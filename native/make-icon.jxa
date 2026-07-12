@@ -1,0 +1,37 @@
+// Renders a default tiny-app icon: Big Sur-style rounded square with a
+// gradient and a glyph. Usage: osascript -l JavaScript make-icon.jxa <out.png>
+ObjC.import('Cocoa');
+
+function run(argv) {
+  const out = argv[0];
+  const S = 1024;
+  const img = $.NSImage.alloc.initWithSize($.NSMakeSize(S, S));
+  img.lockFocus;
+
+  // Full-bleed transparent canvas; icon shape inset like system icons.
+  const inset = 100;
+  const rect = $.NSMakeRect(inset, inset, S - 2 * inset, S - 2 * inset);
+  const path = $.NSBezierPath.bezierPathWithRoundedRectXRadiusYRadius(rect, 185, 185);
+
+  const top = $.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.16, 0.19, 0.28, 1);
+  const bottom = $.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.07, 0.08, 0.12, 1);
+  const grad = $.NSGradient.alloc.initWithStartingColorEndingColor(top, bottom);
+  grad.drawInBezierPathAngle(path, -90);
+
+  // Glyph: a terminal-ish prompt in the brand blue.
+  const str = $.NSString.stringWithString('▸_');
+  const font = $.NSFont.fontWithNameSize('Menlo-Bold', 380);
+  const attrs = $.NSMutableDictionary.alloc.init;
+  attrs.setObjectForKey(font, $.NSFontAttributeName);
+  attrs.setObjectForKey($.NSColor.colorWithCalibratedRedGreenBlueAlpha(0.50, 0.69, 0.91, 1), $.NSForegroundColorAttributeName);
+  const size = str.sizeWithAttributes(attrs);
+  str.drawAtPointWithAttributes($.NSMakePoint((S - size.width) / 2, (S - size.height) / 2 + 20), attrs);
+
+  img.unlockFocus;
+
+  const tiff = img.TIFFRepresentation;
+  const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+  const png = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $.NSDictionary.dictionary);
+  png.writeToFileAtomically(out, true);
+  return 'wrote ' + out;
+}

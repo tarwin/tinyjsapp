@@ -1,0 +1,14 @@
+# vendored/built artifacts — fetched or compiled by setup.sh
+bin/
+native/launcher
+native/shim
+
+# build products
+dist/
+.build/
+
+# local scaffolded playground
+demo/
+
+*.log
+.DS_Store

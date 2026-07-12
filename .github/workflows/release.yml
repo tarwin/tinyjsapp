@@ -1,0 +1,69 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  TJS_VERSION: v26.6.0
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build universal launcher + shim
+        run: |
+          c++ -std=c++17 -x objective-c++ -Inative/include native/launcher.cc \
+            -o native/launcher -framework WebKit -framework AppKit -ldl \
+            -arch arm64 -arch x86_64
+          cc -O2 -Wall native/shim.c -o native/shim -arch arm64 -arch x86_64
+          codesign --force --sign - native/launcher native/shim
+
+      - name: Stamp version
+        run: echo "${GITHUB_REF_NAME}" > VERSION
+
+      - name: Assemble per-arch tarballs
+        run: |
+          set -e
+          mkdir -p out
+          for ARCH in arm64 x86_64; do
+            curl -fsSL -o /tmp/tjs-$ARCH.zip \
+              "https://github.com/saghul/txiki.js/releases/download/${TJS_VERSION}/txiki-macos-$ARCH.zip"
+            unzip -q -o /tmp/tjs-$ARCH.zip -d /tmp/tjs-$ARCH
+
+            STAGE=/tmp/stage-$ARCH/tinyjs
+            mkdir -p "$STAGE/bin" "$STAGE/native"
+            cp "/tmp/tjs-$ARCH/txiki-macos-$ARCH/tjs" "$STAGE/bin/tjs"
+            chmod +x "$STAGE/bin/tjs"
+            cp native/launcher native/shim native/make-icon.jxa "$STAGE/native/"
+            cp -R runtime template test "$STAGE/"
+            cp cli.js tinyjs VERSION README.md LICENSE "$STAGE/"
+
+            tar -czf "out/tinyjs-macos-$ARCH.tar.gz" -C "/tmp/stage-$ARCH" tinyjs
+          done
+          (cd out && shasum -a 256 *.tar.gz > checksums.txt && cat checksums.txt)
+
+      - name: Smoke test (native arch)
+        run: |
+          tar -xzf out/tinyjs-macos-arm64.tar.gz -C /tmp
+          cd "$(mktemp -d)"
+          /tmp/tinyjs/tinyjs version
+          /tmp/tinyjs/tinyjs new ci-check
+          # GUI can't open on a headless runner; verify the build pipeline only.
+          cd ci-check && /tmp/tinyjs/tinyjs build
+          test -x dist/ci-check && test -d dist/ci-check.app
+          codesign --verify --strict --deep dist/ci-check.app
+          echo "build + bundle signature OK"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" out/*.tar.gz out/checksums.txt \
+            --title "tinyjs ${GITHUB_REF_NAME}" \
+            --generate-notes

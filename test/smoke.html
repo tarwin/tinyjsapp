@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>smoke</title></head>
+<body>
+<h1>smoke test…</h1>
+<script>
+const api = {
+  call(method, params) { return window.__invoke(JSON.stringify({ method, params })); },
+};
+window.__emit = (msg) => { window.__lastTick = msg; };
+
+(async () => {
+  const results = {};
+  try {
+    results.ping = await api.call('ping');
+    const info = await api.call('sysinfo');
+    results.sysinfo = info.runtime + ' on ' + info.host + ' (' + info.cpu + ')';
+    const dir = await api.call('listDir', { path: info.home });
+    results.listDir = dir.entries.length + ' entries in ' + dir.path;
+    try {
+      await api.call('nope');
+      results.errorPath = 'FAIL: unknown method did not reject';
+    } catch (e) {
+      results.errorPath = 'rejects ok: ' + e;
+    }
+    results.setTitle = (await api.call('win.setTitle', { title: 'smoke-renamed' })) === true ? 'ok' : 'FAIL';
+    results.setSize = (await api.call('win.setSize', { width: 500, height: 400 })) === true ? 'ok' : 'FAIL';
+    // wait for a pushed tick event to prove backend->frontend push works
+    await new Promise((res) => setTimeout(res, 1500));
+    results.push = window.__lastTick ? 'tick received: ' + JSON.stringify(window.__lastTick.data) : 'FAIL: no tick';
+    await api.call('log', { msg: 'SMOKE RESULTS ' + JSON.stringify(results) });
+  } catch (e) {
+    await api.call('log', { msg: 'SMOKE FATAL ' + e });
+  }
+  await api.call('quit');
+})();
+</script>
+</body>
+</html>

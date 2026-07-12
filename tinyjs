@@ -1,0 +1,5 @@
+#!/bin/sh
+# tinyjs CLI wrapper. Symlink me onto your PATH:
+#   ln -s "$(pwd)/tinyjs" /usr/local/bin/tinyjs
+DIR="$(cd "$(dirname "$(readlink "$0" || echo "$0")")" && pwd)"
+exec "$DIR/bin/tjs" run "$DIR/cli.js" "$@"

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>__NAME__</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="row">
+  <h1>tinyjs <span>— txiki.js ⇄ webview, zero ports</span></h1>
+  <div class="clock"><span class="dot" id="dot"></span><span id="clock">—</span> · up <span id="uptime">0</span>s</div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Backend system info (request/response)</h2>
+    <dl id="sysinfo"><dt>loading…</dt><dd></dd></dl>
+  </div>
+  <div class="card">
+    <h2>Directory browser (backend fs access)</h2>
+    <input id="path" spellcheck="false">
+    <div class="err" id="dirErr"></div>
+    <ul id="dir"></ul>
+  </div>
+  <div class="card">
+    <h2>Window control (launcher commands)</h2>
+    <button id="retitle">Rename window</button>
+    <button id="grow">1200 × 800</button>
+    <button id="shrink">960 × 640</button>
+    <button id="quit">Quit</button>
+  </div>
+  <div class="card">
+    <h2>Native dialogs (answered by the launcher)</h2>
+    <button id="openfile">Open file…</button>
+    <button id="savefile">Save as…</button>
+    <pre id="picked">pick a file to preview its first bytes here</pre>
+  </div>
+</div>
+
+<script src="tiny.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
