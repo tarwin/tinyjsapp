@@ -60,33 +60,58 @@ export const api = {
 };
 export function init(app) {          // window is up
   setInterval(() => app.push('tick', Date.now()), 1000);
-  // app also has: setTitle(t), setSize(w, h), eval(js), reload(html), quit()
+  // app also has: setTitle(t), setSize(w, h), setMenu(menus), eval(js),
+  // reload(html), quit()
 }
+
+export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
 ```
 
-Frontend — include `tiny.js` (from the template) and:
+Frontend — include `tiny.js` (from the template); everything injected lives
+under the `tiny` namespace:
 
 ```js
-const greeting = await api.call('hello', { name: 'world' });  // request/response
-api.on('tick', (t) => ...);                                   // backend push
+const greeting = await tiny.api.call('hello', { name: 'world' });  // request/response
+tiny.api.on('tick', (t) => ...);                                   // backend push
+
+tiny.log('debug msg');  tiny.quit();
+
+// window control
+tiny.win.setTitle('My App');  tiny.win.setSize(1200, 800);
+
+// native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
+const file  = await tiny.win.openFile();     // path | null
+const files = await tiny.win.openFiles();    // paths[] | null
+const dir   = await tiny.win.pickFolder();   // path | null
+const dest  = await tiny.win.saveFile();     // path | null
+
+// native system dialogs (NSAlert)
+await tiny.win.alert('Heads up', 'optional detail');
+const ok   = await tiny.win.confirm('Delete everything?', { detail: '…', ok: 'Delete', cancel: 'Keep' });
+const name = await tiny.win.prompt('Your name?', { default: 'world' });  // string | null
 ```
 
-Built-in methods every app gets:
+### Menus
 
-| method                          | returns                              |
-|---------------------------------|--------------------------------------|
-| `ping`                          | `"pong"`                             |
-| `log {msg}`                     | logs to the backend console          |
-| `quit`                          | closes the window, exits the app     |
-| `win.setTitle {title}`          | `true`                               |
-| `win.setSize {width, height}`   | `true`                               |
-| `win.openFile` / `win.openFiles`| path / array of paths, `null` if cancelled |
-| `win.pickFolder`                | path or `null`                       |
-| `win.saveFile`                  | path or `null`                       |
+Every app gets a default menu bar: an app menu (**About** — standard panel
+with the app name, version from tinyjs.json, and a tinyjs credit — and
+**Quit**, ⌘Q) plus an **Edit** menu so copy/paste shortcuts work. Add your
+own menus after those:
 
-The `win.*` dialogs are native (NSOpenPanel/NSSavePanel): the backend hands
-the call id to the launcher, which runs the panel on the UI thread and
-resolves the page's promise directly.
+```js
+tiny.menu.set([
+  { title: 'Actions', items: [
+    { id: 'open',  label: 'Open File…', key: 'o' },   // key = ⌘+<key>
+    { separator: true },
+    { id: 'hello', label: 'Say Hello' },
+  ]},
+]);
+tiny.menu.on((id) => { ... });   // clicks; backend can also export onMenu(id, app)
+```
+
+The dialogs and menus are native: the backend hands the work to the launcher,
+which runs panels/menus on the UI thread and answers the page's promise
+directly via `webview_return`.
 
 ## Build for release
 
@@ -163,7 +188,9 @@ Developer ID (hardened runtime + `notarytool` are the remaining steps).
 | backend → launcher | `RET <id> <status> <json>` | resolve (0) / reject (≠0) a call |
 | backend → launcher | `EVAL <js>`                | run JS in the page               |
 | backend → launcher | `TITLE <text>` / `SIZE <w> <h>` | window control              |
-| backend → launcher | `DLG <id> <op>`            | native dialog; launcher answers the call itself via `webview_return` |
+| backend → launcher | `DLG <id> <op>[\t<arg>…]`  | native dialog (file panels, alert/confirm/prompt); launcher answers the call itself via `webview_return` |
+| backend → launcher | `MENUBEGIN` … `MENU <t>` / `ITEM id\tlabel\tkey` / `SEP` … `MENUEND` | declare custom menu bar menus |
+| launcher → backend | `MENU <id>`                | a custom menu item was clicked   |
 | backend → launcher | `RELOAD`                   | re-read the page file and re-render (hot-reload) |
 | backend → launcher | `QUIT`                     | close the window                 |
 
@@ -180,7 +207,9 @@ native/make-icon.jxa  default template icon generator (osascript -l JavaScript)
 runtime/bridge.js     backend bridge library (socket, protocol, win.* methods)
 runtime/inline.js     frontend asset inliner
 template/             what `tinyjs new` copies
-cli.js + tinyjs     the CLI
+skill/SKILL.md        tinyjs reference for coding agents (copied into new
+                      projects at .claude/skills/tinyjs/)
+cli.js + tinyjs       the CLI
 test/smoke.html       self-driving test page
 install.sh            curl installer (downloads GitHub release tarballs)
 setup.sh              from-source bootstrap (fetch tjs, compile natives)

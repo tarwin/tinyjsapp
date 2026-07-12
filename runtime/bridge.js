@@ -21,14 +21,21 @@ function dbg(dir, line) {
   if (DEBUG) console.log(dir, line.length > 160 ? line.slice(0, 160) + '…' : line);
 }
 
+// Dialogs run in the launcher, which answers the page's call directly.
+// Each entry maps a method to its wire op and the params serialized as
+// tab-separated args (order matters; see launcher.cc do_dialog).
+const one = (s) => String(s ?? '').replace(/[\t\n\r]/g, ' ');
 const DIALOG_OPS = {
-  'win.openFile': 'open',
-  'win.openFiles': 'openmulti',
-  'win.pickFolder': 'dir',
-  'win.saveFile': 'save',
+  'win.openFile': { op: 'open', args: () => [] },
+  'win.openFiles': { op: 'openmulti', args: () => [] },
+  'win.pickFolder': { op: 'dir', args: () => [] },
+  'win.saveFile': { op: 'save', args: () => [] },
+  'win.alert': { op: 'alert', args: (p) => [one(p.message), one(p.detail), one(p.ok)] },
+  'win.confirm': { op: 'confirm', args: (p) => [one(p.message), one(p.detail), one(p.ok), one(p.cancel)] },
+  'win.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
 };
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', launcherPath, api = {} }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', launcherPath, api = {}, onMenu }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -62,7 +69,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   const server = await tjs.listen('pipe', sockPath);
   const serverInfo = await server.opened;
 
-  const proc = tjs.spawn([launcher, pagePath, sockPath, title, size], { stderr: 'inherit' });
+  const proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], { stderr: 'inherit' });
 
   async function cleanup() {
     await tjs.remove(sockPath).catch(() => {});
@@ -103,6 +110,19 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       if (newHtml != null) await tjs.writeFile(pagePath, enc.encode(newHtml));
       send('RELOAD');
     },
+    // menus: [{ title, items: [{ id, label, key? } | { separator: true }] }]
+    // Clicks arrive as a 'menu' page event and via the onMenu option.
+    setMenu(menus) {
+      send('MENUBEGIN');
+      for (const m of menus ?? []) {
+        send('MENU ' + one(m.title));
+        for (const it of m.items ?? []) {
+          if (it.separator) send('SEP');
+          else send('ITEM ' + [one(it.id), one(it.label ?? it.id), one(it.key ?? '')].join('\t'));
+        }
+      }
+      send('MENUEND');
+    },
     quit() { send('QUIT'); },
     done: null, // filled below
   };
@@ -115,6 +135,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     quit: async () => (app.quit(), true),
     'win.setTitle': async ({ title: t }) => (app.setTitle(t), true),
     'win.setSize': async ({ width, height }) => (app.setSize(width, height), true),
+    'menu.set': async ({ menus }) => (app.setMenu(menus), true),
   };
   const methods = { ...api, ...builtins };
 
@@ -130,8 +151,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
 
       // Native dialogs: hand the call id to the launcher; it runs the panel
       // on the UI thread and resolves the page's promise itself.
-      if (DIALOG_OPS[method]) {
-        send(`DLG ${id} ${DIALOG_OPS[method]}`);
+      const dlg = DIALOG_OPS[method];
+      if (dlg) {
+        send(`DLG ${id} ${[dlg.op, ...dlg.args(params ?? {})].join('\t')}`);
         return;
       }
 
@@ -158,6 +180,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         buf = buf.slice(i + 1);
         dbg('<<', line);
         if (line.startsWith('CALL ')) handleCall(line);
+        else if (line.startsWith('MENU ')) {
+          const id = line.slice(5);
+          push('menu', { id });
+          if (onMenu) onMenu(id, app);
+        }
       }
     }
   })().catch((e) => console.log('tinyjs read loop error:', e));

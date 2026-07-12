@@ -25,6 +25,9 @@ window.__emit = (msg) => { window.__lastTick = msg; };
     }
     results.setTitle = (await api.call('win.setTitle', { title: 'smoke-renamed' })) === true ? 'ok' : 'FAIL';
     results.setSize = (await api.call('win.setSize', { width: 500, height: 400 })) === true ? 'ok' : 'FAIL';
+    results.menuSet = (await api.call('menu.set', { menus: [
+      { title: 'Smoke', items: [{ id: 'a', label: 'A', key: 'k' }, { separator: true }, { id: 'b', label: 'B' }] },
+    ] })) === true ? 'ok' : 'FAIL';
     // wait for a pushed tick event to prove backend->frontend push works
     await new Promise((res) => setTimeout(res, 1500));
     results.push = window.__lastTick ? 'tick received: ' + JSON.stringify(window.__lastTick.data) : 'FAIL: no tick';

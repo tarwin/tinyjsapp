@@ -41,7 +41,7 @@ jobs:
             cp "/tmp/tjs-$ARCH/txiki-macos-$ARCH/tjs" "$STAGE/bin/tjs"
             chmod +x "$STAGE/bin/tjs"
             cp native/launcher native/shim native/make-icon.jxa "$STAGE/native/"
-            cp -R runtime template test "$STAGE/"
+            cp -R runtime template test skill "$STAGE/"
             cp cli.js tinyjs VERSION README.md LICENSE "$STAGE/"
 
             tar -czf "out/tinyjs-macos-$ARCH.tar.gz" -C "/tmp/stage-$ARCH" tinyjs

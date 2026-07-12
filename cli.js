@@ -99,7 +99,9 @@ const app = await createApp({
   html: INDEX_HTML,
   title: ${JSON.stringify(cfg.title)},
   size: ${JSON.stringify(cfg.size)},
+  version: ${JSON.stringify(cfg.version || '0.0.0')},
   api: appMod.api ?? {},
+  onMenu: appMod.onMenu,
 });
 if (appMod.init) appMod.init(app);
 `;
@@ -144,6 +146,11 @@ async function cmdNew() {
   const cfgPath = dir + '/tinyjs.json';
   const cfg = dec.decode(await tjs.readFile(cfgPath)).replaceAll('__NAME__', name);
   await tjs.writeFile(cfgPath, enc.encode(cfg));
+
+  // Give coding agents working in the project a tinyjs reference skill.
+  await tjs.makeDir(dir + '/.claude/skills/tinyjs', { recursive: true });
+  await tjs.writeFile(dir + '/.claude/skills/tinyjs/SKILL.md',
+    await tjs.readFile(TOOL_DIR + 'skill/SKILL.md'));
 
   console.log(`created ${dir}/
   cd ${dir}

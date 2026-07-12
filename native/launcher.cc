@@ -18,11 +18,20 @@
 //                                                    of open|openmulti|dir|save
 //                         RELOAD                     re-read the HTML file and
 //                                                    re-render (dev hot-reload)
+//                         MENUBEGIN / MENU <title> /
+//                         ITEM <id>\t<label>\t<key> /
+//                         SEP / MENUEND              declare custom menu bar
+//                                                    menus (applied on MENUEND)
 //                         QUIT                       close the window
+//   launcher -> backend:  MENU <id>                  a custom menu item was
+//                                                    clicked
+//
+// A default app menu (About + Quit) is always present; About shows the
+// standard panel with the app name, version, and a tinyjs credit.
 //
 // Built as Objective-C++ on macOS (needs AppKit for NSOpenPanel/NSSavePanel).
 //
-// Usage: launcher <html-file-or-url> <socket-path> [title] [WxH]
+// Usage: launcher <html-file-or-url> <socket-path> [title] [WxH] [version]
 
 #include "webview.h"
 
@@ -44,10 +53,14 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <vector>
+
 static webview_t g_w = nullptr;
 static int g_sock = -1;
 static std::mutex g_write_mutex;
 static std::string g_html_path; // empty when target is an http(s) URL
+static std::string g_app_name = "tinyjs";
+static std::string g_app_version = "0.0.0";
 
 static void sock_write_line(const std::string &line) {
   std::lock_guard<std::mutex> lock(g_write_mutex);
@@ -130,20 +143,65 @@ static void do_reload(webview_t w, void *) {
 // Runs on the UI thread via webview_dispatch; answers the pending page call
 // directly with webview_return, so the backend never sees a reply line.
 
+static std::vector<std::string> split_tabs(const std::string &s) {
+  std::vector<std::string> out;
+  size_t start = 0, tab;
+  while ((tab = s.find('\t', start)) != std::string::npos) {
+    out.push_back(s.substr(start, tab - start));
+    start = tab + 1;
+  }
+  out.push_back(s.substr(start));
+  return out;
+}
+
 struct DlgReq {
   std::string id;
-  std::string op; // open | openmulti | dir | save
+  std::string op;                 // open | openmulti | dir | save | alert | confirm | prompt
+  std::vector<std::string> args;  // op-specific, tab-separated on the wire
 };
+
+#ifdef __APPLE__
+static NSString *ns(const std::string &s) {
+  return [NSString stringWithUTF8String:s.c_str()];
+}
+#endif
 
 static void do_dialog(webview_t w, void *arg) {
   DlgReq *req = static_cast<DlgReq *>(arg);
   std::string json = "null";
+  auto a = [&](size_t i) { return i < req->args.size() ? req->args[i] : std::string(); };
 #ifdef __APPLE__
   @autoreleasepool {
     if (req->op == "save") {
       NSSavePanel *panel = [NSSavePanel savePanel];
       if ([panel runModal] == NSModalResponseOK && panel.URL != nil) {
         json = json_escape([panel.URL.path UTF8String]);
+      }
+    } else if (req->op == "alert" || req->op == "confirm") {
+      // args: message, detail, okLabel, cancelLabel
+      NSAlert *alert = [[NSAlert alloc] init];
+      alert.messageText = ns(a(0).empty() ? g_app_name : a(0));
+      if (!a(1).empty()) alert.informativeText = ns(a(1));
+      [alert addButtonWithTitle:ns(a(2).empty() ? "OK" : a(2))];
+      if (req->op == "confirm") {
+        [alert addButtonWithTitle:ns(a(3).empty() ? "Cancel" : a(3))];
+      }
+      NSModalResponse r = [alert runModal];
+      json = (req->op == "alert") ? "true"
+                                  : (r == NSAlertFirstButtonReturn ? "true" : "false");
+    } else if (req->op == "prompt") {
+      // args: message, defaultValue, okLabel, cancelLabel
+      NSAlert *alert = [[NSAlert alloc] init];
+      alert.messageText = ns(a(0).empty() ? g_app_name : a(0));
+      NSTextField *field =
+          [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)];
+      field.stringValue = ns(a(1));
+      alert.accessoryView = field;
+      alert.window.initialFirstResponder = field;
+      [alert addButtonWithTitle:ns(a(2).empty() ? "OK" : a(2))];
+      [alert addButtonWithTitle:ns(a(3).empty() ? "Cancel" : a(3))];
+      if ([alert runModal] == NSAlertFirstButtonReturn) {
+        json = json_escape([field.stringValue UTF8String]);
       }
     } else {
       NSOpenPanel *panel = [NSOpenPanel openPanel];
@@ -170,6 +228,124 @@ static void do_dialog(webview_t w, void *arg) {
   delete req;
 }
 
+// --- menu bar (macOS) --------------------------------------------------------
+// A default app menu (About + Quit) is always installed; MENUBEGIN…MENUEND
+// declares additional custom menus. Item clicks are reported to the backend
+// as `MENU <id>` lines.
+
+struct MenuItemSpec {
+  std::string id, label, key;
+  bool separator = false;
+};
+struct MenuSpec {
+  std::string title;
+  std::vector<MenuItemSpec> items;
+};
+
+#ifdef __APPLE__
+@interface TinyMenuTarget : NSObject
+- (void)itemClicked:(NSMenuItem *)sender;
+- (void)showAbout:(id)sender;
+- (void)doQuit:(id)sender;
+@end
+
+@implementation TinyMenuTarget
+- (void)itemClicked:(NSMenuItem *)sender {
+  NSString *mid = (NSString *)sender.representedObject;
+  if (mid)
+    sock_write_line(std::string("MENU ") + [mid UTF8String]);
+}
+- (void)showAbout:(id)sender {
+  [NSApp orderFrontStandardAboutPanelWithOptions:@{
+    @"ApplicationName" : ns(g_app_name),
+    @"ApplicationVersion" : ns("Version " + g_app_version),
+    @"Version" : @"",
+    @"Credits" : [[NSAttributedString alloc]
+        initWithString:@"Made with tinyjs — https://tinyjs.app"],
+  }];
+}
+- (void)doQuit:(id)sender {
+  webview_terminate(g_w);
+}
+@end
+
+static TinyMenuTarget *g_menu_target = nil;
+
+static void apply_menus(webview_t, void *arg) {
+  std::vector<MenuSpec> *menus = static_cast<std::vector<MenuSpec> *>(arg);
+  @autoreleasepool {
+    if (!g_menu_target)
+      g_menu_target = [[TinyMenuTarget alloc] init];
+
+    NSMenu *bar = [[NSMenu alloc] init];
+
+    // Default app menu: About + Quit.
+    NSMenuItem *appItem = [[NSMenuItem alloc] init];
+    [bar addItem:appItem];
+    NSMenu *appMenu = [[NSMenu alloc] init];
+    NSMenuItem *about =
+        [[NSMenuItem alloc] initWithTitle:ns("About " + g_app_name)
+                                   action:@selector(showAbout:)
+                            keyEquivalent:@""];
+    about.target = g_menu_target;
+    [appMenu addItem:about];
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *quit =
+        [[NSMenuItem alloc] initWithTitle:ns("Quit " + g_app_name)
+                                   action:@selector(doQuit:)
+                            keyEquivalent:@"q"];
+    quit.target = g_menu_target;
+    [appMenu addItem:quit];
+    appItem.submenu = appMenu;
+
+    // Standard Edit menu so cmd-C/V/X/A work in the webview.
+    NSMenuItem *editItem = [[NSMenuItem alloc] init];
+    [bar addItem:editItem];
+    NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+    [editMenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+    [editMenu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    [editMenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+    [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+    [editMenu addItemWithTitle:@"Select All"
+                        action:@selector(selectAll:)
+                 keyEquivalent:@"a"];
+    editItem.submenu = editMenu;
+
+    // Custom menus from the backend.
+    if (menus) {
+      for (const MenuSpec &m : *menus) {
+        NSMenuItem *holder = [[NSMenuItem alloc] init];
+        [bar addItem:holder];
+        NSMenu *menu = [[NSMenu alloc] initWithTitle:ns(m.title)];
+        for (const MenuItemSpec &it : m.items) {
+          if (it.separator) {
+            [menu addItem:[NSMenuItem separatorItem]];
+            continue;
+          }
+          NSMenuItem *mi =
+              [[NSMenuItem alloc] initWithTitle:ns(it.label)
+                                         action:@selector(itemClicked:)
+                                  keyEquivalent:ns(it.key)];
+          mi.target = g_menu_target;
+          mi.representedObject = ns(it.id);
+          [menu addItem:mi];
+        }
+        holder.submenu = menu;
+      }
+    }
+
+    [NSApp setMainMenu:bar];
+  }
+  delete menus;
+}
+#else
+static void apply_menus(webview_t, void *arg) {
+  delete static_cast<std::vector<MenuSpec> *>(arg);
+}
+#endif
+
 // -----------------------------------------------------------------------------
 
 // Page called window.__invoke(...): forward to the backend.
@@ -180,6 +356,8 @@ static void on_invoke(const char *id, const char *req, void *) {
 static void sock_read_loop() {
   std::string buf;
   char chunk[4096];
+  std::vector<MenuSpec> pending_menus;
+  bool in_menu_block = false;
   for (;;) {
     ssize_t n = read(g_sock, chunk, sizeof(chunk));
     if (n <= 0)
@@ -208,11 +386,36 @@ static void sock_read_loop() {
         std::sscanf(line.c_str() + 5, "%d %d", &s->width, &s->height);
         webview_dispatch(g_w, do_size, s);
       } else if (line.rfind("DLG ", 0) == 0) {
+        // DLG <id> <op>[\t<arg>...]
         size_t sp1 = line.find(' ', 4);
         if (sp1 == std::string::npos)
           continue;
-        DlgReq *req = new DlgReq{line.substr(4, sp1 - 4), line.substr(sp1 + 1)};
+        std::vector<std::string> parts = split_tabs(line.substr(sp1 + 1));
+        DlgReq *req = new DlgReq;
+        req->id = line.substr(4, sp1 - 4);
+        req->op = parts[0];
+        req->args.assign(parts.begin() + 1, parts.end());
         webview_dispatch(g_w, do_dialog, req);
+      } else if (line == "MENUBEGIN") {
+        pending_menus.clear();
+        in_menu_block = true;
+      } else if (in_menu_block && line.rfind("MENU ", 0) == 0) {
+        pending_menus.push_back(MenuSpec{line.substr(5), {}});
+      } else if (in_menu_block && line.rfind("ITEM ", 0) == 0 && !pending_menus.empty()) {
+        std::vector<std::string> p = split_tabs(line.substr(5));
+        MenuItemSpec it;
+        it.id = p.size() > 0 ? p[0] : "";
+        it.label = p.size() > 1 ? p[1] : it.id;
+        it.key = p.size() > 2 ? p[2] : "";
+        pending_menus.back().items.push_back(it);
+      } else if (in_menu_block && line == "SEP" && !pending_menus.empty()) {
+        MenuItemSpec sep;
+        sep.separator = true;
+        pending_menus.back().items.push_back(sep);
+      } else if (line == "MENUEND") {
+        in_menu_block = false;
+        webview_dispatch(g_w, apply_menus,
+                         new std::vector<MenuSpec>(pending_menus));
       } else if (line == "RELOAD") {
         webview_dispatch(g_w, do_reload, nullptr);
       } else if (line == "QUIT") {
@@ -235,6 +438,9 @@ int main(int argc, char *argv[]) {
   int width = 960, height = 640;
   if (argc > 4)
     std::sscanf(argv[4], "%dx%d", &width, &height);
+  g_app_name = title;
+  if (argc > 5)
+    g_app_version = argv[5];
 
   g_sock = socket(AF_UNIX, SOCK_STREAM, 0);
   struct sockaddr_un addr;
@@ -256,6 +462,9 @@ int main(int argc, char *argv[]) {
   webview_set_title(g_w, title.c_str());
   webview_set_size(g_w, width, height, WEBVIEW_HINT_NONE);
   webview_bind(g_w, "__invoke", on_invoke, nullptr);
+
+  // Default menu bar (About/Quit + Edit); custom menus replace it via MENUEND.
+  apply_menus(g_w, new std::vector<MenuSpec>());
 
   if (target.rfind("http://", 0) == 0 || target.rfind("https://", 0) == 0) {
     webview_navigate(g_w, target.c_str());
