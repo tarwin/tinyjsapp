@@ -50,10 +50,15 @@ tar -xzf "$TMP/$ASSET" -C "$INSTALL_DIR" --strip-components 1
 # Clear quarantine on the binaries (curl doesn't set it, but belt & braces).
 xattr -dr com.apple.quarantine "$INSTALL_DIR" 2>/dev/null || true
 
-# Symlink onto PATH: prefer /usr/local/bin if writable, else ~/.local/bin.
-if [ -w /usr/local/bin ]; then
-  BIN_DIR=/usr/local/bin
-else
+# Symlink onto PATH. Prefer a writable dir that is ALREADY on PATH
+# (/usr/local/bin, or /opt/homebrew/bin on Apple Silicon brew setups);
+# fall back to ~/.local/bin, which usually needs a PATH edit.
+BIN_DIR=""
+for d in /usr/local/bin /opt/homebrew/bin; do
+  case ":$PATH:" in *":$d:"*) ;; *) continue ;; esac
+  if [ -d "$d" ] && [ -w "$d" ]; then BIN_DIR="$d"; break; fi
+done
+if [ -z "$BIN_DIR" ]; then
   BIN_DIR="$HOME/.local/bin"
   mkdir -p "$BIN_DIR"
 fi
@@ -61,11 +66,63 @@ ln -sf "$INSTALL_DIR/tinyjs" "$BIN_DIR/tinyjs"
 
 echo "==> installed: $("$INSTALL_DIR/tinyjs" version 2>/dev/null || echo tinyjs $VERSION)"
 echo "    $BIN_DIR/tinyjs -> $INSTALL_DIR/tinyjs"
+
 case ":$PATH:" in
-  *":$BIN_DIR:"*) ;;
-  *) echo ""
-     echo "NOTE: $BIN_DIR is not on your PATH. Add this to your shell profile:"
-     echo "  export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  *":$BIN_DIR:"*)
+    echo ""
+    echo "get started:  tinyjs new myapp && cd myapp && tinyjs dev"
+    ;;
+  *)
+    # BIN_DIR is not on PATH: offer to fix the shell profile, or shout.
+    EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
+    PROFILE=""
+    case "$(basename "${SHELL:-}")" in
+      zsh)  PROFILE="$HOME/.zshrc" ;;
+      bash) PROFILE="$HOME/.bashrc" ;;
+      fish) PROFILE="$HOME/.config/fish/config.fish"
+            EXPORT_LINE="fish_add_path $BIN_DIR" ;;
+    esac
+
+    # TINYJS_MODIFY_PATH=1 forces yes (scripted installs); TINYJS_NO_MODIFY_PATH=1
+    # forces no; otherwise ask on the terminal when there is one.
+    want=ask
+    [ -n "$TINYJS_MODIFY_PATH" ] && want=yes
+    [ -n "$TINYJS_NO_MODIFY_PATH" ] && want=no
+    [ -z "$PROFILE" ] && want=no
+    if [ "$want" = ask ]; then
+      if printf "\n%s is not on your PATH. Add it to %s? [Y/n] " "$BIN_DIR" "$PROFILE" > /dev/tty 2>/dev/null &&
+         read -r reply < /dev/tty 2>/dev/null; then
+        case "$reply" in [nN]*) want=no ;; *) want=yes ;; esac
+      else
+        want=no
+      fi
+    fi
+
+    if [ -t 1 ]; then
+      RED=$(printf '\033[1;31m'); YELLOW=$(printf '\033[1;33m'); OFF=$(printf '\033[0m')
+    else
+      RED=""; YELLOW=""; OFF=""
+    fi
+
+    echo ""
+    if [ "$want" = yes ]; then
+      if ! grep -qs "added by tinyjs installer" "$PROFILE"; then
+        mkdir -p "$(dirname "$PROFILE")"
+        printf '\n# added by tinyjs installer\n%s\n' "$EXPORT_LINE" >> "$PROFILE"
+      fi
+      echo "${YELLOW}Added $BIN_DIR to your PATH in $PROFILE.${OFF}"
+      echo "${YELLOW}Open a NEW terminal (or run the line below) before using tinyjs:${OFF}"
+      echo ""
+      echo "  $EXPORT_LINE"
+    else
+      echo "${RED}ACTION NEEDED: \`tinyjs\` will NOT work yet.${OFF}"
+      echo "${RED}$BIN_DIR is not on your PATH. Add it to your shell profile${PROFILE:+ ($PROFILE)}:${OFF}"
+      echo ""
+      echo "  $EXPORT_LINE"
+      echo ""
+      echo "then open a new terminal."
+    fi
+    echo ""
+    echo "get started (in a new terminal):  tinyjs new myapp && cd myapp && tinyjs dev"
+    ;;
 esac
-echo ""
-echo "get started:  tinyjs new myapp && cd myapp && tinyjs dev"
