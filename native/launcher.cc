@@ -83,22 +83,29 @@
 #include <string>
 #include <thread>
 
+#include <spawn.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 
 #include <vector>
 
+extern char **environ;
+
 static webview_t g_w = nullptr;
 static int g_sock = -1;
+static int g_listen_fd = -1;   // bundle mode: launcher listens, backend attaches
+static std::string g_sock_dir; // bundle mode: private socket dir, cleaned at exit
 static std::mutex g_write_mutex;
 static std::string g_html_path; // empty when target is an http(s) URL
 static std::string g_app_name = "tinyjs";
 static std::string g_app_version = "0.0.0";
+// Lines produced before the backend is connected (bundle mode: Apple Events
+// and page calls can arrive before the spawned backend attaches). Flushed by
+// sock_set_connected().
+static std::vector<std::string> g_pending_out;
 
-static void sock_write_line(const std::string &line) {
-  std::lock_guard<std::mutex> lock(g_write_mutex);
-  std::string msg = line + "\n";
+static void sock_write_raw(const std::string &msg) {
   const char *p = msg.data();
   size_t left = msg.size();
   while (left > 0) {
@@ -108,6 +115,24 @@ static void sock_write_line(const std::string &line) {
     p += n;
     left -= (size_t)n;
   }
+}
+
+static void sock_write_line(const std::string &line) {
+  std::lock_guard<std::mutex> lock(g_write_mutex);
+  if (g_sock < 0) {
+    if (g_pending_out.size() < 512)
+      g_pending_out.push_back(line);
+    return;
+  }
+  sock_write_raw(line + "\n");
+}
+
+static void sock_set_connected(int fd) {
+  std::lock_guard<std::mutex> lock(g_write_mutex);
+  g_sock = fd;
+  for (const std::string &line : g_pending_out)
+    sock_write_raw(line + "\n");
+  g_pending_out.clear();
 }
 
 static std::string json_escape(const std::string &s) {
@@ -306,6 +331,7 @@ struct MenuSpec {
 };
 
 #ifdef __APPLE__
+static void send_open_urls(NSArray *urls); // defined below
 @interface TinyMenuTarget : NSObject
 - (void)itemClicked:(NSMenuItem *)sender;
 - (void)trayItemClicked:(NSMenuItem *)sender;
@@ -330,6 +356,24 @@ struct MenuSpec {
   NSString *mid = (NSString *)sender.representedObject;
   if (mid)
     sock_write_line(std::string("CTX ") + [mid UTF8String]);
+}
+- (void)handleGetURL:(NSAppleEventDescriptor *)event
+           withReply:(NSAppleEventDescriptor *)reply {
+  NSString *url = [[event paramDescriptorForKeyword:keyDirectObject] stringValue];
+  NSURL *u = url ? [NSURL URLWithString:url] : nil;
+  if (u)
+    send_open_urls(@[ u ]);
+}
+- (void)handleOpenDocs:(NSAppleEventDescriptor *)event
+             withReply:(NSAppleEventDescriptor *)reply {
+  NSAppleEventDescriptor *list = [event paramDescriptorForKeyword:keyDirectObject];
+  NSMutableArray *urls = [NSMutableArray array];
+  for (NSInteger i = 1; i <= [list numberOfItems]; i++) {
+    NSURL *u = [[list descriptorAtIndex:i] fileURLValue];
+    if (u)
+      [urls addObject:u];
+  }
+  send_open_urls(urls);
 }
 - (void)trayClicked:(id)sender {
   sock_write_line("TRAYCLICK");
@@ -920,6 +964,15 @@ static void on_invoke(const char *id, const char *req, void *) {
 }
 
 static void sock_read_loop() {
+  // Bundle mode: wait for the spawned backend to attach before reading.
+  if (g_listen_fd >= 0) {
+    int fd = accept(g_listen_fd, nullptr, nullptr);
+    if (fd < 0) {
+      webview_dispatch(g_w, do_terminate, nullptr);
+      return;
+    }
+    sock_set_connected(fd);
+  }
   std::string buf;
   char chunk[4096];
   std::vector<MenuSpec> pending_menus;
@@ -1042,31 +1095,218 @@ static void sock_read_loop() {
   webview_dispatch(g_w, do_terminate, nullptr);
 }
 
-int main(int argc, char *argv[]) {
-  if (argc < 3) {
-    std::fprintf(stderr, "usage: %s <html-file-or-url> <socket-path> [title] [WxH]\n", argv[0]);
-    return 1;
-  }
-  const std::string target = argv[1];
-  const std::string sock_path = argv[2];
-  const std::string title = argc > 3 ? argv[3] : "tinyjs";
-  int width = 960, height = 640;
-  if (argc > 4)
-    std::sscanf(argv[4], "%dx%d", &width, &height);
-  g_app_name = title;
-  if (argc > 5)
-    g_app_version = argv[5];
+// --- bundle mode ---------------------------------------------------------------
+// As the .app's CFBundleExecutable the launcher starts with no arguments: it
+// derives everything from the bundle, LISTENS on a private socket, and spawns
+// the backend (Contents/MacOS/tjs run Resources/app/entry.js) pointed at it
+// via TINYJS_SOCKET. Being the LaunchServices-registered GUI process is what
+// makes deep links, file opens, and single-instancing work: a second `open`
+// activates this process instead of launching another copy.
 
-  g_sock = socket(AF_UNIX, SOCK_STREAM, 0);
+#ifdef __APPLE__
+// Deep links + file opens: NSApplication routes kAEGetURL / kAEOpenDocuments
+// to the app delegate's application:openURLs: / application:openFiles: —
+// checked dynamically at event time, so adding the methods to the webview
+// library's delegate class works no matter when finishLaunching ran. Events
+// arriving before the backend attaches (cold starts) are buffered by
+// sock_write_line, so launch URLs/files are never lost.
+// Deep links go out as OPENURL <url>; file opens (which macOS may deliver
+// through the same openURLs: route as file:// URLs) as OPENFILES <json-paths>.
+static void send_open_urls(NSArray *urls) {
+  std::string files = "[";
+  bool any_file = false;
+  for (NSURL *u in urls) {
+    if ([u isFileURL]) {
+      if (any_file)
+        files += ",";
+      any_file = true;
+      files += json_escape([[u path] UTF8String]);
+    } else {
+      sock_write_line(std::string("OPENURL ") + [[u absoluteString] UTF8String]);
+    }
+  }
+  files += "]";
+  if (any_file)
+    sock_write_line("OPENFILES " + files);
+}
+
+static void tiny_openURLs(id, SEL, id /*app*/, NSArray *urls) {
+  send_open_urls(urls);
+}
+
+static void tiny_openFiles(id, SEL, id app, NSArray *files) {
+  std::string json = "[";
+  for (NSUInteger i = 0; i < files.count; i++) {
+    if (i)
+      json += ",";
+    json += json_escape([(NSString *)files[i] UTF8String]);
+  }
+  json += "]";
+  sock_write_line("OPENFILES " + json);
+  [(NSApplication *)app replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
+}
+
+// Launch Apple Events can be dispatched while webview_create pumps the event
+// loop — before the app delegate exists. Register plain NSAppleEventManager
+// handlers FIRST (no delegate needed) so cold-start URLs/files are caught;
+// NSApplication may re-route later events through the delegate methods
+// installed by install_open_handlers, which produce identical wire lines.
+// Swizzled -[NSApplication setDelegate:]: graft our open handlers onto any
+// delegate the moment it is installed, so NSApplication's capability cache
+// (checked when launch Apple Events dispatch, possibly inside webview_create)
+// sees them from the start.
+typedef void (*SetDelegateIMP)(id, SEL, id);
+static SetDelegateIMP g_orig_setDelegate = nullptr;
+
+static void tiny_setDelegate(id self, SEL cmd, id delegate) {
+  if (delegate) {
+    class_addMethod(object_getClass(delegate), @selector(application:openURLs:),
+                    (IMP)tiny_openURLs, "v@:@@");
+    class_addMethod(object_getClass(delegate), @selector(application:openFiles:),
+                    (IMP)tiny_openFiles, "v@:@@");
+  }
+  if (g_orig_setDelegate)
+    g_orig_setDelegate(self, cmd, delegate);
+}
+
+static void install_early_open_handlers() {
+  if (!g_menu_target)
+    g_menu_target = [[TinyMenuTarget alloc] init];
+  g_orig_setDelegate = (SetDelegateIMP)swizzle(
+      [NSApplication class], @selector(setDelegate:), (IMP)tiny_setDelegate,
+      "v@:@");
+  NSAppleEventManager *aem = [NSAppleEventManager sharedAppleEventManager];
+  [aem setEventHandler:g_menu_target
+           andSelector:@selector(handleGetURL:withReply:)
+         forEventClass:kInternetEventClass
+            andEventID:kAEGetURL];
+  [aem setEventHandler:g_menu_target
+           andSelector:@selector(handleOpenDocs:withReply:)
+         forEventClass:kCoreEventClass
+            andEventID:kAEOpenDocuments];
+}
+
+static void install_open_handlers() {
+  id delegate = [NSApp delegate];
+  if (!delegate)
+    return;
+  class_addMethod(object_getClass(delegate), @selector(application:openURLs:),
+                  (IMP)tiny_openURLs, "v@:@@");
+  class_addMethod(object_getClass(delegate), @selector(application:openFiles:),
+                  (IMP)tiny_openFiles, "v@:@@");
+  // NSApplication caches delegate capabilities at setDelegate: time; re-set
+  // it so AppKit notices the methods we just added.
+  [NSApp setDelegate:nil];
+  [NSApp setDelegate:delegate];
+}
+
+static bool bundle_mode_setup(std::string &target, std::string &title,
+                              std::string &size_s, std::string &version) {
+  NSBundle *mb = [NSBundle mainBundle];
+  NSString *bp = [mb bundlePath];
+  NSString *frontend = [bp
+      stringByAppendingPathComponent:@"Contents/Resources/app/frontend/index.html"];
+  if (![bp hasSuffix:@".app"] ||
+      ![[NSFileManager defaultManager] fileExistsAtPath:frontend])
+    return false;
+
+  target = [frontend UTF8String];
+  NSString *name = [mb objectForInfoDictionaryKey:@"CFBundleName"];
+  title = name ? [name UTF8String] : "tinyjs";
+  NSString *ver = [mb objectForInfoDictionaryKey:@"CFBundleVersion"];
+  version = ver ? [ver UTF8String] : "0.0.0";
+  NSString *sz = [mb objectForInfoDictionaryKey:@"TinyjsWindowSize"];
+  size_s = sz ? [sz UTF8String] : "960x640";
+
+  // Private 0700 socket dir under the user temp dir (short enough for
+  // sun_path's ~104-byte cap).
+  std::string tmpl = std::string([NSTemporaryDirectory() UTF8String]) + "tinyjs-XXXXXX";
+  std::vector<char> buf(tmpl.begin(), tmpl.end());
+  buf.push_back('\0');
+  if (!mkdtemp(buf.data()))
+    return false;
+  g_sock_dir = buf.data();
+  std::string sock_path = g_sock_dir + "/app.sock";
+
+  g_listen_fd = socket(AF_UNIX, SOCK_STREAM, 0);
   struct sockaddr_un addr;
   std::memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_UNIX;
   std::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
-  if (connect(g_sock, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-    std::fprintf(stderr, "launcher: cannot connect to %s: %s\n", sock_path.c_str(),
-                 std::strerror(errno));
-    return 1;
+  if (bind(g_listen_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+      listen(g_listen_fd, 1) != 0) {
+    std::fprintf(stderr, "launcher: cannot listen on %s: %s\n",
+                 sock_path.c_str(), std::strerror(errno));
+    return false;
   }
+
+  // Spawn the backend; it attaches to our socket (bridge attach mode).
+  setenv("TINYJS_SOCKET", sock_path.c_str(), 1);
+  std::string exe = [[mb executablePath] UTF8String];
+  std::string exe_dir = exe.substr(0, exe.find_last_of('/'));
+  std::string tjs = exe_dir + "/tjs";
+  std::string entry =
+      std::string([bp UTF8String]) + "/Contents/Resources/app/entry.js";
+  const char *sargv[] = {tjs.c_str(), "run", entry.c_str(), nullptr};
+  pid_t pid;
+  if (posix_spawn(&pid, tjs.c_str(), nullptr, nullptr,
+                  const_cast<char *const *>(sargv), environ) != 0) {
+    std::fprintf(stderr, "launcher: cannot spawn backend: %s\n",
+                 std::strerror(errno));
+    return false;
+  }
+  return true;
+}
+#endif
+
+int main(int argc, char *argv[]) {
+  std::string target, sock_path, title = "tinyjs", size_s = "960x640";
+  bool bundle_mode = false;
+
+#ifdef __APPLE__
+  if (argc < 3)
+    bundle_mode = bundle_mode_setup(target, title, size_s, g_app_version);
+#endif
+
+  if (!bundle_mode) {
+    if (argc < 3) {
+      std::fprintf(stderr,
+                   "usage: %s <html-file-or-url> <socket-path> [title] [WxH]\n",
+                   argv[0]);
+      return 1;
+    }
+    target = argv[1];
+    sock_path = argv[2];
+    if (argc > 3)
+      title = argv[3];
+    if (argc > 4)
+      size_s = argv[4];
+    if (argc > 5)
+      g_app_version = argv[5];
+  }
+  g_app_name = title;
+  int width = 960, height = 640;
+  std::sscanf(size_s.c_str(), "%dx%d", &width, &height);
+
+  if (!bundle_mode) {
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un addr;
+    std::memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    std::strncpy(addr.sun_path, sock_path.c_str(), sizeof(addr.sun_path) - 1);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+      std::fprintf(stderr, "launcher: cannot connect to %s: %s\n",
+                   sock_path.c_str(), std::strerror(errno));
+      return 1;
+    }
+    g_sock = fd;
+  }
+
+#ifdef __APPLE__
+  // Must precede webview_create: launch Apple Events (cold-start deep links /
+  // file opens) can be dispatched during its internal event pumping.
+  install_early_open_handlers();
+#endif
 
   g_w = webview_create(1 /* debug: enables devtools */, nullptr);
   if (!g_w) {
@@ -1080,6 +1320,7 @@ int main(int argc, char *argv[]) {
   install_drop_hook();
   install_ctx_hook();
   install_system_observers();
+  install_open_handlers();
 #endif
 
   webview_set_title(g_w, title.c_str());
@@ -1104,6 +1345,10 @@ int main(int argc, char *argv[]) {
 
   webview_run(g_w);
   webview_destroy(g_w);
+  if (!g_sock_dir.empty()) {
+    unlink((g_sock_dir + "/app.sock").c_str());
+    rmdir(g_sock_dir.c_str());
+  }
   // The socket thread may still be blocked in read; exit hard.
   _exit(0);
 }

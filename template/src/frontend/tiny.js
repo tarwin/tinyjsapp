@@ -72,6 +72,10 @@
     app: {
       // false: menu-bar-only app (no Dock icon); true: normal app.
       setDockVisible: (visible) => call('app.setDockVisible', { visible }),
+      // Deep links + file associations (packaged .app; see tinyjs.json
+      // "urlScheme" and "fileExtensions"). Cold-start events are buffered.
+      onOpenUrl(fn) { window.tiny.api.on('open-url', ({ url }) => fn(url)); },
+      onOpenFiles(fn) { window.tiny.api.on('open-files', ({ paths }) => fn(paths)); },
     },
 
     tray: {

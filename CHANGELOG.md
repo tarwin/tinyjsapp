@@ -4,6 +4,21 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.4.0 — 2026-07-13
+
+- **Deep links** — claim a scheme with `"urlScheme": "myapp"` in tinyjs.json;
+  `open myapp://…` delivers `tiny.app.onOpenUrl` / backend `onOpenUrl`, on
+  cold start too (launch events are buffered until the app is ready).
+- **File associations** — `"fileExtensions": ["md"]` puts you in "Open With";
+  files arrive as real paths via `tiny.app.onOpenFiles` / `onOpenFiles`,
+  including Dock-icon drops.
+- **Single instance** — a second `open` (URL, file, Dock) activates the
+  running app and delivers the event to it instead of launching a copy.
+- **New .app architecture** — the launcher is now the bundle executable (it
+  listens on the socket and spawns the backend), which is what makes the
+  above work; the C shim is gone. Dev mode and the bare `dist/<name>` binary
+  keep the backend-first arrangement. Bundles still sign and notarize clean.
+
 ## 0.3.1 — 2026-07-13
 
 - **Global hotkeys** — `tiny.hotkey.register(id, 'cmd+shift+k')` /

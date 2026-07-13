@@ -27,7 +27,8 @@ TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 
 ```
 tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
-                       update?: { url: "https://…/manifest.json" } }
+                       update?: { url: "https://…/manifest.json" },
+                       urlScheme?: "myapp", fileExtensions?: ["md"] }
 icon.png             1024×1024 app icon
 src/main.js          backend (see below)
 src/frontend/        index.html + js/css/images — served as real files
@@ -126,6 +127,11 @@ tiny.theme.on((dark) => ...);               // live changes
 tiny.api.on('sleep', fn); tiny.api.on('wake', fn);  // backend: export onSystem
 
 tiny.win.print();                           // native print panel
+
+// deep links + file associations (packaged .app only; cold-start buffered;
+// second `open` activates the running instance — single-instance is automatic)
+tiny.app.onOpenUrl((url) => ...);           // backend: export onOpenUrl(url, app)
+tiny.app.onOpenFiles((paths) => ...);       // backend: export onOpenFiles(paths, app)
 ```
 
 Backend SQLite is built into txiki: `import { Database } from 'tjs:sqlite'`;

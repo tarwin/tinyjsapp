@@ -37,7 +37,8 @@
 
   header { padding: 96px 0 0; position: relative; z-index: 1; }
   .brand { font: 700 15px var(--mono); letter-spacing: .08em; color: var(--accent); }
-  .brand a { color: var(--muted); text-decoration: none; font-weight: 400; float: right; }
+  .brand .links { float: right; display: flex; gap: 18px; }
+  .brand a { color: var(--muted); text-decoration: none; font-weight: 400; }
   .brand a:hover { color: var(--text); }
 
   h1 {
@@ -125,7 +126,7 @@
 
 <div class="wrap">
   <header>
-    <div class="brand r r1">▸_ tinyjs <a href="https://github.com/tarwin/tinyjsapp">github ↗</a></div>
+    <div class="brand r r1">▸_ tinyjs <span class="links"><a href="/api">api</a><a href="/changelog">changelog</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span></div>
     <h1 class="r r2">Desktop apps<br>for macOS in <em>~6&hairsp;MB</em>.</h1>
     <p class="sub r r3">A <strong>JavaScript backend</strong> with full system access, a
     <strong>native WebKit window</strong>, and nothing else.
@@ -146,9 +147,8 @@
       <div class="bar tiny"><span class="label">tinyjs</span>
         <div class="track"><div class="fill"><span>~6 MB</span></div></div></div>
     </div>
-    <p class="bars-note">Two files: your backend and a 380 KB window process.
-    The frontend is inlined into the binary. The window is the WebKit already
-    on every Mac.</p>
+    <p class="bars-note">Your backend, a ~600 KB window process, and your
+    plain HTML/CSS/JS. The window is the WebKit already on every Mac.</p>
   </section>
 
   <section>
@@ -201,8 +201,9 @@ tiny.menu.set([…]);
   <footer>
     <a href="https://github.com/tarwin/tinyjsapp">source</a>
     <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
+    <a href="/api">api</a>
     <a href="/changelog">changelog</a>
-    <a href="https://github.com/tarwin/tinyjsapp#readme">docs</a>
+    <a href="https://github.com/tarwin/tinyjsapp#readme">readme</a>
     <span class="flex">this page: one file, no js frameworks, ~10 KB</span>
   </footer>
 </div>

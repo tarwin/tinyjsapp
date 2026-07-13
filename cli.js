@@ -232,6 +232,8 @@ const app = await createApp({
   onHotkey: appMod.onHotkey,
   onContextMenu: appMod.onContextMenu,
   onSystem: appMod.onSystem,
+  onOpenUrl: appMod.onOpenUrl,
+  onOpenFiles: appMod.onOpenFiles,
   update: ${JSON.stringify(cfg.update ?? null)},
 });
 if (appMod.init) appMod.init(app);
@@ -335,14 +337,16 @@ async function cmdBuild() {
 
   // The .app does NOT use the compiled binary (it can't be codesigned, see
   // below): it ships the stock tjs runtime + the app as plain data files in
-  // Resources/, started by a tiny signable shim.
+  // Resources/, with the launcher as the bundle executable (it spawns tjs).
   console.log('==> assembling ' + cfg.title + '.app');
   const APP = 'dist/' + cfg.title + '.app';
   await tjs.makeDir(APP + '/Contents/MacOS', { recursive: true });
   await tjs.makeDir(APP + '/Contents/Resources', { recursive: true });
-  await run(['cp', TOOL_DIR + 'native/shim', APP + '/Contents/MacOS/' + cfg.name]);
+  // The launcher IS the bundle executable ("bundle mode"): it owns the window,
+  // receives Apple Events (deep links, file opens, single-instance activation),
+  // and spawns the backend (tjs) itself.
+  await run(['cp', TOOL_DIR + 'native/launcher', APP + '/Contents/MacOS/' + cfg.name]);
   await run(['cp', tjs.exePath, APP + '/Contents/MacOS/tjs']);
-  await run(['cp', 'dist/launcher', APP + '/Contents/MacOS/launcher']);
   await run(['cp', '-R', '.build/app', APP + '/Contents/Resources/app']);
   // App icon: icon.png in the project root (1024×1024; the template ships a
   // default) becomes AppIcon.icns via sips + iconutil.
@@ -361,6 +365,34 @@ async function cmdBuild() {
     iconKey = '\n  <key>CFBundleIconFile</key>      <string>AppIcon</string>';
   }
 
+  // Window size for the launcher's bundle mode, plus optional deep-link
+  // scheme(s) ("urlScheme": "myapp" or [..]) and file associations
+  // ("fileExtensions": ["md", ...]) from tinyjs.json.
+  let extraKeys = `
+  <key>TinyjsWindowSize</key>    <string>${cfg.size}</string>`;
+  const schemes = cfg.urlScheme ? [].concat(cfg.urlScheme) : [];
+  if (schemes.length) {
+    extraKeys += `
+  <key>CFBundleURLTypes</key>
+  <array><dict>
+    <key>CFBundleURLName</key>    <string>${cfg.id}</string>
+    <key>CFBundleURLSchemes</key>
+    <array>${schemes.map((s) => `<string>${s}</string>`).join('')}</array>
+  </dict></array>`;
+  }
+  const exts = cfg.fileExtensions ?? [];
+  if (exts.length) {
+    extraKeys += `
+  <key>CFBundleDocumentTypes</key>
+  <array><dict>
+    <key>CFBundleTypeName</key>   <string>${cfg.title} Document</string>
+    <key>CFBundleTypeRole</key>   <string>Editor</string>
+    <key>LSHandlerRank</key>      <string>Default</string>
+    <key>CFBundleTypeExtensions</key>
+    <array>${exts.map((e) => `<string>${e}</string>`).join('')}</array>
+  </dict></array>`;
+  }
+
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -371,7 +403,7 @@ async function cmdBuild() {
   <key>CFBundleVersion</key>         <string>${cfg.version || '0.1.0'}</string>
   <key>CFBundleExecutable</key>      <string>${cfg.name}</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
-  <key>NSHighResolutionCapable</key> <true/>${iconKey}
+  <key>NSHighResolutionCapable</key> <true/>${iconKey}${extraKeys}
 </dict>
 </plist>
 `;
@@ -379,8 +411,8 @@ async function cmdBuild() {
 
   // Codesign (ad-hoc by default; set signIdentity in tinyjs.json or
   // TINYJS_SIGN_IDENTITY for a real Developer ID). The .app signs fully:
-  // shim/tjs/launcher are clean Mach-Os and the app code is data sealed by
-  // the bundle signature.
+  // launcher/tjs are clean Mach-Os and the app code is data sealed by the
+  // bundle signature.
   //
   // The bare dist/<name> single binary is the one thing that can't be
   // re-signed — txiki appends the bundled app after the Mach-O, which
@@ -391,7 +423,6 @@ async function cmdBuild() {
   for (const bin of ['dist/launcher',
                      APP + '/Contents/MacOS/' + cfg.name,
                      APP + '/Contents/MacOS/tjs',
-                     APP + '/Contents/MacOS/launcher',
                      APP]) {
     await run(['codesign', '--force', '--sign', identity, bin], { stdout: 'ignore', stderr: 'ignore' });
   }

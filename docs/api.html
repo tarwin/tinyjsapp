@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tinyjs — API</title>
+<meta name="description" content="API reference for tinyjs — tiny macOS desktop apps in JavaScript.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='%2314161b'/%3E%3Cpath d='M22 24l12 8-12 8z' fill='%2385b3ea'/%3E%3Crect x='36' y='38' width='10' height='4' fill='%2385b3ea'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #14161b; --panel: #1a1d24; --line: #262a33;
+    --text: #d9dce3; --muted: #71788a; --accent: #85b3ea;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Iowan Old Style", Georgia, serif;
+  }
+  * { margin: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 17px/1.65 var(--serif);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent); color: var(--bg); }
+  .wrap { max-width: 680px; margin: 0 auto; padding: 0 24px; }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.006) 2px 4px);
+  }
+  header { padding: 72px 0 0; position: relative; z-index: 1; }
+  .brand { font: 700 15px var(--mono); letter-spacing: .08em; color: var(--accent); }
+  .brand a { color: var(--muted); text-decoration: none; font-weight: 400; float: right; }
+  .brand a:hover { color: var(--text); }
+  h1 { font: 700 clamp(34px, 7vw, 52px)/1.05 var(--mono); letter-spacing: -.04em; margin: 36px 0 0; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .sub { margin: 14px 0 0; color: var(--muted); }
+
+  nav.toc {
+    margin: 36px 0 0; padding: 16px 18px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px;
+    font: 13px var(--mono); position: relative; z-index: 1;
+    display: flex; flex-wrap: wrap; gap: 8px 18px;
+  }
+  nav.toc a { color: var(--muted); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+
+  section { position: relative; z-index: 1; margin-top: 52px; }
+  h2 {
+    font: 700 22px var(--mono); letter-spacing: -.02em;
+    border-top: 1px solid var(--line); padding-top: 26px;
+  }
+  h2 .tag { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 10px; }
+  section p { margin: 12px 0 0; }
+  section p.note { color: var(--muted); font-size: 15px; }
+  pre {
+    margin: 16px 0 0; padding: 15px 18px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px;
+    font: 13px/1.65 var(--mono); overflow-x: auto;
+  }
+  pre b { color: var(--accent); font-weight: 400; }
+  pre i { color: var(--muted); font-style: normal; }
+  code {
+    font: 13px var(--mono); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 5px; padding: 1px 6px; white-space: nowrap;
+  }
+  footer {
+    margin-top: 72px; padding: 28px 0 56px; border-top: 1px solid var(--line);
+    font: 12.5px var(--mono); color: var(--muted); display: flex; gap: 22px; flex-wrap: wrap;
+    position: relative; z-index: 1;
+  }
+  footer a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); }
+  footer a:hover { color: var(--accent); border-color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">▸_ tinyjs <a href="/">← home</a></div>
+    <h1>the <em>api</em></h1>
+    <p class="sub">Everything a tinyjs app can do. Frontend calls live under
+    <code>window.tiny</code>; the backend exports plain functions.</p>
+  </header>
+
+  <nav class="toc">
+    <a href="#cli">cli</a>
+    <a href="#config">tinyjs.json</a>
+    <a href="#backend">backend</a>
+    <a href="#frontend">tiny.api</a>
+    <a href="#window">tiny.win</a>
+    <a href="#dialogs">dialogs</a>
+    <a href="#menus">menus</a>
+    <a href="#tray">tray</a>
+    <a href="#store">store</a>
+    <a href="#hotkeys">hotkeys</a>
+    <a href="#system">system</a>
+    <a href="#open">deep links</a>
+    <a href="#update">auto-update</a>
+  </nav>
+
+  <section id="cli">
+    <h2>cli</h2>
+    <pre>tinyjs new &lt;dir&gt;    <i># scaffold an app</i>
+tinyjs dev          <i># run with hot reload (frontend swaps in place,</i>
+                    <i>#   backend restarts; TINYJS_DEBUG=1 traces the bridge)</i>
+tinyjs build        <i># dist/&lt;name&gt; binary + codesigned dist/&lt;Name&gt;.app</i>
+                    <i>#   --dmg: also a disk image installer</i>
+tinyjs publish      <i># build + zip + auto-update manifest in dist/publish/</i>
+tinyjs notarize     <i># notarytool submit + staple (needs Developer ID)</i>
+tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i></pre>
+  </section>
+
+  <section id="config">
+    <h2>tinyjs.json</h2>
+    <pre>{
+  "name": "myapp",              <i>// binary + bundle name (required)</i>
+  "title": "My App",            <i>// window title & menu name (default: name)</i>
+  "size": "960x640",            <i>// initial window size</i>
+  "id": "com.example.myapp",    <i>// bundle identifier</i>
+  "version": "1.0.0",           <i>// shown in About; drives auto-update</i>
+  "icon": "icon.png",           <i>// 1024×1024 → AppIcon.icns</i>
+  "signIdentity": "Developer ID Application: …",  <i>// default: ad-hoc</i>
+  "urlScheme": "myapp",         <i>// deep links: myapp://…</i>
+  "fileExtensions": ["md"],     <i>// "Open With" file associations</i>
+  "update": { "url": "https://…/manifest.json" },
+  "notarize": { "profile": "my-notary-profile" }
+}</pre>
+  </section>
+
+  <section id="backend">
+    <h2>backend <span class="tag">src/main.js — full system access via txiki.js</span></h2>
+    <pre><b>export const api</b> = {
+  <i>// callable from the page: await tiny.api.call('readNotes', { dir })</i>
+  <i>// return value resolves the page's promise; throwing rejects it</i>
+  readNotes: async ({ dir }, app) =&gt; { … },
+};
+
+<b>export function init(app)</b> {          <i>// runs once the window is up</i>
+  app.push('tick', data);             <i>// push an event to the page</i>
+}
+
+<i>// optional event exports (each also arrives as a page event):</i>
+<b>export function onMenu(id, app)</b> {}
+<b>export function onTray(id, app)</b> {}         <i>// id null = bare icon click</i>
+<b>export function onHotkey(id, app)</b> {}
+<b>export function onContextMenu(id, app)</b> {}
+<b>export function onSystem(kind, value, app)</b> {}  <i>// 'theme'|'sleep'|'wake'</i>
+<b>export function onOpenUrl(url, app)</b> {}
+<b>export function onOpenFiles(paths, app)</b> {}</pre>
+    <p>The <code>app</code> handle mirrors the frontend surface:
+    <code>setTitle</code>, <code>setSize</code>, <code>setMenu</code>,
+    <code>setContextMenu</code>, <code>eval(js)</code>, <code>reload()</code>,
+    <code>quit()</code>, <code>notify({title, body})</code>,
+    <code>hide/show/center/minimize/fullscreen</code>,
+    <code>setPosition</code>, <code>setAlwaysOnTop</code>,
+    <code>setResizable</code>, <code>setHideOnClose</code>,
+    <code>setDockVisible</code>, <code>print()</code>, <code>tray.set/remove</code>,
+    <code>store.*</code>, <code>hotkey.*</code>, <code>update.check/install</code>.</p>
+    <p>SQLite ships in the runtime:</p>
+    <pre><b>import</b> { Database } <b>from</b> 'tjs:sqlite';
+const db = new Database(dir + '/notes.db');
+db.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text)');
+const st = db.prepare('INSERT INTO notes (text) VALUES (?)');
+st.run('hello'); st.finalize();
+db.prepare('SELECT * FROM notes').all();  <i>// [{ id: 1, text: 'hello' }]</i></pre>
+  </section>
+
+  <section id="frontend">
+    <h2>tiny.api <span class="tag">request/response + events</span></h2>
+    <pre>const r = <b>await tiny.api.call</b>('method', { params });  <i>// → backend api.method</i>
+<b>tiny.api.on</b>('event-name', (data) =&gt; …);              <i>// ← app.push(...)</i>
+
+<b>tiny.log</b>(msg);                     <i>// print in the backend terminal</i>
+<b>tiny.quit</b>();
+<b>tiny.notify</b>(title, body);          <i>// desktop notification</i></pre>
+  </section>
+
+  <section id="window">
+    <h2>tiny.win <span class="tag">window control</span></h2>
+    <pre><b>tiny.win.setTitle</b>(t);  <b>tiny.win.setSize</b>(w, h);
+<b>tiny.win.center</b>();     <b>tiny.win.setPosition</b>(x, y);   <i>// top-left origin</i>
+<b>tiny.win.minimize</b>();   <b>tiny.win.fullscreen</b>();        <i>// toggles</i>
+<b>tiny.win.setAlwaysOnTop</b>(bool);  <b>tiny.win.setResizable</b>(bool);
+<b>tiny.win.hide</b>();  <b>tiny.win.show</b>();
+<b>tiny.win.setHideOnClose</b>(bool);   <i>// close button hides instead of quits</i>
+<b>tiny.win.print</b>();                <i>// native print panel</i>
+
+<i>// files dragged onto the window — real filesystem paths</i>
+<b>tiny.win.onDrop</b>((paths) =&gt; …);</pre>
+  </section>
+
+  <section id="dialogs">
+    <h2>dialogs <span class="tag">native panels, run by the launcher</span></h2>
+    <pre>await <b>tiny.win.openFile</b>();      <i>// path | null</i>
+await <b>tiny.win.openFiles</b>();     <i>// paths[] | null</i>
+await <b>tiny.win.pickFolder</b>();    <i>// path | null</i>
+await <b>tiny.win.saveFile</b>();      <i>// path | null</i>
+await <b>tiny.win.alert</b>(message, detail);
+await <b>tiny.win.confirm</b>(message, { detail, ok, cancel });   <i>// true | false</i>
+await <b>tiny.win.prompt</b>(message, { default, ok, cancel });   <i>// string | null</i></pre>
+  </section>
+
+  <section id="menus">
+    <h2>tiny.menu <span class="tag">menu bar + right-click</span></h2>
+    <p class="note">Every app gets an app menu (About, Quit ⌘Q) and an Edit
+    menu (copy/paste) for free; yours append after.</p>
+    <pre><b>tiny.menu.set</b>([
+  { title: 'Actions', items: [
+    { id: 'open', label: 'Open…', key: 'o' },   <i>// key = ⌘+key</i>
+    { separator: true },
+    { id: 'hello', label: 'Say Hello' },
+  ]},
+]);
+<b>tiny.menu.on</b>((id) =&gt; …);
+
+<i>// right-click menu — native items replace WebKit's default (null restores)</i>
+<b>tiny.menu.setContext</b>([{ id, label }, { separator: true }]);
+<b>tiny.menu.onContext</b>((id) =&gt; …);</pre>
+  </section>
+
+  <section id="tray">
+    <h2>tiny.tray <span class="tag">menu bar apps</span></h2>
+    <pre><b>tiny.tray.set</b>({
+  title: 'MyApp',          <i>// text and/or icon (png path; template by default)</i>
+  icon: 'tray.png', tooltip: '…',
+  menu: [{ id: 'show', label: 'Show' }, { separator: true }, { id: 'q', label: 'Quit' }],
+});
+<b>tiny.tray.on</b>((id) =&gt; …);       <i>// menu clicks</i>
+<b>tiny.tray.onClick</b>(fn);         <i>// bare icon click (no menu set)</i>
+<b>tiny.tray.remove</b>();
+
+<i>// the menu-bar-only app recipe:</i>
+<b>tiny.win.setHideOnClose</b>(true);
+<b>tiny.app.setDockVisible</b>(false);</pre>
+  </section>
+
+  <section id="store">
+    <h2>tiny.store <span class="tag">persistent settings</span></h2>
+    <p class="note">Flat keys, JSON values, atomic writes —
+    <code>~/Library/Application Support/&lt;bundle id&gt;/store.json</code>.
+    Reach for SQLite when it gets query-shaped.</p>
+    <pre>await <b>tiny.store.set</b>('key', value);
+await <b>tiny.store.get</b>('key');      <i>// value | null</i>
+await <b>tiny.store.delete</b>('key');
+await <b>tiny.store.all</b>();           <i>// { … }</i></pre>
+  </section>
+
+  <section id="hotkeys">
+    <h2>tiny.hotkey <span class="tag">system-wide</span></h2>
+    <pre><b>tiny.hotkey.register</b>('boss', 'cmd+shift+k');   <i>// fires even unfocused</i>
+<b>tiny.hotkey.on</b>((id) =&gt; tiny.win.show());
+<b>tiny.hotkey.unregister</b>('boss');</pre>
+  </section>
+
+  <section id="system">
+    <h2>system <span class="tag">theme + power</span></h2>
+    <pre>await <b>tiny.theme.get</b>();            <i>// { dark } | null</i>
+<b>tiny.theme.on</b>((dark) =&gt; …);        <i>// live changes</i>
+<b>tiny.api.on</b>('sleep', fn);  <b>tiny.api.on</b>('wake', fn);</pre>
+  </section>
+
+  <section id="open">
+    <h2>deep links &amp; files <span class="tag">packaged .app</span></h2>
+    <p class="note">Claim <code>"urlScheme"</code> / <code>"fileExtensions"</code>
+    in tinyjs.json. Cold-start events are buffered; a second
+    <code>open</code> activates the running instance (single-instance is
+    automatic).</p>
+    <pre><b>tiny.app.onOpenUrl</b>((url) =&gt; …);      <i>// open myapp://compose?to=x</i>
+<b>tiny.app.onOpenFiles</b>((paths) =&gt; …);  <i>// "Open With", Dock drops</i></pre>
+  </section>
+
+  <section id="update">
+    <h2>auto-update <span class="tag">ship new versions</span></h2>
+    <p class="note">Each release: <code>tinyjs publish</code>, upload
+    <code>dist/publish/*</code> next to your manifest url. Installs verify
+    sha256 + code signature (Team-ID pinned for Developer ID builds), swap
+    atomically with rollback, and relaunch.</p>
+    <pre>const { available, latest } = await <b>tiny.api.call</b>('update.check');
+if (available) await <b>tiny.api.call</b>('update.install');</pre>
+  </section>
+
+  <footer>
+    <a href="/">home</a>
+    <a href="/changelog">changelog</a>
+    <a href="https://github.com/tarwin/tinyjsapp#readme">readme</a>
+    <a href="https://github.com/tarwin/tinyjsapp">source</a>
+  </footer>
+</div>
+</body>
+</html>

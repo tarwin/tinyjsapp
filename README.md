@@ -29,9 +29,12 @@ To install from source instead:
 
 ```sh
 git clone https://github.com/tarwin/tinyjsapp && cd tinyjsapp
-./setup.sh    # downloads the txiki.js runtime, compiles launcher + shim
+./setup.sh    # downloads the txiki.js runtime, compiles the launcher
 ln -s "$(pwd)/tinyjs" /usr/local/bin/tinyjs
 ```
+
+Full API reference: [tinyjs.app/api](https://tinyjs.app/api) · release
+history: [tinyjs.app/changelog](https://tinyjs.app/changelog).
 
 ## Create and run an app
 
@@ -50,7 +53,8 @@ A project is just:
 
 ```
 myapp/
-  tinyjs.json            # { name, title, size, id, version, icon?, signIdentity? }
+  tinyjs.json            # { name, title, size, id, version, icon?, signIdentity?,
+                         #   urlScheme?, fileExtensions?, update?, notarize? }
   icon.png                # 1024×1024 app icon (template ships a default)
   src/main.js             # backend: export const api = {...}; export function init(app) {}
   src/frontend/           # index.html + any local js/css/images
@@ -170,6 +174,29 @@ The dialogs and menus are native: the backend hands the work to the launcher,
 which runs panels/menus on the UI thread and answers the page's promise
 directly via `webview_return`.
 
+### Deep links, file associations, single instance
+
+Packaged apps (`tinyjs build`) can claim a URL scheme and file extensions in
+tinyjs.json:
+
+```json
+{ "urlScheme": "myapp", "fileExtensions": ["md", "txt"] }
+```
+
+Then `open myapp://compose?to=x`, "Open With → MyApp", and dropping files on
+the Dock icon all deliver events — including on cold start (launch events are
+buffered until the app is ready):
+
+```js
+tiny.app.onOpenUrl((url) => ...);        // backend: export onOpenUrl(url, app)
+tiny.app.onOpenFiles((paths) => ...);    // backend: export onOpenFiles(paths, app)
+```
+
+Single-instancing is automatic: a second `open` (URL, file, or Dock click)
+activates the running app and delivers the event to it instead of launching
+another copy. Dev mode has no bundle, so schemes/associations only work in
+built apps.
+
 ### Tray (menu bar) apps
 
 ```js
@@ -249,13 +276,16 @@ asked to move to /Applications first).
 tjs-compiled binaries can't be re-signed — txiki appends the bundled app
 after the Mach-O, which `codesign` rejects ("main executable failed strict
 validation"; fine locally, fatal for distribution). So the bundle ships the
-**stock** runtime plus the app as plain data, started by a tiny signable shim:
+**stock** runtime plus the app as plain data, with the launcher as the bundle
+executable (it listens on the socket and spawns the backend — and, as the
+LaunchServices-registered process, receives deep links, file opens, and
+single-instance activation):
 
 ```
 MyApp.app/Contents/
-  MacOS/myapp            tiny C shim (CFBundleExecutable) — execs tjs
+  MacOS/myapp            the launcher (CFBundleExecutable) — window process,
+                         spawns tjs
   MacOS/tjs              stock runtime binary — signs cleanly
-  MacOS/launcher         window process
   Resources/app/         entry.js, bridge.js, update.js, frontend/, src/…
                          (plain data, sealed by the bundle signature)
   Resources/AppIcon.icns
@@ -324,7 +354,6 @@ promise — the shim in `tiny.js` is ~10 lines.
 ```
 bin/tjs               txiki.js runtime (fetched by setup.sh, not committed)
 native/launcher.cc    the window process (Objective-C++; webview headers vendored)
-native/shim.c         .app main executable: execs tjs on Resources/app/entry.js
 native/make-icon.jxa  default template icon generator (osascript -l JavaScript)
 runtime/bridge.js     backend bridge library (socket, protocol, win.* methods)
 runtime/update.js     app auto-update (manifest check, verify, bundle swap)

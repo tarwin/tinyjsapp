@@ -76,7 +76,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, update = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, update = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -88,58 +88,76 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     }
   }
 
-  // Launcher: explicit option > env override > next to the executable.
-  let launcher = launcherPath || tjs.env.TINYJS_LAUNCHER;
-  if (!launcher && (await exists(exeDir + 'launcher'))) launcher = exeDir + 'launcher';
-  if (!launcher || !(await exists(launcher))) {
-    throw new Error('tinyjs launcher binary not found (looked at: ' + (launcher || exeDir + 'launcher') + ')');
-  }
-
-  // Private rendezvous dir: socket + materialized frontend.
-  const workDir = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-XXXXXX');
-  const sockPath = workDir + '/app.sock';
-
-  // Page source, in precedence order:
-  //  - TINYJS_HTML env override (self-contained test pages): materialized
-  //  - htmlPath: the real file is handed to the launcher, so sibling css/js/
-  //    images load relatively (multi-file frontends); RELOAD re-reads disk
-  //  - html string: materialized into the private workDir
-  const overridePath = tjs.env.TINYJS_HTML;
-  let pagePath;
+  // Two arrangements:
+  //  - attach (packaged .app): the launcher IS the bundle executable — it owns
+  //    the window, already loaded Resources/app/frontend, listens on a socket,
+  //    and spawned us with TINYJS_SOCKET pointing at it. Being the
+  //    LaunchServices-registered process gives it deep links, file-open events,
+  //    and single-instancing.
+  //  - spawn (dev + bare binary): we create the socket and spawn the launcher.
+  const attachPath = tjs.env.TINYJS_SOCKET;
+  let proc = null;
+  let readable, writable;
+  let pagePath = null;
   let ownsPage = false; // true when the bridge materialized the page file
-  if (!overridePath && htmlPath) {
-    pagePath = htmlPath;
+  let cleanup = async () => {};
+
+  if (attachPath) {
+    const conn = await tjs.connect('pipe', attachPath);
+    ({ readable, writable } = await conn.opened);
   } else {
-    let pageHtml = html;
-    if (overridePath) pageHtml = dec.decode(await tjs.readFile(overridePath));
-    if (pageHtml == null) throw new Error('createApp needs `html` (string) or `htmlPath`');
-    pagePath = workDir + '/index.html';
-    await tjs.writeFile(pagePath, enc.encode(pageHtml));
-    ownsPage = true;
+    // Launcher: explicit option > env override > next to the executable.
+    let launcher = launcherPath || tjs.env.TINYJS_LAUNCHER;
+    if (!launcher && (await exists(exeDir + 'launcher'))) launcher = exeDir + 'launcher';
+    if (!launcher || !(await exists(launcher))) {
+      throw new Error('tinyjs launcher binary not found (looked at: ' + (launcher || exeDir + 'launcher') + ')');
+    }
+
+    // Private rendezvous dir: socket + materialized frontend.
+    const workDir = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-XXXXXX');
+    const sockPath = workDir + '/app.sock';
+
+    // Page source, in precedence order:
+    //  - TINYJS_HTML env override (self-contained test pages): materialized
+    //  - htmlPath: the real file is handed to the launcher, so sibling css/js/
+    //    images load relatively (multi-file frontends); RELOAD re-reads disk
+    //  - html string: materialized into the private workDir
+    const overridePath = tjs.env.TINYJS_HTML;
+    if (!overridePath && htmlPath) {
+      pagePath = htmlPath;
+    } else {
+      let pageHtml = html;
+      if (overridePath) pageHtml = dec.decode(await tjs.readFile(overridePath));
+      if (pageHtml == null) throw new Error('createApp needs `html` (string) or `htmlPath`');
+      pagePath = workDir + '/index.html';
+      await tjs.writeFile(pagePath, enc.encode(pageHtml));
+      ownsPage = true;
+    }
+
+    const server = await tjs.listen('pipe', sockPath);
+    const serverInfo = await server.opened;
+
+    proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], { stderr: 'inherit' });
+
+    cleanup = async () => {
+      await tjs.remove(sockPath).catch(() => {});
+      await tjs.remove(workDir, { recursive: true }).catch(() => tjs.remove(workDir).catch(() => {}));
+    };
+
+    // Wait for the launcher to connect, but bail out if it dies instead.
+    const acceptReader = serverInfo.readable.getReader();
+    const first = await Promise.race([
+      acceptReader.read().then(({ value }) => ({ sock: value })),
+      proc.wait().then((st) => ({ exited: st })),
+    ]);
+    if (first.exited) {
+      await cleanup();
+      throw new Error('launcher exited before connecting: ' + JSON.stringify(first.exited));
+    }
+
+    ({ readable, writable } = await first.sock.opened);
   }
 
-  const server = await tjs.listen('pipe', sockPath);
-  const serverInfo = await server.opened;
-
-  const proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], { stderr: 'inherit' });
-
-  async function cleanup() {
-    await tjs.remove(sockPath).catch(() => {});
-    await tjs.remove(workDir, { recursive: true }).catch(() => tjs.remove(workDir).catch(() => {}));
-  }
-
-  // Wait for the launcher to connect, but bail out if it dies instead.
-  const acceptReader = serverInfo.readable.getReader();
-  const first = await Promise.race([
-    acceptReader.read().then(({ value }) => ({ sock: value })),
-    proc.wait().then((st) => ({ exited: st })),
-  ]);
-  if (first.exited) {
-    await cleanup();
-    throw new Error('launcher exited before connecting: ' + JSON.stringify(first.exited));
-  }
-
-  const { readable, writable } = await first.sock.opened;
   const writer = writable.getWriter();
 
   function send(line) {
@@ -290,6 +308,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   };
   const methods = { ...api, ...builtins };
   let lastTheme = null; // { dark } once the launcher reports it (at startup)
+  let markEof;
+  const eofDone = new Promise((r) => { markEof = () => r({ exit_status: 0 }); });
 
   async function handleCall(line) {
     const sp = line.indexOf(' ', 5);
@@ -363,15 +383,39 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
             push(kind, {}); // 'sleep' | 'wake'
           }
           if (onSystem) onSystem(kind, value ?? null, app);
+        } else if (line.startsWith('OPENURL ')) {
+          // Deep link (custom URL scheme; packaged .app only).
+          const url = line.slice(8);
+          push('open-url', { url });
+          if (onOpenUrl) onOpenUrl(url, app);
+        } else if (line.startsWith('OPENFILES ')) {
+          // "Open With" / Dock drop / file association (packaged .app only).
+          try {
+            const paths = JSON.parse(line.slice(10));
+            push('open-files', { paths });
+            if (onOpenFiles) onOpenFiles(paths, app);
+          } catch {}
         }
       }
     }
-  })().catch((e) => console.log('tinyjs read loop error:', e));
+    markEof();
+  })().catch((e) => { console.log('tinyjs read loop error:', e); markEof(); });
 
-  app.done = proc.wait().then(async (st) => {
-    await cleanup();
-    return st;
-  });
+  // Attach mode has no child process: done = the launcher closing the socket.
+  app.done = proc
+    ? proc.wait().then(async (st) => {
+        await cleanup();
+        return st;
+      })
+    : eofDone;
+
+  // Attach mode: the launcher booted with plist defaults; apply the app's
+  // configured title/size now.
+  if (attachPath) {
+    app.setTitle(title);
+    const [w, h] = String(size).split('x').map((n) => parseInt(n, 10));
+    if (w && h) app.setSize(w, h);
+  }
 
   return app;
 }

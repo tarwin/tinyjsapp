@@ -1,6 +1,6 @@
 #!/bin/sh
 # Bootstrap tinyjs from a source checkout: download the txiki.js runtime
-# and compile the native launcher + shim. Run once after cloning (the curl
+# and compile the native launcher. Run once after cloning (the curl
 # installer ships these prebuilt; this script is for developing tinyjs
 # itself).
 set -e
@@ -34,10 +34,7 @@ echo "==> compiling launcher"
 c++ -std=c++17 -x objective-c++ -Inative/include native/launcher.cc \
   -o native/launcher -framework WebKit -framework AppKit -framework Carbon -ldl
 
-echo "==> compiling shim"
-cc -O2 -Wall native/shim.c -o native/shim
-
-codesign --force --sign - native/launcher native/shim 2>/dev/null || true
+codesign --force --sign - native/launcher 2>/dev/null || true
 
 echo "==> done"
 ./bin/tjs --version

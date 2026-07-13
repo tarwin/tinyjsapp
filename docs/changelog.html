@@ -69,6 +69,16 @@
   <section>
 
     <div class="rel">
+      <h2>0.4.0 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>Deep links</b> — <code>"urlScheme": "myapp"</code> in tinyjs.json; <code>myapp://…</code> opens deliver <code>tiny.app.onOpenUrl</code>, cold starts included.</li>
+        <li><b>File associations</b> — <code>"fileExtensions": ["md"]</code>; "Open With" and Dock drops arrive as real paths via <code>tiny.app.onOpenFiles</code>.</li>
+        <li><b>Single instance</b> — a second <code>open</code> activates the running app instead of launching a copy.</li>
+        <li><b>New .app architecture</b> — the launcher is the bundle executable and spawns the backend; the C shim is gone. Bundles still sign and notarize clean.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.3.1 <span class="date">2026-07-13</span></h2>
       <ul>
         <li><b>Global hotkeys</b> — <code>tiny.hotkey.register('boss', 'cmd+shift+k')</code>; fires system-wide, even while other apps are focused.</li>
@@ -124,6 +134,7 @@
 
   <footer>
     <a href="/">home</a>
+    <a href="/api">api</a>
     <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
     <a href="https://github.com/tarwin/tinyjsapp/blob/main/CHANGELOG.md">CHANGELOG.md</a>
   </footer>
