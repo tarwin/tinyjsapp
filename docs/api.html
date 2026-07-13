@@ -86,6 +86,7 @@
     <a href="#backend">backend</a>
     <a href="#frontend">tiny.api</a>
     <a href="#window">tiny.win</a>
+    <a href="#windows">windows</a>
     <a href="#dialogs">dialogs</a>
     <a href="#menus">menus</a>
     <a href="#tray">tray</a>
@@ -203,6 +204,19 @@ await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i>
 const s = await <b>tiny.win.getState</b>();
 <i>// { x, y, width, height, fullscreen, minimized, visible, focused,</i>
 <i>//   alwaysOnTop, resizable, screen: { width, height, scale } }</i></pre>
+  </section>
+
+  <section id="windows">
+    <h2>multiple windows</h2>
+    <pre><b>tiny.win.open</b>('settings', { page: 'settings.html', title: 'Settings', size: '420x300' });
+<b>tiny.win.id</b>;                  <i>// which window this page lives in</i>
+<b>tiny.win.close</b>();             <i>// the calling window ('main' quits the app)</i>
+await <b>tiny.win.windows</b>();     <i>// ['main', 'settings', …]</i>
+
+<i>// every window runs the full tiny.* bridge; win.* targets its own window.</i>
+<i>// backend: app.openWindow(id, opts), app.window(id).setTitle/push/close/…,</i>
+<i>// app.push broadcasts to all windows, export onWindowClosed(id, app);</i>
+<i>// api handlers: (params, app, meta) — meta.window = caller's window id</i></pre>
   </section>
 
   <section id="dialogs">

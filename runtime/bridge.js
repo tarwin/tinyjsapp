@@ -63,7 +63,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, chrome = null, update = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onWindowClosed, chrome = null, update = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -146,6 +146,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   }
 
   const writer = writable.getWriter();
+  const frontendDir = htmlPath ? htmlPath.replace(/\/[^/]*$/, '') : null;
 
   // Read-backs: GET <qid> <what> → launcher answers GOT <qid> <json>.
   let qidSeq = 1;
@@ -200,7 +201,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   }
 
   function push(event, data) {
-    send('EVAL window.__emit && window.__emit(' + JSON.stringify({ event, data }) + ')');
+    // Broadcast so secondary windows receive backend events too.
+    send('EVAL@* window.__emit && window.__emit(' + JSON.stringify({ event, data }) + ')');
   }
 
   const app = {
@@ -305,6 +307,53 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       send('CTXEND');
     },
     quit() { send('QUIT'); },
+    // --- multi-window ---------------------------------------------------
+    // Open (or focus) a secondary window. `page` is an html file in your
+    // frontend dir (e.g. 'settings.html') or an absolute path. Each window
+    // runs the same tiny.* bridge; win.* calls from its page target itself.
+    openWindow(id, { page, title, size } = {}) {
+      let p = String(page ?? 'index.html');
+      if (!p.startsWith('/')) {
+        if (!frontendDir) throw new Error('win.open needs an absolute page path here');
+        p = frontendDir + '/' + p;
+      }
+      send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400')].join('\t'));
+    },
+    // Handle for any window ('main' or a secondary id).
+    window(id) {
+      const t = (cmd, rest) => send(id === 'main'
+        ? cmd + (rest != null ? ' ' + rest : '')
+        : cmd + '@' + id + (rest != null ? ' ' + rest : ''));
+      return {
+        eval: (js) => t('EVAL', String(js).replace(/\n/g, ' ')),
+        push: (event, data) =>
+          t('EVAL', 'window.__emit && window.__emit(' + JSON.stringify({ event, data }) + ')'),
+        close: () => { if (id !== 'main') send('WINCLOSE ' + id); },
+        setTitle: (v) => t('TITLE', String(v).replace(/\n/g, ' ')),
+        setSize: (w2, h2) => t('SIZE', `${w2 | 0} ${h2 | 0}`),
+        setPosition: (x, y) => t('WINOP', `pos ${x | 0} ${y | 0}`),
+        center: () => t('WINOP', 'center'),
+        hide: () => t('WINOP', 'hide'),
+        show: () => t('WINOP', 'show'),
+        minimize: () => t('WINOP', 'minimize'),
+        restore: () => t('WINOP', 'restore'),
+        zoom: () => t('WINOP', 'zoom'),
+        fullscreen: () => t('WINOP', 'fullscreen'),
+        setFullscreen: (v) => t('WINOP', 'fullscreen ' + (v ? 1 : 0)),
+        setAlwaysOnTop: (v) => t('WINOP', 'ontop ' + (v ? 1 : 0)),
+        setResizable: (v) => t('WINOP', 'resizable ' + (v ? 1 : 0)),
+        setChrome(opts = {}) {
+          const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
+          const vib = opts.vibrancy === undefined ? ''
+                    : opts.vibrancy === null || opts.vibrancy === false ? 'none'
+                    : String(opts.vibrancy);
+          t('CHROME', [bit(opts.frame), bit(opts.trafficLights),
+                       bit(opts.transparent), one(vib)].join('\t'));
+        },
+        getState: () => query(id === 'main' ? 'win' : 'win:' + id),
+      };
+    },
+    windows: () => query('windows'),
     // { version: <app>, tinyjs: <framework that built it>, runtime: <txiki> }
     info: { version, tinyjs: tinyjsVersion, runtime: 'txiki.js ' + tjs.version },
     // Auto-update (tinyjs.json "update": { "url": "https://…/manifest.json" }).
@@ -328,16 +377,25 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     ping: async () => 'pong',
     log: async ({ msg }) => (console.log('[web]', msg), true),
     quit: async () => (app.quit(), true),
-    'win.setTitle': async ({ title: t }) => (app.setTitle(t), true),
-    'win.setSize': async ({ width, height }) => (app.setSize(width, height), true),
-    'win.hide': async () => (app.hide(), true),
-    'win.show': async () => (app.show(), true),
-    'win.center': async () => (app.center(), true),
-    'win.minimize': async () => (app.minimize(), true),
-    'win.fullscreen': async () => (app.fullscreen(), true),
-    'win.setAlwaysOnTop': async ({ enabled }) => (app.setAlwaysOnTop(enabled), true),
-    'win.setResizable': async ({ enabled }) => (app.setResizable(enabled), true),
-    'win.setPosition': async ({ x, y }) => (app.setPosition(x, y), true),
+    // win.* calls target the window the page lives in.
+    'win.setTitle': async ({ title: t }, _a, m) => (forWin(m).setTitle(t), true),
+    'win.setSize': async ({ width, height }, _a, m) => (forWin(m).setSize(width, height), true),
+    'win.hide': async (_p, _a, m) => (forWin(m).hide(), true),
+    'win.show': async (_p, _a, m) => (forWin(m).show(), true),
+    'win.center': async (_p, _a, m) => (forWin(m).center(), true),
+    'win.minimize': async (_p, _a, m) => (forWin(m).minimize(), true),
+    'win.fullscreen': async (_p, _a, m) => (forWin(m).fullscreen(), true),
+    'win.setAlwaysOnTop': async ({ enabled }, _a, m) => (forWin(m).setAlwaysOnTop(enabled), true),
+    'win.setResizable': async ({ enabled }, _a, m) => (forWin(m).setResizable(enabled), true),
+    'win.setPosition': async ({ x, y }, _a, m) => (forWin(m).setPosition(x, y), true),
+    'win.open': async ({ id: wid, ...opts }) => (app.openWindow(wid, opts), true),
+    'win.close': async ({ id: wid }, _a, m) => {
+      const target = wid ?? m?.window ?? 'main';
+      if (target === 'main') app.quit();
+      else app.window(target).close();
+      return true;
+    },
+    'win.windows': async () => app.windows(),
     'win.setHideOnClose': async ({ enabled }) => (app.setHideOnClose(enabled), true),
     'notify': async (params) => notify(params),
     'app.setDockVisible': async ({ visible }) => (app.setDockVisible(visible), true),
@@ -359,16 +417,17 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'menu.setContext': async ({ items }) => (app.setContextMenu(items), true),
     'menu.update': async ({ id: mid, ...patch }) => (app.updateMenuItem(mid, patch), true),
     'menu.get': async ({ id: mid }) => app.getMenuItem(mid),
-    'win.getState': async () => app.getWinState(),
+    'win.getState': async (_p, _a, m) => forWin(m).getState(),
     'debug.get': async ({ what }) => query(String(what)),
-    'win.restore': async () => (app.restore(), true),
-    'win.setFullscreen': async ({ enabled }) => (app.setFullscreen(enabled), true),
-    'win.setChrome': async (opts) => (app.setChrome(opts), true),
+    'win.restore': async (_p, _a, m) => (forWin(m).restore(), true),
+    'win.setFullscreen': async ({ enabled }, _a, m) => (forWin(m).setFullscreen(enabled), true),
+    'win.setChrome': async (opts, _a, m) => (forWin(m).setChrome(opts), true),
     'win.startDrag': async () => (app.startDrag(), true),
-    'win.zoom': async () => (app.zoom(), true),
+    'win.zoom': async (_p, _a, m) => (forWin(m).zoom(), true),
     'theme.get': async () => lastTheme,
     'app.info': async () => app.info,
   };
+  const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };
   let lastTheme = null; // { dark } once the launcher reports it (at startup)
   let markEof;
@@ -377,6 +436,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   async function handleCall(line) {
     const sp = line.indexOf(' ', 5);
     const id = line.slice(5, sp);
+    // Call ids are "<windowId>:<seq>" — routing lives inside the id, so
+    // RET lines need no changes and handlers learn who called.
+    const callerWin = id.includes(':') ? id.slice(0, id.indexOf(':')) : 'main';
     let status = 0;
     let result;
     try {
@@ -394,7 +456,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
 
       const fn = methods[method];
       if (!fn) throw new Error('unknown method: ' + method);
-      result = await fn(params ?? {}, app);
+      result = await fn(params ?? {}, app, { window: callerWin });
     } catch (e) {
       status = 1;
       result = String((e && e.message) || e);
@@ -455,6 +517,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
             try { v = JSON.parse(line.slice(sp + 1)); } catch {}
             resolve(v);
           }
+        } else if (line.startsWith('WINCLOSED ')) {
+          const id = line.slice(10);
+          push('window-closed', { id });
+          if (onWindowClosed) onWindowClosed(id, app);
         } else if (line.startsWith('NOTIFYCLICK ')) {
           const id = line.slice(12);
           push('notification-click', { id });

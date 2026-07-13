@@ -4,6 +4,19 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.8.0 — 2026-07-13
+
+- **Multiple windows** — `tiny.win.open(id, { page, title, size })` turns any
+  frontend html file into a window. Every window runs the full `tiny.*`
+  bridge; `win.*` calls target the caller's own window; `tiny.win.id`,
+  `tiny.win.close()`, `tiny.win.windows()`. Backend: `app.openWindow`,
+  `app.window(id).…` (eval/push/close/title/size/position/chrome/getState),
+  `app.push` broadcasts, `onWindowClosed` export + `window-closed` event,
+  and api handlers receive `meta.window` (who called).
+- **Unified page RPC** — one injected bridge for all windows (call ids carry
+  the window id), replacing the webview library's binding; dialogs reply
+  through the same path.
+
 ## 0.7.0 — 2026-07-13
 
 - **Frameless windows** — `tiny.win.setChrome({ frame, trafficLights,

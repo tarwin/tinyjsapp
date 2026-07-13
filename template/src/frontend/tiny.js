@@ -19,6 +19,11 @@
     notify: (title, body, opts = {}) => call('notify', { title, body, ...opts }),
 
     win: {
+      id: window.__TINY_WIN || 'main',   // which window this page lives in
+      // Open (or focus) another window; page = html file in your frontend dir.
+      open: (id, opts = {}) => call('win.open', { id, ...opts }),
+      close: (id) => call('win.close', id ? { id } : {}),  // no id = this window
+      windows: () => call('win.windows'),                  // ['main', ...]
       setTitle: (title) => call('win.setTitle', { title }),
       setSize: (width, height) => call('win.setSize', { width, height }),
       hide: () => call('win.hide'),

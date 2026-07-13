@@ -208,6 +208,32 @@ The dialogs and menus are native: the backend hands the work to the launcher,
 which runs panels/menus on the UI thread and answers the page's promise
 directly via `webview_return`.
 
+### Multiple windows
+
+Any html file in your frontend dir can be its own window:
+
+```js
+tiny.win.open('settings', { page: 'settings.html', title: 'Settings', size: '420x300' });
+tiny.win.id;                       // which window this page lives in
+tiny.win.close();                  // close the calling window ('main' quits)
+await tiny.win.windows();          // ['main', 'settings', ...]
+```
+
+Every window runs the full `tiny.*` bridge, and `tiny.win.*` calls from a
+page target *its own* window. Backend side:
+
+```js
+app.openWindow('settings', { page: 'settings.html' });
+app.window('settings').setTitle('…');   // eval, push, close, hide/show,
+                                        // setSize/Position, chrome, getState…
+app.push('event', data);                // broadcasts to every window
+app.windows();
+export function onWindowClosed(id, app) {}   // also a 'window-closed' event
+```
+
+API handlers can tell who's calling: `myMethod: async (params, app, meta)
+=> …` — `meta.window` is the caller's window id.
+
 ### Deep links, file associations, single instance
 
 Packaged apps (`tinyjs build`) can claim a URL scheme and file extensions in

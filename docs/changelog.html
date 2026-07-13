@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.8.0 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>Multiple windows</b> — <code>tiny.win.open('settings', { page: 'settings.html' })</code>: any frontend html file becomes a window with the full <code>tiny.*</code> bridge; <code>win.*</code> targets the caller's window; backend <code>app.window(id)</code> handles, broadcasts, close events, and <code>meta.window</code> caller identity.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.7.0 <span class="date">2026-07-13</span></h2>
       <ul>
         <li><b>Frameless windows</b> — <code>tiny.win.setChrome({ frame, trafficLights, transparent, vibrancy })</code> (or <code>"chrome"</code> in tinyjs.json, applied before first paint in packaged apps); native resize/focus/fullscreen kept.</li>

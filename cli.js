@@ -236,6 +236,7 @@ const app = await createApp({
   onOpenUrl: appMod.onOpenUrl,
   onOpenFiles: appMod.onOpenFiles,
   onNotificationClick: appMod.onNotificationClick,
+  onWindowClosed: appMod.onWindowClosed,
   chrome: ${JSON.stringify(cfg.chrome ?? null)},
   update: ${JSON.stringify(cfg.update ?? null)},
 });

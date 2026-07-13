@@ -5,8 +5,14 @@
 // socket. No TCP, no ports; the socket lives in a private temp directory.
 // The backend (txiki.js) creates the socket, then spawns this as a child.
 //
-// Protocol (newline-delimited; payloads are JSON so never contain raw \n):
-//   launcher -> backend:  CALL <id> <json-args-array>
+// Protocol (newline-delimited; payloads are JSON so never contain raw \n).
+// Call/window routing: page-call ids are "<winid>:<seq>"; window-targeted
+// commands use CMD@<winid> (no suffix = main); EVAL@* broadcasts. Windows:
+//   backend -> launcher:  WINOPEN <id>\t<page>\t<title>\t<WxH> (create/focus)
+//                         WINCLOSE <id>
+//   launcher -> backend:  WINCLOSED <id>
+//
+//   launcher -> backend:  CALL <winid>:<seq> <json-args-array>
 //   backend -> launcher:  RET <id> <status> <json>   resolve/reject a call
 //                         EVAL <js>                  run JS in the page
 //                         TITLE <text>               set window title
@@ -122,6 +128,18 @@ static std::mutex g_write_mutex;
 static std::string g_html_path; // empty when target is an http(s) URL
 static std::string g_app_name = "tinyjs";
 static std::string g_app_version = "0.0.0";
+#ifdef __APPLE__
+// Secondary windows (the main window lives in the webview library).
+struct TinyWindow {
+  NSWindow *win = nil;
+  WKWebView *wv = nil;
+  NSObject *handler = nil;   // TinyMsgHandler
+  NSObject *wdelegate = nil; // TinyWinDelegate
+  NSVisualEffectView *effect = nil;
+};
+static std::map<std::string, TinyWindow> g_windows;
+#endif
+
 // Window chrome state (set by CHROME, reported by GET win).
 static int g_resizable_override = -1; // -1 default, 0 forced off, 1 forced on
 static bool g_chrome_frameless = false;
@@ -200,18 +218,31 @@ static void do_title(webview_t w, void *arg) {
 
 struct SizeReq {
   int width, height;
+  std::string win = "main";
 };
 
 static void reapply_window_overrides(webview_t w); // defined with chrome ops
+#ifdef __APPLE__
+static NSWindow *window_for_id(webview_t w, const std::string &id); // below
+#endif
 
 static void do_size(webview_t w, void *arg) {
   SizeReq *s = static_cast<SizeReq *>(arg);
-  webview_set_size(w, s->width, s->height, WEBVIEW_HINT_NONE);
-  // The webview library's set_size rewrites the styleMask wholesale,
-  // wiping frameless chrome and resizable overrides — restore them.
-  reapply_window_overrides(w);
+  if (s->win == "main") {
+    webview_set_size(w, s->width, s->height, WEBVIEW_HINT_NONE);
+    // The webview library's set_size rewrites the styleMask wholesale,
+    // wiping frameless chrome and resizable overrides — restore them.
+    reapply_window_overrides(w);
+  } else {
+#ifdef __APPLE__
+    NSWindow *win = window_for_id(w, s->win);
+    if (win)
+      [win setContentSize:NSMakeSize(s->width, s->height)];
+#endif
+  }
   delete s;
 }
+
 
 static void do_terminate(webview_t w, void *) { webview_terminate(w); }
 
@@ -274,6 +305,9 @@ static std::vector<std::string> split_tabs(const std::string &s) {
   out.push_back(s.substr(start));
   return out;
 }
+
+static void reply_to_call(webview_t w, const std::string &composite, int status,
+                          const std::string &json); // unified RPC (below)
 
 struct DlgReq {
   std::string id;
@@ -345,7 +379,7 @@ static void do_dialog(webview_t w, void *arg) {
     }
   }
 #endif
-  webview_return(w, req->id.c_str(), 0, json.c_str());
+  reply_to_call(w, req->id, 0, json);
   delete req;
 }
 
@@ -625,20 +659,30 @@ static void install_close_hook(webview_t w) {
 }
 #endif
 
+struct WinopReq {
+  std::string win, opstr;
+};
+
 static void do_winop(webview_t w, void *arg) {
-  std::string *op = static_cast<std::string *>(arg);
+  WinopReq *wr = static_cast<WinopReq *>(arg);
+  std::string *op = &wr->opstr;
 #ifdef __APPLE__
   @autoreleasepool {
-    NSWindow *win = (NSWindow *)webview_get_native_handle(
-        w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+    NSWindow *win = window_for_id(w, wr->win);
+    bool is_main = wr->win == "main";
+    if (!win) {
+      delete wr;
+      return;
+    }
     if (*op == "hide") {
       [win orderOut:nil];
     } else if (*op == "show") {
       [NSApp activateIgnoringOtherApps:YES];
       [win makeKeyAndOrderFront:nil];
     } else if (*op == "dock 0") {
-      [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-    } else if (*op == "dock 1") {
+      if (is_main)
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    } else if (*op == "dock 1" && is_main) {
       [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
       [NSApp activateIgnoringOtherApps:YES];
     } else if (*op == "hideonclose 1") {
@@ -665,10 +709,12 @@ static void do_winop(webview_t w, void *arg) {
     } else if (*op == "ontop 0") {
       win.level = NSNormalWindowLevel;
     } else if (*op == "resizable 1") {
-      g_resizable_override = 1;
+      if (is_main)
+        g_resizable_override = 1;
       win.styleMask |= NSWindowStyleMaskResizable;
     } else if (*op == "resizable 0") {
-      g_resizable_override = 0;
+      if (is_main)
+        g_resizable_override = 0;
       win.styleMask &= ~NSWindowStyleMaskResizable;
     } else if (op->rfind("pos ", 0) == 0) {
       // Top-left origin in screen points (y grows downward, CSS-style).
@@ -680,7 +726,7 @@ static void do_winop(webview_t w, void *arg) {
     }
   }
 #endif
-  delete op;
+  delete wr;
 }
 
 // --- file drag & drop (macOS) -------------------------------------------------
@@ -995,9 +1041,14 @@ static void do_get(webview_t w, void *arg) {
   GetReq *req = static_cast<GetReq *>(arg);
   std::string json = "null";
   @autoreleasepool {
-    if (req->what == "win") {
-      NSWindow *win = (NSWindow *)webview_get_native_handle(
-          w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+    if (req->what == "windows") {
+      json = "[\"main\"";
+      for (auto &kv : g_windows)
+        json += "," + json_escape(kv.first);
+      json += "]";
+    } else if (req->what == "win" || req->what.rfind("win:", 0) == 0) {
+      std::string wid = req->what == "win" ? "main" : req->what.substr(4);
+      NSWindow *win = window_for_id(w, wid);
       if (win) {
         NSRect f = win.frame;
         // width/height are frame size — the same units setSize uses, so
@@ -1237,6 +1288,7 @@ static void do_notify(webview_t, void *arg) { delete static_cast<NotifReq *>(arg
 // native window drag (pages mark drag regions with data-tiny-drag).
 
 struct ChromeReq {
+  std::string win = "main";
   std::string frame, traffic, transparent, vibrancy;
 };
 
@@ -1294,18 +1346,15 @@ static void relayout_titlebar(NSWindow *win) {
 // Toggling fullSizeContentView grows the content view, but the webview's
 // autoresizing doesn't reliably follow a style-mask change — pin it (and the
 // vibrancy layer) to the new bounds explicitly.
-static void extend_content(webview_t w, NSWindow *win) {
-  WKWebView *wv = (WKWebView *)webview_get_native_handle(
-      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+static void extend_content(WKWebView *wv, NSWindow *win,
+                           NSVisualEffectView *effect) {
   if (wv)
     wv.frame = win.contentView.bounds;
-  if (g_effect_view)
-    g_effect_view.frame = win.contentView.bounds;
+  if (effect)
+    effect.frame = win.contentView.bounds;
 }
 
-static void webview_draws_background(webview_t w, bool draws) {
-  WKWebView *wv = (WKWebView *)webview_get_native_handle(
-      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+static void webview_draws_background(WKWebView *wv, bool draws) {
   // Private-but-stable WKWebView property, reached via KVC's _drawsBackground
   // fallback (same trick the webview library uses for WKPreferences).
   @try {
@@ -1314,18 +1363,27 @@ static void webview_draws_background(webview_t w, bool draws) {
   }
 }
 
+static NSWindow *window_for_id(webview_t w, const std::string &id);
+static WKWebView *webview_for_id(webview_t w, const std::string &id);
+static NSVisualEffectView **effect_slot_for(const std::string &id); // main/secondary
+
 static void do_chrome(webview_t w, void *arg) {
   ChromeReq *req = static_cast<ChromeReq *>(arg);
   @autoreleasepool {
-    NSWindow *win = (NSWindow *)webview_get_native_handle(
-        w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
-    if (!win) {
+    NSWindow *win = window_for_id(w, req->win);
+    WKWebView *wv = webview_for_id(w, req->win);
+    bool is_main = req->win == "main";
+    NSVisualEffectView **effect = effect_slot_for(req->win);
+    if (!win || !wv || !effect) {
       delete req;
       return;
     }
+    bool req_frameless = req->frame == "0";
+    bool req_traffic_off = req->traffic == "0";
     if (!req->frame.empty()) {
-      bool frameless = req->frame == "0";
-      g_chrome_frameless = frameless;
+      bool frameless = req_frameless;
+      if (is_main)
+        g_chrome_frameless = frameless;
       // AppKit preserves the CONTENT rect across a styleMask change and
       // resizes the frame; pin the frame instead so the window keeps its
       // size and the page absorbs (or returns) the titlebar strip.
@@ -1343,48 +1401,56 @@ static void do_chrome(webview_t w, void *arg) {
     }
     if (!req->traffic.empty()) {
       bool show = req->traffic == "1";
-      g_chrome_traffic = show;
+      if (is_main)
+        g_chrome_traffic = show;
       [win standardWindowButton:NSWindowCloseButton].hidden = !show;
       [win standardWindowButton:NSWindowMiniaturizeButton].hidden = !show;
       [win standardWindowButton:NSWindowZoomButton].hidden = !show;
     }
     if (!req->transparent.empty()) {
       bool tr = req->transparent == "1";
-      g_chrome_transparent = tr;
+      if (is_main)
+        g_chrome_transparent = tr;
       win.opaque = !tr;
       win.backgroundColor = tr ? [NSColor clearColor]
                                : [NSColor windowBackgroundColor];
       win.hasShadow = !tr;
-      webview_draws_background(w, !tr);
+      webview_draws_background(wv, !tr);
     }
     if (!req->frame.empty() || !req->traffic.empty()) {
-      set_titlebar_hidden(win, g_chrome_frameless && !g_chrome_traffic);
+      // Main tracks state globally; secondary windows derive from this
+      // request (set frame+trafficLights together for those).
+      bool hide_bar = is_main ? (g_chrome_frameless && !g_chrome_traffic)
+                              : (req_frameless && req_traffic_off);
+      set_titlebar_hidden(win, hide_bar);
       relayout_titlebar(win);
-      extend_content(w, win);
+      extend_content(wv, win, *effect);
     }
     if (!req->vibrancy.empty()) {
-      if (g_effect_view) {
-        [g_effect_view removeFromSuperview];
-        [g_effect_view release];
-        g_effect_view = nil;
+      if (*effect) {
+        [*effect removeFromSuperview];
+        [*effect release];
+        *effect = nil;
       }
       if (req->vibrancy == "none") {
-        g_chrome_vibrancy.clear();
-        if (!g_chrome_transparent)
-          webview_draws_background(w, true);
+        if (is_main)
+          g_chrome_vibrancy.clear();
+        if (!is_main || !g_chrome_transparent)
+          webview_draws_background(wv, true);
       } else {
-        g_chrome_vibrancy = req->vibrancy;
+        if (is_main)
+          g_chrome_vibrancy = req->vibrancy;
         NSView *content = win.contentView;
-        g_effect_view = [[NSVisualEffectView alloc] initWithFrame:content.bounds];
-        g_effect_view.material = material_for(req->vibrancy);
-        g_effect_view.blendingMode = NSVisualEffectBlendingModeBehindWindow;
-        g_effect_view.state = NSVisualEffectStateFollowsWindowActiveState;
-        g_effect_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        [content addSubview:g_effect_view
-                 positioned:NSWindowBelow
-                 relativeTo:nil];
+        NSVisualEffectView *ev =
+            [[NSVisualEffectView alloc] initWithFrame:content.bounds];
+        ev.material = material_for(req->vibrancy);
+        ev.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+        ev.state = NSVisualEffectStateFollowsWindowActiveState;
+        ev.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [content addSubview:ev positioned:NSWindowBelow relativeTo:nil];
+        *effect = ev;
         // The page must not paint an opaque background over the effect.
-        webview_draws_background(w, false);
+        webview_draws_background(wv, false);
         win.opaque = NO;
         win.backgroundColor = [NSColor clearColor];
       }
@@ -1408,7 +1474,9 @@ static void reapply_window_overrides(webview_t w) {
     [win setFrame:keep display:YES];
     set_titlebar_hidden(win, g_chrome_frameless && !g_chrome_traffic);
     relayout_titlebar(win);
-    extend_content(w, win);
+    WKWebView *mwv = (WKWebView *)webview_get_native_handle(
+        w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+    extend_content(mwv, win, g_effect_view);
   }
 }
 
@@ -1423,6 +1491,257 @@ static void do_dragwin(webview_t w, void *) {
 static void do_chrome(webview_t, void *arg) { delete static_cast<ChromeReq *>(arg); }
 static void do_dragwin(webview_t, void *) {}
 static void reapply_window_overrides(webview_t) {}
+#endif
+
+// --- multi-window + unified page RPC ---------------------------------------------
+// Every window (the main one included) gets the same injected bridge: the
+// page's __invoke posts to the "tiny" script-message handler, which forwards
+// `CALL <winid>:<seq> [payload]` to the backend. RET lines resolve the
+// promise by evaluating __tinyResolve in the origin window — one code path
+// for any number of windows, and the backend learns which window called.
+// Secondary windows: WINOPEN <id>\t<pagePath>\t<title>\t<WxH>, WINCLOSE <id>,
+// targeted ops via CMD@<id>, EVAL@* broadcasts, `WINCLOSED <id>` on close.
+
+#ifdef __APPLE__
+static NSWindow *window_for_id(webview_t w, const std::string &id) {
+  if (id.empty() || id == "main")
+    return (NSWindow *)webview_get_native_handle(
+        w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+  auto it = g_windows.find(id);
+  return it == g_windows.end() ? nil : it->second.win;
+}
+
+static WKWebView *webview_for_id(webview_t w, const std::string &id) {
+  if (id.empty() || id == "main")
+    return (WKWebView *)webview_get_native_handle(
+        w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  auto it = g_windows.find(id);
+  return it == g_windows.end() ? nil : it->second.wv;
+}
+
+static NSVisualEffectView **effect_slot_for(const std::string &id) {
+  if (id.empty() || id == "main")
+    return &g_effect_view;
+  auto it = g_windows.find(id);
+  return it == g_windows.end() ? nullptr : &it->second.effect;
+}
+
+static NSString *tiny_shim_js(const std::string &winid) {
+  std::string js =
+      "(() => {"
+      "if (window.__tinyShim) return; window.__tinyShim = true;"
+      "window.__TINY_WIN = '" + winid + "';"
+      "let seq = 0; const pending = {};"
+      "window.__invoke = (payload) => new Promise((res, rej) => {"
+      "  const s = ++seq; pending[s] = { res, rej };"
+      "  window.webkit.messageHandlers.tiny.postMessage(String(s) + ':' + String(payload));"
+      "});"
+      "window.__tinyResolve = (s, ok, jsonText) => {"
+      "  const p = pending[s]; if (!p) return; delete pending[s];"
+      "  let v = null; try { v = JSON.parse(jsonText); } catch (e) {}"
+      "  ok ? p.res(v) : p.rej(v);"
+      "};"
+      "})();";
+  return ns(js);
+}
+
+@interface TinyMsgHandler : NSObject <WKScriptMessageHandler>
+@property(nonatomic, copy) NSString *winId;
+@end
+@implementation TinyMsgHandler
+- (void)userContentController:(WKUserContentController *)ucc
+      didReceiveScriptMessage:(WKScriptMessage *)msg {
+  if (![msg.body isKindOfClass:[NSString class]])
+    return;
+  std::string body = [(NSString *)msg.body UTF8String];
+  size_t c = body.find(':');
+  if (c == std::string::npos)
+    return;
+  std::string seq = body.substr(0, c);
+  std::string payload = body.substr(c + 1);
+  sock_write_line("CALL " + std::string([self.winId UTF8String]) + ":" + seq +
+                  " [" + json_escape(payload) + "]");
+}
+@end
+
+@interface TinyWinDelegate : NSObject <NSWindowDelegate>
+@property(nonatomic, copy) NSString *winId;
+@end
+@implementation TinyWinDelegate
+- (void)windowWillClose:(NSNotification *)n {
+  std::string id = [self.winId UTF8String];
+  sock_write_line("WINCLOSED " + id);
+  auto it = g_windows.find(id);
+  if (it != g_windows.end()) {
+    TinyWindow tw = it->second;
+    g_windows.erase(it);
+    // Deferred release: we're inside the window's own close notification.
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [tw.wv release];
+      [tw.handler release];
+      [tw.wdelegate release];
+      [tw.effect release];
+      [tw.win release];
+    });
+  }
+}
+@end
+
+static void attach_tiny_bridge(WKUserContentController *ucc,
+                               const std::string &winid) {
+  TinyMsgHandler *h = [[TinyMsgHandler alloc] init];
+  h.winId = ns(winid);
+  [ucc addScriptMessageHandler:h name:@"tiny"];
+  WKUserScript *script = [[[WKUserScript alloc]
+        initWithSource:tiny_shim_js(winid)
+         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+      forMainFrameOnly:YES] autorelease];
+  [ucc addUserScript:script];
+  // main window: handler ownership parked here (never removed)
+  if (winid != "main")
+    g_windows[winid].handler = h;
+}
+
+// Resolve a page call: RET <winid>:<seq> routes here (dialogs too).
+static void reply_to_call(webview_t w, const std::string &composite, int status,
+                          const std::string &json) {
+  size_t c = composite.find(':');
+  if (c == std::string::npos)
+    return;
+  std::string winid = composite.substr(0, c);
+  std::string seq = composite.substr(c + 1);
+  if (seq.empty() || seq.find_first_not_of("0123456789") != std::string::npos)
+    return;
+  WKWebView *wv = webview_for_id(w, winid);
+  if (!wv)
+    return;
+  std::string js = "window.__tinyResolve(" + seq + "," +
+                   (status == 0 ? "true" : "false") + "," + json_escape(json) +
+                   ")";
+  [wv evaluateJavaScript:ns(js) completionHandler:nil];
+}
+
+struct ReplyReq {
+  std::string composite;
+  int status;
+  std::string json;
+};
+
+static void do_reply(webview_t w, void *arg) {
+  ReplyReq *req = static_cast<ReplyReq *>(arg);
+  reply_to_call(w, req->composite, req->status, req->json);
+  delete req;
+}
+
+struct WinOpenReq {
+  std::string id, page, title;
+  int width = 600, height = 400;
+};
+
+static void enable_webgpu_prefs(id preferences); // defined in WebGPU section
+
+static void do_winopen(webview_t w, void *arg) {
+  WinOpenReq *req = static_cast<WinOpenReq *>(arg);
+  @autoreleasepool {
+    if (req->id.empty() || req->id == "main" ||
+        g_windows.count(req->id)) { // exists: just focus it
+      NSWindow *ex = window_for_id(w, req->id);
+      if (ex)
+        [ex makeKeyAndOrderFront:nil];
+      delete req;
+      return;
+    }
+    WKWebViewConfiguration *cfg =
+        [[[WKWebViewConfiguration alloc] init] autorelease];
+    enable_webgpu_prefs(cfg.preferences);
+    TinyWindow &tw = g_windows[req->id]; // create slot first (attach parks handler)
+    attach_tiny_bridge(cfg.userContentController, req->id);
+
+    NSWindow *win = [[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, req->width, req->height)
+                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskMiniaturizable |
+                            NSWindowStyleMaskResizable
+                    backing:NSBackingStoreBuffered
+                      defer:NO];
+    win.releasedWhenClosed = NO;
+    win.title = ns(req->title.empty() ? req->id : req->title);
+    [win center];
+
+    WKWebView *wv =
+        [[WKWebView alloc] initWithFrame:win.contentView.bounds
+                           configuration:cfg];
+    wv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    [win.contentView addSubview:wv];
+
+    NSURL *url = [NSURL fileURLWithPath:ns(req->page)];
+    [wv loadFileURL:url
+        allowingReadAccessToURL:[url URLByDeletingLastPathComponent]];
+
+    TinyWinDelegate *del = [[TinyWinDelegate alloc] init];
+    del.winId = ns(req->id);
+    win.delegate = del;
+
+    tw.win = win;
+    tw.wv = wv;
+    tw.wdelegate = del;
+    [win makeKeyAndOrderFront:nil];
+  }
+  delete req;
+}
+
+static void do_winclose(webview_t w, void *arg) {
+  std::string *id = static_cast<std::string *>(arg);
+  auto it = g_windows.find(*id);
+  if (it != g_windows.end())
+    [it->second.win close]; // delegate sends WINCLOSED + cleans up
+  delete id;
+}
+
+struct EvalReq {
+  std::string win; // "", "main", "*", or an id
+  std::string js;
+};
+
+static void do_title_win(webview_t w, void *arg) {
+  EvalReq *req = static_cast<EvalReq *>(arg); // win + text
+  @autoreleasepool {
+    NSWindow *win = window_for_id(w, req->win);
+    if (win && req->win != "main")
+      win.title = ns(req->js);
+    else if (win)
+      webview_set_title(w, req->js.c_str());
+  }
+  delete req;
+}
+
+static void do_eval_win(webview_t w, void *arg) {
+  EvalReq *req = static_cast<EvalReq *>(arg);
+  @autoreleasepool {
+    if (req->win == "*") {
+      WKWebView *main = webview_for_id(w, "main");
+      if (main)
+        [main evaluateJavaScript:ns(req->js) completionHandler:nil];
+      for (auto &kv : g_windows)
+        [kv.second.wv evaluateJavaScript:ns(req->js) completionHandler:nil];
+    } else {
+      WKWebView *wv = webview_for_id(w, req->win);
+      if (wv)
+        [wv evaluateJavaScript:ns(req->js) completionHandler:nil];
+    }
+  }
+  delete req;
+}
+#else
+struct ReplyReq { std::string composite; int status; std::string json; };
+struct WinOpenReq { std::string id, page, title; int width, height; };
+struct EvalReq { std::string win, js; };
+static void reply_to_call(webview_t, const std::string &, int, const std::string &) {}
+static void do_reply(webview_t, void *arg) { delete static_cast<ReplyReq *>(arg); }
+static void do_winopen(webview_t, void *arg) { delete static_cast<WinOpenReq *>(arg); }
+static void do_winclose(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
+static void do_eval_win(webview_t, void *arg) { delete static_cast<EvalReq *>(arg); }
+static void do_title_win(webview_t, void *arg) { delete static_cast<EvalReq *>(arg); }
 #endif
 
 // --- print (macOS) ---------------------------------------------------------------
@@ -1461,12 +1780,10 @@ static void do_print(webview_t w, void *) {
 // versions where the flag or the private API doesn't exist.
 
 #ifdef __APPLE__
-static void enable_webgpu(webview_t w) {
-  WKWebView *wv = (WKWebView *)webview_get_native_handle(
-      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
-  if (!wv)
+static void enable_webgpu_prefs(id preferences) {
+  WKPreferences *prefs = (WKPreferences *)preferences;
+  if (!prefs)
     return;
-  WKPreferences *prefs = wv.configuration.preferences;
   // Newer WebKit exposes +_features / -_setEnabled:forFeature:; older builds
   // use the _experimentalFeatures spelling.
   struct { const char *list, *set; } apis[] = {
@@ -1491,14 +1808,15 @@ static void enable_webgpu(webview_t w) {
     }
   }
 }
+static void enable_webgpu(webview_t w) {
+  WKWebView *wv = (WKWebView *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  if (wv)
+    enable_webgpu_prefs(wv.configuration.preferences);
+}
 #endif
 
 // -----------------------------------------------------------------------------
-
-// Page called window.__invoke(...): forward to the backend.
-static void on_invoke(const char *id, const char *req, void *) {
-  sock_write_line(std::string("CALL ") + id + " " + req);
-}
 
 static void sock_read_loop() {
   // Bundle mode: wait for the spawned backend to attach before reading.
@@ -1555,19 +1873,54 @@ static void sock_read_loop() {
         size_t sp2 = line.find(' ', sp1 + 1);
         if (sp1 == std::string::npos || sp2 == std::string::npos)
           continue;
-        std::string id = line.substr(4, sp1 - 4);
-        int status = std::atoi(line.c_str() + sp1 + 1);
-        std::string json = line.substr(sp2 + 1);
-        // webview_return is documented as safe to call from any thread.
-        webview_return(g_w, id.c_str(), status, json.c_str());
-      } else if (line.rfind("EVAL ", 0) == 0) {
-        webview_dispatch(g_w, do_eval, new std::string(line.substr(5)));
+        ReplyReq *rr = new ReplyReq;
+        rr->composite = line.substr(4, sp1 - 4);
+        rr->status = std::atoi(line.c_str() + sp1 + 1);
+        rr->json = line.substr(sp2 + 1);
+        webview_dispatch(g_w, do_reply, rr);
+      } else if (line.rfind("EVAL", 0) == 0 &&
+                 (line[4] == ' ' || line[4] == '@')) {
+        // EVAL <js> (main) | EVAL@* <js> (broadcast) | EVAL@<id> <js>
+        EvalReq *er = new EvalReq;
+        if (line[4] == ' ') {
+          er->win = "main";
+          er->js = line.substr(5);
+        } else {
+          size_t sp = line.find(' ', 5);
+          if (sp == std::string::npos) { delete er; continue; }
+          er->win = line.substr(5, sp - 5);
+          er->js = line.substr(sp + 1);
+        }
+        webview_dispatch(g_w, do_eval_win, er);
+      } else if (line.rfind("TITLE@", 0) == 0) {
+        size_t sp = line.find(' ', 6);
+        if (sp == std::string::npos) continue;
+        EvalReq *tr = new EvalReq{line.substr(6, sp - 6), line.substr(sp + 1)};
+        webview_dispatch(g_w, do_title_win, tr);
       } else if (line.rfind("TITLE ", 0) == 0) {
         webview_dispatch(g_w, do_title, new std::string(line.substr(6)));
+      } else if (line.rfind("SIZE@", 0) == 0) {
+        size_t sp = line.find(' ', 5);
+        if (sp == std::string::npos) continue;
+        SizeReq *sr = new SizeReq{600, 400};
+        sr->win = line.substr(5, sp - 5);
+        std::sscanf(line.c_str() + sp + 1, "%d %d", &sr->width, &sr->height);
+        webview_dispatch(g_w, do_size, sr);
       } else if (line.rfind("SIZE ", 0) == 0) {
         SizeReq *s = new SizeReq{960, 640};
         std::sscanf(line.c_str() + 5, "%d %d", &s->width, &s->height);
         webview_dispatch(g_w, do_size, s);
+      } else if (line.rfind("WINOPEN ", 0) == 0) {
+        std::vector<std::string> p = split_tabs(line.substr(8));
+        WinOpenReq *wr = new WinOpenReq;
+        wr->id = p.size() > 0 ? p[0] : "";
+        wr->page = p.size() > 1 ? p[1] : "";
+        wr->title = p.size() > 2 ? p[2] : "";
+        if (p.size() > 3)
+          std::sscanf(p[3].c_str(), "%dx%d", &wr->width, &wr->height);
+        webview_dispatch(g_w, do_winopen, wr);
+      } else if (line.rfind("WINCLOSE ", 0) == 0) {
+        webview_dispatch(g_w, do_winclose, new std::string(line.substr(9)));
       } else if (line.rfind("DLG ", 0) == 0) {
         // DLG <id> <op>[\t<arg>...]
         size_t sp1 = line.find(' ', 4);
@@ -1646,8 +1999,13 @@ static void sock_read_loop() {
         TraySpec *rm = new TraySpec{};
         rm->remove = true;
         webview_dispatch(g_w, apply_tray, rm);
+      } else if (line.rfind("WINOP@", 0) == 0) {
+        size_t sp = line.find(' ', 6);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_winop,
+                         new WinopReq{line.substr(6, sp - 6), line.substr(sp + 1)});
       } else if (line.rfind("WINOP ", 0) == 0) {
-        webview_dispatch(g_w, do_winop, new std::string(line.substr(6)));
+        webview_dispatch(g_w, do_winop, new WinopReq{"main", line.substr(6)});
       } else if (line == "CTXBEGIN") {
         collapse_subs();
         build_stack.assign(1, {});
@@ -1686,9 +2044,19 @@ static void sock_read_loop() {
         req->subtitle = p.size() > 3 ? p[3] : "";
         req->sound = p.size() > 4 && p[4] == "1";
         webview_dispatch(g_w, do_notify, req);
-      } else if (line.rfind("CHROME ", 0) == 0) {
-        std::vector<std::string> p = split_tabs(line.substr(7));
+      } else if (line.rfind("CHROME", 0) == 0 &&
+                 (line[6] == ' ' || line[6] == '@')) {
+        std::string winid = "main";
+        size_t body = 7;
+        if (line[6] == '@') {
+          size_t sp = line.find(' ', 7);
+          if (sp == std::string::npos) continue;
+          winid = line.substr(7, sp - 7);
+          body = sp + 1;
+        }
+        std::vector<std::string> p = split_tabs(line.substr(body));
         ChromeReq *req = new ChromeReq;
+        req->win = winid;
         req->frame = p.size() > 0 ? p[0] : "";
         req->traffic = p.size() > 1 ? p[1] : "";
         req->transparent = p.size() > 2 ? p[2] : "";
@@ -1960,7 +2328,16 @@ int main(int argc, char *argv[]) {
 
   webview_set_title(g_w, title.c_str());
   webview_set_size(g_w, width, height, WEBVIEW_HINT_NONE);
-  webview_bind(g_w, "__invoke", on_invoke, nullptr);
+#ifdef __APPLE__
+  // Unified page RPC for every window, the main one included (replaces
+  // webview_bind: the shim's __invoke wins because nothing else defines it).
+  {
+    WKWebView *mwv = (WKWebView *)webview_get_native_handle(
+        g_w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+    if (mwv)
+      attach_tiny_bridge(mwv.configuration.userContentController, "main");
+  }
+#endif
 
   // Default menu bar (About/Quit + Edit); custom menus replace it via MENUEND.
   apply_menus(g_w, new std::vector<MenuSpec>());

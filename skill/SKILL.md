@@ -145,6 +145,14 @@ tiny.api.on('sleep', fn); tiny.api.on('wake', fn);  // backend: export onSystem
 
 tiny.win.print();                           // native print panel
 
+// multiple windows: any frontend html file can be a window
+tiny.win.open('settings', { page: 'settings.html', title: 'Settings', size: '420x300' });
+tiny.win.id; tiny.win.close(); await tiny.win.windows();
+// win.* calls target the caller's window; backend: app.openWindow/app.window(id)
+// (eval/push/close/setTitle/setSize/chrome/getState…), app.push broadcasts,
+// export onWindowClosed(id, app); api handlers get meta: (params, app, meta)
+// where meta.window = calling window id
+
 // deep links + file associations (packaged .app only; cold-start buffered;
 // second `open` activates the running instance — single-instance is automatic)
 tiny.app.onOpenUrl((url) => ...);           // backend: export onOpenUrl(url, app)
