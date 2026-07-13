@@ -13,6 +13,8 @@
 //                                                     answers the call itself
 //                         QUIT                        close the window
 
+import { checkForUpdate, installUpdate, relaunch } from './update.js';
+
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const DEBUG = !!tjs.env.TINYJS_DEBUG;
@@ -35,7 +37,20 @@ const DIALOG_OPS = {
   'win.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
 };
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', launcherPath, api = {}, onMenu }) {
+// Desktop notification via osascript: works from dev and packaged builds
+// without notification-center entitlements (macOS shows it under "Script
+// Editor" in Notification Center settings). A native UNUserNotificationCenter
+// path (own icon, actions) is possible for signed bundles later.
+async function notify({ title, body, subtitle } = {}) {
+  const aq = (s) => '"' + String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+  let script = 'display notification ' + aq(body ?? '') + ' with title ' + aq(title ?? 'tinyjs');
+  if (subtitle) script += ' subtitle ' + aq(subtitle);
+  const p = tjs.spawn(['osascript', '-e', script], { stdout: 'ignore', stderr: 'ignore' });
+  const st = await p.wait();
+  return st.exit_status === 0 && !st.term_signal;
+}
+
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', launcherPath, api = {}, onMenu, onTray, update = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -58,13 +73,24 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   const workDir = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-XXXXXX');
   const sockPath = workDir + '/app.sock';
 
-  // The bridge always owns the page file so reload(html) can rewrite it.
-  const srcPath = tjs.env.TINYJS_HTML || htmlPath;
-  let pageHtml = html;
-  if (srcPath) pageHtml = dec.decode(await tjs.readFile(srcPath));
-  if (pageHtml == null) throw new Error('createApp needs `html` (string) or `htmlPath`');
-  const pagePath = workDir + '/index.html';
-  await tjs.writeFile(pagePath, enc.encode(pageHtml));
+  // Page source, in precedence order:
+  //  - TINYJS_HTML env override (self-contained test pages): materialized
+  //  - htmlPath: the real file is handed to the launcher, so sibling css/js/
+  //    images load relatively (multi-file frontends); RELOAD re-reads disk
+  //  - html string: materialized into the private workDir
+  const overridePath = tjs.env.TINYJS_HTML;
+  let pagePath;
+  let ownsPage = false; // true when the bridge materialized the page file
+  if (!overridePath && htmlPath) {
+    pagePath = htmlPath;
+  } else {
+    let pageHtml = html;
+    if (overridePath) pageHtml = dec.decode(await tjs.readFile(overridePath));
+    if (pageHtml == null) throw new Error('createApp needs `html` (string) or `htmlPath`');
+    pagePath = workDir + '/index.html';
+    await tjs.writeFile(pagePath, enc.encode(pageHtml));
+    ownsPage = true;
+  }
 
   const server = await tjs.listen('pipe', sockPath);
   const serverInfo = await server.opened;
@@ -106,8 +132,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Not JS eval(): sends script to the app's own page via webview_eval,
     // the same channel push() uses. Never receives external input.
     eval(js) { send('EVAL ' + String(js).replace(/\n/g, ' ')); },
+    // Re-render the page from disk. `newHtml` only applies to materialized
+    // pages (html-string mode); direct htmlPath pages always reload the
+    // real file, which is the point.
     async reload(newHtml) {
-      if (newHtml != null) await tjs.writeFile(pagePath, enc.encode(newHtml));
+      if (newHtml != null && ownsPage) await tjs.writeFile(pagePath, enc.encode(newHtml));
       send('RELOAD');
     },
     // menus: [{ title, items: [{ id, label, key? } | { separator: true }] }]
@@ -123,7 +152,56 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       }
       send('MENUEND');
     },
+    notify,
+    // Window visibility & app presence (tray-app plumbing).
+    hide() { send('WINOP hide'); },
+    show() { send('WINOP show'); },
+    center() { send('WINOP center'); },
+    minimize() { send('WINOP minimize'); },
+    // Toggles native fullscreen.
+    fullscreen() { send('WINOP fullscreen'); },
+    setAlwaysOnTop(v) { send('WINOP ontop ' + (v ? 1 : 0)); },
+    setResizable(v) { send('WINOP resizable ' + (v ? 1 : 0)); },
+    // Top-left origin in screen points (CSS-style coordinates).
+    setPosition(x, y) { send(`WINOP pos ${x | 0} ${y | 0}`); },
+    // false: no Dock icon / no app menu (menu-bar-only app); true: normal app.
+    setDockVisible(v) { send('WINOP dock ' + (v ? 1 : 0)); },
+    // true: the close button hides the window instead of quitting.
+    setHideOnClose(v) { send('WINOP hideonclose ' + (v ? 1 : 0)); },
+    // spec: { title?, icon?, template?, tooltip?,
+    //         menu?: [{ id, label, key? } | { separator: true }] }
+    // icon is a png path (absolute or project-relative); template: false keeps
+    // its colors instead of adapting to the menu bar (default true).
+    // Menu clicks arrive as a 'tray' page event and via the onTray option;
+    // with no menu, icon clicks arrive as 'trayclick'.
+    tray: {
+      set(spec = {}) {
+        let icon = spec.icon ?? '';
+        if (icon && !icon.startsWith('/')) icon = tjs.cwd + '/' + icon;
+        send('TRAYBEGIN ' + [one(spec.title), one(icon),
+                             spec.template === false ? '0' : '1',
+                             one(spec.tooltip)].join('\t'));
+        for (const it of spec.menu ?? []) {
+          if (it.separator) send('SEP');
+          else send('ITEM ' + [one(it.id), one(it.label ?? it.id), one(it.key ?? '')].join('\t'));
+        }
+        send('TRAYEND');
+      },
+      remove() { send('TRAYREMOVE'); },
+    },
     quit() { send('QUIT'); },
+    // Auto-update (tinyjs.json "update": { "url": "https://…/manifest.json" }).
+    // check() -> { available, current, latest }; install() downloads, verifies,
+    // swaps the .app, relaunches the new version, and quits this instance.
+    update: {
+      check: () => checkForUpdate({ url: update?.url, version }),
+      async install() {
+        const bundle = await installUpdate({ url: update?.url, version });
+        relaunch(bundle);
+        setTimeout(() => app.quit(), 250);
+        return true;
+      },
+    },
     done: null, // filled below
   };
 
@@ -135,7 +213,25 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     quit: async () => (app.quit(), true),
     'win.setTitle': async ({ title: t }) => (app.setTitle(t), true),
     'win.setSize': async ({ width, height }) => (app.setSize(width, height), true),
+    'win.hide': async () => (app.hide(), true),
+    'win.show': async () => (app.show(), true),
+    'win.center': async () => (app.center(), true),
+    'win.minimize': async () => (app.minimize(), true),
+    'win.fullscreen': async () => (app.fullscreen(), true),
+    'win.setAlwaysOnTop': async ({ enabled }) => (app.setAlwaysOnTop(enabled), true),
+    'win.setResizable': async ({ enabled }) => (app.setResizable(enabled), true),
+    'win.setPosition': async ({ x, y }) => (app.setPosition(x, y), true),
+    'win.setHideOnClose': async ({ enabled }) => (app.setHideOnClose(enabled), true),
+    'notify': async (params) => notify(params),
+    'app.setDockVisible': async ({ visible }) => (app.setDockVisible(visible), true),
     'menu.set': async ({ menus }) => (app.setMenu(menus), true),
+    'tray.set': async (spec) => (app.tray.set(spec), true),
+    'tray.remove': async () => (app.tray.remove(), true),
+    'update.check': async () => {
+      const { available, current, latest } = await app.update.check();
+      return { available, current, latest };
+    },
+    'update.install': async () => app.update.install(),
   };
   const methods = { ...api, ...builtins };
 
@@ -184,6 +280,16 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           const id = line.slice(5);
           push('menu', { id });
           if (onMenu) onMenu(id, app);
+        } else if (line.startsWith('TRAY ')) {
+          const id = line.slice(5);
+          push('tray', { id });
+          if (onTray) onTray(id, app);
+        } else if (line === 'TRAYCLICK') {
+          push('trayclick', {});
+          if (onTray) onTray(null, app);
+        } else if (line.startsWith('DROP ')) {
+          // Files dragged onto the window; real filesystem paths.
+          try { push('drop', { paths: JSON.parse(line.slice(5)) }); } catch {}
         }
       }
     }

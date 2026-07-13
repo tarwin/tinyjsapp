@@ -8,8 +8,12 @@ native [webview](https://github.com/webview/webview) window.
   domain socket in a private temp directory
 - Backend is plain JavaScript with full system access (files, sockets,
   processes, FFI) via txiki.js
-- Frontend is plain HTML/CSS/JS rendered by the system WebKit
-- Hot reload in dev, signed `.app` bundles out of `build`
+- Frontend is plain HTML/CSS/JS (multi-file, WebGPU included) rendered by
+  the system WebKit
+- Native menus, dialogs, **tray/menu-bar apps**, notifications, drag & drop
+  with real file paths, window control
+- Hot reload in dev, signed `.app` bundles out of `build`, **auto-update**
+  out of `publish`
 
 ## Install
 
@@ -38,8 +42,8 @@ tinyjs dev
 ```
 
 A window opens. `dev` hot-reloads: edit anything in `src/frontend/` and the
-page is re-inlined and swapped in place (no restart, backend state survives);
-edit backend sources and the process restarts automatically.
+page re-renders in place, caches bypassed (no restart, backend state
+survives); edit backend sources and the process restarts automatically.
 `TINYJS_DEBUG=1 tinyjs dev` traces every message crossing the bridge.
 
 A project is just:
@@ -64,10 +68,14 @@ export const api = {
 export function init(app) {          // window is up
   setInterval(() => app.push('tick', Date.now()), 1000);
   // app also has: setTitle(t), setSize(w, h), setMenu(menus), eval(js),
-  // reload(html), quit()
+  // reload(), quit(), notify({title, body}), hide()/show()/center()/
+  // minimize()/fullscreen(), setPosition(x, y), setAlwaysOnTop(v),
+  // setResizable(v), setHideOnClose(v), setDockVisible(v),
+  // tray.set(spec)/tray.remove(), update.check()/update.install()
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
+export function onTray(id, app) {}   // optional: tray clicks (id null = bare icon)
 ```
 
 Frontend — include `tiny.js` (from the template); everything injected lives
@@ -78,9 +86,18 @@ const greeting = await tiny.api.call('hello', { name: 'world' });  // request/re
 tiny.api.on('tick', (t) => ...);                                   // backend push
 
 tiny.log('debug msg');  tiny.quit();
+tiny.notify('Done', 'Your export finished');   // desktop notification
 
 // window control
 tiny.win.setTitle('My App');  tiny.win.setSize(1200, 800);
+tiny.win.center();  tiny.win.setPosition(100, 80);      // top-left origin
+tiny.win.minimize();  tiny.win.fullscreen();            // fullscreen toggles
+tiny.win.setAlwaysOnTop(true);  tiny.win.setResizable(false);
+tiny.win.hide();  tiny.win.show();
+tiny.win.setHideOnClose(true);  // close button hides instead of quitting
+
+// files dragged onto the window arrive with REAL filesystem paths
+tiny.win.onDrop((paths) => tiny.log(paths.join(', ')));
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null
@@ -116,6 +133,30 @@ The dialogs and menus are native: the backend hands the work to the launcher,
 which runs panels/menus on the UI thread and answers the page's promise
 directly via `webview_return`.
 
+### Tray (menu bar) apps
+
+```js
+tiny.tray.set({
+  title: 'MyApp',            // text in the menu bar (and/or icon: png path)
+  icon: 'tray.png',          // template image by default ({ template: false } to keep colors)
+  tooltip: 'My tiny app',
+  menu: [
+    { id: 'show', label: 'Show Window' },
+    { separator: true },
+    { id: 'quit', label: 'Quit' },
+  ],
+});
+tiny.tray.on((id) => { ... });        // menu clicks; backend: export onTray(id, app)
+tiny.tray.remove();
+
+// the full tray-app recipe:
+tiny.win.setHideOnClose(true);        // closing the window hides it
+tiny.app.setDockVisible(false);       // no Dock icon — menu-bar-only app
+```
+
+With no `menu`, clicking the icon fires `tiny.tray.onClick(fn)` instead —
+classic toggle-window behavior.
+
 ## Build for release
 
 ```sh
@@ -124,16 +165,41 @@ tinyjs build
 
 produces:
 
-- `dist/<name>` — a standalone single-file executable (`tjs app compile`;
-  the whole frontend is inlined and embedded). Great for local/CLI use.
+- `dist/<name>` — a standalone executable (`tjs app compile`) that loads its
+  page from `dist/frontend/` next to it. Great for local/CLI use.
 - `dist/<Name>.app` — a fully **codesigned** macOS bundle, the artifact you
   distribute.
 
-The build inlines the frontend (scripts, stylesheets, images and CSS `url()`
-refs become one self-contained HTML), generates `AppIcon.icns` from
-`icon.png` via `sips` + `iconutil`, and codesigns everything (ad-hoc by
-default; set `signIdentity` in tinyjs.json or `TINYJS_SIGN_IDENTITY` for a
-Developer ID).
+The frontend ships as real files (the launcher renders `file://` documents,
+so relative scripts/styles/images just work — no bundling step). The build
+generates `AppIcon.icns` from `icon.png` via `sips` + `iconutil` and
+codesigns everything (ad-hoc by default; set `signIdentity` in tinyjs.json
+or `TINYJS_SIGN_IDENTITY` for a Developer ID).
+
+### Shipping updates (auto-update)
+
+Point `tinyjs.json` at a manifest you host anywhere (any static host —
+GitHub Releases, S3, nginx):
+
+```json
+{ "name": "myapp", "version": "1.1.0",
+  "update": { "url": "https://example.com/myapp/manifest.json" } }
+```
+
+Each release: `tinyjs publish` → `dist/publish/` contains
+`myapp-1.1.0.zip` + `manifest.json` (version, download url, sha256) — upload
+both to the directory `update.url` points at. In the app:
+
+```js
+const { available, latest } = await tiny.api.call('update.check');
+if (available) await tiny.api.call('update.install');   // downloads, verifies
+// sha256 + code signature, swaps the .app in place, relaunches
+```
+
+(Backend equivalents: `app.update.check()` / `app.update.install()`.)
+Installs are refused on checksum or signature mismatch, roll back on
+failure, and require the packaged .app (a quarantined/translocated app is
+asked to move to /Applications first).
 
 ### Why the .app looks the way it does (codesigning)
 
@@ -147,8 +213,8 @@ MyApp.app/Contents/
   MacOS/myapp            tiny C shim (CFBundleExecutable) — execs tjs
   MacOS/tjs              stock runtime binary — signs cleanly
   MacOS/launcher         window process
-  Resources/app/         entry.js, bridge.js, assets.js, src/… (plain data,
-                         sealed by the bundle signature)
+  Resources/app/         entry.js, bridge.js, update.js, frontend/, src/…
+                         (plain data, sealed by the bundle signature)
   Resources/AppIcon.icns
 ```
 
@@ -171,15 +237,15 @@ Developer ID (hardened runtime + `notarytool` are the remaining steps).
 └──────────────────────┘                └──────────┬────────────┘
                                                    │ window.__invoke / eval
                                         ┌──────────▼────────────┐
-                                        │ your page (inlined)   │
+                                        │ your page (file://)   │
                                         │ api.call('m', params) │
                                         │ api.on('event', fn)   │
                                         └───────────────────────┘
 ```
 
 - The backend creates a socket in a fresh `0700` temp dir (invisible to other
-  users; no ports to collide or scan), materializes the page next to it,
-  listens, then spawns the launcher.
+  users; no ports to collide or scan), listens, then spawns the launcher
+  pointed at your frontend's `index.html`.
 - Closing the window ends the launcher; the backend notices, cleans up, exits.
   `api.call('quit')` works the other way (backend sends `QUIT`).
 
@@ -194,7 +260,11 @@ Developer ID (hardened runtime + `notarytool` are the remaining steps).
 | backend → launcher | `DLG <id> <op>[\t<arg>…]`  | native dialog (file panels, alert/confirm/prompt); launcher answers the call itself via `webview_return` |
 | backend → launcher | `MENUBEGIN` … `MENU <t>` / `ITEM id\tlabel\tkey` / `SEP` … `MENUEND` | declare custom menu bar menus |
 | launcher → backend | `MENU <id>`                | a custom menu item was clicked   |
-| backend → launcher | `RELOAD`                   | re-read the page file and re-render (hot-reload) |
+| backend → launcher | `TRAYBEGIN <t>\t<icon>\t<tmpl>\t<tip>` … `ITEM`/`SEP` … `TRAYEND` / `TRAYREMOVE` | declare/remove the menu bar status item |
+| launcher → backend | `TRAY <id>` / `TRAYCLICK`  | tray menu item / bare tray icon clicked |
+| backend → launcher | `WINOP <op> [args]`        | hide, show, center, minimize, fullscreen, ontop, resizable, pos, dock, hideonclose |
+| launcher → backend | `DROP <json-paths>`        | files dragged onto the window (real paths) |
+| backend → launcher | `RELOAD`                   | re-render the page from disk, caches bypassed (hot-reload) |
 | backend → launcher | `QUIT`                     | close the window                 |
 
 In the page, `window.__invoke` (injected by `webview_bind`) already returns a
@@ -208,7 +278,7 @@ native/launcher.cc    the window process (Objective-C++; webview headers vendore
 native/shim.c         .app main executable: execs tjs on Resources/app/entry.js
 native/make-icon.jxa  default template icon generator (osascript -l JavaScript)
 runtime/bridge.js     backend bridge library (socket, protocol, win.* methods)
-runtime/inline.js     frontend asset inliner
+runtime/update.js     app auto-update (manifest check, verify, bundle swap)
 template/             what `tinyjs new` copies
 skill/SKILL.md        tinyjs reference for coding agents (copied into new
                       projects at .claude/skills/tinyjs/)
@@ -255,8 +325,8 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
   (`loadFileURL:allowingReadAccessToURL:`), not `webview_set_html`: the
   latter's `about:blank` origin is not a secure context, and WebKit hides
   SecureContext-only APIs there — notably `navigator.gpu` (WebGPU). The
-  bridge still materializes a single `index.html`, hence the build-time
-  inliner.
+  file:// origin also makes multi-file frontends work: relative
+  scripts/styles/images load straight from the page's directory.
 - WebGPU is additionally gated behind a WebKit feature flag on macOS 15 and
   earlier; the launcher flips it at startup via the private
   `WKPreferences _setEnabled:forFeature:` API (no-op where it's already on,

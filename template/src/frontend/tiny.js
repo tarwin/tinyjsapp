@@ -13,10 +13,22 @@
 
     log: (msg) => call('log', { msg }),
     quit: () => call('quit'),
+    notify: (title, body, opts = {}) => call('notify', { title, body, ...opts }),
 
     win: {
       setTitle: (title) => call('win.setTitle', { title }),
       setSize: (width, height) => call('win.setSize', { width, height }),
+      hide: () => call('win.hide'),
+      show: () => call('win.show'),
+      center: () => call('win.center'),
+      minimize: () => call('win.minimize'),
+      fullscreen: () => call('win.fullscreen'),                    // toggles
+      setAlwaysOnTop: (enabled) => call('win.setAlwaysOnTop', { enabled }),
+      setResizable: (enabled) => call('win.setResizable', { enabled }),
+      setPosition: (x, y) => call('win.setPosition', { x, y }),    // top-left origin
+      setHideOnClose: (enabled) => call('win.setHideOnClose', { enabled }),
+      // fn(paths): files dragged onto the window, as real filesystem paths.
+      onDrop(fn) { window.tiny.api.on('drop', ({ paths }) => fn(paths)); },
       openFile: () => call('win.openFile'),                 // path | null
       openFiles: () => call('win.openFiles'),               // paths[] | null
       pickFolder: () => call('win.pickFolder'),             // path | null
@@ -30,6 +42,20 @@
       // menus: [{ title, items: [{ id, label, key? } | { separator: true }] }]
       set: (menus) => call('menu.set', { menus }),
       on(fn) { window.tiny.api.on('menu', ({ id }) => fn(id)); },
+    },
+
+    app: {
+      // false: menu-bar-only app (no Dock icon); true: normal app.
+      setDockVisible: (visible) => call('app.setDockVisible', { visible }),
+    },
+
+    tray: {
+      // spec: { title?, icon?, template?, tooltip?,
+      //         menu?: [{ id, label, key? } | { separator: true }] }
+      set: (spec) => call('tray.set', spec),
+      remove: () => call('tray.remove'),
+      on(fn) { window.tiny.api.on('tray', ({ id }) => fn(id)); },          // menu item clicks
+      onClick(fn) { window.tiny.api.on('trayclick', () => fn()); },        // bare icon clicks
     },
   };
 

@@ -22,9 +22,25 @@
 //                         ITEM <id>\t<label>\t<key> /
 //                         SEP / MENUEND              declare custom menu bar
 //                                                    menus (applied on MENUEND)
+//                         TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip> /
+//                         ITEM / SEP / TRAYEND       declare a menu bar status
+//                                                    item (applied on TRAYEND)
+//                         TRAYREMOVE                 remove the status item
+//                         WINOP <op> [args]          window ops: hide, show,
+//                                                    center, minimize,
+//                                                    fullscreen, ontop 0|1,
+//                                                    resizable 0|1, pos <x> <y>,
+//                                                    dock 0|1 (Dock icon),
+//                                                    hideonclose 0|1
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
 //                                                    clicked
+//                         TRAY <id>                  a tray menu item was
+//                                                    clicked
+//                         TRAYCLICK                  the tray icon itself was
+//                                                    clicked (no menu set)
+//                         DROP <json-paths>          files dragged onto the
+//                                                    window (real paths)
 //
 // A default app menu (About + Quit) is always present; About shows the
 // standard panel with the app name, version, and a tinyjs credit.
@@ -39,6 +55,7 @@
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
 #include <objc/message.h>
+#include <objc/runtime.h>
 #endif
 
 #include <cstdio>
@@ -155,8 +172,19 @@ static bool load_html_file(webview_t w, const std::string &path) {
 }
 
 static void do_reload(webview_t w, void *) {
-  if (!g_html_path.empty())
-    load_html_file(w, g_html_path);
+  if (g_html_path.empty())
+    return;
+#ifdef __APPLE__
+  // reloadFromOrigin bypasses WebKit's caches, so edited subresources
+  // (css/js/images) are re-read from disk, not just the main document.
+  WKWebView *wv = (WKWebView *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  if (wv && wv.URL != nil) {
+    [wv reloadFromOrigin];
+    return;
+  }
+#endif
+  load_html_file(w, g_html_path);
 }
 
 // --- native dialogs (macOS) -------------------------------------------------
@@ -265,6 +293,8 @@ struct MenuSpec {
 #ifdef __APPLE__
 @interface TinyMenuTarget : NSObject
 - (void)itemClicked:(NSMenuItem *)sender;
+- (void)trayItemClicked:(NSMenuItem *)sender;
+- (void)trayClicked:(id)sender;
 - (void)showAbout:(id)sender;
 - (void)doQuit:(id)sender;
 @end
@@ -274,6 +304,14 @@ struct MenuSpec {
   NSString *mid = (NSString *)sender.representedObject;
   if (mid)
     sock_write_line(std::string("MENU ") + [mid UTF8String]);
+}
+- (void)trayItemClicked:(NSMenuItem *)sender {
+  NSString *mid = (NSString *)sender.representedObject;
+  if (mid)
+    sock_write_line(std::string("TRAY ") + [mid UTF8String]);
+}
+- (void)trayClicked:(id)sender {
+  sock_write_line("TRAYCLICK");
 }
 - (void)showAbout:(id)sender {
   [NSApp orderFrontStandardAboutPanelWithOptions:@{
@@ -366,6 +404,240 @@ static void apply_menus(webview_t, void *arg) {
 }
 #endif
 
+// --- tray / status item (macOS) ----------------------------------------------
+// TRAYBEGIN <title>\t<iconPath>\t<template01>\t<tooltip>, then ITEM/SEP lines,
+// then TRAYEND. With menu items the icon opens the menu (clicks -> `TRAY <id>`);
+// without, clicking the icon sends `TRAYCLICK`.
+
+struct TraySpec {
+  std::string title, icon, tooltip;
+  bool template_icon = true;
+  std::vector<MenuItemSpec> items;
+  bool remove = false;
+};
+
+#ifdef __APPLE__
+static NSStatusItem *g_status_item = nil;
+
+static void apply_tray(webview_t, void *arg) {
+  TraySpec *spec = static_cast<TraySpec *>(arg);
+  @autoreleasepool {
+    if (spec->remove) {
+      if (g_status_item) {
+        [[NSStatusBar systemStatusBar] removeStatusItem:g_status_item];
+        [g_status_item release];
+        g_status_item = nil;
+      }
+      delete spec;
+      return;
+    }
+    if (!g_menu_target)
+      g_menu_target = [[TinyMenuTarget alloc] init];
+    if (!g_status_item) {
+      g_status_item = [[[NSStatusBar systemStatusBar]
+          statusItemWithLength:NSVariableStatusItemLength] retain];
+    }
+    NSStatusBarButton *btn = g_status_item.button;
+    if (!spec->icon.empty()) {
+      NSImage *img =
+          [[[NSImage alloc] initWithContentsOfFile:ns(spec->icon)] autorelease];
+      if (img) {
+        [img setSize:NSMakeSize(18, 18)];
+        [img setTemplate:spec->template_icon ? YES : NO];
+        btn.image = img;
+      }
+    } else {
+      btn.image = nil;
+    }
+    btn.title = ns(spec->title);
+    btn.toolTip = spec->tooltip.empty() ? nil : ns(spec->tooltip);
+
+    if (!spec->items.empty()) {
+      NSMenu *menu = [[[NSMenu alloc] init] autorelease];
+      for (const MenuItemSpec &it : spec->items) {
+        if (it.separator) {
+          [menu addItem:[NSMenuItem separatorItem]];
+          continue;
+        }
+        NSMenuItem *mi =
+            [[[NSMenuItem alloc] initWithTitle:ns(it.label)
+                                        action:@selector(trayItemClicked:)
+                                 keyEquivalent:ns(it.key)] autorelease];
+        mi.target = g_menu_target;
+        mi.representedObject = ns(it.id);
+        [menu addItem:mi];
+      }
+      g_status_item.menu = menu;
+    } else {
+      g_status_item.menu = nil;
+      btn.target = g_menu_target;
+      btn.action = @selector(trayClicked:);
+    }
+  }
+  delete spec;
+}
+#else
+static void apply_tray(webview_t, void *arg) {
+  delete static_cast<TraySpec *>(arg);
+}
+#endif
+
+// --- window ops (macOS) --------------------------------------------------------
+// WINOP hide | show | center | minimize | fullscreen | ontop 0|1 |
+//       resizable 0|1 | pos <x> <y> | dock 0|1 | hideonclose 0|1
+
+static bool g_hide_on_close = false;
+
+#ifdef __APPLE__
+// Installed on the webview library's window delegate class; consulted on every
+// close click. When hide-on-close is on, the window just orders out (tray apps
+// keep running); otherwise the normal close/quit path proceeds.
+static BOOL tiny_windowShouldClose(id, SEL, id sender) {
+  if (!g_hide_on_close)
+    return YES;
+  [(NSWindow *)sender orderOut:nil];
+  return NO;
+}
+
+static void install_close_hook(webview_t w) {
+  NSWindow *win = (NSWindow *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+  id delegate = win ? [win delegate] : nil;
+  if (!delegate)
+    return;
+  // Adds only if the delegate class doesn't implement it (webview's doesn't).
+  class_addMethod(object_getClass(delegate), @selector(windowShouldClose:),
+                  (IMP)tiny_windowShouldClose, "c@:@");
+}
+#endif
+
+static void do_winop(webview_t w, void *arg) {
+  std::string *op = static_cast<std::string *>(arg);
+#ifdef __APPLE__
+  @autoreleasepool {
+    NSWindow *win = (NSWindow *)webview_get_native_handle(
+        w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+    if (*op == "hide") {
+      [win orderOut:nil];
+    } else if (*op == "show") {
+      [NSApp activateIgnoringOtherApps:YES];
+      [win makeKeyAndOrderFront:nil];
+    } else if (*op == "dock 0") {
+      [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+    } else if (*op == "dock 1") {
+      [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+      [NSApp activateIgnoringOtherApps:YES];
+    } else if (*op == "hideonclose 1") {
+      g_hide_on_close = true;
+    } else if (*op == "hideonclose 0") {
+      g_hide_on_close = false;
+    } else if (*op == "center") {
+      [win center];
+    } else if (*op == "minimize") {
+      [win miniaturize:nil];
+    } else if (*op == "fullscreen") {
+      [win toggleFullScreen:nil];
+    } else if (*op == "ontop 1") {
+      win.level = NSFloatingWindowLevel;
+    } else if (*op == "ontop 0") {
+      win.level = NSNormalWindowLevel;
+    } else if (*op == "resizable 1") {
+      win.styleMask |= NSWindowStyleMaskResizable;
+    } else if (*op == "resizable 0") {
+      win.styleMask &= ~NSWindowStyleMaskResizable;
+    } else if (op->rfind("pos ", 0) == 0) {
+      // Top-left origin in screen points (y grows downward, CSS-style).
+      int x = 0, y = 0;
+      if (std::sscanf(op->c_str() + 4, "%d %d", &x, &y) == 2 && win) {
+        CGFloat screenTop = NSMaxY([[NSScreen screens][0] frame]);
+        [win setFrameTopLeftPoint:NSMakePoint(x, screenTop - y)];
+      }
+    }
+  }
+#endif
+  delete op;
+}
+
+// --- file drag & drop (macOS) -------------------------------------------------
+// HTML5 drop events expose File objects but never filesystem paths, and a
+// page that doesn't call preventDefault() on dragover rejects file drags
+// entirely. Swizzle WKWebView's NSDraggingDestination methods so file drags
+// are always accepted and dropped file paths are reported over the socket
+// (`DROP <json-array>`). The original implementations still run, so in-page
+// HTML5 drag & drop keeps working for pages that use it.
+
+#ifdef __APPLE__
+typedef BOOL (*DragPerformIMP)(id, SEL, id);
+typedef NSUInteger (*DragUpdateIMP)(id, SEL, id);
+static DragPerformIMP g_orig_performDragOperation = nullptr;
+static DragUpdateIMP g_orig_draggingEntered = nullptr;
+static DragUpdateIMP g_orig_draggingUpdated = nullptr;
+
+static NSArray *drag_file_urls(id info) {
+  NSPasteboard *pb = [(id<NSDraggingInfo>)info draggingPasteboard];
+  return [pb readObjectsForClasses:@[ [NSURL class] ]
+                           options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
+}
+
+static NSUInteger tiny_draggingEntered(id self, SEL cmd, id info) {
+  NSUInteger op = g_orig_draggingEntered ? g_orig_draggingEntered(self, cmd, info)
+                                         : NSDragOperationNone;
+  if (op == NSDragOperationNone && drag_file_urls(info).count > 0)
+    op = NSDragOperationCopy;
+  return op;
+}
+
+static NSUInteger tiny_draggingUpdated(id self, SEL cmd, id info) {
+  NSUInteger op = g_orig_draggingUpdated ? g_orig_draggingUpdated(self, cmd, info)
+                                         : NSDragOperationNone;
+  if (op == NSDragOperationNone && drag_file_urls(info).count > 0)
+    op = NSDragOperationCopy;
+  return op;
+}
+
+static BOOL tiny_performDragOperation(id self, SEL cmd, id info) {
+  @autoreleasepool {
+    NSArray *urls = drag_file_urls(info);
+    if (urls.count > 0) {
+      std::string json = "[";
+      for (NSUInteger i = 0; i < urls.count; i++) {
+        if (i) json += ",";
+        json += json_escape([[(NSURL *)urls[i] path] UTF8String]);
+      }
+      json += "]";
+      sock_write_line("DROP " + json);
+    }
+    BOOL handled = g_orig_performDragOperation
+                       ? g_orig_performDragOperation(self, cmd, info)
+                       : NO;
+    // The page rejected the HTML5 drop but we delivered the paths: report
+    // success so the drag doesn't animate back to Finder.
+    return handled || urls.count > 0;
+  }
+}
+
+// Replace-or-add: patches the direct implementation when the class has one,
+// otherwise installs an override that falls back to the inherited IMP.
+static IMP swizzle(Class cls, SEL sel, IMP imp, const char *types) {
+  Method m = class_getInstanceMethod(cls, sel);
+  IMP orig = m ? method_getImplementation(m) : nullptr;
+  if (!class_addMethod(cls, sel, imp, types))
+    method_setImplementation(m, imp);
+  return orig;
+}
+
+static void install_drop_hook() {
+  Class cls = [WKWebView class];
+  g_orig_draggingEntered = (DragUpdateIMP)swizzle(
+      cls, @selector(draggingEntered:), (IMP)tiny_draggingEntered, "L@:@");
+  g_orig_draggingUpdated = (DragUpdateIMP)swizzle(
+      cls, @selector(draggingUpdated:), (IMP)tiny_draggingUpdated, "L@:@");
+  g_orig_performDragOperation = (DragPerformIMP)swizzle(
+      cls, @selector(performDragOperation:), (IMP)tiny_performDragOperation,
+      "c@:@");
+}
+#endif
+
 // --- WebGPU (macOS) ----------------------------------------------------------
 // WKWebView gates WebGPU behind a WebKit feature flag (still "experimental"
 // as of macOS 15; no public API to enable it). Flip it through the private
@@ -419,6 +691,8 @@ static void sock_read_loop() {
   char chunk[4096];
   std::vector<MenuSpec> pending_menus;
   bool in_menu_block = false;
+  TraySpec pending_tray;
+  bool in_tray_block = false;
   for (;;) {
     ssize_t n = read(g_sock, chunk, sizeof(chunk));
     if (n <= 0)
@@ -462,21 +736,45 @@ static void sock_read_loop() {
         in_menu_block = true;
       } else if (in_menu_block && line.rfind("MENU ", 0) == 0) {
         pending_menus.push_back(MenuSpec{line.substr(5), {}});
-      } else if (in_menu_block && line.rfind("ITEM ", 0) == 0 && !pending_menus.empty()) {
+      } else if ((in_menu_block || in_tray_block) && line.rfind("ITEM ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(5));
         MenuItemSpec it;
         it.id = p.size() > 0 ? p[0] : "";
         it.label = p.size() > 1 ? p[1] : it.id;
         it.key = p.size() > 2 ? p[2] : "";
-        pending_menus.back().items.push_back(it);
-      } else if (in_menu_block && line == "SEP" && !pending_menus.empty()) {
+        if (in_tray_block)
+          pending_tray.items.push_back(it);
+        else if (!pending_menus.empty())
+          pending_menus.back().items.push_back(it);
+      } else if ((in_menu_block || in_tray_block) && line == "SEP") {
         MenuItemSpec sep;
         sep.separator = true;
-        pending_menus.back().items.push_back(sep);
+        if (in_tray_block)
+          pending_tray.items.push_back(sep);
+        else if (!pending_menus.empty())
+          pending_menus.back().items.push_back(sep);
       } else if (line == "MENUEND") {
         in_menu_block = false;
         webview_dispatch(g_w, apply_menus,
                          new std::vector<MenuSpec>(pending_menus));
+      } else if (line.rfind("TRAYBEGIN", 0) == 0) {
+        pending_tray = TraySpec{};
+        std::vector<std::string> p =
+            line.size() > 10 ? split_tabs(line.substr(10)) : std::vector<std::string>{};
+        pending_tray.title = p.size() > 0 ? p[0] : "";
+        pending_tray.icon = p.size() > 1 ? p[1] : "";
+        pending_tray.template_icon = !(p.size() > 2 && p[2] == "0");
+        pending_tray.tooltip = p.size() > 3 ? p[3] : "";
+        in_tray_block = true;
+      } else if (line == "TRAYEND") {
+        in_tray_block = false;
+        webview_dispatch(g_w, apply_tray, new TraySpec(pending_tray));
+      } else if (line == "TRAYREMOVE") {
+        TraySpec *rm = new TraySpec{};
+        rm->remove = true;
+        webview_dispatch(g_w, apply_tray, rm);
+      } else if (line.rfind("WINOP ", 0) == 0) {
+        webview_dispatch(g_w, do_winop, new std::string(line.substr(6)));
       } else if (line == "RELOAD") {
         webview_dispatch(g_w, do_reload, nullptr);
       } else if (line == "QUIT") {
@@ -522,6 +820,8 @@ int main(int argc, char *argv[]) {
 
 #ifdef __APPLE__
   enable_webgpu(g_w);
+  install_close_hook(g_w);
+  install_drop_hook();
 #endif
 
   webview_set_title(g_w, title.c_str());

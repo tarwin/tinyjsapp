@@ -7,8 +7,6 @@
 //
 // Runs on txiki.js itself (via the `tinyjs` wrapper script).
 
-import { inlineHtml } from './runtime/inline.js';
-
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -47,6 +45,21 @@ async function run(argv, opts = {}) {
   if (st.exit_status !== 0 || st.term_signal) {
     fail(`command failed (${argv[0]}): ` + JSON.stringify(st));
   }
+}
+
+// Run a command and capture its stdout.
+async function runCapture(argv) {
+  const p = tjs.spawn(argv, { stdout: 'pipe', stderr: 'ignore' });
+  const reader = p.stdout.getReader();
+  let out = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    out += dec.decode(value, { stream: true });
+  }
+  const st = await p.wait();
+  if (st.exit_status !== 0 || st.term_signal) fail(`command failed (${argv[0]})`);
+  return out;
 }
 
 // Like run(), but returns false on failure instead of aborting.
@@ -160,9 +173,12 @@ async function loadConfig() {
   return { title: cfg.name, size: '960x640', id: 'com.example.' + cfg.name, ...cfg };
 }
 
-// Generate .build/app/: bridge + copied backend sources + inlined frontend +
-// an entry module, in the layout `tjs app compile` expects (app dir with an
-// app.json manifest — it bundles the whole module graph into one executable).
+// Generate .build/app/: bridge + copied backend sources + an entry module,
+// in the layout `tjs app compile` expects (app dir with an app.json manifest
+// — it bundles the whole module graph into one executable). The frontend
+// ships as real files (the launcher loads file:// documents, so relative
+// css/js/images just work): dev points at src/frontend directly; build
+// copies it into .build/app/frontend.
 async function generateBuild(cfg, dev = false) {
   await run(['rm', '-rf', '.build']);
   const B = '.build/app';
@@ -171,6 +187,7 @@ async function generateBuild(cfg, dev = false) {
   await tjs.writeFile(B + '/app.json',
     enc.encode(JSON.stringify({ version: 0, build: {}, main: 'entry.js' })));
   await tjs.writeFile(B + '/bridge.js', await tjs.readFile(TOOL_DIR + 'runtime/bridge.js'));
+  await tjs.writeFile(B + '/update.js', await tjs.readFile(TOOL_DIR + 'runtime/update.js'));
 
   // Backend sources (everything under src/ except the frontend).
   await tjs.makeDir(B + '/src');
@@ -183,38 +200,48 @@ async function generateBuild(cfg, dev = false) {
     else await tjs.writeFile(d, await tjs.readFile(s));
   }
 
-  const { html, missing } = await inlineHtml('src/frontend/index.html');
-  for (const m of missing) console.log(`warning: frontend references missing file: ${m}`);
-  await tjs.writeFile(B + '/assets.js', enc.encode('export const INDEX_HTML = ' + JSON.stringify(html) + ';\n'));
+  if (!(await exists('src/frontend/index.html'))) {
+    fail('src/frontend/index.html not found');
+  }
+  if (!dev) await copyTree('src/frontend', B + '/frontend');
+
+  // Frontend location at runtime: dev uses the project sources in place;
+  // packaged apps resolve relative to entry.js (.app Resources/app/) with a
+  // fallback next to the executable for the bare compiled binary, where
+  // import.meta.url throws.
+  const frontendResolver = dev
+    ? `const FRONTEND = ${JSON.stringify(tjs.cwd + '/src/frontend')};`
+    : `let FRONTEND;
+try { FRONTEND = decodeURIComponent(new URL('./frontend', import.meta.url).pathname); }
+catch { FRONTEND = tjs.exePath.replace(/\\/[^/]*$/, '') + '/frontend'; }`;
 
   let entry = `import { createApp } from './bridge.js';
 import * as appMod from './src/main.js';
-import { INDEX_HTML } from './assets.js';
+
+${frontendResolver}
 
 const app = await createApp({
-  html: INDEX_HTML,
+  htmlPath: FRONTEND + '/index.html',
   title: ${JSON.stringify(cfg.title)},
   size: ${JSON.stringify(cfg.size)},
   version: ${JSON.stringify(cfg.version || '0.0.0')},
   api: appMod.api ?? {},
   onMenu: appMod.onMenu,
+  onTray: appMod.onTray,
+  update: ${JSON.stringify(cfg.update ?? null)},
 });
 if (appMod.init) appMod.init(app);
 `;
 
   if (dev) {
-    // Hot-reload: watch the project frontend, re-inline, swap the page in place.
-    await tjs.writeFile(B + '/inline.js', await tjs.readFile(TOOL_DIR + 'runtime/inline.js'));
-    entry = `import { inlineHtml } from './inline.js';\n` + entry + `
-const FRONTEND = ${JSON.stringify(tjs.cwd + '/src/frontend')};
+    // Hot-reload: any frontend change re-renders the page from disk in place.
+    entry += `
 let reloadTimer = null;
 tjs.watch(FRONTEND, () => {
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(async () => {
     try {
-      const { html, missing } = await inlineHtml(FRONTEND + '/index.html');
-      for (const m of missing) console.log('warning: frontend references missing file: ' + m);
-      await app.reload(html);
+      await app.reload();
       console.log('tinyjs: frontend reloaded');
     } catch (e) {
       console.log('tinyjs: frontend reload failed:', String(e));
@@ -299,6 +326,8 @@ async function cmdBuild() {
   // whole module graph into a standalone executable.
   await run([tjs.exePath, 'app', 'compile', cwd + '/dist/' + cfg.name], { cwd: cwd + '/.build' });
   await run(['cp', TOOL_DIR + 'native/launcher', 'dist/launcher']);
+  // The bare binary resolves its frontend next to the executable.
+  await run(['cp', '-R', '.build/app/frontend', 'dist/frontend']);
 
   // The .app does NOT use the compiled binary (it can't be codesigned, see
   // below): it ships the stock tjs runtime + the app as plain data files in
@@ -371,6 +400,37 @@ async function cmdBuild() {
   console.log(`run it:  ./dist/${cfg.name}   (or open "${APP}")`);
 }
 
+// Build, zip the .app, and emit the auto-update manifest next to it.
+// Upload dist/publish/* to the directory tinyjs.json "update".url points at.
+async function cmdPublish() {
+  const cfg = await loadConfig();
+  const version = cfg.version;
+  if (!version) fail('tinyjs.json needs a "version" to publish (e.g. "1.0.0")');
+  await cmdBuild();
+
+  const zipName = cfg.name + '-' + version + '.zip';
+  const PUB = 'dist/publish';
+  await run(['rm', '-rf', PUB]);
+  await tjs.makeDir(PUB, { recursive: true });
+  console.log('==> zipping ' + zipName);
+  await run(['ditto', '-c', '-k', '--keepParent', 'dist/' + cfg.title + '.app', PUB + '/' + zipName]);
+  const sha = (await runCapture(['shasum', '-a', '256', PUB + '/' + zipName])).trim().split(/\s+/)[0];
+
+  // Zips live next to the manifest, so derive the download url from update.url.
+  const base = cfg.update?.url ? cfg.update.url.replace(/\/[^/]*$/, '') : null;
+  const manifest = { version, url: (base ?? 'https://YOUR-HOST/updates') + '/' + zipName, sha256: sha };
+  await tjs.writeFile(PUB + '/manifest.json', enc.encode(JSON.stringify(manifest, null, 2) + '\n'));
+
+  console.log('==> dist/publish/ ready:');
+  console.log('    ' + zipName);
+  console.log('    manifest.json (version ' + version + ', url ' + manifest.url + ')');
+  if (!base) {
+    console.log('note: no "update": { "url": … } in tinyjs.json — the manifest url is a');
+    console.log('placeholder; set update.url so shipped apps know where to check.');
+  }
+  console.log('upload both files to the directory update.url points at.');
+}
+
 async function cmdVersion() {
   let v = 'dev';
   try {
@@ -383,6 +443,7 @@ switch (cmd) {
   case 'new': await cmdNew(); break;
   case 'dev': await cmdDev(); break;
   case 'build': await cmdBuild(); break;
+  case 'publish': await cmdPublish(); break;
   case 'version': case '--version': case '-v': await cmdVersion(); break;
   case 'update': await cmdUpdate(); break;
   default:
@@ -392,7 +453,8 @@ usage:
   tinyjs new <dir>    scaffold a new app
   tinyjs dev          run the app in the current directory
   tinyjs build        build dist/<name> and dist/<Name>.app
-  tinyjs update       update to the latest release (--check: only report)
+  tinyjs publish      build + zip the .app + auto-update manifest
+  tinyjs update       update the tinyjs CLI itself (--check: only report)
   tinyjs version      print version`);
     tjs.exit(cmd ? 1 : 0);
 }
