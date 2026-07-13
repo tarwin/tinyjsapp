@@ -19,16 +19,25 @@
 //                         RELOAD                     re-read the HTML file and
 //                                                    re-render (dev hot-reload)
 //                         MENUBEGIN / MENU <title> /
-//                         ITEM <id>\t<label>\t<key> /
+//                         ITEM <id>\t<label>\t<key>\t<flags c|d> /
+//                         SUB <id>\t<label> … SUBEND /
 //                         SEP / MENUEND              declare custom menu bar
-//                                                    menus (applied on MENUEND)
+//                                                    menus (applied on MENUEND;
+//                                                    flags: c=checked,
+//                                                    d=disabled; SUB nests)
+//                         MENUUPD <id>\t<label>\t<checked>\t<enabled>
+//                                                    patch a live item ('' =
+//                                                    leave unchanged)
+//                         GET <qid> <what>           read-back query; what =
+//                                                    win | item:<id>
 //                         TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip> /
 //                         ITEM / SEP / TRAYEND       declare a menu bar status
 //                                                    item (applied on TRAYEND)
 //                         TRAYREMOVE                 remove the status item
 //                         WINOP <op> [args]          window ops: hide, show,
 //                                                    center, minimize,
-//                                                    fullscreen, ontop 0|1,
+//                                                    fullscreen [0|1], restore,
+//                                                    ontop 0|1,
 //                                                    resizable 0|1, pos <x> <y>,
 //                                                    dock 0|1 (Dock icon),
 //                                                    hideonclose 0|1
@@ -53,6 +62,7 @@
 //                                                    clicked (no menu set)
 //                         DROP <json-paths>          files dragged onto the
 //                                                    window (real paths)
+//                         GOT <qid> <json>           read-back answer
 //
 // A default app menu (About + Quit) is always present; About shows the
 // standard panel with the app name, version, and a tinyjs credit.
@@ -324,6 +334,9 @@ static void do_dialog(webview_t w, void *arg) {
 struct MenuItemSpec {
   std::string id, label, key;
   bool separator = false;
+  bool checked = false;   // ITEM flags field: 'c'
+  bool disabled = false;  // ITEM flags field: 'd'
+  std::vector<MenuItemSpec> submenu; // SUB <id>\t<label> … SUBEND nesting
 };
 struct MenuSpec {
   std::string title;
@@ -394,6 +407,39 @@ static void send_open_urls(NSArray *urls); // defined below
 
 static TinyMenuTarget *g_menu_target = nil;
 
+// Live NSMenuItems by id, per container, rebuilt on each apply — MENUUPD
+// patches and `GET item:<id>` reads go through these.
+static NSMutableDictionary *g_reg_menu = nil;
+static NSMutableDictionary *g_reg_tray = nil;
+
+// Recursively fill `menu` from specs. autoenablesItems=NO so `disabled`
+// sticks (AppKit would otherwise re-enable anything with a live target).
+static void build_menu_into(NSMenu *menu, const std::vector<MenuItemSpec> &items,
+                            SEL action, NSMutableDictionary *registry) {
+  menu.autoenablesItems = NO;
+  for (const MenuItemSpec &it : items) {
+    if (it.separator) {
+      [menu addItem:[NSMenuItem separatorItem]];
+      continue;
+    }
+    NSMenuItem *mi = [[[NSMenuItem alloc] initWithTitle:ns(it.label)
+                                                 action:action
+                                          keyEquivalent:ns(it.key)] autorelease];
+    mi.target = g_menu_target;
+    mi.representedObject = ns(it.id);
+    mi.state = it.checked ? NSControlStateValueOn : NSControlStateValueOff;
+    mi.enabled = it.disabled ? NO : YES;
+    if (!it.submenu.empty()) {
+      NSMenu *sub = [[[NSMenu alloc] initWithTitle:ns(it.label)] autorelease];
+      build_menu_into(sub, it.submenu, action, registry);
+      mi.submenu = sub;
+    }
+    if (registry && !it.id.empty())
+      registry[ns(it.id)] = mi;
+    [menu addItem:mi];
+  }
+}
+
 static void apply_menus(webview_t, void *arg) {
   std::vector<MenuSpec> *menus = static_cast<std::vector<MenuSpec> *>(arg);
   @autoreleasepool {
@@ -437,24 +483,14 @@ static void apply_menus(webview_t, void *arg) {
     editItem.submenu = editMenu;
 
     // Custom menus from the backend.
+    [g_reg_menu release];
+    g_reg_menu = [[NSMutableDictionary alloc] init];
     if (menus) {
       for (const MenuSpec &m : *menus) {
         NSMenuItem *holder = [[NSMenuItem alloc] init];
         [bar addItem:holder];
         NSMenu *menu = [[NSMenu alloc] initWithTitle:ns(m.title)];
-        for (const MenuItemSpec &it : m.items) {
-          if (it.separator) {
-            [menu addItem:[NSMenuItem separatorItem]];
-            continue;
-          }
-          NSMenuItem *mi =
-              [[NSMenuItem alloc] initWithTitle:ns(it.label)
-                                         action:@selector(itemClicked:)
-                                  keyEquivalent:ns(it.key)];
-          mi.target = g_menu_target;
-          mi.representedObject = ns(it.id);
-          [menu addItem:mi];
-        }
+        build_menu_into(menu, m.items, @selector(itemClicked:), g_reg_menu);
         holder.submenu = menu;
       }
     }
@@ -517,21 +553,11 @@ static void apply_tray(webview_t, void *arg) {
     btn.title = ns(spec->title);
     btn.toolTip = spec->tooltip.empty() ? nil : ns(spec->tooltip);
 
+    [g_reg_tray release];
+    g_reg_tray = [[NSMutableDictionary alloc] init];
     if (!spec->items.empty()) {
       NSMenu *menu = [[[NSMenu alloc] init] autorelease];
-      for (const MenuItemSpec &it : spec->items) {
-        if (it.separator) {
-          [menu addItem:[NSMenuItem separatorItem]];
-          continue;
-        }
-        NSMenuItem *mi =
-            [[[NSMenuItem alloc] initWithTitle:ns(it.label)
-                                        action:@selector(trayItemClicked:)
-                                 keyEquivalent:ns(it.key)] autorelease];
-        mi.target = g_menu_target;
-        mi.representedObject = ns(it.id);
-        [menu addItem:mi];
-      }
+      build_menu_into(menu, spec->items, @selector(trayItemClicked:), g_reg_tray);
       g_status_item.menu = menu;
     } else {
       g_status_item.menu = nil;
@@ -600,8 +626,15 @@ static void do_winop(webview_t w, void *arg) {
       [win center];
     } else if (*op == "minimize") {
       [win miniaturize:nil];
+    } else if (*op == "restore") {
+      [win deminiaturize:nil];
     } else if (*op == "fullscreen") {
       [win toggleFullScreen:nil];
+    } else if (*op == "fullscreen 1" || *op == "fullscreen 0") {
+      bool want = op->back() == '1';
+      bool is = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
+      if (want != is)
+        [win toggleFullScreen:nil];
     } else if (*op == "ontop 1") {
       win.level = NSFloatingWindowLevel;
     } else if (*op == "ontop 0") {
@@ -854,18 +887,20 @@ static void tiny_willOpenMenu(id self, SEL cmd, NSMenu *menu, NSEvent *ev) {
   if (!g_ctx_active)
     return;
   [menu removeAllItems];
-  for (const MenuItemSpec &it : g_ctx_items) {
-    if (it.separator) {
-      [menu addItem:[NSMenuItem separatorItem]];
-      continue;
-    }
-    NSMenuItem *mi = [[[NSMenuItem alloc] initWithTitle:ns(it.label)
-                                                 action:@selector(ctxItemClicked:)
-                                          keyEquivalent:@""] autorelease];
-    mi.target = g_menu_target;
-    mi.representedObject = ns(it.id);
-    [menu addItem:mi];
+  build_menu_into(menu, g_ctx_items, @selector(ctxItemClicked:), nil);
+}
+
+// Context menus are built lazily at right-click, so state updates and reads
+// go against the stored spec rather than live NSMenuItems.
+static MenuItemSpec *find_ctx_spec(std::vector<MenuItemSpec> &items,
+                                   const std::string &id) {
+  for (MenuItemSpec &it : items) {
+    if (it.id == id)
+      return &it;
+    if (MenuItemSpec *hit = find_ctx_spec(it.submenu, id))
+      return hit;
   }
+  return nullptr;
 }
 
 static void apply_ctx(webview_t, void *arg) {
@@ -886,6 +921,110 @@ static void install_ctx_hook() {
 }
 #else
 static void apply_ctx(webview_t, void *arg) { delete static_cast<CtxReq *>(arg); }
+#endif
+
+// --- stateful menus: surgical updates + read-backs -------------------------------
+// MENUUPD <id>\t<label>\t<checked>\t<enabled> patches a live item (empty field
+// = leave unchanged; checked/enabled are ''|0|1). GET <qid> <what> answers
+// with GOT <qid> <json>; what = "win" (window state) or "item:<id>".
+
+struct MenuUpdReq {
+  std::string id, label, checked, enabled;
+};
+
+struct GetReq {
+  std::string qid, what;
+};
+
+#ifdef __APPLE__
+static void do_menu_update(webview_t, void *arg) {
+  MenuUpdReq *req = static_cast<MenuUpdReq *>(arg);
+  @autoreleasepool {
+    NSString *key = ns(req->id);
+    NSMenuItem *mi = g_reg_menu[key] ?: g_reg_tray[key];
+    if (mi) {
+      if (!req->label.empty())
+        mi.title = ns(req->label);
+      if (!req->checked.empty())
+        mi.state = req->checked == "1" ? NSControlStateValueOn
+                                       : NSControlStateValueOff;
+      if (!req->enabled.empty())
+        mi.enabled = req->enabled == "1";
+    }
+    // Context menus rebuild from spec at right-click; patch the spec too.
+    if (MenuItemSpec *spec = find_ctx_spec(g_ctx_items, req->id)) {
+      if (!req->label.empty())
+        spec->label = req->label;
+      if (!req->checked.empty())
+        spec->checked = req->checked == "1";
+      if (!req->enabled.empty())
+        spec->disabled = req->enabled == "0";
+    }
+  }
+  delete req;
+}
+
+static void do_get(webview_t w, void *arg) {
+  GetReq *req = static_cast<GetReq *>(arg);
+  std::string json = "null";
+  @autoreleasepool {
+    if (req->what == "win") {
+      NSWindow *win = (NSWindow *)webview_get_native_handle(
+          w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+      if (win) {
+        NSRect f = win.frame;
+        // width/height are frame size — the same units setSize uses, so
+        // set → get round-trips.
+        NSScreen *scr = win.screen ?: [NSScreen mainScreen];
+        CGFloat top = NSMaxY([[NSScreen screens][0] frame]);
+        bool fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
+        char buf[512];
+        std::snprintf(
+            buf, sizeof(buf),
+            "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
+            "\"fullscreen\":%s,\"minimized\":%s,\"visible\":%s,\"focused\":%s,"
+            "\"alwaysOnTop\":%s,\"resizable\":%s,"
+            "\"screen\":{\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
+            (int)f.origin.x, (int)(top - NSMaxY(f)), (int)f.size.width,
+            (int)f.size.height, fs ? "true" : "false",
+            win.miniaturized ? "true" : "false", win.visible ? "true" : "false",
+            win.keyWindow ? "true" : "false",
+            win.level != NSNormalWindowLevel ? "true" : "false",
+            (win.styleMask & NSWindowStyleMaskResizable) ? "true" : "false",
+            (int)scr.frame.size.width, (int)scr.frame.size.height,
+            (double)scr.backingScaleFactor);
+        json = buf;
+      }
+    } else if (req->what.rfind("item:", 0) == 0) {
+      std::string id = req->what.substr(5);
+      NSString *key = ns(id);
+      NSMenuItem *mi = g_reg_menu[key] ?: g_reg_tray[key];
+      if (mi) {
+        json = std::string("{\"exists\":true,\"label\":") +
+               json_escape([mi.title UTF8String]) +
+               ",\"checked\":" +
+               (mi.state == NSControlStateValueOn ? "true" : "false") +
+               ",\"enabled\":" + (mi.enabled ? "true" : "false") + "}";
+      } else if (MenuItemSpec *spec = find_ctx_spec(g_ctx_items, id)) {
+        json = std::string("{\"exists\":true,\"label\":") +
+               json_escape(spec->label) +
+               ",\"checked\":" + (spec->checked ? "true" : "false") +
+               ",\"enabled\":" + (spec->disabled ? "false" : "true") + "}";
+      } else {
+        json = "{\"exists\":false}";
+      }
+    }
+  }
+  sock_write_line("GOT " + req->qid + " " + json);
+  delete req;
+}
+#else
+static void do_menu_update(webview_t, void *arg) { delete static_cast<MenuUpdReq *>(arg); }
+static void do_get(webview_t, void *arg) {
+  GetReq *req = static_cast<GetReq *>(arg);
+  sock_write_line("GOT " + req->qid + " null");
+  delete req;
+}
 #endif
 
 // --- print (macOS) ---------------------------------------------------------------
@@ -979,8 +1118,31 @@ static void sock_read_loop() {
   bool in_menu_block = false;
   TraySpec pending_tray;
   bool in_tray_block = false;
-  std::vector<MenuItemSpec> pending_ctx;
   bool in_ctx_block = false;
+  // Items build through a stack so SUB…SUBEND nests; root is build_stack[0].
+  std::vector<std::vector<MenuItemSpec>> build_stack(1);
+  std::vector<MenuItemSpec> sub_parents;
+  auto collapse_subs = [&]() {
+    while (build_stack.size() > 1) {
+      MenuItemSpec parent = sub_parents.back();
+      sub_parents.pop_back();
+      parent.submenu = build_stack.back();
+      build_stack.pop_back();
+      build_stack.back().push_back(parent);
+    }
+  };
+  auto take_root = [&]() {
+    collapse_subs();
+    std::vector<MenuItemSpec> root = build_stack[0];
+    build_stack.assign(1, {});
+    return root;
+  };
+  auto flush_root = [&]() {
+    if (!pending_menus.empty())
+      pending_menus.back().items = take_root();
+    else
+      build_stack.assign(1, {});
+  };
   for (;;) {
     ssize_t n = read(g_sock, chunk, sizeof(chunk));
     if (n <= 0)
@@ -1021,9 +1183,13 @@ static void sock_read_loop() {
         webview_dispatch(g_w, do_dialog, req);
       } else if (line == "MENUBEGIN") {
         pending_menus.clear();
+        collapse_subs();
+        build_stack.assign(1, {});
         in_menu_block = true;
       } else if (in_menu_block && line.rfind("MENU ", 0) == 0) {
+        flush_root(); // previous menu's items (if any)
         pending_menus.push_back(MenuSpec{line.substr(5), {}});
+        build_stack.assign(1, {});
       } else if ((in_menu_block || in_tray_block || in_ctx_block) &&
                  line.rfind("ITEM ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(5));
@@ -1031,22 +1197,35 @@ static void sock_read_loop() {
         it.id = p.size() > 0 ? p[0] : "";
         it.label = p.size() > 1 ? p[1] : it.id;
         it.key = p.size() > 2 ? p[2] : "";
-        if (in_tray_block)
-          pending_tray.items.push_back(it);
-        else if (in_ctx_block)
-          pending_ctx.push_back(it);
-        else if (!pending_menus.empty())
-          pending_menus.back().items.push_back(it);
+        if (p.size() > 3) { // flags: c=checked, d=disabled
+          it.checked = p[3].find('c') != std::string::npos;
+          it.disabled = p[3].find('d') != std::string::npos;
+        }
+        build_stack.back().push_back(it);
       } else if ((in_menu_block || in_tray_block || in_ctx_block) && line == "SEP") {
         MenuItemSpec sep;
         sep.separator = true;
-        if (in_tray_block)
-          pending_tray.items.push_back(sep);
-        else if (in_ctx_block)
-          pending_ctx.push_back(sep);
-        else if (!pending_menus.empty())
-          pending_menus.back().items.push_back(sep);
+        build_stack.back().push_back(sep);
+      } else if ((in_menu_block || in_tray_block || in_ctx_block) &&
+                 line.rfind("SUB ", 0) == 0) {
+        // SUB <id>\t<label>: following ITEMs nest until SUBEND.
+        std::vector<std::string> p = split_tabs(line.substr(4));
+        MenuItemSpec parent;
+        parent.id = p.size() > 0 ? p[0] : "";
+        parent.label = p.size() > 1 ? p[1] : parent.id;
+        sub_parents.push_back(parent);
+        build_stack.push_back({});
+      } else if ((in_menu_block || in_tray_block || in_ctx_block) &&
+                 line == "SUBEND") {
+        if (build_stack.size() > 1) {
+          MenuItemSpec parent = sub_parents.back();
+          sub_parents.pop_back();
+          parent.submenu = build_stack.back();
+          build_stack.pop_back();
+          build_stack.back().push_back(parent);
+        }
       } else if (line == "MENUEND") {
+        flush_root();
         in_menu_block = false;
         webview_dispatch(g_w, apply_menus,
                          new std::vector<MenuSpec>(pending_menus));
@@ -1058,9 +1237,12 @@ static void sock_read_loop() {
         pending_tray.icon = p.size() > 1 ? p[1] : "";
         pending_tray.template_icon = !(p.size() > 2 && p[2] == "0");
         pending_tray.tooltip = p.size() > 3 ? p[3] : "";
+        collapse_subs();
+        build_stack.assign(1, {});
         in_tray_block = true;
       } else if (line == "TRAYEND") {
         in_tray_block = false;
+        pending_tray.items = take_root();
         webview_dispatch(g_w, apply_tray, new TraySpec(pending_tray));
       } else if (line == "TRAYREMOVE") {
         TraySpec *rm = new TraySpec{};
@@ -1069,11 +1251,12 @@ static void sock_read_loop() {
       } else if (line.rfind("WINOP ", 0) == 0) {
         webview_dispatch(g_w, do_winop, new std::string(line.substr(6)));
       } else if (line == "CTXBEGIN") {
-        pending_ctx.clear();
+        collapse_subs();
+        build_stack.assign(1, {});
         in_ctx_block = true;
       } else if (line == "CTXEND") {
         in_ctx_block = false;
-        webview_dispatch(g_w, apply_ctx, new CtxReq{pending_ctx, true});
+        webview_dispatch(g_w, apply_ctx, new CtxReq{take_root(), true});
       } else if (line == "CTXCLEAR") {
         webview_dispatch(g_w, apply_ctx, new CtxReq{{}, false});
       } else if (line.rfind("HKREG ", 0) == 0) {
@@ -1082,6 +1265,20 @@ static void sock_read_loop() {
           webview_dispatch(g_w, do_hotkey, new HotkeyReq{p[0], p[1]});
       } else if (line.rfind("HKUNREG ", 0) == 0) {
         webview_dispatch(g_w, do_hotkey, new HotkeyReq{line.substr(8), ""});
+      } else if (line.rfind("MENUUPD ", 0) == 0) {
+        std::vector<std::string> p = split_tabs(line.substr(8));
+        MenuUpdReq *req = new MenuUpdReq;
+        req->id = p.size() > 0 ? p[0] : "";
+        req->label = p.size() > 1 ? p[1] : "";
+        req->checked = p.size() > 2 ? p[2] : "";
+        req->enabled = p.size() > 3 ? p[3] : "";
+        webview_dispatch(g_w, do_menu_update, req);
+      } else if (line.rfind("GET ", 0) == 0) {
+        size_t sp1 = line.find(' ', 4);
+        if (sp1 == std::string::npos)
+          continue;
+        webview_dispatch(g_w, do_get,
+                         new GetReq{line.substr(4, sp1 - 4), line.substr(sp1 + 1)});
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_print, nullptr);
       } else if (line == "RELOAD") {

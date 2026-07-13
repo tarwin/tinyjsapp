@@ -4,6 +4,20 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.5.0 — 2026-07-13
+
+- **Stateful menus** — items support `checked`, `enabled: false`, and nested
+  `submenu` everywhere (menu bar, tray, context menus).
+  `tiny.menu.update(id, { label?, checked?, enabled? })` patches a live item
+  without redeclaring; `tiny.menu.get(id)` reads one back.
+- **Window read-backs** — `tiny.win.getState()` returns position, size,
+  fullscreen/minimized/visible/focused/always-on-top/resizable, and screen
+  info; set → get round-trips exactly. New `tiny.win.restore()` and absolute
+  `tiny.win.setFullscreen(bool)`.
+- Wire protocol grows its first launcher→backend replies (`GET`/`GOT`).
+- **`tiny.app.info()`** — `{ version, tinyjs, runtime }`: the app's version,
+  the tinyjs version it was built with, and the txiki.js runtime.
+
 ## 0.4.0 — 2026-07-13
 
 - **Deep links** — claim a scheme with `"urlScheme": "myapp"` in tinyjs.json;

@@ -76,7 +76,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, update = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, update = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -160,6 +160,33 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
 
   const writer = writable.getWriter();
 
+  // Read-backs: GET <qid> <what> → launcher answers GOT <qid> <json>.
+  let qidSeq = 1;
+  const pendingGets = new Map();
+  function query(what) {
+    return new Promise((resolve) => {
+      const qid = String(qidSeq++);
+      pendingGets.set(qid, resolve);
+      send('GET ' + qid + ' ' + what);
+    });
+  }
+
+  // Menu items, shared by menu bar / tray / context menu. Items support
+  // { id, label, key?, checked?, enabled?, submenu?: [...] } | { separator }.
+  function sendItems(items) {
+    for (const it of items ?? []) {
+      if (it.separator) { send('SEP'); continue; }
+      if (it.submenu) {
+        send('SUB ' + [one(it.id), one(it.label ?? it.id)].join('\t'));
+        sendItems(it.submenu);
+        send('SUBEND');
+        continue;
+      }
+      const flags = (it.checked ? 'c' : '') + (it.enabled === false ? 'd' : '');
+      send('ITEM ' + [one(it.id), one(it.label ?? it.id), one(it.key ?? ''), flags].join('\t'));
+    }
+  }
+
   function send(line) {
     dbg('>>', line);
     writer.write(enc.encode(line + '\n')).catch((e) => console.log('tinyjs send error:', e));
@@ -189,13 +216,23 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       send('MENUBEGIN');
       for (const m of menus ?? []) {
         send('MENU ' + one(m.title));
-        for (const it of m.items ?? []) {
-          if (it.separator) send('SEP');
-          else send('ITEM ' + [one(it.id), one(it.label ?? it.id), one(it.key ?? '')].join('\t'));
-        }
+        sendItems(m.items);
       }
       send('MENUEND');
     },
+    // Patch a live item without redeclaring the menu: { label?, checked?, enabled? }.
+    updateMenuItem(id, patch = {}) {
+      const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
+      send('MENUUPD ' + [one(id), one(patch.label ?? ''),
+                         bit(patch.checked), bit(patch.enabled)].join('\t'));
+    },
+    // { exists, label, checked, enabled } for a menu/tray/context item.
+    getMenuItem(id) { return query('item:' + id); },
+    // { x, y, width, height, fullscreen, minimized, visible, focused,
+    //   alwaysOnTop, resizable, screen: { width, height, scale } }
+    getWinState() { return query('win'); },
+    restore() { send('WINOP restore'); },
+    setFullscreen(v) { send('WINOP fullscreen ' + (v ? 1 : 0)); },
     notify,
     // Window visibility & app presence (tray-app plumbing).
     hide() { send('WINOP hide'); },
@@ -225,10 +262,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         send('TRAYBEGIN ' + [one(spec.title), one(icon),
                              spec.template === false ? '0' : '1',
                              one(spec.tooltip)].join('\t'));
-        for (const it of spec.menu ?? []) {
-          if (it.separator) send('SEP');
-          else send('ITEM ' + [one(it.id), one(it.label ?? it.id), one(it.key ?? '')].join('\t'));
-        }
+        sendItems(spec.menu);
         send('TRAYEND');
       },
       remove() { send('TRAYREMOVE'); },
@@ -247,13 +281,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     setContextMenu(items) {
       if (!items || !items.length) { send('CTXCLEAR'); return; }
       send('CTXBEGIN');
-      for (const it of items) {
-        if (it.separator) send('SEP');
-        else send('ITEM ' + [one(it.id), one(it.label ?? it.id), ''].join('\t'));
-      }
+      sendItems(items);
       send('CTXEND');
     },
     quit() { send('QUIT'); },
+    // { version: <app>, tinyjs: <framework that built it>, runtime: <txiki> }
+    info: { version, tinyjs: tinyjsVersion, runtime: 'txiki.js ' + tjs.version },
     // Auto-update (tinyjs.json "update": { "url": "https://…/manifest.json" }).
     // check() -> { available, current, latest }; install() downloads, verifies,
     // swaps the .app, relaunches the new version, and quits this instance.
@@ -304,7 +337,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'hotkey.register': async ({ id: hid, combo }) => (app.hotkey.register(hid, combo), true),
     'hotkey.unregister': async ({ id: hid }) => (app.hotkey.unregister(hid), true),
     'menu.setContext': async ({ items }) => (app.setContextMenu(items), true),
+    'menu.update': async ({ id: mid, ...patch }) => (app.updateMenuItem(mid, patch), true),
+    'menu.get': async ({ id: mid }) => app.getMenuItem(mid),
+    'win.getState': async () => app.getWinState(),
+    'win.restore': async () => (app.restore(), true),
+    'win.setFullscreen': async ({ enabled }) => (app.setFullscreen(enabled), true),
     'theme.get': async () => lastTheme,
+    'app.info': async () => app.info,
   };
   const methods = { ...api, ...builtins };
   let lastTheme = null; // { dark } once the launcher reports it (at startup)
@@ -383,6 +422,15 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
             push(kind, {}); // 'sleep' | 'wake'
           }
           if (onSystem) onSystem(kind, value ?? null, app);
+        } else if (line.startsWith('GOT ')) {
+          const sp = line.indexOf(' ', 4);
+          const resolve = pendingGets.get(line.slice(4, sp));
+          if (resolve) {
+            pendingGets.delete(line.slice(4, sp));
+            let v = null;
+            try { v = JSON.parse(line.slice(sp + 1)); } catch {}
+            resolve(v);
+          }
         } else if (line.startsWith('OPENURL ')) {
           // Deep link (custom URL scheme; packaged .app only).
           const url = line.slice(8);

@@ -74,6 +74,7 @@ await tiny.api.call('method', { params })   // -> backend api.<method>
 tiny.api.on('event-name', (data) => ...)    // <- app.push from backend
 
 tiny.log(msg); tiny.quit();
+await tiny.app.info();   // { version: <app>, tinyjs: <built with>, runtime: <txiki> }
 
 tiny.win.setTitle(t); tiny.win.setSize(w, h);
 await tiny.win.openFile();                  // path | null (native panel)
@@ -86,13 +87,21 @@ await tiny.win.prompt(message, { default, ok, cancel });  // string | null
 
 tiny.menu.set([{ title: 'Actions', items: [
   { id: 'open', label: 'Open…', key: 'o' },   // key = cmd+<key>
+  { id: 'mute', label: 'Mute', checked: true },     // checkmark
+  { id: 'no', label: 'Nope', enabled: false },      // grayed out
   { separator: true },
-  { id: 'hello', label: 'Say Hello' },
+  { id: 'more', label: 'More', submenu: [{ id: 'a', label: 'Sub' }] },
 ]}]);
 tiny.menu.on((id) => ...);                  // clicks (also a 'menu' api event)
+tiny.menu.update('mute', { checked: false, label: 'Unmuted' });  // patch live
+await tiny.menu.get('mute');                // { exists, label, checked, enabled }
+// same item shape + update/get work for tray and context menus
 
 tiny.notify(title, body);                   // desktop notification
-tiny.win.center(); tiny.win.minimize(); tiny.win.fullscreen();  // toggles
+tiny.win.center(); tiny.win.minimize(); tiny.win.restore();
+tiny.win.fullscreen(); tiny.win.setFullscreen(bool);   // toggle / absolute
+await tiny.win.getState();  // { x, y, width, height, fullscreen, minimized,
+                            //   visible, focused, alwaysOnTop, resizable, screen }
 tiny.win.setPosition(x, y);                 // top-left origin
 tiny.win.setAlwaysOnTop(v); tiny.win.setResizable(v);
 tiny.win.hide(); tiny.win.show(); tiny.win.setHideOnClose(v);

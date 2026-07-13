@@ -69,6 +69,15 @@
   <section>
 
     <div class="rel">
+      <h2>0.5.0 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>Stateful menus</b> — <code>checked</code>, <code>enabled: false</code>, and nested <code>submenu</code> items everywhere; <code>tiny.menu.update(id, patch)</code> patches live items, <code>tiny.menu.get(id)</code> reads them back.</li>
+        <li><b>Window read-backs</b> — <code>tiny.win.getState()</code>: position, size, fullscreen/minimized/visible/focused/on-top/resizable + screen info; plus <code>restore()</code> and absolute <code>setFullscreen(bool)</code>.</li>
+        <li><b>Version introspection</b> — <code>tiny.app.info()</code>: app version, the tinyjs it was built with, and the runtime.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.4.0 <span class="date">2026-07-13</span></h2>
       <ul>
         <li><b>Deep links</b> — <code>"urlScheme": "myapp"</code> in tinyjs.json; <code>myapp://…</code> opens deliver <code>tiny.app.onOpenUrl</code>, cold starts included.</li>

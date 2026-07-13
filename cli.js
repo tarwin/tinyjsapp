@@ -225,6 +225,7 @@ const app = await createApp({
   title: ${JSON.stringify(cfg.title)},
   size: ${JSON.stringify(cfg.size)},
   version: ${JSON.stringify(cfg.version || '0.0.0')},
+  tinyjsVersion: ${JSON.stringify(await toolVersion())},
   id: ${JSON.stringify(cfg.id)},
   api: appMod.api ?? {},
   onMenu: appMod.onMenu,

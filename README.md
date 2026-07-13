@@ -75,7 +75,8 @@ export function init(app) {          // window is up
   // reload(), quit(), notify({title, body}), hide()/show()/center()/
   // minimize()/fullscreen(), setPosition(x, y), setAlwaysOnTop(v),
   // setResizable(v), setHideOnClose(v), setDockVisible(v), print(),
-  // tray.set(spec)/tray.remove(), store.get/set/delete/all,
+  // restore(), setFullscreen(v), getWinState(), tray.set/remove,
+  // updateMenuItem(id, patch), getMenuItem(id), info, store.get/set/delete/all,
   // hotkey.register(id, combo)/unregister(id), setContextMenu(items),
   // update.check()/update.install()
 }
@@ -108,14 +109,21 @@ tiny.api.on('tick', (t) => ...);                                   // backend pu
 
 tiny.log('debug msg');  tiny.quit();
 tiny.notify('Done', 'Your export finished');   // desktop notification
+await tiny.app.info();  // { version: <app>, tinyjs: <built with>, runtime: <txiki> }
 
 // window control
 tiny.win.setTitle('My App');  tiny.win.setSize(1200, 800);
 tiny.win.center();  tiny.win.setPosition(100, 80);      // top-left origin
-tiny.win.minimize();  tiny.win.fullscreen();            // fullscreen toggles
+tiny.win.minimize();  tiny.win.restore();
+tiny.win.fullscreen();  tiny.win.setFullscreen(true);   // toggle / absolute
 tiny.win.setAlwaysOnTop(true);  tiny.win.setResizable(false);
 tiny.win.hide();  tiny.win.show();
 tiny.win.setHideOnClose(true);  // close button hides instead of quitting
+
+// read the window back
+const s = await tiny.win.getState();
+// { x, y, width, height, fullscreen, minimized, visible, focused,
+//   alwaysOnTop, resizable, screen: { width, height, scale } }
 
 // files dragged onto the window arrive with REAL filesystem paths
 tiny.win.onDrop((paths) => tiny.log(paths.join(', ')));
@@ -163,12 +171,23 @@ own menus after those:
 tiny.menu.set([
   { title: 'Actions', items: [
     { id: 'open',  label: 'Open File…', key: 'o' },   // key = ⌘+<key>
+    { id: 'mute',  label: 'Mute', checked: true },    // ✓ checkmark
+    { id: 'later', label: 'Not Yet', enabled: false },// grayed out
     { separator: true },
-    { id: 'hello', label: 'Say Hello' },
+    { id: 'more',  label: 'More', submenu: [          // nests
+      { id: 'a', label: 'Sub Item' },
+    ]},
   ]},
 ]);
 tiny.menu.on((id) => { ... });   // clicks; backend can also export onMenu(id, app)
+
+// patch an item in place — no redeclaring:
+tiny.menu.update('mute', { checked: false, label: 'Unmuted' });
+const { exists, label, checked, enabled } = await tiny.menu.get('mute');
 ```
+
+The same item shape (checked / enabled / submenu) works in tray and context
+menus, and `menu.update` / `menu.get` reach those too.
 
 The dialogs and menus are native: the backend hands the work to the launcher,
 which runs panels/menus on the UI thread and answers the page's promise

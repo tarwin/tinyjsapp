@@ -170,21 +170,28 @@ db.prepare('SELECT * FROM notes').all();  <i>// [{ id: 1, text: 'hello' }]</i></
 
 <b>tiny.log</b>(msg);                     <i>// print in the backend terminal</i>
 <b>tiny.quit</b>();
-<b>tiny.notify</b>(title, body);          <i>// desktop notification</i></pre>
+<b>tiny.notify</b>(title, body);          <i>// desktop notification</i>
+await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i></pre>
   </section>
 
   <section id="window">
     <h2>tiny.win <span class="tag">window control</span></h2>
     <pre><b>tiny.win.setTitle</b>(t);  <b>tiny.win.setSize</b>(w, h);
 <b>tiny.win.center</b>();     <b>tiny.win.setPosition</b>(x, y);   <i>// top-left origin</i>
-<b>tiny.win.minimize</b>();   <b>tiny.win.fullscreen</b>();        <i>// toggles</i>
+<b>tiny.win.minimize</b>();   <b>tiny.win.restore</b>();
+<b>tiny.win.fullscreen</b>();  <b>tiny.win.setFullscreen</b>(bool);  <i>// toggle / absolute</i>
 <b>tiny.win.setAlwaysOnTop</b>(bool);  <b>tiny.win.setResizable</b>(bool);
 <b>tiny.win.hide</b>();  <b>tiny.win.show</b>();
 <b>tiny.win.setHideOnClose</b>(bool);   <i>// close button hides instead of quits</i>
 <b>tiny.win.print</b>();                <i>// native print panel</i>
 
 <i>// files dragged onto the window — real filesystem paths</i>
-<b>tiny.win.onDrop</b>((paths) =&gt; …);</pre>
+<b>tiny.win.onDrop</b>((paths) =&gt; …);
+
+<i>// read the window back</i>
+const s = await <b>tiny.win.getState</b>();
+<i>// { x, y, width, height, fullscreen, minimized, visible, focused,</i>
+<i>//   alwaysOnTop, resizable, screen: { width, height, scale } }</i></pre>
   </section>
 
   <section id="dialogs">
@@ -205,11 +212,17 @@ await <b>tiny.win.prompt</b>(message, { default, ok, cancel });   <i>// string |
     <pre><b>tiny.menu.set</b>([
   { title: 'Actions', items: [
     { id: 'open', label: 'Open…', key: 'o' },   <i>// key = ⌘+key</i>
+    { id: 'mute', label: 'Mute', checked: true },     <i>// ✓ checkmark</i>
+    { id: 'no', label: 'Not Yet', enabled: false },   <i>// grayed out</i>
     { separator: true },
-    { id: 'hello', label: 'Say Hello' },
+    { id: 'more', label: 'More', submenu: [{ id: 'a', label: 'Sub' }] },
   ]},
 ]);
 <b>tiny.menu.on</b>((id) =&gt; …);
+
+<i>// patch a live item — no redeclaring; works for tray + context items too</i>
+<b>tiny.menu.update</b>('mute', { checked: false, label: 'Unmuted' });
+await <b>tiny.menu.get</b>('mute');   <i>// { exists, label, checked, enabled }</i>
 
 <i>// right-click menu — native items replace WebKit's default (null restores)</i>
 <b>tiny.menu.setContext</b>([{ id, label }, { separator: true }]);

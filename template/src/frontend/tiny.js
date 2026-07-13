@@ -26,6 +26,11 @@
       setAlwaysOnTop: (enabled) => call('win.setAlwaysOnTop', { enabled }),
       setResizable: (enabled) => call('win.setResizable', { enabled }),
       setPosition: (x, y) => call('win.setPosition', { x, y }),    // top-left origin
+      restore: () => call('win.restore'),
+      setFullscreen: (enabled) => call('win.setFullscreen', { enabled }),
+      // { x, y, width, height, fullscreen, minimized, visible, focused,
+      //   alwaysOnTop, resizable, screen: { width, height, scale } }
+      getState: () => call('win.getState'),
       setHideOnClose: (enabled) => call('win.setHideOnClose', { enabled }),
       print: () => call('win.print'),
       // fn(paths): files dragged onto the window, as real filesystem paths.
@@ -40,9 +45,14 @@
     },
 
     menu: {
-      // menus: [{ title, items: [{ id, label, key? } | { separator: true }] }]
+      // menus: [{ title, items: [...] }]; items support { id, label, key?,
+      // checked?, enabled?, submenu?: [...] } | { separator: true } — same
+      // item shape works for tray and context menus.
       set: (menus) => call('menu.set', { menus }),
       on(fn) { window.tiny.api.on('menu', ({ id }) => fn(id)); },
+      // Patch one item in place: update('mute', { checked: true, label: 'Muted' })
+      update: (id, patch = {}) => call('menu.update', { id, ...patch }),
+      get: (id) => call('menu.get', { id }),   // { exists, label, checked, enabled }
       // Right-click menu: [{ id, label } | { separator: true }]; null restores default.
       setContext: (items) => call('menu.setContext', { items }),
       onContext(fn) { window.tiny.api.on('contextmenu', ({ id }) => fn(id)); },
@@ -70,6 +80,8 @@
     },
 
     app: {
+      // { version: <app>, tinyjs: <framework that built it>, runtime: <txiki> }
+      info: () => call('app.info'),
       // false: menu-bar-only app (no Dock icon); true: normal app.
       setDockVisible: (visible) => call('app.setDockVisible', { visible }),
       // Deep links + file associations (packaged .app; see tinyjs.json
