@@ -32,7 +32,7 @@ fi
 
 echo "==> compiling launcher"
 c++ -std=c++17 -x objective-c++ -Inative/include native/launcher.cc \
-  -o native/launcher -framework WebKit -framework AppKit -ldl
+  -o native/launcher -framework WebKit -framework AppKit -framework Carbon -ldl
 
 echo "==> compiling shim"
 cc -O2 -Wall native/shim.c -o native/shim

@@ -70,12 +70,29 @@ export function init(app) {          // window is up
   // app also has: setTitle(t), setSize(w, h), setMenu(menus), eval(js),
   // reload(), quit(), notify({title, body}), hide()/show()/center()/
   // minimize()/fullscreen(), setPosition(x, y), setAlwaysOnTop(v),
-  // setResizable(v), setHideOnClose(v), setDockVisible(v),
-  // tray.set(spec)/tray.remove(), update.check()/update.install()
+  // setResizable(v), setHideOnClose(v), setDockVisible(v), print(),
+  // tray.set(spec)/tray.remove(), store.get/set/delete/all,
+  // hotkey.register(id, combo)/unregister(id), setContextMenu(items),
+  // update.check()/update.install()
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
 export function onTray(id, app) {}   // optional: tray clicks (id null = bare icon)
+export function onHotkey(id, app) {} // optional: global hotkey presses
+export function onContextMenu(id, app) {}      // optional: context menu clicks
+export function onSystem(kind, value, app) {}  // optional: 'theme'|'sleep'|'wake'
+```
+
+The backend runtime ships SQLite built in, handy for anything `tiny.store`
+is too small for:
+
+```js
+import { Database } from 'tjs:sqlite';
+const db = new Database(dataDir + '/notes.db');
+db.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text)');
+const st = db.prepare('INSERT INTO notes (text) VALUES (?)');
+st.run('hello'); st.finalize();
+db.prepare('SELECT * FROM notes').all();   // [{ id: 1, text: 'hello' }]
 ```
 
 Frontend — include `tiny.js` (from the template); everything injected lives
@@ -98,6 +115,26 @@ tiny.win.setHideOnClose(true);  // close button hides instead of quitting
 
 // files dragged onto the window arrive with REAL filesystem paths
 tiny.win.onDrop((paths) => tiny.log(paths.join(', ')));
+tiny.win.print();                      // native print panel for the page
+
+// persistent settings (JSON in ~/Library/Application Support/<app id>/)
+await tiny.store.set('recent', ['/tmp/a.txt']);
+const recent = await tiny.store.get('recent');      // value | null
+await tiny.store.delete('recent');  await tiny.store.all();
+
+// system-wide hotkeys (work while other apps are focused)
+tiny.hotkey.register('boss', 'cmd+shift+k');
+tiny.hotkey.on((id) => tiny.win.show());
+tiny.hotkey.unregister('boss');
+
+// custom right-click menu (native NSMenu; null restores WebKit's default)
+tiny.menu.setContext([{ id: 'copy-path', label: 'Copy Path' }, { separator: true }, { id: 'del', label: 'Delete' }]);
+tiny.menu.onContext((id) => ...);
+
+// system theme + power events
+const { dark } = await tiny.theme.get();
+tiny.theme.on((dark) => document.body.classList.toggle('dark', dark));
+tiny.api.on('sleep', () => ...);  tiny.api.on('wake', () => ...);
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null
@@ -175,6 +212,12 @@ so relative scripts/styles/images just work — no bundling step). The build
 generates `AppIcon.icns` from `icon.png` via `sips` + `iconutil` and
 codesigns everything (ad-hoc by default; set `signIdentity` in tinyjs.json
 or `TINYJS_SIGN_IDENTITY` for a Developer ID).
+
+`tinyjs build --dmg` additionally produces `dist/<name>-<version>.dmg` — the
+.app plus an /Applications shortcut, the classic installer image. With a real
+Developer ID, `tinyjs notarize` submits the built .app via `notarytool`
+(keychain profile from tinyjs.json `"notarize": { "profile": … }` or
+`TINYJS_NOTARY_PROFILE`) and staples the ticket.
 
 ### Shipping updates (auto-update)
 
@@ -264,6 +307,12 @@ Developer ID (hardened runtime + `notarytool` are the remaining steps).
 | launcher → backend | `TRAY <id>` / `TRAYCLICK`  | tray menu item / bare tray icon clicked |
 | backend → launcher | `WINOP <op> [args]`        | hide, show, center, minimize, fullscreen, ontop, resizable, pos, dock, hideonclose |
 | launcher → backend | `DROP <json-paths>`        | files dragged onto the window (real paths) |
+| backend → launcher | `CTXBEGIN` … `ITEM`/`SEP` … `CTXEND` / `CTXCLEAR` | replace/restore the right-click menu |
+| launcher → backend | `CTX <id>`                 | a context menu item was clicked  |
+| backend → launcher | `HKREG <id>\t<combo>` / `HKUNREG <id>` | global hotkeys       |
+| launcher → backend | `HOTKEY <id>`              | a global hotkey fired            |
+| launcher → backend | `SYS theme dark\|light` / `SYS sleep` / `SYS wake` | system events (theme also once at startup) |
+| backend → launcher | `PRINT`                    | native print panel               |
 | backend → launcher | `RELOAD`                   | re-render the page from disk, caches bypassed (hot-reload) |
 | backend → launcher | `QUIT`                     | close the window                 |
 
@@ -286,13 +335,17 @@ cli.js + tinyjs       the CLI
 test/smoke.html       self-driving test page
 docs/                 tinyjs.app site (GitHub Pages): landing page + installer
                       (docs/install is what `curl tinyjs.app/install` fetches)
+                      + changelog.html (tinyjs.app/changelog)
+CHANGELOG.md          release history (canonical; the site page mirrors it)
 setup.sh              from-source bootstrap (fetch tjs, compile natives)
 .github/workflows/    release automation: tag vX.Y.Z → universal binaries →
                       per-arch tarballs + checksums → GitHub release
 ```
 
 After editing the natives, re-run `./setup.sh` (or the `c++`/`cc` lines
-inside it). To cut a release: `git tag v0.1.0 && git push --tags`.
+inside it). To cut a release: update `CHANGELOG.md` and `docs/changelog.html`
+(served at tinyjs.app/changelog — retitle the "upcoming" section with the
+date), then `git tag vX.Y.Z && git push --tags`.
 
 ### Testing
 

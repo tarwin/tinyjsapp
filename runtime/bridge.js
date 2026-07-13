@@ -50,7 +50,33 @@ async function notify({ title, body, subtitle } = {}) {
   return st.exit_status === 0 && !st.term_signal;
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', launcherPath, api = {}, onMenu, onTray, update = null }) {
+// Tiny persistent JSON store in ~/Library/Application Support/<app id>/.
+// Flat string keys, JSON values, atomic writes.
+function makeStore(appId) {
+  const dir = tjs.homeDir + '/Library/Application Support/' + (appId || 'tinyjs-app');
+  const path = dir + '/store.json';
+  let data = null;
+  async function load() {
+    if (data) return data;
+    try { data = JSON.parse(dec.decode(await tjs.readFile(path))); }
+    catch { data = {}; }
+    return data;
+  }
+  async function save() {
+    await tjs.makeDir(dir, { recursive: true }).catch(() => {});
+    const tmp = path + '.tmp';
+    await tjs.writeFile(tmp, enc.encode(JSON.stringify(data, null, 2) + '\n'));
+    await tjs.rename(tmp, path);
+  }
+  return {
+    async get(key) { return (await load())[key] ?? null; },
+    async set(key, value) { await load(); data[key] = value; await save(); return true; },
+    async delete(key) { await load(); delete data[key]; await save(); return true; },
+    async all() { return { ...(await load()) }; },
+  };
+}
+
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, update = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -189,6 +215,26 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       },
       remove() { send('TRAYREMOVE'); },
     },
+    print() { send('PRINT'); },
+    // Persistent settings (see makeStore).
+    store: makeStore(id),
+    // System-wide hotkeys; combos like 'cmd+shift+k'. Presses arrive as a
+    // 'hotkey' page event and via the onHotkey option.
+    hotkey: {
+      register(hid, combo) { send('HKREG ' + one(hid) + '\t' + one(combo)); },
+      unregister(hid) { send('HKUNREG ' + one(hid)); },
+    },
+    // Replace the right-click menu: [{ id, label } | { separator: true }].
+    // null/empty restores WebKit's default menu. Clicks: 'contextmenu' event.
+    setContextMenu(items) {
+      if (!items || !items.length) { send('CTXCLEAR'); return; }
+      send('CTXBEGIN');
+      for (const it of items) {
+        if (it.separator) send('SEP');
+        else send('ITEM ' + [one(it.id), one(it.label ?? it.id), ''].join('\t'));
+      }
+      send('CTXEND');
+    },
     quit() { send('QUIT'); },
     // Auto-update (tinyjs.json "update": { "url": "https://…/manifest.json" }).
     // check() -> { available, current, latest }; install() downloads, verifies,
@@ -232,8 +278,18 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       return { available, current, latest };
     },
     'update.install': async () => app.update.install(),
+    'win.print': async () => (app.print(), true),
+    'store.get': async ({ key }) => app.store.get(key),
+    'store.set': async ({ key, value }) => app.store.set(key, value),
+    'store.delete': async ({ key }) => app.store.delete(key),
+    'store.all': async () => app.store.all(),
+    'hotkey.register': async ({ id: hid, combo }) => (app.hotkey.register(hid, combo), true),
+    'hotkey.unregister': async ({ id: hid }) => (app.hotkey.unregister(hid), true),
+    'menu.setContext': async ({ items }) => (app.setContextMenu(items), true),
+    'theme.get': async () => lastTheme,
   };
   const methods = { ...api, ...builtins };
+  let lastTheme = null; // { dark } once the launcher reports it (at startup)
 
   async function handleCall(line) {
     const sp = line.indexOf(' ', 5);
@@ -290,6 +346,23 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         } else if (line.startsWith('DROP ')) {
           // Files dragged onto the window; real filesystem paths.
           try { push('drop', { paths: JSON.parse(line.slice(5)) }); } catch {}
+        } else if (line.startsWith('HOTKEY ')) {
+          const id = line.slice(7);
+          push('hotkey', { id });
+          if (onHotkey) onHotkey(id, app);
+        } else if (line.startsWith('CTX ')) {
+          const id = line.slice(4);
+          push('contextmenu', { id });
+          if (onContextMenu) onContextMenu(id, app);
+        } else if (line.startsWith('SYS ')) {
+          const [kind, value] = line.slice(4).split(' ');
+          if (kind === 'theme') {
+            lastTheme = { dark: value === 'dark' };
+            push('theme', lastTheme);
+          } else {
+            push(kind, {}); // 'sleep' | 'wake'
+          }
+          if (onSystem) onSystem(kind, value ?? null, app);
         }
       }
     }

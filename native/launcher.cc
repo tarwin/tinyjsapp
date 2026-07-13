@@ -32,9 +32,21 @@
 //                                                    resizable 0|1, pos <x> <y>,
 //                                                    dock 0|1 (Dock icon),
 //                                                    hideonclose 0|1
+//                         CTXBEGIN / ITEM / SEP /
+//                         CTXEND / CTXCLEAR          replace or restore the
+//                                                    right-click menu
+//                         HKREG <id>\t<combo> /
+//                         HKUNREG <id>               global hotkeys
+//                         PRINT                      native print panel
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
 //                                                    clicked
+//                         CTX <id>                   a context menu item was
+//                                                    clicked
+//                         HOTKEY <id>                a global hotkey fired
+//                         SYS theme dark|light /
+//                         SYS sleep / SYS wake       system events (theme also
+//                                                    sent once at startup)
 //                         TRAY <id>                  a tray menu item was
 //                                                    clicked
 //                         TRAYCLICK                  the tray icon itself was
@@ -54,9 +66,12 @@
 #ifdef __APPLE__
 #import <AppKit/AppKit.h>
 #import <WebKit/WebKit.h>
+#include <Carbon/Carbon.h> // RegisterEventHotKey (global hotkeys)
 #include <objc/message.h>
 #include <objc/runtime.h>
 #endif
+
+#include <map>
 
 #include <cstdio>
 #include <cstdlib>
@@ -294,6 +309,7 @@ struct MenuSpec {
 @interface TinyMenuTarget : NSObject
 - (void)itemClicked:(NSMenuItem *)sender;
 - (void)trayItemClicked:(NSMenuItem *)sender;
+- (void)ctxItemClicked:(NSMenuItem *)sender;
 - (void)trayClicked:(id)sender;
 - (void)showAbout:(id)sender;
 - (void)doQuit:(id)sender;
@@ -309,6 +325,11 @@ struct MenuSpec {
   NSString *mid = (NSString *)sender.representedObject;
   if (mid)
     sock_write_line(std::string("TRAY ") + [mid UTF8String]);
+}
+- (void)ctxItemClicked:(NSMenuItem *)sender {
+  NSString *mid = (NSString *)sender.representedObject;
+  if (mid)
+    sock_write_line(std::string("CTX ") + [mid UTF8String]);
 }
 - (void)trayClicked:(id)sender {
   sock_write_line("TRAYCLICK");
@@ -638,6 +659,218 @@ static void install_drop_hook() {
 }
 #endif
 
+// --- global hotkeys (macOS) ----------------------------------------------------
+// HKREG <id>\t<combo> registers a system-wide hotkey (combo like
+// "cmd+shift+k"); presses arrive as `HOTKEY <id>`. HKUNREG <id> removes it.
+
+struct HotkeyReq {
+  std::string id, combo; // combo empty = unregister
+};
+
+#ifdef __APPLE__
+static std::map<std::string, EventHotKeyRef> g_hotkeys;
+static std::map<UInt32, std::string> g_hotkey_ids;
+static UInt32 g_hotkey_seq = 1;
+
+static int keycode_for(const std::string &k) {
+  static const std::map<std::string, int> m = {
+    {"a",0},{"s",1},{"d",2},{"f",3},{"h",4},{"g",5},{"z",6},{"x",7},{"c",8},
+    {"v",9},{"b",11},{"q",12},{"w",13},{"e",14},{"r",15},{"y",16},{"t",17},
+    {"1",18},{"2",19},{"3",20},{"4",21},{"6",22},{"5",23},{"9",25},{"7",26},
+    {"8",28},{"0",29},{"o",31},{"u",32},{"i",34},{"p",35},{"l",37},{"j",38},
+    {"k",40},{"n",45},{"m",46},{"space",49},{"tab",48},{"return",36},
+    {"enter",36},{"escape",53},{"esc",53},{"left",123},{"right",124},
+    {"down",125},{"up",126},{"f1",122},{"f2",120},{"f3",99},{"f4",118},
+    {"f5",96},{"f6",97},{"f7",98},{"f8",100},{"f9",101},{"f10",109},
+    {"f11",103},{"f12",111},{"minus",27},{"equal",24},{"comma",43},
+    {"period",47},{"slash",44},{"semicolon",41},{"quote",39},
+    {"bracketleft",33},{"bracketright",30},{"backslash",42},{"grave",50},
+    {"delete",51},
+  };
+  auto it = m.find(k);
+  return it == m.end() ? -1 : it->second;
+}
+
+static OSStatus hotkey_handler(EventHandlerCallRef, EventRef event, void *) {
+  EventHotKeyID hkid;
+  GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID, NULL,
+                    sizeof(hkid), NULL, &hkid);
+  auto it = g_hotkey_ids.find(hkid.id);
+  if (it != g_hotkey_ids.end())
+    sock_write_line("HOTKEY " + it->second);
+  return noErr;
+}
+
+static void ensure_hotkey_handler() {
+  static bool installed = false;
+  if (installed)
+    return;
+  installed = true;
+  EventTypeSpec spec = {kEventClassKeyboard, kEventHotKeyPressed};
+  InstallEventHandler(GetApplicationEventTarget(), hotkey_handler, 1, &spec,
+                      NULL, NULL);
+}
+
+static void do_hotkey(webview_t, void *arg) {
+  HotkeyReq *req = static_cast<HotkeyReq *>(arg);
+  // Re-registering or unregistering an existing id removes the old binding.
+  auto existing = g_hotkeys.find(req->id);
+  if (existing != g_hotkeys.end()) {
+    UnregisterEventHotKey(existing->second);
+    g_hotkeys.erase(existing);
+  }
+  if (!req->combo.empty()) {
+    UInt32 mods = 0;
+    std::string key;
+    std::stringstream ss(req->combo);
+    std::string part;
+    while (std::getline(ss, part, '+')) {
+      for (auto &c : part) c = (char)tolower(c);
+      if (part == "cmd" || part == "command" || part == "meta") mods |= cmdKey;
+      else if (part == "ctrl" || part == "control") mods |= controlKey;
+      else if (part == "alt" || part == "opt" || part == "option") mods |= optionKey;
+      else if (part == "shift") mods |= shiftKey;
+      else key = part;
+    }
+    int code = keycode_for(key);
+    if (code >= 0) {
+      ensure_hotkey_handler();
+      EventHotKeyID hkid = {'tnyj', g_hotkey_seq++};
+      EventHotKeyRef ref = NULL;
+      if (RegisterEventHotKey((UInt32)code, mods, hkid,
+                              GetApplicationEventTarget(), 0, &ref) == noErr) {
+        g_hotkeys[req->id] = ref;
+        g_hotkey_ids[hkid.id] = req->id;
+      }
+    }
+  }
+  delete req;
+}
+#else
+static void do_hotkey(webview_t, void *arg) { delete static_cast<HotkeyReq *>(arg); }
+#endif
+
+// --- system events (macOS) ------------------------------------------------------
+// Pushed as `SYS theme dark|light` (also once at startup), `SYS sleep`,
+// `SYS wake`.
+
+#ifdef __APPLE__
+static void send_theme() {
+  NSAppearance *ap = [NSApp effectiveAppearance];
+  NSString *best = [ap bestMatchFromAppearancesWithNames:@[
+    NSAppearanceNameAqua, NSAppearanceNameDarkAqua
+  ]];
+  bool dark = [best isEqualToString:NSAppearanceNameDarkAqua];
+  sock_write_line(std::string("SYS theme ") + (dark ? "dark" : "light"));
+}
+
+static void install_system_observers() {
+  [[NSDistributedNotificationCenter defaultCenter]
+      addObserverForName:@"AppleInterfaceThemeChangedNotification"
+                  object:nil
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *) {
+                // NSApp's effectiveAppearance updates a beat after the
+                // notification; read it on the next runloop turn.
+                dispatch_async(dispatch_get_main_queue(), ^{ send_theme(); });
+              }];
+  NSNotificationCenter *wsnc = [[NSWorkspace sharedWorkspace] notificationCenter];
+  [wsnc addObserverForName:NSWorkspaceWillSleepNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *) { sock_write_line("SYS sleep"); }];
+  [wsnc addObserverForName:NSWorkspaceDidWakeNotification
+                    object:nil
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *) { sock_write_line("SYS wake"); }];
+  send_theme(); // initial state
+}
+#endif
+
+// --- custom context menu (macOS) -------------------------------------------------
+// CTXBEGIN, ITEM/SEP lines, CTXEND replaces the webview's right-click menu
+// with the declared items (clicks -> `CTX <id>`); CTXCLEAR restores WebKit's
+// default menu.
+
+static std::vector<MenuItemSpec> g_ctx_items;
+static bool g_ctx_active = false;
+
+struct CtxReq {
+  std::vector<MenuItemSpec> items;
+  bool active;
+};
+
+#ifdef __APPLE__
+typedef void (*WillOpenMenuIMP)(id, SEL, NSMenu *, NSEvent *);
+static WillOpenMenuIMP g_orig_willOpenMenu = nullptr;
+
+static void tiny_willOpenMenu(id self, SEL cmd, NSMenu *menu, NSEvent *ev) {
+  if (g_orig_willOpenMenu)
+    g_orig_willOpenMenu(self, cmd, menu, ev);
+  if (!g_ctx_active)
+    return;
+  [menu removeAllItems];
+  for (const MenuItemSpec &it : g_ctx_items) {
+    if (it.separator) {
+      [menu addItem:[NSMenuItem separatorItem]];
+      continue;
+    }
+    NSMenuItem *mi = [[[NSMenuItem alloc] initWithTitle:ns(it.label)
+                                                 action:@selector(ctxItemClicked:)
+                                          keyEquivalent:@""] autorelease];
+    mi.target = g_menu_target;
+    mi.representedObject = ns(it.id);
+    [menu addItem:mi];
+  }
+}
+
+static void apply_ctx(webview_t, void *arg) {
+  CtxReq *req = static_cast<CtxReq *>(arg);
+  if (!g_menu_target)
+    g_menu_target = [[TinyMenuTarget alloc] init];
+  g_ctx_items = req->items;
+  g_ctx_active = req->active;
+  delete req;
+}
+
+static void install_ctx_hook() {
+  // willOpenMenu:withEvent: is swizzled with the same replace-or-add helper
+  // used for drag & drop.
+  g_orig_willOpenMenu = (WillOpenMenuIMP)swizzle(
+      [WKWebView class], @selector(willOpenMenu:withEvent:),
+      (IMP)tiny_willOpenMenu, "v@:@@");
+}
+#else
+static void apply_ctx(webview_t, void *arg) { delete static_cast<CtxReq *>(arg); }
+#endif
+
+// --- print (macOS) ---------------------------------------------------------------
+
+static void do_print(webview_t w, void *) {
+#ifdef __APPLE__
+  @autoreleasepool {
+    WKWebView *wv = (WKWebView *)webview_get_native_handle(
+        w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+    NSWindow *win = (NSWindow *)webview_get_native_handle(
+        w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+    if (!wv || !win)
+      return;
+    NSPrintInfo *pi = [NSPrintInfo sharedPrintInfo];
+    pi.horizontallyCentered = YES;
+    pi.verticallyCentered = NO;
+    NSPrintOperation *op = [wv printOperationWithPrintInfo:pi];
+    op.showsPrintPanel = YES;
+    op.showsProgressPanel = YES;
+    // The print view needs a nonzero frame or WebKit renders blank pages.
+    op.view.frame = wv.bounds;
+    [op runOperationModalForWindow:win
+                          delegate:nil
+                    didRunSelector:NULL
+                       contextInfo:NULL];
+  }
+#endif
+}
+
 // --- WebGPU (macOS) ----------------------------------------------------------
 // WKWebView gates WebGPU behind a WebKit feature flag (still "experimental"
 // as of macOS 15; no public API to enable it). Flip it through the private
@@ -693,6 +926,8 @@ static void sock_read_loop() {
   bool in_menu_block = false;
   TraySpec pending_tray;
   bool in_tray_block = false;
+  std::vector<MenuItemSpec> pending_ctx;
+  bool in_ctx_block = false;
   for (;;) {
     ssize_t n = read(g_sock, chunk, sizeof(chunk));
     if (n <= 0)
@@ -736,7 +971,8 @@ static void sock_read_loop() {
         in_menu_block = true;
       } else if (in_menu_block && line.rfind("MENU ", 0) == 0) {
         pending_menus.push_back(MenuSpec{line.substr(5), {}});
-      } else if ((in_menu_block || in_tray_block) && line.rfind("ITEM ", 0) == 0) {
+      } else if ((in_menu_block || in_tray_block || in_ctx_block) &&
+                 line.rfind("ITEM ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(5));
         MenuItemSpec it;
         it.id = p.size() > 0 ? p[0] : "";
@@ -744,13 +980,17 @@ static void sock_read_loop() {
         it.key = p.size() > 2 ? p[2] : "";
         if (in_tray_block)
           pending_tray.items.push_back(it);
+        else if (in_ctx_block)
+          pending_ctx.push_back(it);
         else if (!pending_menus.empty())
           pending_menus.back().items.push_back(it);
-      } else if ((in_menu_block || in_tray_block) && line == "SEP") {
+      } else if ((in_menu_block || in_tray_block || in_ctx_block) && line == "SEP") {
         MenuItemSpec sep;
         sep.separator = true;
         if (in_tray_block)
           pending_tray.items.push_back(sep);
+        else if (in_ctx_block)
+          pending_ctx.push_back(sep);
         else if (!pending_menus.empty())
           pending_menus.back().items.push_back(sep);
       } else if (line == "MENUEND") {
@@ -775,6 +1015,22 @@ static void sock_read_loop() {
         webview_dispatch(g_w, apply_tray, rm);
       } else if (line.rfind("WINOP ", 0) == 0) {
         webview_dispatch(g_w, do_winop, new std::string(line.substr(6)));
+      } else if (line == "CTXBEGIN") {
+        pending_ctx.clear();
+        in_ctx_block = true;
+      } else if (line == "CTXEND") {
+        in_ctx_block = false;
+        webview_dispatch(g_w, apply_ctx, new CtxReq{pending_ctx, true});
+      } else if (line == "CTXCLEAR") {
+        webview_dispatch(g_w, apply_ctx, new CtxReq{{}, false});
+      } else if (line.rfind("HKREG ", 0) == 0) {
+        std::vector<std::string> p = split_tabs(line.substr(6));
+        if (p.size() >= 2)
+          webview_dispatch(g_w, do_hotkey, new HotkeyReq{p[0], p[1]});
+      } else if (line.rfind("HKUNREG ", 0) == 0) {
+        webview_dispatch(g_w, do_hotkey, new HotkeyReq{line.substr(8), ""});
+      } else if (line == "PRINT") {
+        webview_dispatch(g_w, do_print, nullptr);
       } else if (line == "RELOAD") {
         webview_dispatch(g_w, do_reload, nullptr);
       } else if (line == "QUIT") {
@@ -822,6 +1078,8 @@ int main(int argc, char *argv[]) {
   enable_webgpu(g_w);
   install_close_hook(g_w);
   install_drop_hook();
+  install_ctx_hook();
+  install_system_observers();
 #endif
 
   webview_set_title(g_w, title.c_str());

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tinyjs — changelog</title>
+<meta name="description" content="Release history for tinyjs — tiny macOS desktop apps in JavaScript.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='%2314161b'/%3E%3Cpath d='M22 24l12 8-12 8z' fill='%2385b3ea'/%3E%3Crect x='36' y='38' width='10' height='4' fill='%2385b3ea'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #14161b; --panel: #1a1d24; --line: #262a33;
+    --text: #d9dce3; --muted: #71788a; --accent: #85b3ea;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Iowan Old Style", Georgia, serif;
+  }
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 17px/1.65 var(--serif);
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent); color: var(--bg); }
+  .wrap { max-width: 680px; margin: 0 auto; padding: 0 24px; }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+    background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.006) 2px 4px);
+  }
+  header { padding: 72px 0 0; position: relative; z-index: 1; }
+  .brand { font: 700 15px var(--mono); letter-spacing: .08em; color: var(--accent); }
+  .brand a { color: var(--muted); text-decoration: none; font-weight: 400; float: right; }
+  .brand a:hover { color: var(--text); }
+  h1 { font: 700 clamp(34px, 7vw, 52px)/1.05 var(--mono); letter-spacing: -.04em; margin: 36px 0 0; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .sub { margin: 14px 0 0; color: var(--muted); }
+
+  section { position: relative; z-index: 1; margin-top: 56px; }
+  .rel { border-top: 1px solid var(--line); padding: 26px 0 8px; }
+  .rel h2 { font: 700 20px var(--mono); letter-spacing: -.02em; }
+  .rel h2 .date { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 12px; letter-spacing: 0; }
+  .rel h2 .soon {
+    color: var(--bg); background: var(--accent); font-size: 11px; font-weight: 700;
+    border-radius: 4px; padding: 2px 7px; margin-left: 12px; vertical-align: 2px; letter-spacing: .05em;
+  }
+  .rel ul { margin: 14px 0 18px; padding-left: 22px; }
+  .rel li { margin: 7px 0; }
+  .rel li::marker { color: var(--accent); }
+  .rel b { color: var(--text); }
+  .rel code {
+    font: 13px var(--mono); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 5px; padding: 1px 6px; white-space: nowrap;
+  }
+  footer {
+    margin-top: 72px; padding: 28px 0 56px; border-top: 1px solid var(--line);
+    font: 12.5px var(--mono); color: var(--muted); display: flex; gap: 22px; flex-wrap: wrap;
+    position: relative; z-index: 1;
+  }
+  footer a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); }
+  footer a:hover { color: var(--accent); border-color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">▸_ tinyjs <a href="/">← home</a></div>
+    <h1>change<em>log</em></h1>
+    <p class="sub">Every release is a git tag; <code>tinyjs update</code> gets you the latest.</p>
+  </header>
+
+  <section>
+
+    <div class="rel">
+      <h2>0.3.1 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>Global hotkeys</b> — <code>tiny.hotkey.register('boss', 'cmd+shift+k')</code>; fires system-wide, even while other apps are focused.</li>
+        <li><b>System events</b> — <code>tiny.theme.get()</code> / <code>tiny.theme.on()</code> for dark/light, plus <code>sleep</code> / <code>wake</code> events.</li>
+        <li><b>tiny.store</b> — persistent JSON settings in Application Support: <code>get / set / delete / all</code>, atomic writes.</li>
+        <li><b>Custom context menus</b> — <code>tiny.menu.setContext(items)</code> replaces the right-click menu with native items.</li>
+        <li><b>Print</b> — <code>tiny.win.print()</code> opens the native print panel.</li>
+        <li><b>Disk images</b> — <code>tinyjs build --dmg</code> emits a classic installer image.</li>
+        <li><b>Notarization</b> — <code>tinyjs notarize</code> wraps notarytool + stapler for Developer ID builds.</li>
+        <li>SQLite (<code>tjs:sqlite</code>, built into the runtime) documented with examples.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <h2>0.3.0 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>Tray / menu-bar apps</b> — <code>tiny.tray.set(…)</code>, hide-on-close, Dock-less accessory mode.</li>
+        <li><b>Multi-file frontends</b> — no more inlining; <code>src/frontend/</code> ships as real files and relative assets just work. Hot reload bypasses caches.</li>
+        <li><b>Auto-update for your apps</b> — <code>tinyjs publish</code> + <code>update.check()</code> / <code>update.install()</code>: sha256 + code-signature verified, Team-ID pinned, atomic swap with rollback, relaunch.</li>
+        <li><b>Notifications</b> — <code>tiny.notify(title, body)</code>.</li>
+        <li><b>Drag &amp; drop</b> — files dropped on the window arrive with real filesystem paths.</li>
+        <li><b>Window controls</b> — center, minimize, fullscreen, position, always-on-top, resizable, hide/show.</li>
+        <li>Installer picks a bin dir already on your PATH (Homebrew-aware) and can add one to your shell profile.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <h2>0.2.1 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>WebGPU</b> — pages are secure-context <code>file://</code> documents; <code>navigator.gpu</code> works out of the box.</li>
+        <li><b>CLI self-update</b> — <code>tinyjs update</code> (and a once-a-day notice in <code>tinyjs dev</code>).</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <h2>0.2.0 <span class="date">2026-07-12</span></h2>
+      <ul>
+        <li><b>tiny.* namespace</b> — <code>tiny.api.call/on</code>, <code>tiny.win.*</code>, <code>tiny.menu.*</code>.</li>
+        <li><b>Native menus</b> — default About/Quit + Edit menus, custom menus with shortcuts.</li>
+        <li><b>System dialogs</b> — alert / confirm / prompt alongside the file panels.</li>
+        <li>Agent skill scaffolded into new projects; tinyjs.app landing page + installer.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <h2>0.1.0 <span class="date">2026-07-12</span></h2>
+      <ul>
+        <li>Initial release: txiki.js backend + native WebKit window over a private Unix socket, <code>new / dev / build</code>, hot reload, native file dialogs, codesigned .app bundles, ~6 MB shipped.</li>
+      </ul>
+    </div>
+
+  </section>
+
+  <footer>
+    <a href="/">home</a>
+    <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
+    <a href="https://github.com/tarwin/tinyjsapp/blob/main/CHANGELOG.md">CHANGELOG.md</a>
+  </footer>
+</div>
+</body>
+</html>

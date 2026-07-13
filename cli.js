@@ -225,9 +225,13 @@ const app = await createApp({
   title: ${JSON.stringify(cfg.title)},
   size: ${JSON.stringify(cfg.size)},
   version: ${JSON.stringify(cfg.version || '0.0.0')},
+  id: ${JSON.stringify(cfg.id)},
   api: appMod.api ?? {},
   onMenu: appMod.onMenu,
   onTray: appMod.onTray,
+  onHotkey: appMod.onHotkey,
+  onContextMenu: appMod.onContextMenu,
+  onSystem: appMod.onSystem,
   update: ${JSON.stringify(cfg.update ?? null)},
 });
 if (appMod.init) appMod.init(app);
@@ -395,9 +399,48 @@ async function cmdBuild() {
     console.log('warning: bundle signature did not verify: ' + APP);
   }
 
+  // Optional installer disk image: the .app plus an /Applications shortcut.
+  if (args.includes('--dmg')) {
+    console.log('==> creating dmg');
+    const STAGE = '.build/dmg';
+    await run(['rm', '-rf', STAGE]);
+    await tjs.makeDir(STAGE, { recursive: true });
+    await run(['cp', '-R', APP, STAGE + '/']);
+    await run(['ln', '-s', '/Applications', STAGE + '/Applications']);
+    const dmg = 'dist/' + cfg.name + '-' + (cfg.version || '0.0.0') + '.dmg';
+    await run(['hdiutil', 'create', '-volname', cfg.title, '-srcfolder', STAGE,
+               '-ov', '-quiet', '-format', 'UDZO', dmg]);
+    console.log('    ' + dmg);
+  }
+
   console.log('==> done');
   await run(['ls', '-lh', 'dist/' + cfg.name, 'dist/launcher']);
   console.log(`run it:  ./dist/${cfg.name}   (or open "${APP}")`);
+}
+
+// Submit dist/<Title>.app to Apple notarization and staple the ticket.
+// Needs a real Developer ID signature plus a notarytool keychain profile
+// (create one: xcrun notarytool store-credentials <name> --apple-id … --team-id …).
+async function cmdNotarize() {
+  const cfg = await loadConfig();
+  const APP = 'dist/' + cfg.title + '.app';
+  if (!(await exists(APP))) fail(`${APP} not found — run \`tinyjs build\` first`);
+  const identity = cfg.signIdentity || tjs.env.TINYJS_SIGN_IDENTITY;
+  if (!identity || identity === '-') {
+    fail('notarization needs a real Developer ID — set "signIdentity" in tinyjs.json and rebuild');
+  }
+  const profile = cfg.notarize?.profile || tjs.env.TINYJS_NOTARY_PROFILE;
+  if (!profile) {
+    fail('no notarytool profile — set tinyjs.json "notarize": { "profile": "…" } or TINYJS_NOTARY_PROFILE');
+  }
+  const zip = '.build/notarize.zip';
+  console.log('==> zipping for submission');
+  await run(['ditto', '-c', '-k', '--keepParent', APP, zip]);
+  console.log('==> submitting to Apple (this waits for their verdict)');
+  await run(['xcrun', 'notarytool', 'submit', zip, '--keychain-profile', profile, '--wait']);
+  console.log('==> stapling ticket');
+  await run(['xcrun', 'stapler', 'staple', APP]);
+  console.log('==> done: ' + APP + ' is notarized');
 }
 
 // Build, zip the .app, and emit the auto-update manifest next to it.
@@ -444,6 +487,7 @@ switch (cmd) {
   case 'dev': await cmdDev(); break;
   case 'build': await cmdBuild(); break;
   case 'publish': await cmdPublish(); break;
+  case 'notarize': await cmdNotarize(); break;
   case 'version': case '--version': case '-v': await cmdVersion(); break;
   case 'update': await cmdUpdate(); break;
   default:
@@ -452,8 +496,9 @@ switch (cmd) {
 usage:
   tinyjs new <dir>    scaffold a new app
   tinyjs dev          run the app in the current directory
-  tinyjs build        build dist/<name> and dist/<Name>.app
+  tinyjs build        build dist/<name> and dist/<Name>.app (--dmg: also a disk image)
   tinyjs publish      build + zip the .app + auto-update manifest
+  tinyjs notarize     submit dist/<Name>.app to Apple notarization + staple
   tinyjs update       update the tinyjs CLI itself (--check: only report)
   tinyjs version      print version`);
     tjs.exit(cmd ? 1 : 0);

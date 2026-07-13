@@ -17,7 +17,9 @@ tinyjs new <dir>    # scaffold
 tinyjs dev          # run with hot reload (frontend edits swap in place;
                     #   backend edits restart the process)
 tinyjs build        # dist/<name> binary + dist/<Name>.app (codesigned)
+                    #   --dmg: also dist/<name>-<ver>.dmg installer image
 tinyjs publish      # build + dist/publish/<name>-<ver>.zip + auto-update manifest
+tinyjs notarize     # notarytool submit + staple (needs Developer ID + profile)
 TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 ```
 
@@ -48,8 +50,9 @@ export function init(app) {
   app.setTitle(t); app.setSize(w, h); app.setMenu(menus); app.quit();
   // also: notify({title, body}), hide()/show()/center()/minimize()/
   // fullscreen(), setPosition(x, y), setAlwaysOnTop(v), setResizable(v),
-  // setHideOnClose(v), setDockVisible(v), tray.set(spec)/tray.remove(),
-  // update.check()/update.install()
+  // setHideOnClose(v), setDockVisible(v), print(), tray.set/remove,
+  // store.get/set/delete/all, hotkey.register/unregister,
+  // setContextMenu(items), update.check()/update.install()
 }
 
 export function onMenu(id, app) { ... }  // optional: menu clicks, backend-side
@@ -103,7 +106,31 @@ tiny.app.setDockVisible(false);             // menu-bar-only app
 // auto-update (needs tinyjs.json "update".url; ships via `tinyjs publish`)
 const { available, latest } = await tiny.api.call('update.check');
 await tiny.api.call('update.install');      // verify + swap .app + relaunch
+
+// persistent settings (~/Library/Application Support/<app id>/store.json)
+await tiny.store.set('key', anyJsonValue);
+await tiny.store.get('key');                // value | null
+await tiny.store.delete('key'); await tiny.store.all();
+
+// global hotkeys (system-wide, fire even when unfocused)
+tiny.hotkey.register('boss', 'cmd+shift+k'); tiny.hotkey.on((id) => ...);
+tiny.hotkey.unregister('boss');             // backend: export onHotkey(id, app)
+
+// custom right-click menu (native; null restores WebKit default)
+tiny.menu.setContext([{ id, label }, { separator: true }]);
+tiny.menu.onContext((id) => ...);           // backend: export onContextMenu
+
+// theme + power events
+await tiny.theme.get();                     // { dark } | null
+tiny.theme.on((dark) => ...);               // live changes
+tiny.api.on('sleep', fn); tiny.api.on('wake', fn);  // backend: export onSystem
+
+tiny.win.print();                           // native print panel
 ```
+
+Backend SQLite is built into txiki: `import { Database } from 'tjs:sqlite'`;
+`new Database(path)`, `.exec(sql)`, `.prepare(sql).run(...)/.all()/.finalize()`,
+`.close()`. Use it over tiny.store for anything query-shaped.
 
 An app menu (About + Quit) and an Edit menu (copy/paste shortcuts) always
 exist; `tiny.menu.set` adds menus after them. About shows name + version from

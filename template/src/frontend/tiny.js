@@ -27,6 +27,7 @@
       setResizable: (enabled) => call('win.setResizable', { enabled }),
       setPosition: (x, y) => call('win.setPosition', { x, y }),    // top-left origin
       setHideOnClose: (enabled) => call('win.setHideOnClose', { enabled }),
+      print: () => call('win.print'),
       // fn(paths): files dragged onto the window, as real filesystem paths.
       onDrop(fn) { window.tiny.api.on('drop', ({ paths }) => fn(paths)); },
       openFile: () => call('win.openFile'),                 // path | null
@@ -42,6 +43,30 @@
       // menus: [{ title, items: [{ id, label, key? } | { separator: true }] }]
       set: (menus) => call('menu.set', { menus }),
       on(fn) { window.tiny.api.on('menu', ({ id }) => fn(id)); },
+      // Right-click menu: [{ id, label } | { separator: true }]; null restores default.
+      setContext: (items) => call('menu.setContext', { items }),
+      onContext(fn) { window.tiny.api.on('contextmenu', ({ id }) => fn(id)); },
+    },
+
+    // Persistent settings (JSON, in ~/Library/Application Support/<app id>/).
+    store: {
+      get: (key) => call('store.get', { key }),          // value | null
+      set: (key, value) => call('store.set', { key, value }),
+      delete: (key) => call('store.delete', { key }),
+      all: () => call('store.all'),
+    },
+
+    // System-wide hotkeys, e.g. register('boss', 'cmd+shift+k').
+    hotkey: {
+      register: (id, combo) => call('hotkey.register', { id, combo }),
+      unregister: (id) => call('hotkey.unregister', { id }),
+      on(fn) { window.tiny.api.on('hotkey', ({ id }) => fn(id)); },
+    },
+
+    // System theme; also 'sleep'/'wake' events via tiny.api.on.
+    theme: {
+      get: () => call('theme.get'),                      // { dark } | null
+      on(fn) { window.tiny.api.on('theme', ({ dark }) => fn(dark)); },
     },
 
     app: {
