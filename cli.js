@@ -3,6 +3,7 @@
 //   tinyjs new <dir>     scaffold a new app
 //   tinyjs dev           run the app in the current directory
 //   tinyjs build         build dist/<name> + dist/<Name>.app
+//   tinyjs update        self-update from the latest GitHub release
 //
 // Runs on txiki.js itself (via the `tinyjs` wrapper script).
 
@@ -53,6 +54,101 @@ async function tryRun(argv, opts = {}) {
   const p = tjs.spawn(argv, { stdin: 'inherit', stdout: 'ignore', stderr: 'ignore', ...opts });
   const st = await p.wait();
   return st.exit_status === 0 && !st.term_signal;
+}
+
+// --- self-update -------------------------------------------------------------
+
+const REPO = 'tarwin/tinyjsapp';
+const UPDATE_CHECK_FILE = TOOL_DIR + '.update-check';
+const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000;
+
+async function toolVersion() {
+  try {
+    return dec.decode(await tjs.readFile(TOOL_DIR + 'VERSION')).trim();
+  } catch {
+    return 'dev';
+  }
+}
+
+function parseVer(v) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(v));
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+
+// True when `latest` is a release newer than `current`.
+function isNewer(current, latest) {
+  const a = parseVer(current), b = parseVer(latest);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
+
+function withTimeout(promise, ms) {
+  return new Promise((resolve) => {
+    const t = setTimeout(() => resolve(null), ms);
+    promise.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      () => { clearTimeout(t); resolve(null); },
+    );
+  });
+}
+
+async function fetchLatestVersion() {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+      headers: { 'user-agent': 'tinyjs-cli', accept: 'application/vnd.github+json' },
+    });
+    if (!res.ok) return null;
+    const tag = (await res.json()).tag_name;
+    return typeof tag === 'string' && parseVer(tag) ? tag : null;
+  } catch {
+    return null;
+  }
+}
+
+// Once a day (and never from a source checkout), see if a newer release
+// exists and mention it. Network errors are silent; never blocks or fails
+// the command it piggybacks on.
+async function maybeNotifyUpdate() {
+  try {
+    const current = await toolVersion();
+    if (current === 'dev') return;
+    let cache = null;
+    try {
+      cache = JSON.parse(dec.decode(await tjs.readFile(UPDATE_CHECK_FILE)));
+    } catch {}
+    const notify = (latest) =>
+      console.log(`tinyjs: ${latest} is available (you have ${current}) — run \`tinyjs update\``);
+    if (cache?.latest && isNewer(current, cache.latest)) notify(cache.latest);
+    if (cache && Date.now() - (cache.checkedAt || 0) < UPDATE_CHECK_INTERVAL) return;
+    const latest = await withTimeout(fetchLatestVersion(), 4000);
+    if (!latest) return;
+    await tjs.writeFile(UPDATE_CHECK_FILE,
+      enc.encode(JSON.stringify({ checkedAt: Date.now(), latest })));
+    if (isNewer(current, latest) && latest !== cache?.latest) notify(latest);
+  } catch {}
+}
+
+async function cmdUpdate() {
+  const current = await toolVersion();
+  if (current === 'dev') {
+    fail('running from a source checkout — update with `git pull` (+ ./setup.sh) instead');
+  }
+  const latest = await withTimeout(fetchLatestVersion(), 10000);
+  if (!latest) fail('could not reach GitHub to check the latest release');
+  if (!isNewer(current, latest)) {
+    console.log(`already up to date (${current})`);
+    tjs.exit(0);
+  }
+  if (args[0] === '--check') {
+    console.log(`${latest} is available (you have ${current}) — run \`tinyjs update\` to install`);
+    tjs.exit(0);
+  }
+  console.log(`==> updating ${current} → ${latest}`);
+  // The installer re-resolves "latest", verifies checksums, and swaps
+  // ~/.tinyjs (or $TINYJS_HOME) in place.
+  await run(['sh', '-c', 'curl -fsSL https://tinyjs.app/install | sh']);
+  tjs.exit(0);
 }
 
 async function loadConfig() {
@@ -160,6 +256,7 @@ async function cmdNew() {
 
 async function cmdDev() {
   const cfg = await loadConfig();
+  maybeNotifyUpdate(); // fire-and-forget; prints if a newer release exists
 
   // Frontend changes hot-reload inside the app process (see the dev entry);
   // backend changes need a fresh process, so we watch and restart.
@@ -287,6 +384,7 @@ switch (cmd) {
   case 'dev': await cmdDev(); break;
   case 'build': await cmdBuild(); break;
   case 'version': case '--version': case '-v': await cmdVersion(); break;
+  case 'update': await cmdUpdate(); break;
   default:
     console.log(`tinyjs — tiny desktop apps with txiki.js + webview
 
@@ -294,6 +392,7 @@ usage:
   tinyjs new <dir>    scaffold a new app
   tinyjs dev          run the app in the current directory
   tinyjs build        build dist/<name> and dist/<Name>.app
+  tinyjs update       update to the latest release (--check: only report)
   tinyjs version      print version`);
     tjs.exit(cmd ? 1 : 0);
 }

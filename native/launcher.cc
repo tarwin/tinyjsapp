@@ -37,6 +37,8 @@
 
 #ifdef __APPLE__
 #import <AppKit/AppKit.h>
+#import <WebKit/WebKit.h>
+#include <objc/message.h>
 #endif
 
 #include <cstdio>
@@ -123,10 +125,28 @@ static void do_size(webview_t w, void *arg) {
 
 static void do_terminate(webview_t w, void *) { webview_terminate(w); }
 
+// Load a local HTML file. On macOS this must go through
+// loadFileURL:allowingReadAccessToURL: rather than webview_set_html:
+// loadHTMLString (what set_html uses) gives the page an opaque about:blank
+// origin, which is not a secure context, and WebKit hides SecureContext-only
+// APIs like navigator.gpu (WebGPU) there. A file:// document is a secure
+// context, and read access to the containing directory lets the page load
+// sibling assets.
 static bool load_html_file(webview_t w, const std::string &path) {
   std::ifstream f(path, std::ios::binary);
   if (!f)
     return false;
+#ifdef __APPLE__
+  WKWebView *wv = (WKWebView *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  if (wv) {
+    NSURL *url =
+        [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+    [wv loadFileURL:url
+        allowingReadAccessToURL:[url URLByDeletingLastPathComponent]];
+    return true;
+  }
+#endif
   std::stringstream ss;
   ss << f.rdbuf();
   const std::string html = ss.str();
@@ -346,6 +366,47 @@ static void apply_menus(webview_t, void *arg) {
 }
 #endif
 
+// --- WebGPU (macOS) ----------------------------------------------------------
+// WKWebView gates WebGPU behind a WebKit feature flag (still "experimental"
+// as of macOS 15; no public API to enable it). Flip it through the private
+// WKPreferences feature list before any content loads. Preference changes
+// propagate to the web process, so doing this right after webview_create and
+// before the first navigate/set_html is sufficient. Harmless no-op on OS
+// versions where the flag or the private API doesn't exist.
+
+#ifdef __APPLE__
+static void enable_webgpu(webview_t w) {
+  WKWebView *wv = (WKWebView *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  if (!wv)
+    return;
+  WKPreferences *prefs = wv.configuration.preferences;
+  // Newer WebKit exposes +_features / -_setEnabled:forFeature:; older builds
+  // use the _experimentalFeatures spelling.
+  struct { const char *list, *set; } apis[] = {
+      {"_features", "_setEnabled:forFeature:"},
+      {"_experimentalFeatures", "_setEnabled:forExperimentalFeature:"},
+  };
+  for (auto &api : apis) {
+    SEL list_sel = sel_registerName(api.list);
+    SEL set_sel = sel_registerName(api.set);
+    if (![(id)[WKPreferences class] respondsToSelector:list_sel] ||
+        ![prefs respondsToSelector:set_sel])
+      continue;
+    NSArray *features =
+        ((NSArray * (*)(id, SEL))objc_msgSend)((id)[WKPreferences class], list_sel);
+    for (id feature in features) {
+      NSString *key =
+          ((NSString * (*)(id, SEL))objc_msgSend)(feature, sel_registerName("key"));
+      if ([key isEqualToString:@"WebGPUEnabled"]) {
+        ((void (*)(id, SEL, BOOL, id))objc_msgSend)(prefs, set_sel, YES, feature);
+        return;
+      }
+    }
+  }
+}
+#endif
+
 // -----------------------------------------------------------------------------
 
 // Page called window.__invoke(...): forward to the backend.
@@ -459,6 +520,10 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
+#ifdef __APPLE__
+  enable_webgpu(g_w);
+#endif
+
   webview_set_title(g_w, title.c_str());
   webview_set_size(g_w, width, height, WEBVIEW_HINT_NONE);
   webview_bind(g_w, "__invoke", on_invoke, nullptr);
@@ -469,7 +534,7 @@ int main(int argc, char *argv[]) {
   if (target.rfind("http://", 0) == 0 || target.rfind("https://", 0) == 0) {
     webview_navigate(g_w, target.c_str());
   } else {
-    // Load file contents via set_html; avoids file:// restrictions in WKWebView.
+    // file:// document (secure context; see load_html_file).
     g_html_path = target;
     if (!load_html_file(g_w, target)) {
       std::fprintf(stderr, "launcher: cannot read %s\n", target.c_str());

@@ -18,7 +18,10 @@ curl -fsSL https://tinyjs.app/install | sh
 ```
 
 Installs to `~/.tinyjs` and symlinks `tinyjs` onto your PATH. Pin a
-version with `TINYJS_VERSION=vX.Y.Z`. To install from source instead:
+version with `TINYJS_VERSION=vX.Y.Z`. Later, `tinyjs update` re-runs the
+installer if a newer release exists (`tinyjs update --check` only reports);
+`tinyjs dev` also mentions new releases, checking at most once a day.
+To install from source instead:
 
 ```sh
 git clone https://github.com/tarwin/tinyjsapp && cd tinyjsapp
@@ -248,9 +251,16 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
 - txiki streams don't support `for await`; use `getReader()`.
 - `tjs.cwd` is a property, not a function; spawn's stdio silencer is
   `'ignore'` (`'null'` silently inherits).
-- The launcher loads HTML via `webview_set_html` (not `file://` navigation)
-  to sidestep WKWebView local-file restrictions — hence the build-time
+- The launcher loads local pages as real `file://` documents
+  (`loadFileURL:allowingReadAccessToURL:`), not `webview_set_html`: the
+  latter's `about:blank` origin is not a secure context, and WebKit hides
+  SecureContext-only APIs there — notably `navigator.gpu` (WebGPU). The
+  bridge still materializes a single `index.html`, hence the build-time
   inliner.
+- WebGPU is additionally gated behind a WebKit feature flag on macOS 15 and
+  earlier; the launcher flips it at startup via the private
+  `WKPreferences _setEnabled:forFeature:` API (no-op where it's already on,
+  as on macOS 26).
 - The webview headers don't compile under ARC; build without `-fobjc-arc`.
 
 ### Portability
