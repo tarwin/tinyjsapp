@@ -107,12 +107,10 @@
   @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
   .cols h3 { font: 400 11px var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 2px; }
 
-  /* quick start — equal-height 2×2 quadrant */
-  .qs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; grid-auto-rows: 1fr; }
-  .qs-cell { display: flex; flex-direction: column; }
+  /* quick start — full-width stacked steps */
+  .qs { display: flex; flex-direction: column; gap: 20px; }
   .qs-cell h3 { font: 400 11px var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 2px; }
-  .qs-cell pre { flex: 1; margin: 0; }
-  @media (max-width: 640px) { .qs { grid-template-columns: 1fr; grid-auto-rows: auto; } }
+  .qs-cell pre { margin: 0; }
 
   /* architecture */
   pre.arch { line-height: 1.75; color: var(--muted); font-size: 13px; }
