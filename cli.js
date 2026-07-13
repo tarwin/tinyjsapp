@@ -236,6 +236,7 @@ const app = await createApp({
   onOpenUrl: appMod.onOpenUrl,
   onOpenFiles: appMod.onOpenFiles,
   onNotificationClick: appMod.onNotificationClick,
+  chrome: ${JSON.stringify(cfg.chrome ?? null)},
   update: ${JSON.stringify(cfg.update ?? null)},
 });
 if (appMod.init) appMod.init(app);
@@ -372,6 +373,13 @@ async function cmdBuild() {
   // ("fileExtensions": ["md", ...]) from tinyjs.json.
   let extraKeys = `
   <key>TinyjsWindowSize</key>    <string>${cfg.size}</string>`;
+  if (cfg.chrome) {
+    const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
+    const ch = cfg.chrome;
+    const vib = ch.vibrancy === undefined ? '' : (ch.vibrancy === null ? 'none' : ch.vibrancy);
+    extraKeys += `
+  <key>TinyjsChrome</key>        <string>${[bit(ch.frame), bit(ch.trafficLights), bit(ch.transparent), vib].join('&#9;')}</string>`;
+  }
   const schemes = cfg.urlScheme ? [].concat(cfg.urlScheme) : [];
   if (schemes.length) {
     extraKeys += `

@@ -120,6 +120,7 @@ tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i>
   "signIdentity": "Developer ID Application: …",  <i>// default: ad-hoc</i>
   "urlScheme": "myapp",         <i>// deep links: myapp://…</i>
   "fileExtensions": ["md"],     <i>// "Open With" file associations</i>
+  "chrome": { "frame": false, "vibrancy": "hud" },  <i>// frameless window</i>
   "update": { "url": "https://…/manifest.json" },
   "notarize": { "profile": "my-notary-profile" }
 }</pre>
@@ -192,6 +193,11 @@ await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i>
 
 <i>// files dragged onto the window — real filesystem paths</i>
 <b>tiny.win.onDrop</b>((paths) =&gt; …);
+
+<i>// frameless / transparent / vibrancy (native resize + focus kept)</i>
+<b>tiny.win.setChrome</b>({ frame: false, trafficLights: false, vibrancy: 'hud' });
+<i>// drag regions: &lt;header data-tiny-drag&gt; — drag moves, double-click zooms</i>
+<b>tiny.win.startDrag</b>();  <b>tiny.win.zoom</b>();
 
 <i>// read the window back</i>
 const s = await <b>tiny.win.getState</b>();

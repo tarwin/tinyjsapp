@@ -54,7 +54,7 @@ A project is just:
 ```
 myapp/
   tinyjs.json            # { name, title, size, id, version, icon?, signIdentity?,
-                         #   urlScheme?, fileExtensions?, update?, notarize? }
+                         #   urlScheme?, fileExtensions?, chrome?, update?, notarize? }
   icon.png                # 1024×1024 app icon (template ships a default)
   src/main.js             # backend: export const api = {...}; export function init(app) {}
   src/frontend/           # index.html + any local js/css/images
@@ -75,7 +75,8 @@ export function init(app) {          // window is up
   // reload(), quit(), notify({title, body}), hide()/show()/center()/
   // minimize()/fullscreen(), setPosition(x, y), setAlwaysOnTop(v),
   // setResizable(v), setHideOnClose(v), setDockVisible(v), print(),
-  // restore(), setFullscreen(v), getWinState(), tray.set/remove,
+  // restore(), setFullscreen(v), getWinState(), setChrome(opts),
+  // startDrag(), zoom(), tray.set/remove,
   // updateMenuItem(id, patch), getMenuItem(id), info, store.get/set/delete/all,
   // hotkey.register(id, combo)/unregister(id), setContextMenu(items),
   // update.check()/update.install()
@@ -125,10 +126,19 @@ tiny.win.setAlwaysOnTop(true);  tiny.win.setResizable(false);
 tiny.win.hide();  tiny.win.show();
 tiny.win.setHideOnClose(true);  // close button hides instead of quitting
 
+// frameless / transparent / vibrancy windows (native resize + focus kept)
+tiny.win.setChrome({ frame: false, trafficLights: false, vibrancy: 'hud' });
+// mark your own titlebar: <header data-tiny-drag>…</header> — drag moves the
+// window, double-click zooms; interactive children are excluded automatically
+// (or opt out with data-tiny-nodrag). Also in tinyjs.json as "chrome": {…}
+// (packaged apps apply it before first paint — no titlebar flash).
+tiny.win.startDrag();  tiny.win.zoom();   // manual equivalents
+
 // read the window back
 const s = await tiny.win.getState();
 // { x, y, width, height, fullscreen, minimized, visible, focused,
-//   alwaysOnTop, resizable, screen: { width, height, scale } }
+//   alwaysOnTop, resizable, chrome: { frame, trafficLights, transparent,
+//   vibrancy }, screen: { width, height, scale } }
 
 // files dragged onto the window arrive with REAL filesystem paths
 tiny.win.onDrop((paths) => tiny.log(paths.join(', ')));

@@ -63,7 +63,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, update = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, chrome = null, update = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -275,6 +275,19 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       remove() { send('TRAYREMOVE'); },
     },
     print() { send('PRINT'); },
+    // Window chrome: { frame?, trafficLights?, transparent?, vibrancy? }.
+    // frame:false hides the titlebar (content extends under it; keep your own
+    // drag region via data-tiny-drag). vibrancy: material name or null.
+    setChrome(opts = {}) {
+      const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
+      const vib = opts.vibrancy === undefined ? ''
+                : opts.vibrancy === null || opts.vibrancy === false ? 'none'
+                : String(opts.vibrancy);
+      send('CHROME ' + [bit(opts.frame), bit(opts.trafficLights),
+                        bit(opts.transparent), one(vib)].join('\t'));
+    },
+    startDrag() { send('DRAGWIN'); },
+    zoom() { send('WINOP zoom'); },
     // Persistent settings (see makeStore).
     store: makeStore(id),
     // System-wide hotkeys; combos like 'cmd+shift+k'. Presses arrive as a
@@ -347,8 +360,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'menu.update': async ({ id: mid, ...patch }) => (app.updateMenuItem(mid, patch), true),
     'menu.get': async ({ id: mid }) => app.getMenuItem(mid),
     'win.getState': async () => app.getWinState(),
+    'debug.get': async ({ what }) => query(String(what)),
     'win.restore': async () => (app.restore(), true),
     'win.setFullscreen': async ({ enabled }) => (app.setFullscreen(enabled), true),
+    'win.setChrome': async (opts) => (app.setChrome(opts), true),
+    'win.startDrag': async () => (app.startDrag(), true),
+    'win.zoom': async () => (app.zoom(), true),
     'theme.get': async () => lastTheme,
     'app.info': async () => app.info,
   };
@@ -475,6 +492,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     const [w, h] = String(size).split('x').map((n) => parseInt(n, 10));
     if (w && h) app.setSize(w, h);
   }
+  // Chrome from tinyjs.json. Packaged apps already applied it from the plist
+  // (flash-free); re-sending is idempotent. Dev applies it here.
+  if (chrome && !attachPath) app.setChrome(chrome);
 
   return app;
 }

@@ -4,6 +4,22 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.7.0 — 2026-07-13
+
+- **Frameless windows** — `tiny.win.setChrome({ frame, trafficLights,
+  transparent, vibrancy })` (also `"chrome"` in tinyjs.json; packaged apps
+  apply it before first paint). Frameless keeps native resize edges, focus,
+  shadows, and fullscreen. Vibrancy materials: sidebar, hud, menu, popover,
+  window, content, and friends.
+- **Drag regions** — mark any element `data-tiny-drag` to make it a titlebar:
+  dragging moves the window natively, double-click zooms; buttons/inputs
+  inside are excluded automatically (`data-tiny-nodrag` to opt out).
+- `tiny.win.zoom()`, `tiny.win.startDrag()`; `getState()` now reports the
+  chrome state.
+- Fix: window chrome and `setResizable(false)` now survive `setSize()` (the
+  webview library rewrites the styleMask on every resize; overrides are
+  re-applied).
+
 ## 0.6.0 — 2026-07-13
 
 - **Native Notification Center** — packaged apps built with a signing

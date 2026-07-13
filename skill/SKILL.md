@@ -28,7 +28,8 @@ TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 ```
 tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        update?: { url: "https://…/manifest.json" },
-                       urlScheme?: "myapp", fileExtensions?: ["md"] }
+                       urlScheme?: "myapp", fileExtensions?: ["md"],
+                       chrome?: { frame, trafficLights, transparent, vibrancy } }
 icon.png             1024×1024 app icon
 src/main.js          backend (see below)
 src/frontend/        index.html + js/css/images — served as real files
@@ -106,6 +107,10 @@ tiny.win.fullscreen(); tiny.win.setFullscreen(bool);   // toggle / absolute
 await tiny.win.getState();  // { x, y, width, height, fullscreen, minimized,
                             //   visible, focused, alwaysOnTop, resizable, screen }
 tiny.win.setPosition(x, y);                 // top-left origin
+tiny.win.setChrome({ frame: false, trafficLights: false,
+                     transparent: false, vibrancy: 'hud' });  // frameless etc.
+// drag regions: <header data-tiny-drag> — drag moves window, dblclick zooms;
+// interactive children excluded (data-tiny-nodrag to opt out manually)
 tiny.win.setAlwaysOnTop(v); tiny.win.setResizable(v);
 tiny.win.hide(); tiny.win.show(); tiny.win.setHideOnClose(v);
 tiny.win.onDrop((paths) => ...);            // files dropped on the window: real paths

@@ -69,6 +69,16 @@
   <section>
 
     <div class="rel">
+      <h2>0.7.0 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>Frameless windows</b> — <code>tiny.win.setChrome({ frame, trafficLights, transparent, vibrancy })</code> (or <code>"chrome"</code> in tinyjs.json, applied before first paint in packaged apps); native resize/focus/fullscreen kept.</li>
+        <li><b>Drag regions</b> — <code>data-tiny-drag</code> elements move the window natively; double-click zooms.</li>
+        <li><code>tiny.win.zoom()</code>, <code>startDrag()</code>; <code>getState()</code> reports chrome.</li>
+        <li>Fix: chrome and <code>setResizable(false)</code> survive later resizes.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.6.0 <span class="date">2026-07-13</span></h2>
       <ul>
         <li><b>Native Notification Center</b> — signed packaged apps get real banners (own icon, permission prompt, foreground banners) with clicks routed back via <code>tiny.app.onNotificationClick</code>; <code>notify</code> gains <code>{ id, subtitle, sound }</code>. Ad-hoc/dev builds fall back to osascript automatically.</li>

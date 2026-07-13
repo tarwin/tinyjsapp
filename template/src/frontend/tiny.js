@@ -35,6 +35,11 @@
       //   alwaysOnTop, resizable, screen: { width, height, scale } }
       getState: () => call('win.getState'),
       setHideOnClose: (enabled) => call('win.setHideOnClose', { enabled }),
+      // { frame?, trafficLights?, transparent?, vibrancy? } — frameless windows
+      // keep native resize/focus; mark your own titlebar with data-tiny-drag.
+      setChrome: (opts) => call('win.setChrome', opts),
+      startDrag: () => call('win.startDrag'),
+      zoom: () => call('win.zoom'),
       print: () => call('win.print'),
       // fn(paths): files dragged onto the window, as real filesystem paths.
       onDrop(fn) { window.tiny.api.on('drop', ({ paths }) => fn(paths)); },
@@ -108,4 +113,15 @@
   window.__emit = (msg) => {
     (handlers[msg.event] || []).forEach((fn) => fn(msg.data));
   };
+
+  // Drag regions for frameless windows: any element with data-tiny-drag acts
+  // as a titlebar — drag moves the window, double-click zooms. Interactive
+  // children (or anything inside data-tiny-nodrag) are left alone.
+  window.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (!e.target.closest('[data-tiny-drag]')) return;
+    if (e.target.closest('button, a, input, textarea, select, [contenteditable], [data-tiny-nodrag]')) return;
+    if (e.detail === 2) call('win.zoom');
+    else call('win.startDrag');
+  });
 })();

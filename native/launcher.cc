@@ -49,6 +49,12 @@
 //                         NOTIFY <id>\t<title>\t<body>\t<subtitle>\t<snd01>
 //                                                    notification (bundle mode:
 //                                                    Notification Center)
+//                         CHROME <frame>\t<traffic>\t<transp>\t<vibrancy>
+//                                                    window chrome ('' = keep;
+//                                                    0|1 flags; vibrancy =
+//                                                    material name | none)
+//                         DRAGWIN                    start a native window drag
+//                                                    (page drag regions)
 //                         PRINT                      native print panel
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
@@ -116,6 +122,12 @@ static std::mutex g_write_mutex;
 static std::string g_html_path; // empty when target is an http(s) URL
 static std::string g_app_name = "tinyjs";
 static std::string g_app_version = "0.0.0";
+// Window chrome state (set by CHROME, reported by GET win).
+static int g_resizable_override = -1; // -1 default, 0 forced off, 1 forced on
+static bool g_chrome_frameless = false;
+static bool g_chrome_traffic = true;
+static bool g_chrome_transparent = false;
+static std::string g_chrome_vibrancy; // empty = none
 // Lines produced before the backend is connected (bundle mode: Apple Events
 // and page calls can arrive before the spawned backend attaches). Flushed by
 // sock_set_connected().
@@ -190,9 +202,14 @@ struct SizeReq {
   int width, height;
 };
 
+static void reapply_window_overrides(webview_t w); // defined with chrome ops
+
 static void do_size(webview_t w, void *arg) {
   SizeReq *s = static_cast<SizeReq *>(arg);
   webview_set_size(w, s->width, s->height, WEBVIEW_HINT_NONE);
+  // The webview library's set_size rewrites the styleMask wholesale,
+  // wiping frameless chrome and resizable overrides — restore them.
+  reapply_window_overrides(w);
   delete s;
 }
 
@@ -634,6 +651,8 @@ static void do_winop(webview_t w, void *arg) {
       [win miniaturize:nil];
     } else if (*op == "restore") {
       [win deminiaturize:nil];
+    } else if (*op == "zoom") {
+      [win zoom:nil];
     } else if (*op == "fullscreen") {
       [win toggleFullScreen:nil];
     } else if (*op == "fullscreen 1" || *op == "fullscreen 0") {
@@ -646,8 +665,10 @@ static void do_winop(webview_t w, void *arg) {
     } else if (*op == "ontop 0") {
       win.level = NSNormalWindowLevel;
     } else if (*op == "resizable 1") {
+      g_resizable_override = 1;
       win.styleMask |= NSWindowStyleMaskResizable;
     } else if (*op == "resizable 0") {
+      g_resizable_override = 0;
       win.styleMask &= ~NSWindowStyleMaskResizable;
     } else if (op->rfind("pos ", 0) == 0) {
       // Top-left origin in screen points (y grows downward, CSS-style).
@@ -990,6 +1011,8 @@ static void do_get(webview_t w, void *arg) {
             "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
             "\"fullscreen\":%s,\"minimized\":%s,\"visible\":%s,\"focused\":%s,"
             "\"alwaysOnTop\":%s,\"resizable\":%s,"
+            "\"chrome\":{\"frame\":%s,\"trafficLights\":%s,"
+            "\"transparent\":%s,\"vibrancy\":%s},"
             "\"screen\":{\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
             (int)f.origin.x, (int)(top - NSMaxY(f)), (int)f.size.width,
             (int)f.size.height, fs ? "true" : "false",
@@ -997,9 +1020,29 @@ static void do_get(webview_t w, void *arg) {
             win.keyWindow ? "true" : "false",
             win.level != NSNormalWindowLevel ? "true" : "false",
             (win.styleMask & NSWindowStyleMaskResizable) ? "true" : "false",
+            g_chrome_frameless ? "false" : "true",
+            g_chrome_traffic ? "true" : "false",
+            g_chrome_transparent ? "true" : "false",
+            g_chrome_vibrancy.empty()
+                ? "null"
+                : json_escape(g_chrome_vibrancy).c_str(),
             (int)scr.frame.size.width, (int)scr.frame.size.height,
             (double)scr.backingScaleFactor);
         json = buf;
+      }
+    } else if (req->what == "debug:trafficpos") {
+      NSWindow *win = (NSWindow *)webview_get_native_handle(
+          w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+      NSButton *btn = win ? [win standardWindowButton:NSWindowCloseButton] : nil;
+      if (btn && !btn.hidden) {
+        NSRect r = [btn convertRect:btn.bounds toView:nil]; // window coords
+        double fromTop = win.frame.size.height - NSMaxY(r);
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "{\"fromTop\":%.1f,\"x\":%.1f}",
+                      fromTop, r.origin.x);
+        json = buf;
+      } else {
+        json = "{\"hidden\":true}";
       }
     } else if (req->what.rfind("item:", 0) == 0) {
       std::string id = req->what.substr(5);
@@ -1183,6 +1226,203 @@ static void do_notify(webview_t, void *arg) {
 #else
 static void install_notif_delegate() {}
 static void do_notify(webview_t, void *arg) { delete static_cast<NotifReq *>(arg); }
+#endif
+
+// --- window chrome: frameless / traffic lights / transparency / vibrancy ---------
+// CHROME <frame>\t<traffic>\t<transparent>\t<vibrancy> ('' = leave unchanged;
+// frame/traffic/transparent are 0|1; vibrancy is a material name or "none").
+// "Frameless" keeps the window titled (fullSizeContentView + transparent,
+// hidden titlebar) so focus, resize edges, shadows, rounded corners, and
+// fullscreen all keep working — unlike true borderless. DRAGWIN starts a
+// native window drag (pages mark drag regions with data-tiny-drag).
+
+struct ChromeReq {
+  std::string frame, traffic, transparent, vibrancy;
+};
+
+#ifdef __APPLE__
+static NSVisualEffectView *g_effect_view = nil;
+
+static NSVisualEffectMaterial material_for(const std::string &name) {
+  static const std::map<std::string, NSVisualEffectMaterial> m = {
+      {"titlebar", NSVisualEffectMaterialTitlebar},
+      {"selection", NSVisualEffectMaterialSelection},
+      {"menu", NSVisualEffectMaterialMenu},
+      {"popover", NSVisualEffectMaterialPopover},
+      {"sidebar", NSVisualEffectMaterialSidebar},
+      {"header", NSVisualEffectMaterialHeaderView},
+      {"sheet", NSVisualEffectMaterialSheet},
+      {"window", NSVisualEffectMaterialWindowBackground},
+      {"hud", NSVisualEffectMaterialHUDWindow},
+      {"fullscreen", NSVisualEffectMaterialFullScreenUI},
+      {"tooltip", NSVisualEffectMaterialToolTip},
+      {"content", NSVisualEffectMaterialContentBackground},
+      {"underwindow", NSVisualEffectMaterialUnderWindowBackground},
+      {"underpage", NSVisualEffectMaterialUnderPageBackground},
+  };
+  auto it = m.find(name);
+  return it == m.end() ? NSVisualEffectMaterialSidebar : it->second;
+}
+
+// The hidden titlebar's NSTitlebarContainerView still occupies (and drags
+// from) the top strip; hide it entirely when frameless with no traffic
+// lights so the page owns every pixel and every mouse event.
+static void set_titlebar_hidden(NSWindow *win, bool hidden) {
+  NSView *frameView = win.contentView.superview;
+  for (NSView *v in frameView.subviews) {
+    if ([v isKindOfClass:NSClassFromString(@"NSTitlebarContainerView")])
+      v.hidden = hidden;
+  }
+}
+
+// After styleMask/frame changes the private NSTitlebarContainerView can be
+// left at a stale position (traffic lights floating outside the window).
+// Re-anchor it to the top of the frame view explicitly.
+static void relayout_titlebar(NSWindow *win) {
+  NSView *frameView = win.contentView.superview;
+  CGFloat H = frameView.bounds.size.height;
+  CGFloat W = frameView.bounds.size.width;
+  for (NSView *v in frameView.subviews) {
+    if ([v isKindOfClass:NSClassFromString(@"NSTitlebarContainerView")]) {
+      CGFloat h = v.frame.size.height > 0 ? v.frame.size.height : 28;
+      v.frame = NSMakeRect(0, H - h, W, h);
+      [v setNeedsLayout:YES];
+    }
+  }
+}
+
+// Toggling fullSizeContentView grows the content view, but the webview's
+// autoresizing doesn't reliably follow a style-mask change — pin it (and the
+// vibrancy layer) to the new bounds explicitly.
+static void extend_content(webview_t w, NSWindow *win) {
+  WKWebView *wv = (WKWebView *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  if (wv)
+    wv.frame = win.contentView.bounds;
+  if (g_effect_view)
+    g_effect_view.frame = win.contentView.bounds;
+}
+
+static void webview_draws_background(webview_t w, bool draws) {
+  WKWebView *wv = (WKWebView *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  // Private-but-stable WKWebView property, reached via KVC's _drawsBackground
+  // fallback (same trick the webview library uses for WKPreferences).
+  @try {
+    [wv setValue:@(draws) forKey:@"drawsBackground"];
+  } @catch (NSException *) {
+  }
+}
+
+static void do_chrome(webview_t w, void *arg) {
+  ChromeReq *req = static_cast<ChromeReq *>(arg);
+  @autoreleasepool {
+    NSWindow *win = (NSWindow *)webview_get_native_handle(
+        w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+    if (!win) {
+      delete req;
+      return;
+    }
+    if (!req->frame.empty()) {
+      bool frameless = req->frame == "0";
+      g_chrome_frameless = frameless;
+      // AppKit preserves the CONTENT rect across a styleMask change and
+      // resizes the frame; pin the frame instead so the window keeps its
+      // size and the page absorbs (or returns) the titlebar strip.
+      NSRect keep = win.frame;
+      if (frameless) {
+        win.styleMask |= NSWindowStyleMaskFullSizeContentView;
+        win.titlebarAppearsTransparent = YES;
+        win.titleVisibility = NSWindowTitleHidden;
+      } else {
+        win.styleMask &= ~NSWindowStyleMaskFullSizeContentView;
+        win.titlebarAppearsTransparent = NO;
+        win.titleVisibility = NSWindowTitleVisible;
+      }
+      [win setFrame:keep display:YES];
+    }
+    if (!req->traffic.empty()) {
+      bool show = req->traffic == "1";
+      g_chrome_traffic = show;
+      [win standardWindowButton:NSWindowCloseButton].hidden = !show;
+      [win standardWindowButton:NSWindowMiniaturizeButton].hidden = !show;
+      [win standardWindowButton:NSWindowZoomButton].hidden = !show;
+    }
+    if (!req->transparent.empty()) {
+      bool tr = req->transparent == "1";
+      g_chrome_transparent = tr;
+      win.opaque = !tr;
+      win.backgroundColor = tr ? [NSColor clearColor]
+                               : [NSColor windowBackgroundColor];
+      win.hasShadow = !tr;
+      webview_draws_background(w, !tr);
+    }
+    if (!req->frame.empty() || !req->traffic.empty()) {
+      set_titlebar_hidden(win, g_chrome_frameless && !g_chrome_traffic);
+      relayout_titlebar(win);
+      extend_content(w, win);
+    }
+    if (!req->vibrancy.empty()) {
+      if (g_effect_view) {
+        [g_effect_view removeFromSuperview];
+        [g_effect_view release];
+        g_effect_view = nil;
+      }
+      if (req->vibrancy == "none") {
+        g_chrome_vibrancy.clear();
+        if (!g_chrome_transparent)
+          webview_draws_background(w, true);
+      } else {
+        g_chrome_vibrancy = req->vibrancy;
+        NSView *content = win.contentView;
+        g_effect_view = [[NSVisualEffectView alloc] initWithFrame:content.bounds];
+        g_effect_view.material = material_for(req->vibrancy);
+        g_effect_view.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+        g_effect_view.state = NSVisualEffectStateFollowsWindowActiveState;
+        g_effect_view.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        [content addSubview:g_effect_view
+                 positioned:NSWindowBelow
+                 relativeTo:nil];
+        // The page must not paint an opaque background over the effect.
+        webview_draws_background(w, false);
+        win.opaque = NO;
+        win.backgroundColor = [NSColor clearColor];
+      }
+    }
+  }
+  delete req;
+}
+
+static void reapply_window_overrides(webview_t w) {
+  NSWindow *win = (NSWindow *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+  if (!win)
+    return;
+  if (g_resizable_override == 0)
+    win.styleMask &= ~NSWindowStyleMaskResizable;
+  if (g_chrome_frameless) {
+    NSRect keep = win.frame;
+    win.styleMask |= NSWindowStyleMaskFullSizeContentView;
+    win.titlebarAppearsTransparent = YES;
+    win.titleVisibility = NSWindowTitleHidden;
+    [win setFrame:keep display:YES];
+    set_titlebar_hidden(win, g_chrome_frameless && !g_chrome_traffic);
+    relayout_titlebar(win);
+    extend_content(w, win);
+  }
+}
+
+static void do_dragwin(webview_t w, void *) {
+  NSWindow *win = (NSWindow *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+  NSEvent *ev = [NSApp currentEvent];
+  if (win && ev)
+    [win performWindowDragWithEvent:ev];
+}
+#else
+static void do_chrome(webview_t, void *arg) { delete static_cast<ChromeReq *>(arg); }
+static void do_dragwin(webview_t, void *) {}
+static void reapply_window_overrides(webview_t) {}
 #endif
 
 // --- print (macOS) ---------------------------------------------------------------
@@ -1446,6 +1686,16 @@ static void sock_read_loop() {
         req->subtitle = p.size() > 3 ? p[3] : "";
         req->sound = p.size() > 4 && p[4] == "1";
         webview_dispatch(g_w, do_notify, req);
+      } else if (line.rfind("CHROME ", 0) == 0) {
+        std::vector<std::string> p = split_tabs(line.substr(7));
+        ChromeReq *req = new ChromeReq;
+        req->frame = p.size() > 0 ? p[0] : "";
+        req->traffic = p.size() > 1 ? p[1] : "";
+        req->transparent = p.size() > 2 ? p[2] : "";
+        req->vibrancy = p.size() > 3 ? p[3] : "";
+        webview_dispatch(g_w, do_chrome, req);
+      } else if (line == "DRAGWIN") {
+        webview_dispatch(g_w, do_dragwin, nullptr);
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_print, nullptr);
       } else if (line == "RELOAD") {
@@ -1690,6 +1940,22 @@ int main(int argc, char *argv[]) {
   install_ctx_hook();
   install_system_observers();
   install_open_handlers();
+  // Packaged apps can declare chrome in the plist (TinyjsChrome, same
+  // tab-separated fields as the CHROME command) so the window never flashes
+  // its default titlebar.
+  if (bundle_mode) {
+    NSString *cs = [[NSBundle mainBundle]
+        objectForInfoDictionaryKey:@"TinyjsChrome"];
+    if (cs) {
+      std::vector<std::string> p = split_tabs([cs UTF8String]);
+      ChromeReq *req = new ChromeReq;
+      req->frame = p.size() > 0 ? p[0] : "";
+      req->traffic = p.size() > 1 ? p[1] : "";
+      req->transparent = p.size() > 2 ? p[2] : "";
+      req->vibrancy = p.size() > 3 ? p[3] : "";
+      do_chrome(g_w, req);
+    }
+  }
 #endif
 
   webview_set_title(g_w, title.c_str());
