@@ -235,6 +235,7 @@ const app = await createApp({
   onSystem: appMod.onSystem,
   onOpenUrl: appMod.onOpenUrl,
   onOpenFiles: appMod.onOpenFiles,
+  onNotificationClick: appMod.onNotificationClick,
   update: ${JSON.stringify(cfg.update ?? null)},
 });
 if (appMod.init) appMod.init(app);

@@ -37,19 +37,6 @@ const DIALOG_OPS = {
   'win.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
 };
 
-// Desktop notification via osascript: works from dev and packaged builds
-// without notification-center entitlements (macOS shows it under "Script
-// Editor" in Notification Center settings). A native UNUserNotificationCenter
-// path (own icon, actions) is possible for signed bundles later.
-async function notify({ title, body, subtitle } = {}) {
-  const aq = (s) => '"' + String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-  let script = 'display notification ' + aq(body ?? '') + ' with title ' + aq(title ?? 'tinyjs');
-  if (subtitle) script += ' subtitle ' + aq(subtitle);
-  const p = tjs.spawn(['osascript', '-e', script], { stdout: 'ignore', stderr: 'ignore' });
-  const st = await p.wait();
-  return st.exit_status === 0 && !st.term_signal;
-}
-
 // Tiny persistent JSON store in ~/Library/Application Support/<app id>/.
 // Flat string keys, JSON values, atomic writes.
 function makeStore(appId) {
@@ -76,7 +63,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, update = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, update = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -185,6 +172,26 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       const flags = (it.checked ? 'c' : '') + (it.enabled === false ? 'd' : '');
       send('ITEM ' + [one(it.id), one(it.label ?? it.id), one(it.key ?? ''), flags].join('\t'));
     }
+  }
+
+  // Desktop notification. Packaged apps (attach mode: the launcher is the
+  // bundle executable) get real Notification Center banners — the app's own
+  // icon, permission prompt on first use, and clicks back as the
+  // 'notification-click' event (opts: { id, subtitle, sound }). Dev has no
+  // bundle for UNUserNotificationCenter, so it falls back to osascript
+  // (banner appears under "Script Editor").
+  async function notify({ title, body, subtitle, id: nid, sound } = {}) {
+    if (attachPath) {
+      send('NOTIFY ' + [one(nid ?? ''), one(title ?? 'tinyjs'), one(body ?? ''),
+                        one(subtitle ?? ''), sound ? '1' : '0'].join('\t'));
+      return true;
+    }
+    const aq = (s) => '"' + String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+    let script = 'display notification ' + aq(body ?? '') + ' with title ' + aq(title ?? 'tinyjs');
+    if (subtitle) script += ' subtitle ' + aq(subtitle);
+    const p = tjs.spawn(['osascript', '-e', script], { stdout: 'ignore', stderr: 'ignore' });
+    const st = await p.wait();
+    return st.exit_status === 0 && !st.term_signal;
   }
 
   function send(line) {
@@ -431,6 +438,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
             try { v = JSON.parse(line.slice(sp + 1)); } catch {}
             resolve(v);
           }
+        } else if (line.startsWith('NOTIFYCLICK ')) {
+          const id = line.slice(12);
+          push('notification-click', { id });
+          if (onNotificationClick) onNotificationClick(id, app);
         } else if (line.startsWith('OPENURL ')) {
           // Deep link (custom URL scheme; packaged .app only).
           const url = line.slice(8);

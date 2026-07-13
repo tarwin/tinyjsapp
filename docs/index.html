@@ -107,8 +107,15 @@
   @media (max-width: 640px) { .cols { grid-template-columns: 1fr; } }
   .cols h3 { font: 400 11px var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 2px; }
 
+  /* quick start — equal-height 2×2 quadrant */
+  .qs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; grid-auto-rows: 1fr; }
+  .qs-cell { display: flex; flex-direction: column; }
+  .qs-cell h3 { font: 400 11px var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 2px; }
+  .qs-cell pre { flex: 1; margin: 0; }
+  @media (max-width: 640px) { .qs { grid-template-columns: 1fr; grid-auto-rows: auto; } }
+
   /* architecture */
-  pre.arch { line-height: 1.45; color: var(--muted); font-size: 12.5px; }
+  pre.arch { line-height: 1.75; color: var(--muted); font-size: 13px; }
   pre.arch b { color: var(--text); font-weight: 400; }
   pre.arch i { color: var(--accent); font-style: normal; }
 
@@ -165,35 +172,34 @@
 
   <section>
     <h2>Quick start</h2>
-    <div class="cols">
-      <div>
+    <div class="qs">
+      <div class="qs-cell">
         <h3>terminal</h3>
         <pre><span class="a">tinyjs</span> new myapp
 <span class="a">cd</span> myapp
 <span class="a">tinyjs</span> dev    <span class="c"># window opens, hot reload</span>
 <span class="a">tinyjs</span> build  <span class="c"># dist/myapp.app, signed</span></pre>
       </div>
-      <div>
+      <div class="qs-cell">
         <h3>src/main.js — the whole backend</h3>
         <pre><span class="a">export const</span> api = {
   hello: <span class="a">async</span> ({ name }) =&gt;
     <span class="c">`hi ${name}`</span>,
 };</pre>
       </div>
-    </div>
-    <div class="cols" style="margin-top:16px">
-      <div>
+      <div class="qs-cell">
         <h3>in the page</h3>
         <pre><span class="a">await</span> tiny.api.call(<span class="c">'hello'</span>, { name });
 tiny.menu.set([…]);
 <span class="a">await</span> tiny.win.openFile();</pre>
       </div>
-      <div>
+      <div class="qs-cell">
         <h3>how it fits</h3>
-        <pre class="arch"><b>backend</b> (txiki.js) ◂──▸ <b>launcher</b> (WebKit)
-     <i>unix socket · line protocol</i>
-                 ◂──▸ <b>your page</b>
-     <i>tiny.api.call / tiny.api.on</i></pre>
+        <pre class="arch"><b>your page</b>
+  ⇅  <i>tiny.api.call · tiny.api.on</i>
+<b>launcher</b> (WebKit)
+  ⇅  <i>unix socket · line protocol</i>
+<b>backend</b> (txiki.js)</pre>
       </div>
     </div>
   </section>

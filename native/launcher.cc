@@ -46,6 +46,9 @@
 //                                                    right-click menu
 //                         HKREG <id>\t<combo> /
 //                         HKUNREG <id>               global hotkeys
+//                         NOTIFY <id>\t<title>\t<body>\t<subtitle>\t<snd01>
+//                                                    notification (bundle mode:
+//                                                    Notification Center)
 //                         PRINT                      native print panel
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
@@ -63,6 +66,8 @@
 //                         DROP <json-paths>          files dragged onto the
 //                                                    window (real paths)
 //                         GOT <qid> <json>           read-back answer
+//                         NOTIFYCLICK <id>           a notification banner was
+//                                                    clicked
 //
 // A default app menu (About + Quit) is always present; About shows the
 // standard panel with the app name, version, and a tinyjs credit.
@@ -75,6 +80,7 @@
 
 #ifdef __APPLE__
 #import <AppKit/AppKit.h>
+#import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
 #include <Carbon/Carbon.h> // RegisterEventHotKey (global hotkeys)
 #include <objc/message.h>
@@ -1027,6 +1033,158 @@ static void do_get(webview_t, void *arg) {
 }
 #endif
 
+// --- native notifications (macOS, bundle mode only) ------------------------------
+// NOTIFY <id>\t<title>\t<body>\t<subtitle>\t<sound01>. Requires a real bundle
+// (UNUserNotificationCenter refuses bare processes), so this only runs when
+// the launcher is the .app executable; dev builds use the bridge's osascript
+// fallback. Authorization is requested lazily on the first notification and
+// pending ones queue until the user answers. Banner clicks come back as
+// `NOTIFYCLICK <id>` — including the click that launched the app.
+
+struct NotifReq {
+  std::string id, title, body, subtitle;
+  bool sound = false;
+};
+
+static bool g_bundle_mode = false;
+
+#ifdef __APPLE__
+@interface TinyNotifDelegate : NSObject <UNUserNotificationCenterDelegate>
+@end
+@implementation TinyNotifDelegate
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+    didReceiveNotificationResponse:(UNNotificationResponse *)response
+             withCompletionHandler:(void (^)(void))completionHandler {
+  if ([response.actionIdentifier
+          isEqualToString:UNNotificationDefaultActionIdentifier]) {
+    sock_write_line(std::string("NOTIFYCLICK ") +
+                    [response.notification.request.identifier UTF8String]);
+  }
+  completionHandler();
+}
+// Show banners even while the app is frontmost (default is to suppress).
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:
+             (void (^)(UNNotificationPresentationOptions))completionHandler {
+  completionHandler(UNNotificationPresentationOptionBanner |
+                    UNNotificationPresentationOptionList);
+}
+@end
+
+static TinyNotifDelegate *g_notif_delegate = nil;
+enum class NotifAuth { Unasked, Pending, Granted, Denied, Fallback };
+static NotifAuth g_notif_auth = NotifAuth::Unasked;
+static std::vector<NotifReq> g_notif_queue;
+
+static void install_notif_delegate() {
+  if (!g_bundle_mode)
+    return;
+  g_notif_delegate = [[TinyNotifDelegate alloc] init];
+  [UNUserNotificationCenter currentNotificationCenter].delegate =
+      g_notif_delegate;
+}
+
+// Ad-hoc-signed apps are refused by Notification Center outright (error,
+// no prompt). Fall back to osascript so notify() still works in unsigned
+// builds; a real signing identity upgrades to native banners.
+static void deliver_osascript(const NotifReq &req) {
+  auto q = [](const std::string &v) {
+    std::string out = "\"";
+    for (char ch : v) {
+      if (ch == '\\' || ch == '"')
+        out += '\\';
+      out += ch;
+    }
+    return out + "\"";
+  };
+  std::string script = "display notification " + q(req.body) +
+                       " with title " + q(req.title);
+  if (!req.subtitle.empty())
+    script += " subtitle " + q(req.subtitle);
+  const char *sargv[] = {"/usr/bin/osascript", "-e", script.c_str(), nullptr};
+  pid_t pid;
+  posix_spawn(&pid, "/usr/bin/osascript", nullptr, nullptr,
+              const_cast<char *const *>(sargv), environ);
+}
+
+static void deliver_notification(const NotifReq &req) {
+  UNMutableNotificationContent *content =
+      [[[UNMutableNotificationContent alloc] init] autorelease];
+  content.title = ns(req.title);
+  if (!req.body.empty())
+    content.body = ns(req.body);
+  if (!req.subtitle.empty())
+    content.subtitle = ns(req.subtitle);
+  if (req.sound)
+    content.sound = [UNNotificationSound defaultSound];
+  NSString *nid =
+      req.id.empty() ? [[NSUUID UUID] UUIDString] : ns(req.id);
+  UNNotificationRequest *r =
+      [UNNotificationRequest requestWithIdentifier:nid
+                                           content:content
+                                           trigger:nil];
+  [[UNUserNotificationCenter currentNotificationCenter]
+      addNotificationRequest:r
+       withCompletionHandler:^(NSError *err) {
+         if (getenv("TINYJS_NOTIF_DEBUG"))
+           std::fprintf(stderr, "DBG deliver err=%s\n",
+                        err ? [[err description] UTF8String] : "none");
+       }];
+}
+
+static void do_notify(webview_t, void *arg) {
+  NotifReq *req = static_cast<NotifReq *>(arg);
+  if (!g_bundle_mode) {
+    delete req;
+    return;
+  }
+  switch (g_notif_auth) {
+  case NotifAuth::Granted:
+    deliver_notification(*req);
+    break;
+  case NotifAuth::Fallback:
+    deliver_osascript(*req);
+    break;
+  case NotifAuth::Pending:
+    g_notif_queue.push_back(*req);
+    break;
+  case NotifAuth::Denied:
+    break; // the user explicitly said no; respect it
+  case NotifAuth::Unasked: {
+    g_notif_auth = NotifAuth::Pending;
+    g_notif_queue.push_back(*req);
+    [[UNUserNotificationCenter currentNotificationCenter]
+        requestAuthorizationWithOptions:(UNAuthorizationOptionAlert |
+                                         UNAuthorizationOptionSound |
+                                         UNAuthorizationOptionBadge)
+                      completionHandler:^(BOOL granted, NSError *err) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                          // granted=NO WITH an error and no prompt means the
+                          // system refused (ad-hoc signature) — fall back.
+                          // granted=NO without an error is the user's choice.
+                          g_notif_auth = granted ? NotifAuth::Granted
+                                        : err    ? NotifAuth::Fallback
+                                                 : NotifAuth::Denied;
+                          for (const NotifReq &n : g_notif_queue) {
+                            if (g_notif_auth == NotifAuth::Granted)
+                              deliver_notification(n);
+                            else if (g_notif_auth == NotifAuth::Fallback)
+                              deliver_osascript(n);
+                          }
+                          g_notif_queue.clear();
+                        });
+                      }];
+    break;
+  }
+  }
+  delete req;
+}
+#else
+static void install_notif_delegate() {}
+static void do_notify(webview_t, void *arg) { delete static_cast<NotifReq *>(arg); }
+#endif
+
 // --- print (macOS) ---------------------------------------------------------------
 
 static void do_print(webview_t w, void *) {
@@ -1279,6 +1437,15 @@ static void sock_read_loop() {
           continue;
         webview_dispatch(g_w, do_get,
                          new GetReq{line.substr(4, sp1 - 4), line.substr(sp1 + 1)});
+      } else if (line.rfind("NOTIFY ", 0) == 0) {
+        std::vector<std::string> p = split_tabs(line.substr(7));
+        NotifReq *req = new NotifReq;
+        req->id = p.size() > 0 ? p[0] : "";
+        req->title = p.size() > 1 ? p[1] : "";
+        req->body = p.size() > 2 ? p[2] : "";
+        req->subtitle = p.size() > 3 ? p[3] : "";
+        req->sound = p.size() > 4 && p[4] == "1";
+        webview_dispatch(g_w, do_notify, req);
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_print, nullptr);
       } else if (line == "RELOAD") {
@@ -1499,10 +1666,15 @@ int main(int argc, char *argv[]) {
     g_sock = fd;
   }
 
+  g_bundle_mode = bundle_mode;
+
 #ifdef __APPLE__
   // Must precede webview_create: launch Apple Events (cold-start deep links /
-  // file opens) can be dispatched during its internal event pumping.
+  // file opens) can be dispatched during its internal event pumping, and the
+  // notification-center delegate must exist before launch to receive the
+  // banner click that started the app.
   install_early_open_handlers();
+  install_notif_delegate();
 #endif
 
   g_w = webview_create(1 /* debug: enables devtools */, nullptr);

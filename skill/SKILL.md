@@ -97,7 +97,10 @@ tiny.menu.update('mute', { checked: false, label: 'Unmuted' });  // patch live
 await tiny.menu.get('mute');                // { exists, label, checked, enabled }
 // same item shape + update/get work for tray and context menus
 
-tiny.notify(title, body);                   // desktop notification
+tiny.notify(title, body, { id, subtitle, sound });  // desktop notification
+// packaged + signed (even Apple Development): native Notification Center
+// banners with click routing: tiny.app.onNotificationClick((id) => ...) /
+// backend export onNotificationClick(id, app). Ad-hoc/dev: osascript fallback.
 tiny.win.center(); tiny.win.minimize(); tiny.win.restore();
 tiny.win.fullscreen(); tiny.win.setFullscreen(bool);   // toggle / absolute
 await tiny.win.getState();  // { x, y, width, height, fullscreen, minimized,

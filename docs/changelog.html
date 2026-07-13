@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.6.0 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>Native Notification Center</b> — signed packaged apps get real banners (own icon, permission prompt, foreground banners) with clicks routed back via <code>tiny.app.onNotificationClick</code>; <code>notify</code> gains <code>{ id, subtitle, sound }</code>. Ad-hoc/dev builds fall back to osascript automatically.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.5.0 <span class="date">2026-07-13</span></h2>
       <ul>
         <li><b>Stateful menus</b> — <code>checked</code>, <code>enabled: false</code>, and nested <code>submenu</code> items everywhere; <code>tiny.menu.update(id, patch)</code> patches live items, <code>tiny.menu.get(id)</code> reads them back.</li>

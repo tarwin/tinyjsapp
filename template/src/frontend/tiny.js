@@ -13,6 +13,9 @@
 
     log: (msg) => call('log', { msg }),
     quit: () => call('quit'),
+    // opts: { id?, subtitle?, sound? }. Packaged apps get real Notification
+    // Center banners (app icon, permission prompt); clicks arrive via
+    // tiny.app.onNotificationClick. Dev falls back to osascript.
     notify: (title, body, opts = {}) => call('notify', { title, body, ...opts }),
 
     win: {
@@ -88,6 +91,8 @@
       // "urlScheme" and "fileExtensions"). Cold-start events are buffered.
       onOpenUrl(fn) { window.tiny.api.on('open-url', ({ url }) => fn(url)); },
       onOpenFiles(fn) { window.tiny.api.on('open-files', ({ paths }) => fn(paths)); },
+      // fn(id): a notification banner was clicked (packaged apps).
+      onNotificationClick(fn) { window.tiny.api.on('notification-click', ({ id }) => fn(id)); },
     },
 
     tray: {

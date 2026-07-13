@@ -109,6 +109,11 @@ tiny.api.on('tick', (t) => ...);                                   // backend pu
 
 tiny.log('debug msg');  tiny.quit();
 tiny.notify('Done', 'Your export finished');   // desktop notification
+// packaged apps get REAL Notification Center banners (your app's icon,
+// permission prompt on first use) when built with a signing identity —
+// even "Apple Development" works. Ad-hoc/dev builds fall back to osascript.
+tiny.notify('Ping', 'body', { id: 'x', subtitle: '…', sound: true });
+tiny.app.onNotificationClick((id) => ...);  // backend: export onNotificationClick
 await tiny.app.info();  // { version: <app>, tinyjs: <built with>, runtime: <txiki> }
 
 // window control

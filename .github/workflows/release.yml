@@ -19,7 +19,7 @@ jobs:
       - name: Build universal launcher
         run: |
           c++ -std=c++17 -x objective-c++ -Inative/include native/launcher.cc \
-            -o native/launcher -framework WebKit -framework AppKit -framework Carbon -ldl \
+            -o native/launcher -framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -ldl \
             -arch arm64 -arch x86_64
           codesign --force --sign - native/launcher
 

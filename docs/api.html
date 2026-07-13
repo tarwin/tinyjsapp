@@ -170,7 +170,12 @@ db.prepare('SELECT * FROM notes').all();  <i>// [{ id: 1, text: 'hello' }]</i></
 
 <b>tiny.log</b>(msg);                     <i>// print in the backend terminal</i>
 <b>tiny.quit</b>();
-<b>tiny.notify</b>(title, body);          <i>// desktop notification</i>
+<b>tiny.notify</b>(title, body, { id, subtitle, sound });
+<i>// packaged apps signed with a real identity (even "Apple Development")</i>
+<i>// get native Notification Center banners — your icon, permission prompt,</i>
+<i>// and clicks back:</i>
+<b>tiny.app.onNotificationClick</b>((id) =&gt; …);
+<i>// ad-hoc/dev builds fall back to osascript banners automatically</i>
 await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i></pre>
   </section>
 

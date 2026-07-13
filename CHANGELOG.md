@@ -4,6 +4,17 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.6.0 — 2026-07-13
+
+- **Native Notification Center** — packaged apps built with a signing
+  identity (even "Apple Development") get real banners: the app's own icon,
+  a proper permission prompt on first `tiny.notify()`, banners while
+  frontmost, and clicks routed back (`tiny.app.onNotificationClick` /
+  backend `onNotificationClick`, cold starts included). `notify` gains
+  `{ id, subtitle, sound }`. Ad-hoc and dev builds fall back to the
+  osascript banner automatically; a user's explicit "Don't Allow" is
+  respected (notifications drop silently).
+
 ## 0.5.0 — 2026-07-13
 
 - **Stateful menus** — items support `checked`, `enabled: false`, and nested
