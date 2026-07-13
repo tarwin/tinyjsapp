@@ -1,7 +1,7 @@
 #!/bin/sh
 # tinyjs installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/tarwin/tinyjsapp/main/install.sh | sh
+#   curl -fsSL https://tinyjs.app/install | sh
 #
 # Downloads the latest release (or TINYJS_VERSION=vX.Y.Z) into ~/.tinyjs
 # and symlinks the `tinyjs` CLI onto your PATH.

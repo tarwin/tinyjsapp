@@ -14,7 +14,7 @@ native [webview](https://github.com/webview/webview) window.
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/tarwin/tinyjsapp/main/install.sh | sh
+curl -fsSL https://tinyjs.app/install | sh
 ```
 
 Installs to `~/.tinyjs` and symlinks `tinyjs` onto your PATH. Pin a
@@ -211,7 +211,8 @@ skill/SKILL.md        tinyjs reference for coding agents (copied into new
                       projects at .claude/skills/tinyjs/)
 cli.js + tinyjs       the CLI
 test/smoke.html       self-driving test page
-install.sh            curl installer (downloads GitHub release tarballs)
+docs/                 tinyjs.app site (GitHub Pages): landing page + installer
+                      (docs/install is what `curl tinyjs.app/install` fetches)
 setup.sh              from-source bootstrap (fetch tjs, compile natives)
 .github/workflows/    release automation: tag vX.Y.Z → universal binaries →
                       per-arch tarballs + checksums → GitHub release
