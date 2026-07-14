@@ -605,11 +605,18 @@ async function cmdBuild() {
   // original linker signature; use the .app for distribution.
   const identity = cfg.signIdentity || tjs.env.TINYJS_SIGN_IDENTITY || '-';
   console.log('==> codesigning' + (identity === '-' ? ' (ad-hoc)' : ' as ' + identity));
+  // A real identity gets the hardened runtime + a secure timestamp — both
+  // required by notarization. No entitlements needed: QuickJS interprets
+  // (no JIT/executable memory) and WKWebView content runs out-of-process.
+  const sigFlags = identity === '-' ? [] : ['--options', 'runtime', '--timestamp'];
   for (const bin of ['dist/launcher',
                      APP + '/Contents/MacOS/' + cfg.name,
                      APP + '/Contents/MacOS/tjs',
                      APP]) {
-    await run(['codesign', '--force', '--sign', identity, bin], { stdout: 'ignore', stderr: 'ignore' });
+    // Keychain errors (locked keychain, missing key) matter with a real
+    // identity, so only silence stderr for the ad-hoc path.
+    await run(['codesign', '--force', ...sigFlags, '--sign', identity, bin],
+              identity === '-' ? { stdout: 'ignore', stderr: 'ignore' } : { stdout: 'ignore' });
   }
   if (!(await tryRun(['codesign', '--verify', '--strict', '--deep', APP]))) {
     console.log('warning: bundle signature did not verify: ' + APP);
