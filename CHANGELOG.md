@@ -4,6 +4,20 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.9.0 — 2026-07-13
+
+- **Menu-bar agents** — `"activation": "accessory"` in tinyjs.json launches
+  the app with no Dock icon and the window hidden, with no flash of either
+  (packaged apps get `LSUIElement`; dev mode matches). Show the window later
+  with `tiny.win.show()`; `setDockVisible(true)` restores a regular app.
+- **SF Symbol tray icons** — `tiny.tray.set({ icon: 'sf:cup.and.saucer.fill' })`
+  renders a crisp, auto-templating menu-bar icon straight from an SF Symbol
+  name; no shipped assets needed. PNG paths still work.
+- **Tray primary action** — `tiny.tray.set({ primaryAction: true, menu })`
+  splits clicks: left click fires `tiny.tray.onClick` (backend
+  `onTray(null, app)`), right/ctrl-click opens the menu — the classic
+  Caffeine-style toggle.
+
 ## 0.8.0 — 2026-07-13
 
 - **Multiple windows** — `tiny.win.open(id, { page, title, size })` turns any

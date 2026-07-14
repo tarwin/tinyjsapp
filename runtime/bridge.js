@@ -63,7 +63,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onWindowClosed, chrome = null, update = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onWindowClosed, chrome = null, update = null, activation = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -124,7 +124,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     const server = await tjs.listen('pipe', sockPath);
     const serverInfo = await server.opened;
 
-    proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], { stderr: 'inherit' });
+    // Accessory activation (menu-bar agents) rides in on the env; packaged
+    // apps get it from the plist instead (LSUIElement + TinyjsActivation).
+    const spawnOpts = { stderr: 'inherit' };
+    if (activation === 'accessory') spawnOpts.env = { ...tjs.env, TINYJS_ACTIVATION: 'accessory' };
+    proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], spawnOpts);
 
     cleanup = async () => {
       await tjs.remove(sockPath).catch(() => {});
@@ -258,19 +262,23 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     setDockVisible(v) { send('WINOP dock ' + (v ? 1 : 0)); },
     // true: the close button hides the window instead of quitting.
     setHideOnClose(v) { send('WINOP hideonclose ' + (v ? 1 : 0)); },
-    // spec: { title?, icon?, template?, tooltip?,
+    // spec: { title?, icon?, template?, tooltip?, primaryAction?,
     //         menu?: [{ id, label, key? } | { separator: true }] }
-    // icon is a png path (absolute or project-relative); template: false keeps
-    // its colors instead of adapting to the menu bar (default true).
-    // Menu clicks arrive as a 'tray' page event and via the onTray option;
-    // with no menu, icon clicks arrive as 'trayclick'.
+    // icon is a png path (absolute or project-relative) or 'sf:<name>' for an
+    // SF Symbol (e.g. 'sf:cup.and.saucer.fill' — no shipped assets needed);
+    // template: false keeps its colors instead of adapting to the menu bar
+    // (default true). Menu clicks arrive as a 'tray' page event and via the
+    // onTray option; with no menu, icon clicks arrive as 'trayclick'.
+    // primaryAction: true splits the two — left click fires 'trayclick' (a
+    // Caffeine-style toggle) and the menu opens on right/ctrl-click.
     tray: {
       set(spec = {}) {
         let icon = spec.icon ?? '';
-        if (icon && !icon.startsWith('/')) icon = tjs.cwd + '/' + icon;
+        if (icon && !icon.startsWith('/') && !icon.startsWith('sf:')) icon = tjs.cwd + '/' + icon;
         send('TRAYBEGIN ' + [one(spec.title), one(icon),
                              spec.template === false ? '0' : '1',
-                             one(spec.tooltip)].join('\t'));
+                             one(spec.tooltip),
+                             spec.primaryAction ? '1' : '0'].join('\t'));
         sendItems(spec.menu);
         send('TRAYEND');
       },

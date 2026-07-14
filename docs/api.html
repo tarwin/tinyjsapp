@@ -122,6 +122,7 @@ tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i>
   "urlScheme": "myapp",         <i>// deep links: myapp://…</i>
   "fileExtensions": ["md"],     <i>// "Open With" file associations</i>
   "chrome": { "frame": false, "vibrancy": "hud" },  <i>// frameless window</i>
+  "activation": "accessory",    <i>// menu-bar agent: no Dock icon, starts hidden (no flash)</i>
   "update": { "url": "https://…/manifest.json" },
   "notarize": { "profile": "my-notary-profile" }
 }</pre>
@@ -257,17 +258,20 @@ await <b>tiny.menu.get</b>('mute');   <i>// { exists, label, checked, enabled }<
   <section id="tray">
     <h2>tiny.tray <span class="tag">menu bar apps</span></h2>
     <pre><b>tiny.tray.set</b>({
-  title: 'MyApp',          <i>// text and/or icon (png path; template by default)</i>
-  icon: 'tray.png', tooltip: '…',
+  title: 'MyApp',          <i>// text and/or icon (template by default)</i>
+  icon: 'sf:cup.and.saucer.fill',  <i>// SF Symbol by name — or a png path ('tray.png')</i>
+  tooltip: '…',
   menu: [{ id: 'show', label: 'Show' }, { separator: true }, { id: 'q', label: 'Quit' }],
+  primaryAction: true,     <i>// left click fires onClick; menu opens on right-click</i>
 });
 <b>tiny.tray.on</b>((id) =&gt; …);       <i>// menu clicks</i>
-<b>tiny.tray.onClick</b>(fn);         <i>// bare icon click (no menu set)</i>
+<b>tiny.tray.onClick</b>(fn);         <i>// icon click (no menu set, or primaryAction left click)</i>
 <b>tiny.tray.remove</b>();
 
-<i>// the menu-bar-only app recipe:</i>
+<i>// the menu-bar-only app recipe: "activation": "accessory" in tinyjs.json</i>
+<i>// (launches with no Dock icon, window hidden — no flash), then:</i>
 <b>tiny.win.setHideOnClose</b>(true);
-<b>tiny.app.setDockVisible</b>(false);</pre>
+<b>tiny.win.show</b>();               <i>// whenever the window is wanted</i></pre>
   </section>
 
   <section id="store">

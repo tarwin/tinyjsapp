@@ -117,9 +117,14 @@ tiny.win.onDrop((paths) => ...);            // files dropped on the window: real
 
 // tray / menu-bar apps
 tiny.tray.set({ title, icon, tooltip, menu: [{ id, label }, { separator: true }] });
+// icon: png path OR 'sf:<name>' (SF Symbol, e.g. 'sf:cup.and.saucer.fill' — no assets)
+// primaryAction: true → left click fires onClick, menu opens on right-click
 tiny.tray.on((id) => ...); tiny.tray.onClick(fn); tiny.tray.remove();
 tiny.app.setDockVisible(false);             // menu-bar-only app
-// tray-app recipe: tray.set + win.setHideOnClose(true) + app.setDockVisible(false)
+// tray-app recipe: tinyjs.json { "activation": "accessory" } (launches with no
+// Dock icon and window hidden — no flash) + tray.set + win.setHideOnClose(true);
+// tiny.win.show() when needed. Without the config flag: tray.set +
+// win.setHideOnClose(true) + app.setDockVisible(false) in init().
 
 // auto-update (needs tinyjs.json "update".url; ships via `tinyjs publish`)
 const { available, latest } = await tiny.api.call('update.check');

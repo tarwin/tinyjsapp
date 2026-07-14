@@ -170,6 +170,9 @@ async function loadConfig() {
   }
   const cfg = JSON.parse(dec.decode(await tjs.readFile('tinyjs.json')));
   if (!cfg.name) fail('tinyjs.json needs a "name"');
+  if (cfg.activation && !['regular', 'accessory'].includes(cfg.activation)) {
+    fail('tinyjs.json "activation" must be "regular" or "accessory"');
+  }
   return { title: cfg.name, size: '960x640', id: 'com.example.' + cfg.name, ...cfg };
 }
 
@@ -239,6 +242,7 @@ const app = await createApp({
   onWindowClosed: appMod.onWindowClosed,
   chrome: ${JSON.stringify(cfg.chrome ?? null)},
   update: ${JSON.stringify(cfg.update ?? null)},
+  activation: ${JSON.stringify(cfg.activation ?? null)},
 });
 if (appMod.init) appMod.init(app);
 `;
@@ -374,6 +378,14 @@ async function cmdBuild() {
   // ("fileExtensions": ["md", ...]) from tinyjs.json.
   let extraKeys = `
   <key>TinyjsWindowSize</key>    <string>${cfg.size}</string>`;
+  if (cfg.activation === 'accessory') {
+    // Menu-bar agent: LSUIElement starts the process with no Dock icon at the
+    // system level; TinyjsActivation makes the launcher keep the window hidden
+    // until the app shows it.
+    extraKeys += `
+  <key>LSUIElement</key>         <true/>
+  <key>TinyjsActivation</key>    <string>accessory</string>`;
+  }
   if (cfg.chrome) {
     const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
     const ch = cfg.chrome;

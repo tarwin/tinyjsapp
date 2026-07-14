@@ -69,6 +69,15 @@
   <section>
 
     <div class="rel">
+      <h2>0.9.0 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li><b>Menu-bar agents</b> — <code>"activation": "accessory"</code> in tinyjs.json launches with no Dock icon and the window hidden, with no flash of either; <code>tiny.win.show()</code> when wanted, <code>setDockVisible(true)</code> to become a regular app.</li>
+        <li><b>SF Symbol tray icons</b> — <code>tiny.tray.set({ icon: 'sf:cup.and.saucer.fill' })</code>: crisp, auto-templating menu-bar icons with zero shipped assets (png paths still work).</li>
+        <li><b>Tray primary action</b> — <code>primaryAction: true</code> splits clicks: left click fires <code>onClick</code> (the Caffeine-style toggle), right/ctrl-click opens the menu.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.8.0 <span class="date">2026-07-13</span></h2>
       <ul>
         <li><b>Multiple windows</b> — <code>tiny.win.open('settings', { page: 'settings.html' })</code>: any frontend html file becomes a window with the full <code>tiny.*</code> bridge; <code>win.*</code> targets the caller's window; backend <code>app.window(id)</code> handles, broadcasts, close events, and <code>meta.window</code> caller identity.</li>

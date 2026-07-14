@@ -106,12 +106,14 @@
     },
 
     tray: {
-      // spec: { title?, icon?, template?, tooltip?,
+      // spec: { title?, icon?, template?, tooltip?, primaryAction?,
       //         menu?: [{ id, label, key? } | { separator: true }] }
+      // icon: png path or 'sf:<name>' (SF Symbol); primaryAction: true makes a
+      // left click fire onClick and moves the menu to right-click.
       set: (spec) => call('tray.set', spec),
       remove: () => call('tray.remove'),
       on(fn) { window.tiny.api.on('tray', ({ id }) => fn(id)); },          // menu item clicks
-      onClick(fn) { window.tiny.api.on('trayclick', () => fn()); },        // bare icon clicks
+      onClick(fn) { window.tiny.api.on('trayclick', () => fn()); },        // icon clicks
     },
   };
 

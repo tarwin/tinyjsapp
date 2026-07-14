@@ -36,9 +36,14 @@
 //                                                    leave unchanged)
 //                         GET <qid> <what>           read-back query; what =
 //                                                    win | item:<id>
-//                         TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip> /
+//                         TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip>\t<primary01> /
 //                         ITEM / SEP / TRAYEND       declare a menu bar status
-//                                                    item (applied on TRAYEND)
+//                                                    item (applied on TRAYEND;
+//                                                    icon: png path or
+//                                                    sf:<sfsymbol-name>;
+//                                                    primary=1: left click
+//                                                    sends TRAYCLICK, the menu
+//                                                    opens on right-click)
 //                         TRAYREMOVE                 remove the status item
 //                         WINOP <op> [args]          window ops: hide, show,
 //                                                    center, minimize,
@@ -74,7 +79,9 @@
 //                         TRAY <id>                  a tray menu item was
 //                                                    clicked
 //                         TRAYCLICK                  the tray icon itself was
-//                                                    clicked (no menu set)
+//                                                    clicked (no menu set, or
+//                                                    left click in primary-
+//                                                    action mode)
 //                         DROP <json-paths>          files dragged onto the
 //                                                    window (real paths)
 //                         GOT <qid> <json>           read-back answer
@@ -402,6 +409,14 @@ struct MenuSpec {
 
 #ifdef __APPLE__
 static void send_open_urls(NSArray *urls); // defined below
+
+// Tray globals live up here because TinyMenuTarget's click handlers use them;
+// they are managed in the tray section below. g_tray_menu is set only in
+// primary-action mode, where a left click on the icon is an event and the
+// menu is popped up on right-click.
+static NSStatusItem *g_status_item = nil;
+static NSMenu *g_tray_menu = nil;
+
 @interface TinyMenuTarget : NSObject
 - (void)itemClicked:(NSMenuItem *)sender;
 - (void)trayItemClicked:(NSMenuItem *)sender;
@@ -446,6 +461,17 @@ static void send_open_urls(NSArray *urls); // defined below
   send_open_urls(urls);
 }
 - (void)trayClicked:(id)sender {
+  NSEvent *ev = [NSApp currentEvent];
+  bool secondary = ev && (ev.type == NSEventTypeRightMouseUp ||
+                          ([ev modifierFlags] & NSEventModifierFlagControl));
+  if (secondary && g_tray_menu && g_status_item) {
+    // Attach the menu just for this tracking session so plain left clicks
+    // keep firing the action (a set menu swallows all button clicks).
+    g_status_item.menu = g_tray_menu;
+    [g_status_item.button performClick:nil];
+    g_status_item.menu = nil;
+    return;
+  }
   sock_write_line("TRAYCLICK");
 }
 - (void)showAbout:(id)sender {
@@ -563,20 +589,21 @@ static void apply_menus(webview_t, void *arg) {
 #endif
 
 // --- tray / status item (macOS) ----------------------------------------------
-// TRAYBEGIN <title>\t<iconPath>\t<template01>\t<tooltip>, then ITEM/SEP lines,
-// then TRAYEND. With menu items the icon opens the menu (clicks -> `TRAY <id>`);
-// without, clicking the icon sends `TRAYCLICK`.
+// TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip>\t<primary01>, then
+// ITEM/SEP lines, then TRAYEND. icon is a png path or sf:<name> (SF Symbol).
+// With menu items the icon opens the menu (clicks -> `TRAY <id>`); without,
+// clicking the icon sends `TRAYCLICK`. primary=1 splits the two: left click
+// sends `TRAYCLICK`, right/ctrl-click opens the menu (Caffeine-style toggles).
 
 struct TraySpec {
   std::string title, icon, tooltip;
   bool template_icon = true;
+  bool primary = false;
   std::vector<MenuItemSpec> items;
   bool remove = false;
 };
 
 #ifdef __APPLE__
-static NSStatusItem *g_status_item = nil;
-
 static void apply_tray(webview_t, void *arg) {
   TraySpec *spec = static_cast<TraySpec *>(arg);
   @autoreleasepool {
@@ -586,6 +613,8 @@ static void apply_tray(webview_t, void *arg) {
         [g_status_item release];
         g_status_item = nil;
       }
+      [g_tray_menu release];
+      g_tray_menu = nil;
       delete spec;
       return;
     }
@@ -596,30 +625,53 @@ static void apply_tray(webview_t, void *arg) {
           statusItemWithLength:NSVariableStatusItemLength] retain];
     }
     NSStatusBarButton *btn = g_status_item.button;
-    if (!spec->icon.empty()) {
-      NSImage *img =
-          [[[NSImage alloc] initWithContentsOfFile:ns(spec->icon)] autorelease];
-      if (img) {
-        [img setSize:NSMakeSize(18, 18)];
-        [img setTemplate:spec->template_icon ? YES : NO];
-        btn.image = img;
+    NSImage *img = nil;
+    if (spec->icon.rfind("sf:", 0) == 0) {
+      // SF Symbol by name — crisp and menu-bar-templating with no shipped
+      // assets. Unknown names resolve to nil and fall through to the title.
+      if (@available(macOS 11.0, *)) {
+        img = [NSImage imageWithSystemSymbolName:ns(spec->icon.substr(3))
+                        accessibilityDescription:nil];
+        NSImageSymbolConfiguration *conf = [NSImageSymbolConfiguration
+            configurationWithPointSize:15
+                                weight:NSFontWeightRegular];
+        NSImage *sized = img ? [img imageWithSymbolConfiguration:conf] : nil;
+        if (sized)
+          img = sized;
       }
-    } else {
-      btn.image = nil;
+    } else if (!spec->icon.empty()) {
+      img = [[[NSImage alloc] initWithContentsOfFile:ns(spec->icon)] autorelease];
+      if (img)
+        [img setSize:NSMakeSize(18, 18)];
     }
+    if (img)
+      [img setTemplate:spec->template_icon ? YES : NO];
+    btn.image = img;
     btn.title = ns(spec->title);
     btn.toolTip = spec->tooltip.empty() ? nil : ns(spec->tooltip);
 
     [g_reg_tray release];
     g_reg_tray = [[NSMutableDictionary alloc] init];
-    if (!spec->items.empty()) {
+    [g_tray_menu release];
+    g_tray_menu = nil;
+    if (!spec->items.empty() && !spec->primary) {
       NSMenu *menu = [[[NSMenu alloc] init] autorelease];
       build_menu_into(menu, spec->items, @selector(trayItemClicked:), g_reg_tray);
       g_status_item.menu = menu;
     } else {
+      if (!spec->items.empty()) {
+        // Primary-action mode: hold the menu aside; trayClicked: pops it on
+        // right-click and reports left clicks as TRAYCLICK.
+        NSMenu *menu = [[NSMenu alloc] init];
+        build_menu_into(menu, spec->items, @selector(trayItemClicked:), g_reg_tray);
+        g_tray_menu = menu;
+      }
       g_status_item.menu = nil;
       btn.target = g_menu_target;
       btn.action = @selector(trayClicked:);
+      [btn sendActionOn:(g_tray_menu
+                             ? (NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)
+                             : NSEventMaskLeftMouseUp)];
     }
   }
   delete spec;
@@ -635,6 +687,13 @@ static void apply_tray(webview_t, void *arg) {
 //       resizable 0|1 | pos <x> <y> | dock 0|1 | hideonclose 0|1
 
 static bool g_hide_on_close = false;
+
+// Accessory activation ("activation": "accessory" — menu-bar agents): while
+// set, attempts to make the app Regular are coerced back to Accessory and the
+// startup order-front is swallowed, so neither a Dock icon nor a window ever
+// flashes. Installed in install_accessory_mode() below; WINOP dock 1 lifts it.
+static bool g_accessory = false;
+static bool g_suppress_order_front = false;
 
 #ifdef __APPLE__
 // Installed on the webview library's window delegate class; consulted on every
@@ -683,6 +742,7 @@ static void do_winop(webview_t w, void *arg) {
       if (is_main)
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     } else if (*op == "dock 1" && is_main) {
+      g_accessory = false; // lift the accessory-mode coercion, if any
       [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
       [NSApp activateIgnoringOtherApps:YES];
     } else if (*op == "hideonclose 1") {
@@ -806,6 +866,50 @@ static void install_drop_hook() {
   g_orig_performDragOperation = (DragPerformIMP)swizzle(
       cls, @selector(performDragOperation:), (IMP)tiny_performDragOperation,
       "c@:@");
+}
+
+// --- accessory activation (macOS) ----------------------------------------------
+// Menu-bar agents come up with no Dock icon and no window, with no flash of
+// either. Packaged apps get LSUIElement in the plist (the system starts them
+// as an accessory already); this hook keeps the webview library from undoing
+// it: its startup path forces NSApplicationActivationPolicyRegular +
+// activation for non-bundled processes (dev mode) and orders the window front
+// unconditionally, so both are swizzled and neutered while the flags are set.
+// The order-front suppression only spans webview_create (cleared in main
+// before the socket loop starts, so WINOP show works normally); the policy
+// coercion stays until the backend calls setDockVisible(true).
+
+typedef BOOL (*SetPolicyIMP)(id, SEL, NSInteger);
+static SetPolicyIMP g_orig_setActivationPolicy = nullptr;
+typedef void (*OrderFrontIMP)(id, SEL, id);
+static OrderFrontIMP g_orig_makeKeyAndOrderFront = nullptr;
+
+static BOOL tiny_setActivationPolicy(id self, SEL cmd, NSInteger policy) {
+  if (g_accessory && policy == NSApplicationActivationPolicyRegular)
+    policy = NSApplicationActivationPolicyAccessory;
+  return g_orig_setActivationPolicy
+             ? g_orig_setActivationPolicy(self, cmd, policy)
+             : NO;
+}
+
+static void tiny_makeKeyAndOrderFront(id self, SEL cmd, id sender) {
+  if (g_suppress_order_front)
+    return;
+  if (g_orig_makeKeyAndOrderFront)
+    g_orig_makeKeyAndOrderFront(self, cmd, sender);
+}
+
+static void install_accessory_mode() {
+  g_accessory = true;
+  g_suppress_order_front = true;
+  g_orig_setActivationPolicy = (SetPolicyIMP)swizzle(
+      [NSApplication class], @selector(setActivationPolicy:),
+      (IMP)tiny_setActivationPolicy, "c@:q");
+  g_orig_makeKeyAndOrderFront = (OrderFrontIMP)swizzle(
+      [NSWindow class], @selector(makeKeyAndOrderFront:),
+      (IMP)tiny_makeKeyAndOrderFront, "v@:@");
+  [[NSApplication sharedApplication]
+      setActivationPolicy:NSApplicationActivationPolicyAccessory];
 }
 #endif
 
@@ -1094,6 +1198,26 @@ static void do_get(webview_t w, void *arg) {
         json = buf;
       } else {
         json = "{\"hidden\":true}";
+      }
+    } else if (req->what == "debug:activation") {
+      NSApplicationActivationPolicy p = [NSApp activationPolicy];
+      const char *pol = p == NSApplicationActivationPolicyRegular ? "regular"
+                        : p == NSApplicationActivationPolicyAccessory
+                            ? "accessory"
+                            : "prohibited";
+      json = std::string("{\"policy\":\"") + pol + "\"}";
+    } else if (req->what == "debug:tray") {
+      // NSStatusItem windows are system-hosted (invisible to CGWindowList),
+      // so tests read the item's wiring here instead.
+      if (g_status_item) {
+        NSStatusBarButton *btn = g_status_item.button;
+        json = std::string("{\"exists\":true,\"menuAttached\":") +
+               (g_status_item.menu ? "true" : "false") +
+               ",\"menuHeld\":" + (g_tray_menu ? "true" : "false") +
+               ",\"icon\":" + (btn.image ? "true" : "false") + ",\"title\":" +
+               json_escape(btn.title ? [btn.title UTF8String] : "") + "}";
+      } else {
+        json = "{\"exists\":false}";
       }
     } else if (req->what.rfind("item:", 0) == 0) {
       std::string id = req->what.substr(5);
@@ -1988,6 +2112,7 @@ static void sock_read_loop() {
         pending_tray.icon = p.size() > 1 ? p[1] : "";
         pending_tray.template_icon = !(p.size() > 2 && p[2] == "0");
         pending_tray.tooltip = p.size() > 3 ? p[3] : "";
+        pending_tray.primary = p.size() > 4 && p[4] == "1";
         collapse_subs();
         build_stack.assign(1, {});
         in_tray_block = true;
@@ -2293,6 +2418,21 @@ int main(int argc, char *argv[]) {
   // banner click that started the app.
   install_early_open_handlers();
   install_notif_delegate();
+
+  // Accessory activation (menu-bar agents): env in dev/spawn mode, plist in
+  // bundle mode. Must also precede webview_create — that's where the library
+  // would otherwise flash the Dock icon and the window.
+  {
+    const char *act = getenv("TINYJS_ACTIVATION");
+    bool accessory = act && std::strcmp(act, "accessory") == 0;
+    if (!accessory) {
+      NSString *pa = [[NSBundle mainBundle]
+          objectForInfoDictionaryKey:@"TinyjsActivation"];
+      accessory = pa && [pa isEqualToString:@"accessory"];
+    }
+    if (accessory)
+      install_accessory_mode();
+  }
 #endif
 
   g_w = webview_create(1 /* debug: enables devtools */, nullptr);
@@ -2352,6 +2492,19 @@ int main(int argc, char *argv[]) {
       return 1;
     }
   }
+
+#ifdef __APPLE__
+  // Accessory startup is done: everything up to here ran with order-front
+  // suppressed, so the window was never on screen. Make sure it is genuinely
+  // ordered out, then lift the suppression so WINOP show works normally (the
+  // socket loop hasn't started yet, so no show can have been requested).
+  if (g_suppress_order_front) {
+    NSWindow *win = (NSWindow *)webview_get_native_handle(
+        g_w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+    [win orderOut:nil];
+    g_suppress_order_front = false;
+  }
+#endif
 
   std::thread(sock_read_loop).detach();
 

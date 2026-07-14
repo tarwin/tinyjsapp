@@ -54,7 +54,8 @@ A project is just:
 ```
 myapp/
   tinyjs.json            # { name, title, size, id, version, icon?, signIdentity?,
-                         #   urlScheme?, fileExtensions?, chrome?, update?, notarize? }
+                         #   urlScheme?, fileExtensions?, chrome?, update?, notarize?,
+                         #   activation? ("accessory" = menu-bar agent: no Dock, starts hidden) }
   icon.png                # 1024×1024 app icon (template ships a default)
   src/main.js             # backend: export const api = {...}; export function init(app) {}
   src/frontend/           # index.html + any local js/css/images
@@ -261,10 +262,10 @@ built apps.
 
 ```js
 tiny.tray.set({
-  title: 'MyApp',            // text in the menu bar (and/or icon: png path)
-  icon: 'tray.png',          // template image by default ({ template: false } to keep colors)
-  tooltip: 'My tiny app',
-  menu: [
+  title: 'MyApp',            // text in the menu bar (and/or an icon)
+  icon: 'sf:cup.and.saucer.fill', // SF Symbol by name — or a png path ('tray.png')
+  tooltip: 'My tiny app',    // pngs are template images by default
+  menu: [                    // ({ template: false } keeps their colors)
     { id: 'show', label: 'Show Window' },
     { separator: true },
     { id: 'quit', label: 'Quit' },
@@ -279,7 +280,28 @@ tiny.app.setDockVisible(false);       // no Dock icon — menu-bar-only app
 ```
 
 With no `menu`, clicking the icon fires `tiny.tray.onClick(fn)` instead —
-classic toggle-window behavior.
+classic toggle-window behavior. Want both? `primaryAction: true` keeps the
+menu on **right-click** (and ctrl-click) while a plain left click fires
+`onClick` — the Caffeine-style toggle:
+
+```js
+tiny.tray.set({ icon: 'sf:cup.and.saucer.fill', primaryAction: true,
+                menu: [{ id: 'quit', label: 'Quit' }] });
+tiny.tray.onClick(() => toggle());    // left click; backend: onTray(null, app)
+```
+
+And to launch as a menu-bar agent from the start — no Dock icon, no window,
+not even a flash of either — declare it in tinyjs.json instead of hiding
+things in `init()`:
+
+```json
+{ "activation": "accessory" }
+```
+
+Packaged apps get `LSUIElement` (the system never shows them in the Dock);
+dev mode behaves the same. The window exists but stays hidden until you call
+`tiny.win.show()` / `app.show()`, and `setDockVisible(true)` turns the app
+back into a regular one.
 
 ## Build for release
 
@@ -393,8 +415,8 @@ Developer ID (hardened runtime + `notarytool` are the remaining steps).
 | backend → launcher | `DLG <id> <op>[\t<arg>…]`  | native dialog (file panels, alert/confirm/prompt); launcher answers the call itself via `webview_return` |
 | backend → launcher | `MENUBEGIN` … `MENU <t>` / `ITEM id\tlabel\tkey` / `SEP` … `MENUEND` | declare custom menu bar menus |
 | launcher → backend | `MENU <id>`                | a custom menu item was clicked   |
-| backend → launcher | `TRAYBEGIN <t>\t<icon>\t<tmpl>\t<tip>` … `ITEM`/`SEP` … `TRAYEND` / `TRAYREMOVE` | declare/remove the menu bar status item |
-| launcher → backend | `TRAY <id>` / `TRAYCLICK`  | tray menu item / bare tray icon clicked |
+| backend → launcher | `TRAYBEGIN <t>\t<icon>\t<tmpl>\t<tip>\t<primary>` … `ITEM`/`SEP` … `TRAYEND` / `TRAYREMOVE` | declare/remove the menu bar status item (icon: png path or `sf:<symbol>`; primary=1: menu on right-click only) |
+| launcher → backend | `TRAY <id>` / `TRAYCLICK`  | tray menu item / tray icon clicked (no menu, or left click with primary=1) |
 | backend → launcher | `WINOP <op> [args]`        | hide, show, center, minimize, fullscreen, ontop, resizable, pos, dock, hideonclose |
 | launcher → backend | `DROP <json-paths>`        | files dragged onto the window (real paths) |
 | backend → launcher | `CTXBEGIN` … `ITEM`/`SEP` … `CTXEND` / `CTXCLEAR` | replace/restore the right-click menu |
