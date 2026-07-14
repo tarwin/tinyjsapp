@@ -12,3 +12,4 @@ demo/
 
 *.log
 .DS_Store
+native/tiny_client.h

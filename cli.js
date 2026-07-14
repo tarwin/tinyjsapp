@@ -176,6 +176,20 @@ async function loadConfig() {
   return { title: cfg.name, size: '960x640', id: 'com.example.' + cfg.name, ...cfg };
 }
 
+// Backend entry: cfg.backend, or the first of src/main.js|ts, backend/main.js|ts.
+// .ts entries (or any entry with cfg.backendBundle) are bundled with esbuild —
+// which also makes npm packages usable in the backend.
+async function resolveBackendEntry(cfg) {
+  if (cfg.backend) {
+    if (!(await exists(cfg.backend))) fail('backend entry not found: ' + cfg.backend);
+    return cfg.backend;
+  }
+  for (const p of ['src/main.js', 'src/main.ts', 'backend/main.js', 'backend/main.ts']) {
+    if (await exists(p)) return p;
+  }
+  fail('no backend entry found (src/main.js|ts, backend/main.js|ts, or "backend" in tinyjs.json)');
+}
+
 // Generate .build/app/: bridge + copied backend sources + an entry module,
 // in the layout `tjs app compile` expects (app dir with an app.json manifest
 // — it bundles the whole module graph into one executable). The frontend
@@ -192,39 +206,65 @@ async function generateBuild(cfg, dev = false) {
   await tjs.writeFile(B + '/bridge.js', await tjs.readFile(TOOL_DIR + 'runtime/bridge.js'));
   await tjs.writeFile(B + '/update.js', await tjs.readFile(TOOL_DIR + 'runtime/update.js'));
 
-  // Backend sources (everything under src/ except the frontend).
-  await tjs.makeDir(B + '/src');
-  const iter = await tjs.readDir('src');
-  for await (const e of iter) {
-    if (e.name === 'frontend') continue;
-    const s = 'src/' + e.name;
-    const d = B + '/src/' + e.name;
-    if (e.isDirectory) await copyTree(s, d);
-    else await tjs.writeFile(d, await tjs.readFile(s));
+  // Backend: TypeScript (or any entry, with npm packages) bundles via esbuild;
+  // plain JS copies sources as before.
+  const backendEntry = await resolveBackendEntry(cfg);
+  const entryDir = backendEntry.includes('/') ? backendEntry.replace(/\/[^/]*$/, '') : '.';
+  let entryName = backendEntry.split('/').pop();
+  if (backendEntry.endsWith('.ts')) {
+    console.log('==> bundling backend (esbuild)');
+    await run(['npx', '--yes', 'esbuild', backendEntry, '--bundle', '--format=esm',
+               '--platform=neutral', '--main-fields=module,main',
+               '--external:tjs:*', '--log-level=warning',
+               '--outfile=' + B + '/src/main.js']);
+    entryName = 'main.js';
+  } else {
+    // Copy the backend dir (minus a nested frontend/, for src/ layouts).
+    await tjs.makeDir(B + '/src');
+    const iter = await tjs.readDir(entryDir);
+    for await (const e of iter) {
+      if (e.name === 'frontend') continue;
+      const s = entryDir + '/' + e.name;
+      const d = B + '/src/' + e.name;
+      if (e.isDirectory) await copyTree(s, d);
+      else await tjs.writeFile(d, await tjs.readFile(s));
+    }
   }
 
-  if (!(await exists('src/frontend/index.html'))) {
-    fail('src/frontend/index.html not found');
+  // Frontend: optional build hook (bundlers) or plain source dir; dev with a
+  // devUrl skips all of this — the dev server owns the frontend.
+  const fe = cfg.frontend ?? {};
+  const devUrl = dev ? fe.devUrl : null;
+  let frontendSrc = fe.dir ?? 'src/frontend';
+  if (!dev && fe.build) {
+    console.log('==> frontend build: ' + fe.build);
+    await run(['sh', '-c', fe.build]);
+    frontendSrc = fe.dist ?? 'dist';
   }
-  if (!dev) await copyTree('src/frontend', B + '/frontend');
+  if (!devUrl && !(await exists(frontendSrc + '/index.html'))) {
+    fail(frontendSrc + '/index.html not found');
+  }
+  if (!dev) await copyTree(frontendSrc, B + '/frontend');
 
   // Frontend location at runtime: dev uses the project sources in place;
   // packaged apps resolve relative to entry.js (.app Resources/app/) with a
   // fallback next to the executable for the bare compiled binary, where
   // import.meta.url throws.
-  const frontendResolver = dev
-    ? `const FRONTEND = ${JSON.stringify(tjs.cwd + '/src/frontend')};`
+  const frontendResolver = devUrl
+    ? `const FRONTEND = ${JSON.stringify(devUrl)};`
+    : dev
+    ? `const FRONTEND = ${JSON.stringify(tjs.cwd + '/' + frontendSrc)};`
     : `let FRONTEND;
 try { FRONTEND = decodeURIComponent(new URL('./frontend', import.meta.url).pathname); }
 catch { FRONTEND = tjs.exePath.replace(/\\/[^/]*$/, '') + '/frontend'; }`;
 
   let entry = `import { createApp } from './bridge.js';
-import * as appMod from './src/main.js';
+import * as appMod from './src/${entryName}';
 
 ${frontendResolver}
 
 const app = await createApp({
-  htmlPath: FRONTEND + '/index.html',
+  htmlPath: ${devUrl ? 'FRONTEND' : "FRONTEND + '/index.html'"},
   title: ${JSON.stringify(cfg.title)},
   size: ${JSON.stringify(cfg.size)},
   version: ${JSON.stringify(cfg.version || '0.0.0')},
@@ -247,7 +287,7 @@ const app = await createApp({
 if (appMod.init) appMod.init(app);
 `;
 
-  if (dev) {
+  if (dev && !devUrl) {
     // Hot-reload: any frontend change re-renders the page from disk in place.
     entry += `
 let reloadTimer = null;
@@ -273,11 +313,86 @@ tjs.exit(0);
   return B;
 }
 
+// Overlay tinyjs onto a fresh create-vite scaffold: config wired for the dev
+// server + build hook, a backend dir, ambient types, and the agent skill.
+// Vite's own templates stay current upstream — we never fork them.
+async function scaffoldViteTemplate(dir, name, template) {
+  console.log('==> npm create vite (' + template + ')');
+  await run(['npm', 'create', 'vite@latest', dir, '--yes', '--', '--template', template]);
+  const ts = template.endsWith('-ts');
+  const backendEntry = 'backend/main.' + (ts ? 'ts' : 'js');
+
+  await tjs.writeFile(dir + '/tinyjs.json', enc.encode(JSON.stringify({
+    name,
+    title: name,
+    size: '960x640',
+    id: 'com.example.' + name,
+    version: '0.1.0',
+    backend: backendEntry,
+    frontend: {
+      build: 'npm run build',
+      dist: 'dist',
+      dev: 'npm run dev',
+      devUrl: 'http://127.0.0.1:5173',
+    },
+  }, null, 2) + '\n'));
+
+  await tjs.makeDir(dir + '/backend', { recursive: true });
+  await tjs.writeFile(dir + '/' + backendEntry, enc.encode(
+`// tinyjs backend — full system access via txiki.js (the 'tjs' global).
+// Every api method is callable from the page: await tiny.api.call('hello', {...})
+export const api${ts ? ': Record<string, TinyApiHandler>' : ''} = {
+  hello: async ({ name }${ts ? ': { name: string }' : ''}) => 'hi ' + name + ' — from the backend',
+};
+
+export function init(app${ts ? ': TinyApp' : ''}) {
+  // window is up; push events with app.push('event', data)
+}
+`));
+
+  // Ambient types where each side's editor picks them up automatically.
+  for (const d of ['/src', '/backend']) {
+    await tjs.writeFile(dir + d + '/tiny.d.ts', await tjs.readFile(TOOL_DIR + 'template/types/tiny.d.ts'));
+    await tjs.writeFile(dir + d + '/tjs.d.ts', await tjs.readFile(TOOL_DIR + 'template/types/tjs.d.ts'));
+  }
+
+  // package.json: pin the dev port and make built asset paths relative
+  // (file:// documents need base './').
+  const pkgPath = dir + '/package.json';
+  const pkg = JSON.parse(dec.decode(await tjs.readFile(pkgPath)));
+  pkg.scripts = pkg.scripts ?? {};
+  // --host 127.0.0.1: modern node binds ::1 for 'localhost', which txiki's
+  // IPv4 fetch (our readiness probe) can't reach.
+  pkg.scripts.dev = 'vite --host 127.0.0.1 --port 5173 --strictPort';
+  pkg.scripts.build = String(pkg.scripts.build ?? 'vite build')
+    .replace('vite build', 'vite build --base=./');
+  await tjs.writeFile(pkgPath, enc.encode(JSON.stringify(pkg, null, 2) + '\n'));
+
+  await tjs.writeFile(dir + '/icon.png', await tjs.readFile(TOOL_DIR + 'template/icon.png'));
+  await tjs.makeDir(dir + '/.claude/skills/tinyjs', { recursive: true });
+  await tjs.writeFile(dir + '/.claude/skills/tinyjs/SKILL.md',
+    await tjs.readFile(TOOL_DIR + 'skill/SKILL.md'));
+
+  console.log(`created ${dir}/ (${template} + tinyjs)
+  cd ${dir}
+  npm install
+  tinyjs dev      # vite dev server + native window, HMR included
+  tinyjs build    # vite build + package .app`);
+}
+
 async function cmdNew() {
   const dir = args[0];
-  if (!dir) fail('usage: tinyjs new <dir>');
+  if (!dir) fail('usage: tinyjs new <dir> [--template vanilla|vanilla-ts|react|react-ts|vue|vue-ts|svelte|svelte-ts|solid|solid-ts]');
   if (await exists(dir)) fail(`'${dir}' already exists`);
   const name = dir.replace(/\/+$/, '').split('/').pop();
+
+  const ti = args.indexOf('--template');
+  if (ti !== -1) {
+    const template = (args[ti + 1] ?? '').replace(/^=/, '');
+    if (!template) fail('--template needs a value (e.g. react-ts)');
+    await scaffoldViteTemplate(dir, name, template);
+    return;
+  }
 
   await copyTree(TOOL_DIR + 'template', dir);
   const cfgPath = dir + '/tinyjs.json';
@@ -298,6 +413,34 @@ async function cmdNew() {
 async function cmdDev() {
   const cfg = await loadConfig();
   maybeNotifyUpdate(); // fire-and-forget; prints if a newer release exists
+
+  // Frontend dev server (vite etc.): spawn it, wait until it responds, and
+  // point the window at it. HMR replaces tinyjs' own frontend watcher; the
+  // tiny.* bridge is injected into any origin, so it works over http too.
+  let devServer = null;
+  const fe = cfg.frontend ?? {};
+  if (fe.devUrl) {
+    if (fe.dev) {
+      console.log('==> starting frontend dev server: ' + fe.dev);
+      devServer = tjs.spawn(['sh', '-c', fe.dev], { stdout: 'inherit', stderr: 'inherit' });
+    }
+    // Probe both spellings: 'localhost' may be ::1-only (modern node) which
+    // txiki's fetch can't reach even when the server is up.
+    const probes = [fe.devUrl];
+    if (fe.devUrl.includes('//localhost')) probes.push(fe.devUrl.replace('//localhost', '//127.0.0.1'));
+    const deadline = Date.now() + 60000;
+    let up = false;
+    while (!up && Date.now() < deadline) {
+      for (const u of probes) {
+        try { await fetch(u, { method: 'HEAD' }); up = true; break; } catch {}
+      }
+      if (!up) await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!up) {
+      devServer?.kill();
+      fail('frontend dev server did not respond at ' + fe.devUrl);
+    }
+  }
 
   // Frontend changes hot-reload inside the app process (see the dev entry);
   // backend changes need a fresh process, so we watch and restart.
@@ -324,7 +467,10 @@ async function cmdDev() {
       env: { ...tjs.env, TINYJS_LAUNCHER: TOOL_DIR + 'native/launcher' },
     });
     const st = await child.wait();
-    if (!restarting) tjs.exit(st.exit_status ?? 0);
+    if (!restarting) {
+      devServer?.kill();
+      tjs.exit(st.exit_status ?? 0);
+    }
   }
 }
 
@@ -548,7 +694,9 @@ switch (cmd) {
     console.log(`tinyjs — tiny desktop apps with txiki.js + webview
 
 usage:
-  tinyjs new <dir>    scaffold a new app
+  tinyjs new <dir>    scaffold a new app (zero dependencies)
+                        --template react-ts|vue-ts|solid-ts|svelte-ts|vanilla-ts|…
+                        scaffolds create-vite + tinyjs overlay instead
   tinyjs dev          run the app in the current directory
   tinyjs build        build dist/<name> and dist/<Name>.app (--dmg: also a disk image)
   tinyjs publish      build + zip the .app + auto-update manifest

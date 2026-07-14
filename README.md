@@ -49,6 +49,16 @@ page re-renders in place, caches bypassed (no restart, backend state
 survives); edit backend sources and the process restarts automatically.
 `TINYJS_DEBUG=1 tinyjs dev` traces every message crossing the bridge.
 
+**Frameworks welcome:** `tinyjs new myapp --template react-ts` (or vue-ts,
+svelte-ts, solid-ts, vanilla-ts, …) scaffolds a Vite app wired to tinyjs —
+`tinyjs dev` runs Vite's dev server with HMR inside the native window, and
+`tinyjs build` ships the built assets as usual. TypeScript backends are
+bundled with esbuild automatically (which also makes npm packages usable in
+the backend). The zero-dependency default scaffold is unchanged.
+
+The `tiny` global is injected into every page by the launcher — no script
+tag needed — and ships with full TypeScript definitions (`types/tiny.d.ts`).
+
 A project is just:
 
 ```
@@ -102,8 +112,7 @@ st.run('hello'); st.finalize();
 db.prepare('SELECT * FROM notes').all();   // [{ id: 1, text: 'hello' }]
 ```
 
-Frontend — include `tiny.js` (from the template); everything injected lives
-under the `tiny` namespace:
+Frontend — the `tiny` global is injected into every page automatically:
 
 ```js
 const greeting = await tiny.api.call('hello', { name: 'world' });  // request/response

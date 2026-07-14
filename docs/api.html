@@ -99,7 +99,10 @@
 
   <section id="cli">
     <h2>cli</h2>
-    <pre>tinyjs new &lt;dir&gt;    <i># scaffold an app</i>
+    <pre>tinyjs new &lt;dir&gt;    <i># scaffold an app (zero dependencies)</i>
+tinyjs new &lt;dir&gt; --template react-ts|vue-ts|svelte-ts|…
+                    <i>#   Vite + tinyjs: HMR dev server in the native window,</i>
+                    <i>#   TypeScript backend bundled with esbuild (npm pkgs ok)</i>
 tinyjs dev          <i># run with hot reload (frontend swaps in place,</i>
                     <i>#   backend restarts; TINYJS_DEBUG=1 traces the bridge)</i>
 tinyjs build        <i># dist/&lt;name&gt; binary + codesigned dist/&lt;Name&gt;.app</i>
@@ -122,6 +125,11 @@ tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i>
   "urlScheme": "myapp",         <i>// deep links: myapp://…</i>
   "fileExtensions": ["md"],     <i>// "Open With" file associations</i>
   "chrome": { "frame": false, "vibrancy": "hud" },  <i>// frameless window</i>
+  "backend": "backend/main.ts",           <i>// entry; .ts → esbuild bundle</i>
+  "frontend": {                           <i>// bundler hooks (Vite etc.)</i>
+    "build": "npm run build", "dist": "dist",
+    "dev": "npm run dev", "devUrl": "http://127.0.0.1:5173"
+  },
   "activation": "accessory",    <i>// menu-bar agent: no Dock icon, starts hidden (no flash)</i>
   "update": { "url": "https://…/manifest.json" },
   "notarize": { "profile": "my-notary-profile" }

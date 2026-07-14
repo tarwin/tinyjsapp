@@ -4,6 +4,23 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.10.0 — 2026-07-13
+
+- **Vite / React / Vue / TypeScript** — `tinyjs new myapp --template react-ts`
+  (vue-ts, svelte-ts, solid-ts, vanilla-ts, …) scaffolds create-vite wired to
+  tinyjs. `tinyjs dev` runs the Vite dev server with HMR inside the native
+  window (`frontend.devUrl`); `tinyjs build` runs `frontend.build` and ships
+  `frontend.dist`. The zero-dependency default scaffold is unchanged.
+- **TypeScript backends** — a `.ts` backend entry (configurable via
+  `"backend"`) is bundled with esbuild, which also makes npm packages usable
+  in the backend.
+- **`tiny` is injected everywhere** — no `tiny.js` script tag; every page in
+  every window (file:// or dev server) gets the global automatically.
+- **TypeScript definitions** — `types/tiny.d.ts` ships in scaffolds: the full
+  `tiny.*` surface, `TinyApp`, `TinyApiHandler`, window state, menus, chrome.
+- Vite builds run under `file://` (WebKit file-access flags — module scripts
+  with `crossorigin` now load).
+
 ## 0.9.0 — 2026-07-13
 
 - **Menu-bar agents** — `"activation": "accessory"` in tinyjs.json launches

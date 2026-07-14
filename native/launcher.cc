@@ -104,6 +104,7 @@
 #include <Carbon/Carbon.h> // RegisterEventHotKey (global hotkeys)
 #include <objc/message.h>
 #include <objc/runtime.h>
+#include "tiny_client.h" // generated from runtime/tiny.js (gen-client.sh)
 #endif
 
 #include <map>
@@ -1721,6 +1722,13 @@ static void attach_tiny_bridge(WKUserContentController *ucc,
          injectionTime:WKUserScriptInjectionTimeAtDocumentStart
       forMainFrameOnly:YES] autorelease];
   [ucc addUserScript:script];
+  // The tiny.* client library rides along — every page in every window gets
+  // window.tiny with no script tag (dev servers and file pages alike).
+  WKUserScript *client = [[[WKUserScript alloc]
+        initWithSource:[NSString stringWithUTF8String:TINY_CLIENT_JS]
+         injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+      forMainFrameOnly:YES] autorelease];
+  [ucc addUserScript:client];
   // main window: handler ownership parked here (never removed)
   if (winid != "main")
     g_windows[winid].handler = h;
@@ -1763,6 +1771,7 @@ struct WinOpenReq {
 };
 
 static void enable_webgpu_prefs(id preferences); // defined in WebGPU section
+static void enable_file_access(WKWebViewConfiguration *cfg); // ditto
 
 static void do_winopen(webview_t w, void *arg) {
   WinOpenReq *req = static_cast<WinOpenReq *>(arg);
@@ -1778,6 +1787,7 @@ static void do_winopen(webview_t w, void *arg) {
     WKWebViewConfiguration *cfg =
         [[[WKWebViewConfiguration alloc] init] autorelease];
     enable_webgpu_prefs(cfg.preferences);
+    enable_file_access(cfg);
     TinyWindow &tw = g_windows[req->id]; // create slot first (attach parks handler)
     attach_tiny_bridge(cfg.userContentController, req->id);
 
@@ -1798,9 +1808,15 @@ static void do_winopen(webview_t w, void *arg) {
     wv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [win.contentView addSubview:wv];
 
-    NSURL *url = [NSURL fileURLWithPath:ns(req->page)];
-    [wv loadFileURL:url
-        allowingReadAccessToURL:[url URLByDeletingLastPathComponent]];
+    if (req->page.rfind("http://", 0) == 0 ||
+        req->page.rfind("https://", 0) == 0) {
+      // Dev-server pages (devUrl mode); the bridge shim injects the same way.
+      [wv loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:ns(req->page)]]];
+    } else {
+      NSURL *url = [NSURL fileURLWithPath:ns(req->page)];
+      [wv loadFileURL:url
+          allowingReadAccessToURL:[url URLByDeletingLastPathComponent]];
+    }
 
     TinyWinDelegate *del = [[TinyWinDelegate alloc] init];
     del.winId = ns(req->id);
@@ -1932,11 +1948,27 @@ static void enable_webgpu_prefs(id preferences) {
     }
   }
 }
+// file:// pages are opaque origins, so module scripts with `crossorigin`
+// (every Vite build) fail CORS. These private-but-stable flags make
+// file→file loads same-origin, exactly like Tauri's wry does.
+static void enable_file_access(WKWebViewConfiguration *cfg) {
+  @try {
+    [cfg.preferences setValue:@YES forKey:@"allowFileAccessFromFileURLs"];
+  } @catch (NSException *) {
+  }
+  @try {
+    [cfg setValue:@YES forKey:@"allowUniversalAccessFromFileURLs"];
+  } @catch (NSException *) {
+  }
+}
+
 static void enable_webgpu(webview_t w) {
   WKWebView *wv = (WKWebView *)webview_get_native_handle(
       w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
-  if (wv)
+  if (wv) {
     enable_webgpu_prefs(wv.configuration.preferences);
+    enable_file_access(wv.configuration);
+  }
 }
 #endif
 

@@ -150,7 +150,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   }
 
   const writer = writable.getWriter();
-  const frontendDir = htmlPath ? htmlPath.replace(/\/[^/]*$/, '') : null;
+  // Frontend base for win.open page resolution: a directory in file mode, or
+  // the dev-server origin when htmlPath is a URL (devUrl mode).
+  const isUrl = (s) => /^https?:\/\//i.test(String(s ?? ''));
+  const frontendDir = htmlPath
+    ? (isUrl(htmlPath) ? htmlPath.replace(/\/+$/, '') : htmlPath.replace(/\/[^/]*$/, ''))
+    : null;
 
   // Read-backs: GET <qid> <what> → launcher answers GOT <qid> <json>.
   let qidSeq = 1;
@@ -321,8 +326,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // runs the same tiny.* bridge; win.* calls from its page target itself.
     openWindow(id, { page, title, size } = {}) {
       let p = String(page ?? 'index.html');
-      if (!p.startsWith('/')) {
-        if (!frontendDir) throw new Error('win.open needs an absolute page path here');
+      if (!isUrl(p) && !p.startsWith('/')) {
+        if (!frontendDir) throw new Error('win.open needs an absolute page path or URL here');
         p = frontendDir + '/' + p;
       }
       send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400')].join('\t'));

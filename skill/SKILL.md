@@ -13,7 +13,10 @@ socket — no HTTP server, no ports.
 ## Commands
 
 ```sh
-tinyjs new <dir>    # scaffold
+tinyjs new <dir>    # scaffold (zero dependencies)
+tinyjs new <dir> --template react-ts|vue-ts|svelte-ts|solid-ts|vanilla-ts|…
+                    #   create-vite + tinyjs overlay: HMR dev server in the
+                    #   native window, esbuild-bundled TS backend (npm pkgs ok)
 tinyjs dev          # run with hot reload (frontend edits swap in place;
                     #   backend edits restart the process)
 tinyjs build        # dist/<name> binary + dist/<Name>.app (codesigned)
@@ -29,7 +32,10 @@ TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        update?: { url: "https://…/manifest.json" },
                        urlScheme?: "myapp", fileExtensions?: ["md"],
-                       chrome?: { frame, trafficLights, transparent, vibrancy } }
+                       chrome?: { frame, trafficLights, transparent, vibrancy },
+                       backend?: "backend/main.ts",   // .ts → esbuild bundle
+                       frontend?: { build: "npm run build", dist: "dist",
+                                    dev: "npm run dev", devUrl: "http://127.0.0.1:5173" } }
 icon.png             1024×1024 app icon
 src/main.js          backend (see below)
 src/frontend/        index.html + js/css/images — served as real files
@@ -66,9 +72,10 @@ Runtime is txiki.js (`tjs` global): `tjs.readFile/writeFile/readDir/stat`,
 FFI. Docs: https://txikijs.org. Gotchas: streams need `getReader()` (no
 `for await`); `tjs.cwd` is a property; spawn stdio silencer is `'ignore'`.
 
-## Frontend (include tiny.js before your code)
+## Frontend
 
-Everything injected lives under `tiny`:
+The `tiny` global is injected into every page automatically (no script tag);
+TypeScript definitions live in types/tiny.d.ts (TinyApiHandler, TinyApp, …):
 
 ```js
 await tiny.api.call('method', { params })   // -> backend api.<method>

@@ -31,6 +31,7 @@ if [ ! -x bin/tjs ]; then
 fi
 
 echo "==> compiling launcher"
+./native/gen-client.sh
 c++ -std=c++17 -x objective-c++ -Inative/include native/launcher.cc \
   -o native/launcher -framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -ldl
 
