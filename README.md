@@ -90,7 +90,10 @@ export function init(app) {          // window is up
   // startDrag(), zoom(), tray.set/remove,
   // updateMenuItem(id, patch), getMenuItem(id), info, store.get/set/delete/all,
   // hotkey.register(id, combo)/unregister(id), setContextMenu(items),
-  // update.check()/update.install()
+  // update.check()/update.install(),
+  // clipboard.read()/write(data)/changeCount()/watch(ms)/unwatch(),
+  // keystroke(combo), paste(), permissions.check(name)/request(name),
+  // mousePosition(), show({ activate: false })
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -134,7 +137,19 @@ tiny.win.minimize();  tiny.win.restore();
 tiny.win.fullscreen();  tiny.win.setFullscreen(true);   // toggle / absolute
 tiny.win.setAlwaysOnTop(true);  tiny.win.setResizable(false);
 tiny.win.hide();  tiny.win.show();
+// hide() hides the APP (NSApp hide) — macOS returns focus to the previously
+// active app on its own, so a palette can hide() then app.paste() with no
+// frontmost-pid bookkeeping. show() re-activates;
+tiny.win.show({ activate: false });  // …or surface WITHOUT stealing focus
+                                     // (overlay/HUD panels)
 tiny.win.setHideOnClose(true);  // close button hides instead of quitting
+
+// global cursor position (same top-left coords as setPosition — handy for
+// popping a palette at the mouse)
+const { x, y, window, screen } = await tiny.app.mousePosition();
+// window = relative to this window's content area, clientX/clientY units,
+//          valid even while the cursor is OUTSIDE it: { x, y, inside }
+// screen = the display the cursor is on: { x, y, width, height, scale }
 
 // frameless / transparent / vibrancy windows (native resize + focus kept)
 tiny.win.setChrome({ frame: false, trafficLights: false, vibrancy: 'hud' });
@@ -172,6 +187,40 @@ tiny.menu.onContext((id) => ...);
 const { dark } = await tiny.theme.get();
 tiny.theme.on((dark) => document.body.classList.toggle('dark', dark));
 tiny.api.on('sleep', () => ...);  tiny.api.on('wake', () => ...);
+
+// clipboard — native NSPasteboard in the launcher process (no pbpaste/
+// osascript spawns, no scratch files, multi-file writes never lose the tail)
+const clip = await tiny.clipboard.read();
+// { kind: 'files'|'image'|'color'|'text'|'empty', changeCount, text, html,
+//   paths, image, color } — image is a png temp path, valid until the
+// clipboard changes again (copy the file to keep it)
+tiny.clipboard.write({ text: 'hi' });                    // any combination of
+tiny.clipboard.write({ paths: ['/tmp/a.png', '/tmp/b.png'] });  // text, html,
+tiny.clipboard.write({ image: pngPathOrBase64, color: '#ff8800' }); // paths…
+await tiny.clipboard.changeCount();          // cheap "did it change?" probe
+tiny.clipboard.watch(500);                   // launcher-side change polling
+tiny.clipboard.onChange(({ changeCount, self }) => ...);  // self = own write
+// backend: same api as app.clipboard.*; a createApp onClipboardChange
+// handler auto-starts the watcher
+
+// drag files OUT of the app — into Finder, Slack, anywhere (real files).
+// Must be called from a mousedown handler while the button is held:
+row.addEventListener('mousedown', () =>
+  tiny.win.startDrag({ files: ['/tmp/report.pdf'], image: undefined }));
+
+// native keystrokes — a CGEvent posted by the launcher. ONE permission
+// (Accessibility) whose prompt names your app; no osascript, no spawn.
+await tiny.app.keystroke('cmd+v');           // -> { ok, trusted }
+await tiny.app.paste();                      // = keystroke('cmd+v'); call
+                                             // win.hide() first so the paste
+                                             // lands in the frontmost app
+
+// permissions — check before use, build onboarding instead of failing
+await tiny.app.permissions.check('accessibility');
+// 'granted' | 'denied' | 'undetermined' | 'unsupported'
+await tiny.app.permissions.request('accessibility');  // prompt/open Settings
+// names: 'accessibility', 'screen', 'notifications' (packaged apps),
+//        'automation' (System Events) or 'automation:<bundle-id>'
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null
@@ -337,6 +386,53 @@ Developer ID, `tinyjs notarize` submits the built .app via `notarytool`
 (keychain profile from tinyjs.json `"notarize": { "profile": … }` or
 `TINYJS_NOTARY_PROFILE`) and staples the ticket.
 
+### Distributing to other people (Developer ID + notarization)
+
+The ad-hoc-signed default runs fine on **your** Mac, but on anyone else's,
+Gatekeeper blocks it: recipients must approve it in System Settings →
+Privacy & Security → "Open Anyway" (on macOS 15+ the old right-click-Open
+trick no longer works) or strip quarantine with
+`xattr -d com.apple.quarantine`. Tolerable for friends and internal tools;
+hostile for the public.
+
+For frictionless installs you need a **Developer ID Application**
+certificate plus notarization, and both require the paid
+[Apple Developer Program](https://developer.apple.com/programs/) ($99/year).
+A free Apple ID only issues "Apple Development" certificates, which are
+valid on your own registered devices — not for distribution. One-time setup:
+
+1. **Enroll** at [developer.apple.com](https://developer.apple.com/programs/enroll/).
+2. **Create the certificate**: Xcode → Settings → Accounts → your Apple ID →
+   Manage Certificates → **+** → *Developer ID Application* (or create and
+   download it from the developer portal). It lands in your login keychain.
+3. **Copy its exact name** into `tinyjs.json`:
+
+   ```sh
+   security find-identity -v -p codesigning
+   # 1) ABC123… "Developer ID Application: Your Name (TEAMID123)"
+   ```
+
+   ```json
+   { "signIdentity": "Developer ID Application: Your Name (TEAMID123)" }
+   ```
+
+   (or export `TINYJS_SIGN_IDENTITY` instead). `tinyjs build` now signs with
+   the hardened runtime and a secure timestamp — notarization-ready.
+4. **Store notarization credentials** (once): generate an app-specific
+   password at [account.apple.com](https://account.apple.com) (Sign-In &
+   Security → App-Specific Passwords), then
+
+   ```sh
+   xcrun notarytool store-credentials tinyjs-notary \
+     --apple-id you@example.com --team-id TEAMID123 \
+     --password <app-specific-password>
+   ```
+
+   and point `tinyjs.json` at the profile:
+   `"notarize": { "profile": "tinyjs-notary" }`.
+5. **Ship**: `tinyjs build && tinyjs notarize` (add `--dmg` to the build for
+   an installer image). The stapled .app opens anywhere, no warnings.
+
 ### Shipping updates (auto-update)
 
 Point `tinyjs.json` at a manifest you host anywhere (any static host —
@@ -383,8 +479,9 @@ MyApp.app/Contents/
 ```
 
 Clean Mach-Os plus data files means the whole bundle passes
-`codesign --verify --strict --deep` — and is notarizable once you use a real
-Developer ID (hardened runtime + `notarytool` are the remaining steps).
+`codesign --verify --strict --deep` — and with a real Developer ID the build
+signs with the hardened runtime automatically, so `tinyjs notarize` is the
+only remaining step.
 
 ---
 
@@ -426,13 +523,21 @@ Developer ID (hardened runtime + `notarytool` are the remaining steps).
 | launcher → backend | `MENU <id>`                | a custom menu item was clicked   |
 | backend → launcher | `TRAYBEGIN <t>\t<icon>\t<tmpl>\t<tip>\t<primary>` … `ITEM`/`SEP` … `TRAYEND` / `TRAYREMOVE` | declare/remove the menu bar status item (icon: png path or `sf:<symbol>`; primary=1: menu on right-click only) |
 | launcher → backend | `TRAY <id>` / `TRAYCLICK`  | tray menu item / tray icon clicked (no menu, or left click with primary=1) |
-| backend → launcher | `WINOP <op> [args]`        | hide, show, center, minimize, fullscreen, ontop, resizable, pos, dock, hideonclose |
+| backend → launcher | `WINOP <op> [args]`        | hide (main = NSApp hide: focus returns to the previous app), show [0 = don't steal focus], center, minimize, fullscreen, ontop, resizable, pos, dock, hideonclose |
+| backend → launcher | `GET <qid> mouse`          | global cursor position + its screen (answered as `GOT`) |
 | launcher → backend | `DROP <json-paths>`        | files dragged onto the window (real paths) |
 | backend → launcher | `CTXBEGIN` … `ITEM`/`SEP` … `CTXEND` / `CTXCLEAR` | replace/restore the right-click menu |
 | launcher → backend | `CTX <id>`                 | a context menu item was clicked  |
 | backend → launcher | `HKREG <id>\t<combo>` / `HKUNREG <id>` | global hotkeys       |
 | launcher → backend | `HOTKEY <id>`              | a global hotkey fired            |
 | launcher → backend | `SYS theme dark\|light` / `SYS sleep` / `SYS wake` | system events (theme also once at startup) |
+| backend → launcher | `CLIPWRITE <text>\t<html>\t<image>\t<color>\t<path>…` | write the clipboard (fields escape `\n`/`\t`; image: png path or base64) |
+| backend → launcher | `GET <qid> clipboard[:count]` | read the clipboard (answered as `GOT`) |
+| backend → launcher | `CLIPWATCH <ms>`           | poll changeCount in the launcher (0 = stop) |
+| launcher → backend | `CLIPCHANGE <count> <self01>` | the clipboard changed (self=1: our own write) |
+| backend → launcher | `DRAGOUT[@win] <image>\t<path>…` | drag real files out of the window (from a page mousedown) |
+| backend → launcher | `KEYSTROKE <qid> <combo>`  | post a CGEvent keystroke; answers `GOT <qid> {ok, trusted}` |
+| backend → launcher | `PERMCHK <qid> <name>` / `PERMREQ <qid> <name>` | check/request a TCC permission; answers `GOT <qid> {status}` |
 | backend → launcher | `PRINT`                    | native print panel               |
 | backend → launcher | `RELOAD`                   | re-render the page from disk, caches bypassed (hot-reload) |
 | backend → launcher | `QUIT`                     | close the window                 |

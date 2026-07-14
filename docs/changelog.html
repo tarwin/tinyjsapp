@@ -69,6 +69,19 @@
   <section>
 
     <div class="rel">
+      <h2>0.11.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b>Native clipboard</b> — <code>tiny.clipboard</code> read/writes text, html, <em>multiple</em> files, images (png in/out), and colors via NSPasteboard in the launcher process; <code>changeCount()</code> plus <code>watch()</code>/<code>onChange</code> change events with a <code>self</code> flag for your own writes. No more per-second osascript/pbpaste spawns, scratch files, or lost multi-file writes.</li>
+        <li><b>Drag files out of the app</b> — <code>tiny.win.startDrag({ files, image? })</code> from a page mousedown starts a real native drag session: drop into Finder, Slack, anywhere.</li>
+        <li><b>Native keystrokes</b> — <code>tiny.app.keystroke('cmd+v')</code> / <code>tiny.app.paste()</code> post a CGEvent from the launcher: one permission (Accessibility) whose prompt names <em>your app</em>, not osascript or the terminal.</li>
+        <li><b>Permission checks</b> — <code>tiny.app.permissions.check/request()</code> for <code>accessibility</code>, <code>screen</code>, <code>notifications</code>, <code>automation[:&lt;bundle-id&gt;]</code> → granted / denied / undetermined, so apps can onboard instead of failing at first use.</li>
+        <li><code>hide()</code> now hides the <em>app</em> — macOS returns focus to the previously active app on its own, so palettes can hide-then-paste with no frontmost bookkeeping. <code>show({ activate: false })</code> surfaces overlay/HUD windows without stealing focus.</li>
+        <li><code>tiny.app.mousePosition()</code> — the cursor in global, window-relative, and screen coordinates (open a palette at the mouse).</li>
+        <li>Fix: builds with a real <code>signIdentity</code> sign with the hardened runtime + secure timestamp, as notarization requires; codesign errors are no longer swallowed.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.10.2 <span class="date">2026-07-13</span></h2>
       <ul>
         <li>Fix: fire-and-forget <code>app.notify()</code> could crash the backend in dev builds (unhandled rejection from the osascript fallback). notify never rejects now — it resolves <code>false</code> if delivery failed.</li>

@@ -35,7 +35,8 @@
 //                                                    patch a live item ('' =
 //                                                    leave unchanged)
 //                         GET <qid> <what>           read-back query; what =
-//                                                    win | item:<id>
+//                                                    win | item:<id> | mouse |
+//                                                    clipboard[:count]
 //                         TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip>\t<primary01> /
 //                         ITEM / SEP / TRAYEND       declare a menu bar status
 //                                                    item (applied on TRAYEND;
@@ -45,8 +46,12 @@
 //                                                    sends TRAYCLICK, the menu
 //                                                    opens on right-click)
 //                         TRAYREMOVE                 remove the status item
-//                         WINOP <op> [args]          window ops: hide, show,
-//                                                    center, minimize,
+//                         WINOP <op> [args]          window ops: hide (main:
+//                                                    NSApp hide — focus returns
+//                                                    to the previous app),
+//                                                    show [0|1] (0 = don't
+//                                                    steal focus), center,
+//                                                    minimize,
 //                                                    fullscreen [0|1], restore,
 //                                                    ontop 0|1,
 //                                                    resizable 0|1, pos <x> <y>,
@@ -66,6 +71,27 @@
 //                                                    material name | none)
 //                         DRAGWIN                    start a native window drag
 //                                                    (page drag regions)
+//                         DRAGOUT[@win] <image>\t<path>… start dragging real
+//                                                    files OUT of the window
+//                                                    (from a page mousedown;
+//                                                    image: optional drag-image
+//                                                    png, '' = file icons)
+//                         CLIPWRITE <text>\t<html>\t<image>\t<color>\t<path>…
+//                                                    write the clipboard (fields
+//                                                    wire-escaped: \n \t \r \\;
+//                                                    empty = skip; image = png
+//                                                    path or base64/data-url)
+//                         CLIPWATCH <ms>             poll the clipboard change
+//                                                    count every <ms> (0 = stop)
+//                         KEYSTROKE <qid> <combo>    post a CGEvent keystroke
+//                                                    (e.g. cmd+v); answers
+//                                                    GOT <qid> {ok, trusted}
+//                         PERMCHK <qid> <name> /
+//                         PERMREQ <qid> <name>       check/request a TCC
+//                                                    permission (accessibility,
+//                                                    screen, notifications,
+//                                                    automation[:<bundle-id>]);
+//                                                    answers GOT <qid> {status}
 //                         PRINT                      native print panel
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
@@ -85,6 +111,8 @@
 //                         DROP <json-paths>          files dragged onto the
 //                                                    window (real paths)
 //                         GOT <qid> <json>           read-back answer
+//                         CLIPCHANGE <count> <self01> the clipboard changed
+//                                                    (self=1: our own CLIPWRITE)
 //                         NOTIFYCLICK <id>           a notification banner was
 //                                                    clicked
 //
@@ -136,6 +164,7 @@ static std::mutex g_write_mutex;
 static std::string g_html_path; // empty when target is an http(s) URL
 static std::string g_app_name = "tinyjs";
 static std::string g_app_version = "0.0.0";
+static bool g_bundle_mode = false; // launcher IS the .app executable (attach mode)
 #ifdef __APPLE__
 // Secondary windows (the main window lives in the webview library).
 struct TinyWindow {
@@ -302,6 +331,23 @@ static void do_reload(webview_t w, void *) {
 // --- native dialogs (macOS) -------------------------------------------------
 // Runs on the UI thread via webview_dispatch; answers the pending page call
 // directly with webview_return, so the backend never sees a reply line.
+
+// CLIPWRITE/DRAGOUT payload fields escape \n \t \r \\ so multi-line clipboard
+// text survives the newline-delimited, tab-separated wire; this reverses
+// runtime/bridge.js esc().
+static std::string wire_unescape(const std::string &s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] == '\\' && i + 1 < s.size()) {
+      char c = s[++i];
+      out += c == 'n' ? '\n' : c == 't' ? '\t' : c == 'r' ? '\r' : c;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
 
 static std::vector<std::string> split_tabs(const std::string &s) {
   std::vector<std::string> out;
@@ -735,10 +781,25 @@ static void do_winop(webview_t w, void *arg) {
       return;
     }
     if (*op == "hide") {
-      [win orderOut:nil];
-    } else if (*op == "show") {
+      // Main-window hide means "get out of the way": NSApp hide deactivates
+      // the app, so macOS hands focus back to the previously active app on
+      // its own (palette apps paste into it with no frontmost-pid dance).
+      // Secondary windows just order out.
+      if (is_main)
+        [NSApp hide:nil];
+      else
+        [win orderOut:nil];
+    } else if (*op == "show" || *op == "show 1") {
+      [NSApp unhide:nil];
       [NSApp activateIgnoringOtherApps:YES];
       [win makeKeyAndOrderFront:nil];
+    } else if (*op == "show 0") {
+      // Show without stealing focus (overlay/HUD panels): the window appears
+      // but the active app keeps keyboard focus; clicking it activates
+      // normally. (True non-activating click-through needs an NSPanel with
+      // NSWindowStyleMaskNonactivatingPanel — not what webview creates.)
+      [NSApp unhideWithoutActivation];
+      [win orderFrontRegardless];
     } else if (*op == "dock 0") {
       if (is_main)
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
@@ -1042,6 +1103,429 @@ static void install_system_observers() {
 }
 #endif
 
+// --- clipboard (macOS) ------------------------------------------------------------
+// Native NSPasteboard in this long-lived process: reads answer `GET <qid>
+// clipboard[:count]`, writes arrive as CLIPWRITE (multiple file URLs flush
+// reliably here — the short-lived-writer race osascript/pbcopy tricks hit
+// doesn't exist), and CLIPWATCH polls changeCount in-process (~free) instead
+// of apps spawning pbpaste/osascript.
+
+struct ClipWriteReq {
+  std::string text, html, image, color;
+  std::vector<std::string> paths;
+};
+
+#ifdef __APPLE__
+static NSTimer *g_clip_timer = nil;
+static NSInteger g_clip_seen = -1;
+static NSInteger g_clip_self = -1;    // changeCount produced by our own CLIPWRITE
+static NSInteger g_clip_png_count = -1;
+static std::string g_clip_png_path;   // materialized image, one per changeCount
+
+// image field: absolute png path, data: URL, or raw base64.
+static NSData *decode_image_field(const std::string &image) {
+  if (image.empty())
+    return nil;
+  if (image[0] == '/' || image[0] == '~')
+    return [NSData dataWithContentsOfFile:ns(image)];
+  std::string b64 = image;
+  size_t comma = image.find(',');
+  if (image.rfind("data:", 0) == 0 && comma != std::string::npos)
+    b64 = image.substr(comma + 1);
+  return [[[NSData alloc] initWithBase64EncodedString:ns(b64)
+                                              options:NSDataBase64DecodingIgnoreUnknownCharacters]
+      autorelease];
+}
+
+static bool parse_hex_color(const std::string &hex, CGFloat out[4]) {
+  std::string h = hex[0] == '#' ? hex.substr(1) : hex;
+  if (h.size() != 6 && h.size() != 8)
+    return false;
+  unsigned v = 0;
+  if (std::sscanf(h.c_str(), "%x", &v) != 1)
+    return false;
+  bool alpha = h.size() == 8;
+  out[0] = ((v >> (alpha ? 24 : 16)) & 0xff) / 255.0;
+  out[1] = ((v >> (alpha ? 16 : 8)) & 0xff) / 255.0;
+  out[2] = ((v >> (alpha ? 8 : 0)) & 0xff) / 255.0;
+  out[3] = alpha ? (v & 0xff) / 255.0 : 1.0;
+  return true;
+}
+
+static void do_clip_write(webview_t, void *arg) {
+  ClipWriteReq *req = static_cast<ClipWriteReq *>(arg);
+  @autoreleasepool {
+    NSPasteboard *pb = [NSPasteboard generalPasteboard];
+    [pb clearContents];
+    NSMutableArray *objs = [NSMutableArray array];
+    for (const std::string &p : req->paths) {
+      NSURL *u = [NSURL fileURLWithPath:ns(p)];
+      if (u)
+        [objs addObject:u];
+    }
+    NSData *png = decode_image_field(req->image);
+    if (png) {
+      NSPasteboardItem *pi = [[[NSPasteboardItem alloc] init] autorelease];
+      [pi setData:png forType:NSPasteboardTypePNG];
+      // TIFF alongside PNG: plenty of apps only look for TIFF.
+      NSBitmapImageRep *rep = [NSBitmapImageRep imageRepWithData:png];
+      NSData *tiff = rep ? [rep TIFFRepresentation] : nil;
+      if (tiff)
+        [pi setData:tiff forType:NSPasteboardTypeTIFF];
+      [objs addObject:pi];
+    }
+    if (!req->text.empty() || !req->html.empty()) {
+      NSPasteboardItem *pi = [[[NSPasteboardItem alloc] init] autorelease];
+      if (!req->text.empty())
+        [pi setString:ns(req->text) forType:NSPasteboardTypeString];
+      if (!req->html.empty())
+        [pi setString:ns(req->html) forType:NSPasteboardTypeHTML];
+      [objs addObject:pi];
+    }
+    CGFloat rgba[4];
+    if (!req->color.empty() && parse_hex_color(req->color, rgba)) {
+      NSColor *c = [NSColor colorWithSRGBRed:rgba[0] green:rgba[1] blue:rgba[2]
+                                       alpha:rgba[3]];
+      if (c)
+        [objs addObject:c];
+    }
+    if (objs.count)
+      [pb writeObjects:objs];
+    // Lets the watcher tag the resulting CLIPCHANGE as self-inflicted.
+    g_clip_self = [pb changeCount];
+  }
+  delete req;
+}
+
+static void do_clip_watch(webview_t, void *arg) {
+  int ms = *static_cast<int *>(arg);
+  delete static_cast<int *>(arg);
+  if (g_clip_timer) {
+    [g_clip_timer invalidate];
+    g_clip_timer = nil;
+  }
+  if (ms <= 0)
+    return;
+  if (ms < 100)
+    ms = 100;
+  g_clip_seen = [[NSPasteboard generalPasteboard] changeCount];
+  g_clip_timer = [NSTimer
+      scheduledTimerWithTimeInterval:ms / 1000.0
+                             repeats:YES
+                               block:^(NSTimer *) {
+                                 NSInteger c =
+                                     [[NSPasteboard generalPasteboard] changeCount];
+                                 if (c == g_clip_seen)
+                                   return;
+                                 g_clip_seen = c;
+                                 sock_write_line(
+                                     "CLIPCHANGE " + std::to_string((long)c) +
+                                     (c == g_clip_self ? " 1" : " 0"));
+                               }];
+}
+
+static std::string clipboard_json(bool count_only) {
+  NSPasteboard *pb = [NSPasteboard generalPasteboard];
+  NSInteger count = [pb changeCount];
+  if (count_only)
+    return "{\"changeCount\":" + std::to_string((long)count) + "}";
+
+  // files
+  NSArray *urls = [pb readObjectsForClasses:@[ [NSURL class] ]
+                                    options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
+  std::string paths = "[";
+  bool has_paths = false;
+  for (NSURL *u in urls) {
+    if (![u isFileURL])
+      continue;
+    if (has_paths)
+      paths += ",";
+    has_paths = true;
+    paths += json_escape([[u path] UTF8String]);
+  }
+  paths += "]";
+
+  NSString *text = [pb stringForType:NSPasteboardTypeString];
+  NSString *html = [pb stringForType:NSPasteboardTypeHTML];
+
+  // image → materialized as a png temp file, rewritten only when the
+  // clipboard actually changed (changeCount-keyed).
+  NSData *png = [pb dataForType:NSPasteboardTypePNG];
+  if (!png) {
+    NSData *tiff = [pb dataForType:NSPasteboardTypeTIFF];
+    if (tiff) {
+      NSBitmapImageRep *rep = [NSBitmapImageRep imageRepWithData:tiff];
+      png = rep ? [rep representationUsingType:NSBitmapImageFileTypePNG
+                                    properties:@{}]
+                : nil;
+    }
+  }
+  std::string image;
+  if (png) {
+    if (count != g_clip_png_count) {
+      if (!g_clip_png_path.empty())
+        unlink(g_clip_png_path.c_str());
+      std::string p = std::string([NSTemporaryDirectory() UTF8String]) +
+                      "tinyjs-clip-" + std::to_string(getpid()) + "-" +
+                      std::to_string((long)count) + ".png";
+      if ([png writeToFile:ns(p) atomically:YES]) {
+        g_clip_png_path = p;
+        g_clip_png_count = count;
+      }
+    }
+    if (count == g_clip_png_count)
+      image = g_clip_png_path;
+  }
+
+  std::string color;
+  NSArray *colors = [pb readObjectsForClasses:@[ [NSColor class] ] options:@{}];
+  if (colors.count) {
+    NSColor *c = [(NSColor *)colors[0]
+        colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+    if (c) {
+      char buf[16];
+      if (c.alphaComponent < 1.0)
+        std::snprintf(buf, sizeof(buf), "#%02x%02x%02x%02x",
+                      (int)(c.redComponent * 255 + 0.5),
+                      (int)(c.greenComponent * 255 + 0.5),
+                      (int)(c.blueComponent * 255 + 0.5),
+                      (int)(c.alphaComponent * 255 + 0.5));
+      else
+        std::snprintf(buf, sizeof(buf), "#%02x%02x%02x",
+                      (int)(c.redComponent * 255 + 0.5),
+                      (int)(c.greenComponent * 255 + 0.5),
+                      (int)(c.blueComponent * 255 + 0.5));
+      color = buf;
+    }
+  }
+
+  const char *kind = has_paths                       ? "files"
+                     : !image.empty()                ? "image"
+                     : !color.empty()                ? "color"
+                     : (text.length || html.length)  ? "text"
+                                                     : "empty";
+  std::string json = std::string("{\"kind\":\"") + kind + "\"";
+  json += ",\"changeCount\":" + std::to_string((long)count);
+  json += ",\"text\":" + (text.length ? json_escape([text UTF8String]) : "null");
+  json += ",\"html\":" + (html.length ? json_escape([html UTF8String]) : "null");
+  json += ",\"paths\":" + paths;
+  json += ",\"image\":" + (image.empty() ? "null" : json_escape(image));
+  json += ",\"color\":" + (color.empty() ? "null" : json_escape(color));
+  json += "}";
+  return json;
+}
+#else
+static void do_clip_write(webview_t, void *arg) { delete static_cast<ClipWriteReq *>(arg); }
+static void do_clip_watch(webview_t, void *arg) { delete static_cast<int *>(arg); }
+#endif
+
+// --- drag-out (macOS) -------------------------------------------------------------
+// DRAGOUT[@win] starts a native NSDraggingSession carrying real file URLs, so
+// a page mousedown can drag files into Finder/Slack/anywhere. Must arrive
+// while the mouse button is still down (same latency budget as DRAGWIN).
+
+struct DragOutReq {
+  std::string win, image;
+  std::vector<std::string> paths;
+};
+
+#ifdef __APPLE__
+static WKWebView *webview_for_id(webview_t w, const std::string &id); // below
+
+@interface TinyDragSource : NSObject <NSDraggingSource>
+@end
+@implementation TinyDragSource
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session
+    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+  return NSDragOperationCopy;
+}
+@end
+
+static TinyDragSource *g_drag_source = nil;
+
+static void do_dragout(webview_t w, void *arg) {
+  DragOutReq *req = static_cast<DragOutReq *>(arg);
+  @autoreleasepool {
+    WKWebView *wv = webview_for_id(w, req->win);
+    NSEvent *ev = [NSApp currentEvent];
+    // beginDraggingSession needs a live mouse-down; by the time the page's
+    // call crosses the bridge the latest event is usually LeftMouseDragged.
+    bool mouse_ok = ev && (ev.type == NSEventTypeLeftMouseDown ||
+                           ev.type == NSEventTypeLeftMouseDragged);
+    if (wv && mouse_ok && !req->paths.empty()) {
+      NSPoint at = [wv convertPoint:ev.locationInWindow fromView:nil];
+      NSImage *custom = nil;
+      if (!req->image.empty())
+        custom = [[[NSImage alloc] initWithContentsOfFile:ns(req->image)] autorelease];
+      NSMutableArray *items = [NSMutableArray array];
+      CGFloat off = 0;
+      for (const std::string &p : req->paths) {
+        NSURL *u = [NSURL fileURLWithPath:ns(p)];
+        if (!u)
+          continue;
+        NSDraggingItem *di =
+            [[[NSDraggingItem alloc] initWithPasteboardWriter:u] autorelease];
+        NSImage *img = custom ?: [[NSWorkspace sharedWorkspace] iconForFile:ns(p)];
+        NSSize sz = custom ? custom.size : NSMakeSize(32, 32);
+        if (sz.width > 160 || sz.height > 160) {
+          CGFloat s = 160 / (sz.width > sz.height ? sz.width : sz.height);
+          sz = NSMakeSize(sz.width * s, sz.height * s);
+        }
+        [di setDraggingFrame:NSMakeRect(at.x - sz.width / 2 + off,
+                                        at.y - sz.height / 2 + off, sz.width,
+                                        sz.height)
+                    contents:img];
+        custom = nil; // custom image decorates the top item only
+        off += 4;     // cascade the rest so a multi-file drag reads as a stack
+        [items addObject:di];
+      }
+      if (!g_drag_source)
+        g_drag_source = [[TinyDragSource alloc] init];
+      @try {
+        [wv beginDraggingSessionWithItems:items event:ev source:g_drag_source];
+      } @catch (NSException *) {
+      }
+    }
+  }
+  delete req;
+}
+#else
+static void do_dragout(webview_t, void *arg) { delete static_cast<DragOutReq *>(arg); }
+#endif
+
+// --- keystroke + permissions (macOS) ------------------------------------------------
+// KEYSTROKE posts a CGEvent from this process — one Accessibility grant that
+// names the app, instead of osascript→System Events (Automation +
+// Accessibility, spawn latency, prompts naming osascript/the terminal).
+// PERMCHK/PERMREQ let apps build onboarding instead of failing at first use.
+
+struct KeystrokeReq {
+  std::string qid, combo;
+};
+struct PermReq {
+  std::string qid, name;
+  bool request;
+};
+
+#ifdef __APPLE__
+static void do_keystroke(webview_t, void *arg) {
+  KeystrokeReq *req = static_cast<KeystrokeReq *>(arg);
+  CGEventFlags flags = 0;
+  std::string key;
+  std::stringstream ss(req->combo);
+  std::string part;
+  while (std::getline(ss, part, '+')) {
+    for (auto &c : part) c = (char)tolower(c);
+    if (part == "cmd" || part == "command" || part == "meta") flags |= kCGEventFlagMaskCommand;
+    else if (part == "ctrl" || part == "control") flags |= kCGEventFlagMaskControl;
+    else if (part == "alt" || part == "opt" || part == "option") flags |= kCGEventFlagMaskAlternate;
+    else if (part == "shift") flags |= kCGEventFlagMaskShift;
+    else key = part;
+  }
+  int code = keycode_for(key);
+  bool trusted = AXIsProcessTrusted();
+  if (code >= 0) {
+    CGEventRef down = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)code, true);
+    CGEventRef up = CGEventCreateKeyboardEvent(NULL, (CGKeyCode)code, false);
+    CGEventSetFlags(down, flags);
+    CGEventSetFlags(up, flags);
+    CGEventPost(kCGHIDEventTap, down);
+    CGEventPost(kCGHIDEventTap, up);
+    CFRelease(down);
+    CFRelease(up);
+  }
+  sock_write_line("GOT " + req->qid + " {\"ok\":" +
+                  (code >= 0 && trusted ? "true" : "false") +
+                  ",\"trusted\":" + (trusted ? "true" : "false") + "}");
+  delete req;
+}
+
+static void perm_reply(const std::string &qid, const char *status) {
+  sock_write_line("GOT " + qid + " {\"status\":\"" + status + "\"}");
+}
+
+static void do_perm(webview_t, void *arg) {
+  PermReq *req = static_cast<PermReq *>(arg);
+  std::string name = req->name, qid = req->qid;
+  bool ask = req->request;
+  delete req;
+
+  if (name == "accessibility") {
+    bool trusted;
+    if (ask) {
+      NSDictionary *opts = @{(NSString *)kAXTrustedCheckOptionPrompt : @YES};
+      trusted = AXIsProcessTrustedWithOptions((CFDictionaryRef)opts);
+    } else {
+      trusted = AXIsProcessTrusted();
+    }
+    perm_reply(qid, trusted ? "granted" : "denied");
+  } else if (name == "screen" || name == "screen-recording") {
+    bool ok = ask ? CGRequestScreenCaptureAccess() : CGPreflightScreenCaptureAccess();
+    perm_reply(qid, ok ? "granted" : "denied");
+  } else if (name == "notifications") {
+    // UNUserNotificationCenter needs a real bundle (see the notify section).
+    if (!g_bundle_mode) {
+      perm_reply(qid, "unsupported");
+      return;
+    }
+    UNUserNotificationCenter *nc = [UNUserNotificationCenter currentNotificationCenter];
+    if (ask) {
+      [nc requestAuthorizationWithOptions:(UNAuthorizationOptionAlert |
+                                           UNAuthorizationOptionSound |
+                                           UNAuthorizationOptionBadge)
+                        completionHandler:^(BOOL granted, NSError *) {
+                          perm_reply(qid, granted ? "granted" : "denied");
+                        }];
+    } else {
+      [nc getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *s) {
+        perm_reply(qid,
+                   s.authorizationStatus == UNAuthorizationStatusNotDetermined
+                       ? "undetermined"
+                   : s.authorizationStatus == UNAuthorizationStatusDenied
+                       ? "denied"
+                       : "granted");
+      }];
+    }
+  } else if (name == "automation" || name.rfind("automation:", 0) == 0) {
+    // Per-target: automation:<bundle-id>; bare = System Events. The consent
+    // dialog (and a possible target launch) can block, so ask off-main.
+    std::string bid = name == "automation" ? "com.apple.systemevents"
+                                           : name.substr(11);
+    dispatch_async(
+        dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+          AEAddressDesc addr;
+          OSStatus st = AECreateDesc(typeApplicationBundleID, bid.c_str(),
+                                     bid.size(), &addr);
+          if (st != noErr) {
+            perm_reply(qid, "undetermined");
+            return;
+          }
+          st = AEDeterminePermissionToAutomateTarget(&addr, typeWildCard,
+                                                     typeWildCard, ask);
+          AEDisposeDesc(&addr);
+          perm_reply(qid, st == noErr                              ? "granted"
+                          : st == errAEEventNotPermitted           ? "denied"
+                          : st == errAEEventWouldRequireUserConsent
+                              ? "undetermined"
+                              : "undetermined");
+        });
+  } else {
+    perm_reply(qid, "unsupported");
+  }
+}
+#else
+static void do_keystroke(webview_t, void *arg) {
+  KeystrokeReq *req = static_cast<KeystrokeReq *>(arg);
+  sock_write_line("GOT " + req->qid + " {\"ok\":false,\"trusted\":false}");
+  delete req;
+}
+static void do_perm(webview_t, void *arg) {
+  PermReq *req = static_cast<PermReq *>(arg);
+  sock_write_line("GOT " + req->qid + " {\"status\":\"unsupported\"}");
+  delete req;
+}
+#endif
+
 // --- custom context menu (macOS) -------------------------------------------------
 // CTXBEGIN, ITEM/SEP lines, CTXEND replaces the webview's right-click menu
 // with the declared items (clicks -> `CTX <id>`); CTXCLEAR restores WebKit's
@@ -1186,6 +1670,47 @@ static void do_get(webview_t w, void *arg) {
             (double)scr.backingScaleFactor);
         json = buf;
       }
+    } else if (req->what == "clipboard" || req->what == "clipboard:count") {
+      json = clipboard_json(req->what == "clipboard:count");
+    } else if (req->what == "mouse" || req->what.rfind("mouse:", 0) == 0) {
+      // Global cursor position in the same top-left coordinates WINOP pos
+      // and getState use, so setPosition(mouse.x, mouse.y) just works;
+      // `screen` is the display the cursor is on (frame in those coords).
+      // `window` is relative to the queried window's CONTENT area (top-left,
+      // same units as the page's clientX/clientY) — mouse:<winid> targets a
+      // secondary window, bare = main.
+      NSPoint p = [NSEvent mouseLocation]; // bottom-left origin
+      CGFloat top = NSMaxY([[NSScreen screens][0] frame]);
+      NSScreen *scr = nil;
+      for (NSScreen *s in [NSScreen screens])
+        if (NSMouseInRect(p, s.frame, NO)) {
+          scr = s;
+          break;
+        }
+      if (!scr)
+        scr = [NSScreen mainScreen];
+      NSRect sf = scr.frame;
+      std::string wid = req->what == "mouse" ? "main" : req->what.substr(6);
+      NSWindow *win = window_for_id(w, wid);
+      std::string winjson = "null";
+      if (win) {
+        NSRect cf = [win contentRectForFrameRect:win.frame]; // screen coords
+        char wbuf[128];
+        std::snprintf(wbuf, sizeof(wbuf),
+                      "{\"x\":%d,\"y\":%d,\"inside\":%s}",
+                      (int)(p.x - cf.origin.x), (int)(NSMaxY(cf) - p.y),
+                      NSMouseInRect(p, cf, NO) ? "true" : "false");
+        winjson = wbuf;
+      }
+      char buf[384];
+      std::snprintf(
+          buf, sizeof(buf),
+          "{\"x\":%d,\"y\":%d,\"window\":%s,\"screen\":{\"x\":%d,\"y\":%d,"
+          "\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
+          (int)p.x, (int)(top - p.y), winjson.c_str(), (int)sf.origin.x,
+          (int)(top - NSMaxY(sf)), (int)sf.size.width, (int)sf.size.height,
+          (double)scr.backingScaleFactor);
+      json = buf;
     } else if (req->what == "debug:trafficpos") {
       NSWindow *win = (NSWindow *)webview_get_native_handle(
           w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
@@ -1206,7 +1731,9 @@ static void do_get(webview_t w, void *arg) {
                         : p == NSApplicationActivationPolicyAccessory
                             ? "accessory"
                             : "prohibited";
-      json = std::string("{\"policy\":\"") + pol + "\"}";
+      json = std::string("{\"policy\":\"") + pol + "\"" +
+             ",\"active\":" + ([NSApp isActive] ? "true" : "false") +
+             ",\"hidden\":" + ([NSApp isHidden] ? "true" : "false") + "}";
     } else if (req->what == "debug:tray") {
       // NSStatusItem windows are system-hosted (invisible to CGWindowList),
       // so tests read the item's wiring here instead.
@@ -1264,8 +1791,6 @@ struct NotifReq {
   std::string id, title, body, subtitle;
   bool sound = false;
 };
-
-static bool g_bundle_mode = false;
 
 #ifdef __APPLE__
 @interface TinyNotifDelegate : NSObject <UNUserNotificationCenterDelegate>
@@ -2221,6 +2746,51 @@ static void sock_read_loop() {
         webview_dispatch(g_w, do_chrome, req);
       } else if (line == "DRAGWIN") {
         webview_dispatch(g_w, do_dragwin, nullptr);
+      } else if (line.rfind("CLIPWRITE ", 0) == 0) {
+        std::vector<std::string> p = split_tabs(line.substr(10));
+        ClipWriteReq *req = new ClipWriteReq;
+        req->text = p.size() > 0 ? wire_unescape(p[0]) : "";
+        req->html = p.size() > 1 ? wire_unescape(p[1]) : "";
+        req->image = p.size() > 2 ? wire_unescape(p[2]) : "";
+        req->color = p.size() > 3 ? wire_unescape(p[3]) : "";
+        for (size_t i = 4; i < p.size(); i++)
+          if (!p[i].empty())
+            req->paths.push_back(wire_unescape(p[i]));
+        webview_dispatch(g_w, do_clip_write, req);
+      } else if (line.rfind("CLIPWATCH ", 0) == 0) {
+        webview_dispatch(g_w, do_clip_watch,
+                         new int(std::atoi(line.c_str() + 10)));
+      } else if (line.rfind("DRAGOUT", 0) == 0 &&
+                 (line[7] == ' ' || line[7] == '@')) {
+        std::string winid = "main";
+        size_t body = 8;
+        if (line[7] == '@') {
+          size_t sp = line.find(' ', 8);
+          if (sp == std::string::npos) continue;
+          winid = line.substr(8, sp - 8);
+          body = sp + 1;
+        }
+        std::vector<std::string> p = split_tabs(line.substr(body));
+        DragOutReq *req = new DragOutReq;
+        req->win = winid;
+        req->image = p.size() > 0 ? wire_unescape(p[0]) : "";
+        for (size_t i = 1; i < p.size(); i++)
+          if (!p[i].empty())
+            req->paths.push_back(wire_unescape(p[i]));
+        webview_dispatch(g_w, do_dragout, req);
+      } else if (line.rfind("KEYSTROKE ", 0) == 0) {
+        size_t sp = line.find(' ', 10);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_keystroke,
+                         new KeystrokeReq{line.substr(10, sp - 10),
+                                          line.substr(sp + 1)});
+      } else if (line.rfind("PERMCHK ", 0) == 0 ||
+                 line.rfind("PERMREQ ", 0) == 0) {
+        size_t sp = line.find(' ', 8);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_perm,
+                         new PermReq{line.substr(8, sp - 8), line.substr(sp + 1),
+                                     line.rfind("PERMREQ ", 0) == 0});
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_print, nullptr);
       } else if (line == "RELOAD") {

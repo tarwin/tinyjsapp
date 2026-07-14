@@ -26,8 +26,11 @@
       windows: () => call('win.windows'),                  // ['main', ...]
       setTitle: (title) => call('win.setTitle', { title }),
       setSize: (width, height) => call('win.setSize', { width, height }),
+      // hide(): hides the APP — focus returns to the previous app (palettes
+      // can hide-then-paste with no frontmost tracking). show({ activate:
+      // false }): surface the window without stealing focus (overlays/HUDs).
       hide: () => call('win.hide'),
-      show: () => call('win.show'),
+      show: (opts) => call('win.show', opts ?? {}),
       center: () => call('win.center'),
       minimize: () => call('win.minimize'),
       fullscreen: () => call('win.fullscreen'),                    // toggles
@@ -43,7 +46,11 @@
       // { frame?, trafficLights?, transparent?, vibrancy? } — frameless windows
       // keep native resize/focus; mark your own titlebar with data-tiny-drag.
       setChrome: (opts) => call('win.setChrome', opts),
-      startDrag: () => call('win.startDrag'),
+      // No args: drag the window (frameless chrome). With { files: [path…],
+      // image? }: drag real files OUT of the app (into Finder, Slack, …) —
+      // call from a mousedown handler while the button is held.
+      startDrag: (opts) => opts?.files ? call('win.dragOut', opts) : call('win.startDrag'),
+      dragOut: (opts) => call('win.dragOut', opts),
       zoom: () => call('win.zoom'),
       print: () => call('win.print'),
       // fn(paths): files dragged onto the window, as real filesystem paths.
@@ -86,6 +93,20 @@
       on(fn) { window.tiny.api.on('hotkey', ({ id }) => fn(id)); },
     },
 
+    // Native clipboard (NSPasteboard in the launcher — no polling spawns).
+    clipboard: {
+      // -> { kind: 'files'|'image'|'color'|'text'|'empty', changeCount,
+      //      text, html, paths, image (png temp path), color }
+      read: () => call('clip.read'),
+      // { text?, html?, paths?, image? (png path/data-url/base64), color? }
+      write: (data) => call('clip.write', data),
+      changeCount: () => call('clip.changeCount'),
+      watch: (intervalMs) => call('clip.watch', { intervalMs }),
+      unwatch: () => call('clip.unwatch'),
+      // fn({ changeCount, self }) after watch(); self = our own write().
+      onChange(fn) { window.tiny.api.on('clipboard-change', fn); },
+    },
+
     // System theme; also 'sleep'/'wake' events via tiny.api.on.
     theme: {
       get: () => call('theme.get'),                      // { dark } | null
@@ -103,6 +124,22 @@
       onOpenFiles(fn) { window.tiny.api.on('open-files', ({ paths }) => fn(paths)); },
       // fn(id): a notification banner was clicked (packaged apps).
       onNotificationClick(fn) { window.tiny.api.on('notification-click', ({ id }) => fn(id)); },
+      // Post a native keystroke (e.g. 'cmd+v') -> { ok, trusted }; needs the
+      // Accessibility permission (which names your app, not osascript).
+      keystroke: (combo) => call('app.keystroke', { combo }),
+      // keystroke('cmd+v'): paste into the frontmost app (hide first).
+      paste: () => call('app.paste'),
+      // 'accessibility' | 'screen' | 'notifications' | 'automation[:<id>]'
+      // -> 'granted' | 'denied' | 'undetermined' | 'unsupported'
+      permissions: {
+        check: (name) => call('perm.check', { name }),
+        request: (name) => call('perm.request', { name }),
+      },
+      // Global cursor position (same top-left coords as win.setPosition):
+      // { x, y, window: { x, y, inside }, screen: { x, y, width, height,
+      //   scale } } — window is relative to THIS window's content area
+      // (clientX/clientY units, works even while the cursor is outside it)
+      mousePosition: () => call('app.mouse'),
     },
 
     tray: {

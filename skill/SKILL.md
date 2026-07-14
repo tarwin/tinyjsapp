@@ -60,7 +60,10 @@ export function init(app) {
   // fullscreen(), setPosition(x, y), setAlwaysOnTop(v), setResizable(v),
   // setHideOnClose(v), setDockVisible(v), print(), tray.set/remove,
   // store.get/set/delete/all, hotkey.register/unregister,
-  // setContextMenu(items), update.check()/update.install()
+  // setContextMenu(items), update.check()/update.install(),
+  // clipboard.read/write/changeCount/watch/unwatch, keystroke(combo),
+  // paste(), permissions.check/request, mousePosition(),
+  // show({ activate: false })
 }
 
 export function onMenu(id, app) { ... }  // optional: menu clicks, backend-side
@@ -120,6 +123,16 @@ tiny.win.setChrome({ frame: false, trafficLights: false,
 // interactive children excluded (data-tiny-nodrag to opt out manually)
 tiny.win.setAlwaysOnTop(v); tiny.win.setResizable(v);
 tiny.win.hide(); tiny.win.show(); tiny.win.setHideOnClose(v);
+// hide() hides the APP (NSApp hide) — focus returns to the previous app,
+// so palettes can hide() then app.paste() with no frontmost tracking.
+tiny.win.show({ activate: false });  // surface WITHOUT stealing focus (HUDs)
+await tiny.app.mousePosition();      // { x, y, window: { x, y, inside },
+                                     //   screen: { x, y, width, height,
+                                     //   scale } } — global coords match
+                                     // win.setPosition; window is relative
+                                     // to this window's content area
+                                     // (clientX/Y units, valid even while
+                                     // the cursor is outside it)
 tiny.win.onDrop((paths) => ...);            // files dropped on the window: real paths
 
 // tray / menu-bar apps
@@ -154,6 +167,36 @@ tiny.menu.onContext((id) => ...);           // backend: export onContextMenu
 await tiny.theme.get();                     // { dark } | null
 tiny.theme.on((dark) => ...);               // live changes
 tiny.api.on('sleep', fn); tiny.api.on('wake', fn);  // backend: export onSystem
+
+// clipboard (native NSPasteboard in the launcher — no pbpaste/osascript spawns)
+await tiny.clipboard.read();   // { kind: 'files'|'image'|'color'|'text'|'empty',
+                               //   changeCount, text, html, paths, image, color }
+                               // image = png temp path, valid until the next
+                               // clipboard change (copy the file to keep it)
+tiny.clipboard.write({ text, html, paths, image, color });  // any combo;
+                               // image: png path, data: URL, or base64;
+                               // multiple paths all land (no flush race)
+await tiny.clipboard.changeCount();         // cheap change probe
+tiny.clipboard.watch(500); tiny.clipboard.unwatch();  // poll in the launcher
+tiny.clipboard.onChange(({ changeCount, self }) => ...);  // self = own write
+// backend: app.clipboard.* is the same api; passing onClipboardChange to
+// createApp auto-starts the watcher
+
+// drag files OUT of the app (into Finder/Slack/…): call from mousedown,
+// while the button is held; image: optional custom drag-image png
+el.addEventListener('mousedown', () => tiny.win.startDrag({ files: [path] }));
+
+// native keystrokes (CGEvent from the launcher — ONE permission,
+// Accessibility, and the prompt names your app, not osascript/terminal)
+await tiny.app.keystroke('cmd+v');          // -> { ok, trusted }
+await tiny.app.paste();                     // = keystroke('cmd+v'); hide() first
+                                            // to paste into the frontmost app
+
+// permissions — build onboarding instead of failing at first use
+await tiny.app.permissions.check('accessibility');  // 'granted'|'denied'|
+                                            // 'undetermined'|'unsupported'
+await tiny.app.permissions.request('accessibility'); // prompts / opens Settings
+// names: accessibility | screen | notifications | automation[:<bundle-id>]
 
 tiny.win.print();                           // native print panel
 

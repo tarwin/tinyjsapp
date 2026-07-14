@@ -91,7 +91,10 @@
     <a href="#menus">menus</a>
     <a href="#tray">tray</a>
     <a href="#store">store</a>
+    <a href="#clipboard">clipboard</a>
     <a href="#hotkeys">hotkeys</a>
+    <a href="#keystrokes">keystrokes</a>
+    <a href="#permissions">permissions</a>
     <a href="#system">system</a>
     <a href="#open">deep links</a>
     <a href="#update">auto-update</a>
@@ -200,7 +203,16 @@ await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i>
 <b>tiny.win.fullscreen</b>();  <b>tiny.win.setFullscreen</b>(bool);  <i>// toggle / absolute</i>
 <b>tiny.win.setAlwaysOnTop</b>(bool);  <b>tiny.win.setResizable</b>(bool);
 <b>tiny.win.hide</b>();  <b>tiny.win.show</b>();
+<i>// hide() hides the APP — focus returns to the previous app on its own, so a</i>
+<i>// palette can hide() then app.paste() with no frontmost-pid bookkeeping</i>
+<b>tiny.win.show</b>({ activate: false });  <i>// surface WITHOUT stealing focus (HUDs)</i>
 <b>tiny.win.setHideOnClose</b>(bool);   <i>// close button hides instead of quits</i>
+
+<i>// global cursor position — same top-left coords as setPosition, so a</i>
+<i>// palette can open at the mouse; window = relative to this window's content</i>
+<i>// area ({ x, y, inside } — clientX/clientY units, valid even while the</i>
+<i>// cursor is outside it); screen = the display the cursor is on</i>
+const { x, y, window, screen } = await <b>tiny.app.mousePosition</b>();
 <b>tiny.win.print</b>();                <i>// native print panel</i>
 
 <i>// files dragged onto the window — real filesystem paths</i>
@@ -210,6 +222,11 @@ await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i>
 <b>tiny.win.setChrome</b>({ frame: false, trafficLights: false, vibrancy: 'hud' });
 <i>// drag regions: &lt;header data-tiny-drag&gt; — drag moves, double-click zooms</i>
 <b>tiny.win.startDrag</b>();  <b>tiny.win.zoom</b>();
+
+<i>// drag real files OUT of the app (Finder, Slack, …) — call from a</i>
+<i>// mousedown handler while the button is still held; image: optional png</i>
+row.addEventListener('mousedown', () =&gt;
+  <b>tiny.win.startDrag</b>({ files: ['/tmp/report.pdf'] }));
 
 <i>// read the window back</i>
 const s = await <b>tiny.win.getState</b>();
@@ -295,11 +312,58 @@ await <b>tiny.store.delete</b>('key');
 await <b>tiny.store.all</b>();           <i>// { … }</i></pre>
   </section>
 
+  <section id="clipboard">
+    <h2>tiny.clipboard <span class="tag">native NSPasteboard</span></h2>
+    <p class="note">Lives in the long-lived launcher process — no
+    <code>pbpaste</code>/<code>osascript</code> spawns, no scratch files, and
+    multi-file writes never lose their tail to a flush race.</p>
+    <pre>const clip = await <b>tiny.clipboard.read</b>();
+<i>// { kind: 'files'|'image'|'color'|'text'|'empty', changeCount,</i>
+<i>//   text, html, paths, image, color } — image is a png temp path,</i>
+<i>//   valid until the clipboard changes again (copy the file to keep it)</i>
+
+<b>tiny.clipboard.write</b>({ text: 'hi' });               <i>// any combination:</i>
+<b>tiny.clipboard.write</b>({ paths: ['/tmp/a.png', '/tmp/b.png'] });
+<b>tiny.clipboard.write</b>({ image: pngPathOrBase64, color: '#ff8800' });
+
+await <b>tiny.clipboard.changeCount</b>();   <i>// cheap "did it change?" probe</i>
+<b>tiny.clipboard.watch</b>(500);            <i>// launcher-side polling (0 spawns)</i>
+<b>tiny.clipboard.onChange</b>(({ changeCount, self }) =&gt; …);  <i>// self = own write</i>
+<b>tiny.clipboard.unwatch</b>();
+<i>// backend: app.clipboard.* is the same api; a createApp onClipboardChange</i>
+<i>// handler auto-starts the watcher</i></pre>
+  </section>
+
   <section id="hotkeys">
     <h2>tiny.hotkey <span class="tag">system-wide</span></h2>
     <pre><b>tiny.hotkey.register</b>('boss', 'cmd+shift+k');   <i>// fires even unfocused</i>
 <b>tiny.hotkey.on</b>((id) =&gt; tiny.win.show());
 <b>tiny.hotkey.unregister</b>('boss');</pre>
+  </section>
+
+  <section id="keystrokes">
+    <h2>keystrokes <span class="tag">paste into other apps</span></h2>
+    <p class="note">A CGEvent posted by the launcher — one permission
+    (Accessibility) whose prompt names <em>your app</em>, instead of
+    osascript→System Events needing two grants that name osascript or the
+    terminal.</p>
+    <pre>await <b>tiny.app.keystroke</b>('cmd+v');   <i>// -&gt; { ok, trusted }</i>
+await <b>tiny.app.paste</b>();              <i>// = keystroke('cmd+v')</i>
+<i>// hide the window first so the paste lands in the frontmost app:</i>
+<b>tiny.win.hide</b>();  await <b>tiny.app.paste</b>();
+<i>// trusted: false → Accessibility isn't granted (see permissions)</i></pre>
+  </section>
+
+  <section id="permissions">
+    <h2>tiny.app.permissions <span class="tag">onboarding, not surprises</span></h2>
+    <p class="note">Check before use — "needs Accessibility to paste — Open
+    Settings" beats failing silently at first use.</p>
+    <pre>await <b>tiny.app.permissions.check</b>('accessibility');
+<i>// 'granted' | 'denied' | 'undetermined' | 'unsupported'</i>
+await <b>tiny.app.permissions.request</b>('accessibility');
+<i>// prompts; accessibility opens System Settings pointed at your app</i>
+<i>// names: 'accessibility', 'screen', 'notifications' (packaged apps),</i>
+<i>//        'automation' (System Events) or 'automation:&lt;bundle-id&gt;'</i></pre>
   </section>
 
   <section id="system">

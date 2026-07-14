@@ -4,6 +4,61 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.11.0 — 2026-07-14
+
+- **Native clipboard** — `tiny.clipboard` / `app.clipboard`: NSPasteboard in
+  the long-lived launcher process. `read()` returns
+  `{ kind, changeCount, text, html, paths, image, color }` (image lands as a
+  png temp file), `write()` takes any combination of the same (image: png
+  path, data: URL, or base64), `changeCount()` is a cheap change probe, and
+  `watch(ms)`/`onChange` push `clipboard-change` events with a `self` flag
+  for your own writes (backend: `onClipboardChange` auto-starts the
+  watcher). No more per-second `osascript`/`pbpaste` spawns or scratch-file
+  plumbing — and multi-file writes can't lose their tail to the short-lived
+  writer flush race.
+- **Drag files out of the app** — `tiny.win.startDrag({ files, image? })`
+  (alias `tiny.win.dragOut`) starts a native NSDraggingSession from a page
+  mousedown, so real files can be dragged into Finder, Slack, or any other
+  app. Optional custom drag-image png; file icons (stacked for multi-file
+  drags) otherwise.
+- **Native keystrokes** — `tiny.app.keystroke('cmd+v')` / `tiny.app.paste()`
+  post a CGEvent from the launcher: one permission (Accessibility) whose
+  prompt names *your app*, instead of osascript→System Events needing
+  Automation + Accessibility with prompts naming osascript or the terminal.
+  Resolves `{ ok, trusted }` so apps can detect the missing grant.
+- **Permission checks** — `tiny.app.permissions.check(name)` / `request(name)`
+  for `accessibility`, `screen`, `notifications`, and
+  `automation[:<bundle-id>]` → `granted` / `denied` / `undetermined` /
+  `unsupported`, so apps can build a proper onboarding flow ("needs
+  Accessibility to paste — Open Settings") instead of discovering failure at
+  first use. `request` prompts (Accessibility opens System Settings pointed
+  at the app).
+- **hide() now hides the app, not just the window** — `tiny.win.hide()` /
+  `app.hide()` use `NSApp hide`, so macOS deactivates the app and returns
+  focus to the previously active app automatically. Palettes can
+  `hide()` → `paste()` with no frontmost-pid bookkeeping. Secondary windows
+  (`app.window(id).hide()`) still just order out. `show()` unhides +
+  activates as before.
+- **`show({ activate: false })`** — surface the window without stealing
+  focus, for overlay/HUD panels that must appear over the active app
+  (clicking the window still activates normally).
+- **`tiny.app.mousePosition()`** — cursor position three ways:
+  global (`x`/`y`, same top-left coordinates as `win.setPosition` — open a
+  palette at the mouse), `window` (relative to the calling window's content
+  area in `clientX`/`clientY` units, with an `inside` flag — valid even
+  while the cursor is outside the window), and `screen` (the display the
+  cursor is on: `{ x, y, width, height, scale }`).
+- Fix: builds with a real `signIdentity` now sign with the **hardened
+  runtime** and a secure timestamp (`codesign --options runtime
+  --timestamp`) — both required by notarization, which previously rejected
+  the .app. Ad-hoc builds are unchanged. codesign stderr is no longer
+  swallowed when a real identity is used, so keychain errors surface.
+- Docs: README gains a "Distributing to other people" walkthrough — why
+  ad-hoc-signed apps are blocked on other Macs, that Developer ID +
+  notarization require the paid Apple Developer Program ($99/yr, a free
+  Apple ID won't do), and the one-time cert / `notarytool
+  store-credentials` setup ending in `tinyjs build && tinyjs notarize`.
+
 ## 0.10.2 — 2026-07-13
 
 - Fix: `app.notify()` / `tiny.notify()` can no longer crash the backend when

@@ -27,6 +27,11 @@ function dbg(dir, line) {
 // Each entry maps a method to its wire op and the params serialized as
 // tab-separated args (order matters; see launcher.cc do_dialog).
 const one = (s) => String(s ?? '').replace(/[\t\n\r]/g, ' ');
+// Wire-escape for payloads that must survive tabs/newlines intact (clipboard
+// text, drag-out paths); the launcher reverses it (wire_unescape).
+const esc = (s) => String(s ?? '')
+  .replace(/\\/g, '\\\\').replace(/\t/g, '\\t')
+  .replace(/\r/g, '\\r').replace(/\n/g, '\\n');
 const DIALOG_OPS = {
   'win.openFile': { op: 'open', args: () => [] },
   'win.openFiles': { op: 'openmulti', args: () => [] },
@@ -63,7 +68,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onWindowClosed, chrome = null, update = null, activation = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onWindowClosed, onClipboardChange, chrome = null, update = null, activation = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -157,16 +162,17 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     ? (isUrl(htmlPath) ? htmlPath.replace(/\/+$/, '') : htmlPath.replace(/\/[^/]*$/, ''))
     : null;
 
-  // Read-backs: GET <qid> <what> → launcher answers GOT <qid> <json>.
+  // Read-backs: <OP> <qid> <rest> → launcher answers GOT <qid> <json>.
   let qidSeq = 1;
   const pendingGets = new Map();
-  function query(what) {
+  function ask(op, rest) {
     return new Promise((resolve) => {
       const qid = String(qidSeq++);
       pendingGets.set(qid, resolve);
-      send('GET ' + qid + ' ' + what);
+      send(op + ' ' + qid + (rest != null ? ' ' + rest : ''));
     });
   }
+  const query = (what) => ask('GET', what);
 
   // Menu items, shared by menu bar / tray / context menu. Items support
   // { id, label, key?, checked?, enabled?, submenu?: [...] } | { separator }.
@@ -259,9 +265,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     restore() { send('WINOP restore'); },
     setFullscreen(v) { send('WINOP fullscreen ' + (v ? 1 : 0)); },
     notify,
-    // Window visibility & app presence (tray-app plumbing).
+    // Window visibility & app presence. hide() hides the APP (NSApp hide):
+    // macOS returns focus to the previously active app on its own, so
+    // hide-then-paste palettes need no frontmost-tracking. show() re-activates;
+    // show({ activate: false }) surfaces the window without stealing focus
+    // (overlay/HUD panels).
     hide() { send('WINOP hide'); },
-    show() { send('WINOP show'); },
+    show(opts) { send('WINOP show' + (opts?.activate === false ? ' 0' : '')); },
     center() { send('WINOP center'); },
     minimize() { send('WINOP minimize'); },
     // Toggles native fullscreen.
@@ -310,6 +320,50 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     },
     startDrag() { send('DRAGWIN'); },
     zoom() { send('WINOP zoom'); },
+    // Native NSPasteboard — no osascript/pbpaste spawns, no scratch files.
+    clipboard: {
+      // { kind: 'files'|'image'|'color'|'text'|'empty', changeCount, text,
+      //   html, paths, image (png temp path, valid until the clipboard
+      //   changes again — copy it to keep it), color ('#rrggbb[aa]') }
+      read: () => query('clipboard'),
+      async changeCount() { return (await query('clipboard:count'))?.changeCount ?? 0; },
+      // { text?, html?, paths?, image?, color? } — image: png path, data:
+      // URL, or base64. Multiple paths flush reliably (long-lived process).
+      write({ text, html, image, color, paths } = {}) {
+        send('CLIPWRITE ' + [esc(text), esc(html), esc(image), esc(color),
+                             ...(paths ?? []).map(esc)].join('\t'));
+        return true;
+      },
+      // Poll changeCount in the launcher (in-process, ~free); changes arrive
+      // as the 'clipboard-change' event / onClipboardChange option with
+      // { changeCount, self } — self: our own write() caused it.
+      watch(intervalMs = 500) { send('CLIPWATCH ' + (intervalMs | 0)); },
+      unwatch() { send('CLIPWATCH 0'); },
+    },
+    // Post a real CGEvent keystroke (combo like 'cmd+v') from the launcher —
+    // one Accessibility grant that names your app, no osascript spawn.
+    // -> { ok, trusted }; trusted:false means Accessibility isn't granted
+    // (see app.permissions).
+    keystroke: (combo) => ask('KEYSTROKE', one(combo)),
+    // Paste into the frontmost app (hide your window first).
+    paste: () => ask('KEYSTROKE', 'cmd+v'),
+    // TCC permissions: 'accessibility' | 'screen' | 'notifications' |
+    // 'automation[:<bundle-id>]'. check -> 'granted'|'denied'|'undetermined'|
+    // 'unsupported'; request also prompts (accessibility opens System
+    // Settings pointing at your app).
+    permissions: {
+      async check(name) { return (await ask('PERMCHK', one(name)))?.status ?? 'unsupported'; },
+      async request(name) { return (await ask('PERMREQ', one(name)))?.status ?? 'unsupported'; },
+    },
+    // Global cursor position, same top-left coordinates as setPosition /
+    // getState: { x, y, window: { x, y, inside }, screen: { x, y, width,
+    // height, scale } } — window is relative to the main window's content
+    // area (clientX/clientY units, even while the cursor is outside);
+    // screen is the display the cursor is on.
+    mousePosition: () => query('mouse'),
+    // Raw launcher read-back (debug/test surface; the page twin is the
+    // 'debug.get' builtin).
+    debug: (what) => query(String(what)),
     // Persistent settings (see makeStore).
     store: makeStore(id),
     // System-wide hotkeys; combos like 'cmd+shift+k'. Presses arrive as a
@@ -354,7 +408,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         setPosition: (x, y) => t('WINOP', `pos ${x | 0} ${y | 0}`),
         center: () => t('WINOP', 'center'),
         hide: () => t('WINOP', 'hide'),
-        show: () => t('WINOP', 'show'),
+        show: (opts) => t('WINOP', 'show' + (opts?.activate === false ? ' 0' : '')),
         minimize: () => t('WINOP', 'minimize'),
         restore: () => t('WINOP', 'restore'),
         zoom: () => t('WINOP', 'zoom'),
@@ -401,7 +455,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.setTitle': async ({ title: t }, _a, m) => (forWin(m).setTitle(t), true),
     'win.setSize': async ({ width, height }, _a, m) => (forWin(m).setSize(width, height), true),
     'win.hide': async (_p, _a, m) => (forWin(m).hide(), true),
-    'win.show': async (_p, _a, m) => (forWin(m).show(), true),
+    'win.show': async (p, _a, m) => (forWin(m).show(p), true),
     'win.center': async (_p, _a, m) => (forWin(m).center(), true),
     'win.minimize': async (_p, _a, m) => (forWin(m).minimize(), true),
     'win.fullscreen': async (_p, _a, m) => (forWin(m).fullscreen(), true),
@@ -444,6 +498,30 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.setChrome': async (opts, _a, m) => (forWin(m).setChrome(opts), true),
     'win.startDrag': async () => (app.startDrag(), true),
     'win.zoom': async (_p, _a, m) => (forWin(m).zoom(), true),
+    // Drag files OUT of the window (page must call this from a mousedown,
+    // while the button is still held). files: real paths; image: optional
+    // custom drag-image png (file icons otherwise).
+    'win.dragOut': async ({ files, paths, image }, _a, m) => {
+      const list = files ?? paths ?? [];
+      const win = m?.window || 'main';
+      send((win === 'main' ? 'DRAGOUT' : 'DRAGOUT@' + win) + ' ' +
+           [esc(image), ...list.map(esc)].join('\t'));
+      return true;
+    },
+    'clip.read': async () => app.clipboard.read(),
+    'clip.write': async (data) => app.clipboard.write(data),
+    'clip.changeCount': async () => app.clipboard.changeCount(),
+    'clip.watch': async ({ intervalMs }) => (app.clipboard.watch(intervalMs ?? 500), true),
+    'clip.unwatch': async () => (app.clipboard.unwatch(), true),
+    'app.keystroke': async ({ combo }) => app.keystroke(combo),
+    'app.paste': async () => app.paste(),
+    'perm.check': async ({ name }) => app.permissions.check(name),
+    'perm.request': async ({ name }) => app.permissions.request(name),
+    // Pages get `window` relative to their own window.
+    'app.mouse': async (_p, _a, m) => {
+      const win = m?.window || 'main';
+      return query(win === 'main' ? 'mouse' : 'mouse:' + win);
+    },
     'theme.get': async () => lastTheme,
     'app.info': async () => app.info,
   };
@@ -537,6 +615,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
             try { v = JSON.parse(line.slice(sp + 1)); } catch {}
             resolve(v);
           }
+        } else if (line.startsWith('CLIPCHANGE ')) {
+          const [count, selfFlag] = line.slice(11).split(' ');
+          const info = { changeCount: parseInt(count, 10), self: selfFlag === '1' };
+          push('clipboard-change', info);
+          if (onClipboardChange) onClipboardChange(info, app);
         } else if (line.startsWith('WINCLOSED ')) {
           const id = line.slice(10);
           push('window-closed', { id });
@@ -581,6 +664,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // Chrome from tinyjs.json. Packaged apps already applied it from the plist
   // (flash-free); re-sending is idempotent. Dev applies it here.
   if (chrome && !attachPath) app.setChrome(chrome);
+
+  // A clipboard handler implies watching; apps needing a custom interval can
+  // call app.clipboard.watch(ms) on top (idempotent).
+  if (onClipboardChange) app.clipboard.watch();
 
   return app;
 }
