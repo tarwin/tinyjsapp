@@ -355,6 +355,22 @@ export function init(app${ts ? ': TinyApp' : ''}) {
     await tjs.writeFile(dir + d + '/tiny.d.ts', await tjs.readFile(TOOL_DIR + 'template/types/tiny.d.ts'));
     await tjs.writeFile(dir + d + '/tjs.d.ts', await tjs.readFile(TOOL_DIR + 'template/types/tjs.d.ts'));
   }
+  // backend/ needs its own project file: the Vite tsconfig only covers src/,
+  // and TS "inferred projects" don't load sibling ambient .d.ts files.
+  const beConfig = {
+    compilerOptions: {
+      target: 'es2022',
+      module: 'es2022',
+      moduleResolution: 'bundler',
+      strict: ts,
+      checkJs: false,
+      noEmit: true,
+      types: [],
+    },
+    include: ['./**/*'],
+  };
+  await tjs.writeFile(dir + '/backend/' + (ts ? 'tsconfig.json' : 'jsconfig.json'),
+    enc.encode(JSON.stringify(beConfig, null, 2) + '\n'));
 
   // package.json: pin the dev port and make built asset paths relative
   // (file:// documents need base './').

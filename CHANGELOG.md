@@ -4,6 +4,13 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.10.1 — 2026-07-13
+
+- Fix: Vite-template scaffolds now include a `backend/tsconfig.json`
+  (`jsconfig.json` for JS templates), so editors resolve `tjs` /
+  `TinyApiHandler` / `TinyApp` in the backend — the Vite tsconfig only covers
+  `src/`, and TS inferred projects ignore sibling ambient `.d.ts` files.
+
 ## 0.10.0 — 2026-07-13
 
 - **Vite / React / Vue / TypeScript** — `tinyjs new myapp --template react-ts`
