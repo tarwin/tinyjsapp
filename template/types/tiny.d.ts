@@ -110,7 +110,8 @@ declare interface Tiny {
   log(msg: string): Promise<any>;
   quit(): Promise<any>;
   /** Desktop notification. Packaged + signed apps get native Notification
-   *  Center banners; dev builds fall back to osascript. */
+   *  Center banners; dev builds fall back to osascript. Never rejects —
+   *  resolves false if delivery failed, so fire-and-forget is safe. */
   notify(title: string, body?: string, opts?: TinyNotifyOptions): Promise<boolean>;
 
   win: {
@@ -244,6 +245,8 @@ declare interface TinyApp {
   eval(js: string): void;
   reload(newHtml?: string): Promise<void>;
   quit(): void;
+  /** Never rejects — resolves false if delivery failed, so fire-and-forget
+   *  is safe. */
   notify(opts: { title?: string; body?: string } & TinyNotifyOptions): Promise<boolean>;
   hide(): void;
   show(): void;

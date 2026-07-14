@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.10.2 <span class="date">2026-07-13</span></h2>
+      <ul>
+        <li>Fix: fire-and-forget <code>app.notify()</code> could crash the backend in dev builds (unhandled rejection from the osascript fallback). notify never rejects now — it resolves <code>false</code> if delivery failed.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.10.1 <span class="date">2026-07-13</span></h2>
       <ul>
         <li>Fix: Vite scaffolds get a <code>backend/tsconfig.json</code> so editors resolve the tinyjs types in the backend folder.</li>

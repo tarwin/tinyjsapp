@@ -187,6 +187,8 @@ db.prepare('SELECT * FROM notes').all();  <i>// [{ id: 1, text: 'hello' }]</i></
 <i>// and clicks back:</i>
 <b>tiny.app.onNotificationClick</b>((id) =&gt; …);
 <i>// ad-hoc/dev builds fall back to osascript banners automatically</i>
+<i>// notify() never rejects — it resolves false if delivery failed, so</i>
+<i>// fire-and-forget is safe</i>
 await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i></pre>
   </section>
 

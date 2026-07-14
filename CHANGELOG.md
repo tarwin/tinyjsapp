@@ -4,6 +4,14 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.10.2 — 2026-07-13
+
+- Fix: `app.notify()` / `tiny.notify()` can no longer crash the backend when
+  fired without `await`. The dev-mode osascript fallback could reject (e.g.
+  `ENOENT` when launched with a minimal `PATH`), and an unhandled rejection
+  kills the txiki process. notify now uses the absolute `/usr/bin/osascript`
+  path and never rejects — it resolves `false` if delivery failed.
+
 ## 0.10.1 — 2026-07-13
 
 - Fix: Vite-template scaffolds now include a `backend/tsconfig.json`

@@ -196,12 +196,19 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                         one(subtitle ?? ''), sound ? '1' : '0'].join('\t'));
       return true;
     }
-    const aq = (s) => '"' + String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
-    let script = 'display notification ' + aq(body ?? '') + ' with title ' + aq(title ?? 'tinyjs');
-    if (subtitle) script += ' subtitle ' + aq(subtitle);
-    const p = tjs.spawn(['osascript', '-e', script], { stdout: 'ignore', stderr: 'ignore' });
-    const st = await p.wait();
-    return st.exit_status === 0 && !st.term_signal;
+    // notify() is naturally fire-and-forget; an unhandled rejection here
+    // would kill the whole backend, so it never throws — it resolves false.
+    try {
+      const aq = (s) => '"' + String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+      let script = 'display notification ' + aq(body ?? '') + ' with title ' + aq(title ?? 'tinyjs');
+      if (subtitle) script += ' subtitle ' + aq(subtitle);
+      const p = tjs.spawn(['/usr/bin/osascript', '-e', script], { stdout: 'ignore', stderr: 'ignore' });
+      const st = await p.wait();
+      return st.exit_status === 0 && !st.term_signal;
+    } catch (e) {
+      console.log('tinyjs notify failed:', e?.message ?? String(e));
+      return false;
+    }
   }
 
   function send(line) {
