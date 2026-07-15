@@ -218,6 +218,13 @@
       // AppleScript in-process (no osascript) -> result string | null;
       // rejects with the script error. Uses the 'automation' permission.
       applescript: (source) => call('app.applescript', { source }),
+      // Record a display to an .mp4. start({ screenId?, path }) resolves
+      // once capturing; stop() -> { path, duration }. Needs the 'screen'
+      // permission + macOS 14; rejects otherwise. Video only, one at a time.
+      recorder: {
+        start: (opts) => call('record.start', opts ?? {}),
+        stop: () => call('record.stop'),
+      },
       // Now Playing (Control Center / lock screen) + media keys. set() arms
       // the keys; presses arrive via onMediaKey.
       nowPlaying: {

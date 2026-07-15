@@ -140,6 +140,20 @@ declare interface TinyVoice {
   quality: 'default' | 'enhanced' | 'premium';
 }
 
+/** A finished screen recording; path is the .mp4 you asked for. */
+declare interface TinyRecording {
+  path: string;
+  /** seconds */
+  duration: number;
+}
+
+declare interface TinyRecorder {
+  /** resolves once capture is running; needs the 'screen' permission +
+   *  macOS 14, rejects with the reason otherwise */
+  start(opts: { path: string; screenId?: number }): Promise<true>;
+  stop(): Promise<TinyRecording>;
+}
+
 declare interface TinySayOptions {
   /** a voice id from voices(), or a BCP-47 language like 'en-AU' */
   voice?: string;
@@ -536,6 +550,8 @@ declare interface Tiny {
     say(text: string, opts?: TinySayOptions): Promise<boolean>;
     stopSpeaking(): Promise<any>;
     voices(): Promise<TinyVoice[]>;
+    /** record a display to an .mp4 (video only, one at a time) */
+    recorder: TinyRecorder;
   };
 
   tray: {
@@ -705,6 +721,8 @@ declare interface TinyApp {
   say(text: string, opts?: TinySayOptions): Promise<boolean>;
   stopSpeaking(): boolean;
   voices(): Promise<TinyVoice[]>;
+  /** record a display to an .mp4 (video only, one at a time) */
+  recorder: TinyRecorder;
   update: {
     /** notes = release notes from the manifest ("tinyjs publish --notes") */
     check(): Promise<{ available: boolean; current: string; latest: string | null; notes: string | null }>;

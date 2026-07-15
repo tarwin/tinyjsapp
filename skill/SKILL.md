@@ -291,6 +291,10 @@ tiny.notify(title, body, { actions: [{ id, title, reply?, placeholder?,
                                        destructive? }] });
 tiny.app.onNotificationAction(({ id, action, reply }) => …);  // reply=text
 // backend exports: onMediaKey(info, app), onNotificationAction(info, app)
+// record a display to .mp4 (SCStream→H.264, video only; 'screen' perm +
+// macOS 14; one at a time)
+await tiny.app.recorder.start({ path, screenId });  // resolves once capturing
+const { path, duration } = await tiny.app.recorder.stop();
 
 tiny.win.print();                           // native print panel
 

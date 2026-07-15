@@ -80,6 +80,15 @@
 //                         SAYSTOP                    stop speaking
 //                         VOICES <qid>               list installed voices;
 //                                                    GOT {ok, voices}
+//                         RECORD start <qid> <display>\t<path>
+//                         RECORD stop <qid>          record a display to an
+//                                                    .mp4 (SCStream →
+//                                                    AVAssetWriter; macOS 14 +
+//                                                    the 'screen' permission);
+//                                                    start answers GOT {ok,
+//                                                    error} once capturing,
+//                                                    stop answers GOT {ok,
+//                                                    path, duration, error}
 //                         CHROME <frame>\t<traffic>\t<transp>\t<vibrancy>
 //                                                    window chrome ('' = keep;
 //                                                    0|1 flags; vibrancy =
@@ -2420,6 +2429,252 @@ static void do_osa(webview_t, void *arg) {
 }
 #endif
 
+// --- screen recording to .mp4 (macOS) -----------------------------------------------
+// SCStream feeds screen CMSampleBuffers into an AVAssetWriterInput. All
+// recorder state lives on one serial queue (g_rec_queue) — the sample
+// handler runs there, and start/stop hop onto it — so nothing races. Needs
+// macOS 14 and the 'screen' permission; ScreenCaptureKit is weak-linked so
+// older systems still launch. Video-only for now (no audio track).
+
+struct RecordReq {
+  std::string qid, path;
+  long display;
+  bool start;
+};
+
+#ifdef __APPLE__
+static dispatch_queue_t g_rec_queue = nullptr;
+static SCStream *g_rec_stream = nil;
+static AVAssetWriter *g_rec_writer = nil;
+static AVAssetWriterInput *g_rec_input = nil;
+static bool g_rec_session = false;
+static CMTime g_rec_first, g_rec_last;
+static std::string g_rec_path;
+
+@interface TinyRecOutput : NSObject <SCStreamOutput>
+@end
+@implementation TinyRecOutput
+- (void)stream:(SCStream *)stream
+    didOutputSampleBuffer:(CMSampleBufferRef)sb
+                   ofType:(SCStreamOutputType)type
+    API_AVAILABLE(macos(14.0)) {
+  if (type != SCStreamOutputTypeScreen || !CMSampleBufferIsValid(sb))
+    return;
+  // SCStream emits idle/duplicate frames too; only append complete ones.
+  NSArray *att = (__bridge NSArray *)CMSampleBufferGetSampleAttachmentsArray(
+      sb, false);
+  NSDictionary *info = att.firstObject;
+  if (info) {
+    NSNumber *st = info[SCStreamFrameInfoStatus];
+    if (st && st.intValue != SCFrameStatusComplete)
+      return;
+  }
+  if (!g_rec_writer || g_rec_writer.status != AVAssetWriterStatusWriting)
+    return;
+  CMTime pts = CMSampleBufferGetPresentationTimeStamp(sb);
+  if (!g_rec_session) {
+    [g_rec_writer startSessionAtSourceTime:pts];
+    g_rec_first = pts;
+    g_rec_session = true;
+  }
+  if (g_rec_input.isReadyForMoreMediaData) {
+    [g_rec_input appendSampleBuffer:sb];
+    g_rec_last = pts;
+  }
+}
+@end
+
+static TinyRecOutput *g_rec_output = nil;
+
+static void rec_reset() {
+  g_rec_stream = nil;
+  g_rec_writer = nil;
+  g_rec_input = nil;
+  g_rec_session = false;
+  g_rec_path.clear();
+}
+
+API_AVAILABLE(macos(14.0))
+static void rec_start(const std::string &qid, long want,
+                      const std::string &path) {
+  if (g_rec_stream) {
+    capture_fail(qid, "already recording");
+    return;
+  }
+  // Fail fast when the screen-recording permission is missing:
+  // getShareableContent's completion handler is unreliable when TCC has
+  // denied us (it can neither error nor fire), which would hang start().
+  if (!CGPreflightScreenCaptureAccess()) {
+    CGRequestScreenCaptureAccess(); // adds us to System Settings for next time
+    capture_fail(qid, "screen recording permission required "
+                      "(System Settings > Privacy > Screen Recording)");
+    return;
+  }
+  [SCShareableContent
+      getShareableContentWithCompletionHandler:^(SCShareableContent *content,
+                                                 NSError *error) {
+        dispatch_async(g_rec_queue, ^{
+          if (!content) {
+            capture_fail(qid,
+                         error ? [error.localizedDescription UTF8String]
+                               : "no shareable content (screen permission?)");
+            return;
+          }
+          SCDisplay *disp = nil;
+          for (SCDisplay *d in content.displays)
+            if (!want || (long)d.displayID == want) {
+              disp = d;
+              break;
+            }
+          if (!disp) {
+            capture_fail(qid, "no such display");
+            return;
+          }
+          CGFloat scale = 1;
+          for (NSScreen *s in [NSScreen screens])
+            if ([s.deviceDescription[@"NSScreenNumber"] longValue] ==
+                (long)disp.displayID)
+              scale = s.backingScaleFactor;
+          size_t w = (size_t)(disp.width * scale), h = (size_t)(disp.height * scale);
+
+          NSError *werr = nil;
+          [[NSFileManager defaultManager] removeItemAtPath:ns(path) error:nil];
+          AVAssetWriter *writer = [[AVAssetWriter alloc]
+              initWithURL:[NSURL fileURLWithPath:ns(path)]
+                 fileType:AVFileTypeMPEG4
+                    error:&werr];
+          if (!writer) {
+            capture_fail(qid, werr ? [werr.localizedDescription UTF8String]
+                                   : "cannot create the mp4");
+            return;
+          }
+          AVAssetWriterInput *input = [AVAssetWriterInput
+              assetWriterInputWithMediaType:AVMediaTypeVideo
+                             outputSettings:@{
+                               AVVideoCodecKey : AVVideoCodecTypeH264,
+                               AVVideoWidthKey : @(w),
+                               AVVideoHeightKey : @(h),
+                             }];
+          input.expectsMediaDataInRealTime = YES;
+          if (![writer canAddInput:input]) {
+            capture_fail(qid, "cannot add the video track");
+            return;
+          }
+          [writer addInput:input];
+          if (![writer startWriting]) {
+            capture_fail(qid, "asset writer refused to start");
+            return;
+          }
+
+          SCContentFilter *filter =
+              [[SCContentFilter alloc] initWithDisplay:disp
+                                      excludingWindows:@[]];
+          SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
+          cfg.width = w;
+          cfg.height = h;
+          cfg.showsCursor = YES;
+          cfg.minimumFrameInterval = CMTimeMake(1, 60);
+          cfg.pixelFormat = kCVPixelFormatType_32BGRA;
+          if (!g_rec_output)
+            g_rec_output = [[TinyRecOutput alloc] init];
+          SCStream *stream = [[SCStream alloc] initWithFilter:filter
+                                                configuration:cfg
+                                                     delegate:nil];
+          NSError *oerr = nil;
+          [stream addStreamOutput:g_rec_output
+                             type:SCStreamOutputTypeScreen
+               sampleHandlerQueue:g_rec_queue
+                            error:&oerr];
+          if (oerr) {
+            capture_fail(qid, [oerr.localizedDescription UTF8String]);
+            return;
+          }
+          g_rec_writer = writer;
+          g_rec_input = input;
+          g_rec_stream = stream;
+          g_rec_session = false;
+          g_rec_path = path;
+          [stream startCaptureWithCompletionHandler:^(NSError *serr) {
+            dispatch_async(g_rec_queue, ^{
+              if (serr) {
+                [writer cancelWriting];
+                rec_reset();
+                capture_fail(qid, [serr.localizedDescription UTF8String]);
+              } else {
+                sock_write_line("GOT " + qid + " {\"ok\":true,\"error\":null}");
+              }
+            });
+          }];
+        });
+      }];
+}
+
+API_AVAILABLE(macos(14.0))
+static void rec_stop(const std::string &qid) {
+  if (!g_rec_stream) {
+    capture_fail(qid, "not recording");
+    return;
+  }
+  SCStream *stream = g_rec_stream;
+  AVAssetWriter *writer = g_rec_writer;
+  AVAssetWriterInput *input = g_rec_input;
+  std::string path = g_rec_path;
+  bool session = g_rec_session;
+  CMTime first = g_rec_first, last = g_rec_last;
+  g_rec_stream = nil; // block re-entrancy; keep the rest until finalize
+  [stream stopCaptureWithCompletionHandler:^(NSError *) {
+    dispatch_async(g_rec_queue, ^{
+      [input markAsFinished];
+      [writer finishWritingWithCompletionHandler:^{
+        dispatch_async(g_rec_queue, ^{
+          bool ok = writer.status == AVAssetWriterStatusCompleted && session;
+          double dur =
+              session ? CMTimeGetSeconds(CMTimeSubtract(last, first)) : 0;
+          if (ok) {
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "%.3f", dur);
+            sock_write_line("GOT " + qid + " {\"ok\":true,\"path\":" +
+                            json_escape(path) + ",\"duration\":" + buf +
+                            ",\"error\":null}");
+          } else {
+            capture_fail(qid, writer.error
+                                  ? [writer.error.localizedDescription UTF8String]
+                                  : "no frames captured");
+          }
+          rec_reset();
+        });
+      }];
+    });
+  }];
+}
+
+static void do_record(webview_t, void *arg) {
+  RecordReq *req = static_cast<RecordReq *>(arg);
+  std::string qid = req->qid, path = req->path;
+  long display = req->display;
+  bool start = req->start;
+  delete req;
+  if (@available(macOS 14.0, *)) {
+    if (!g_rec_queue)
+      g_rec_queue = dispatch_queue_create("app.tinyjs.recorder", DISPATCH_QUEUE_SERIAL);
+    dispatch_async(g_rec_queue, ^{
+      if (start)
+        rec_start(qid, display, path);
+      else
+        rec_stop(qid);
+    });
+  } else {
+    capture_fail(qid, "needs macOS 14");
+  }
+}
+#else
+static void do_record(webview_t, void *arg) {
+  RecordReq *req = static_cast<RecordReq *>(arg);
+  sock_write_line("GOT " + req->qid + " {\"ok\":false,\"error\":\"unsupported\"}");
+  delete req;
+}
+#endif
+
 // --- custom context menu (macOS) -------------------------------------------------
 // CTXBEGIN, ITEM/SEP lines, CTXEND replaces the webview's right-click menu
 // with the declared items (clicks -> `CTX <id>`); CTXCLEAR restores WebKit's
@@ -4081,6 +4336,21 @@ static void sock_read_loop() {
         req->voice = p.size() > 1 ? wire_unescape(p[1]) : "";
         req->rate = p.size() > 2 ? std::atof(p[2].c_str()) : 0;
         webview_dispatch(g_w, do_say, req);
+      } else if (line.rfind("RECORD ", 0) == 0) {
+        // RECORD <qid> start <display>\t<path> | RECORD <qid> stop
+        size_t sp = line.find(' ', 7);
+        if (sp == std::string::npos) continue;
+        RecordReq *req = new RecordReq;
+        req->qid = line.substr(7, sp - 7);
+        std::string verb = line.substr(sp + 1); // "start …" | "stop"
+        req->start = verb.rfind("start ", 0) == 0;
+        req->display = 0;
+        if (req->start) {
+          std::vector<std::string> p = split_tabs(verb.substr(6));
+          req->display = p.size() > 0 ? std::atol(p[0].c_str()) : 0;
+          req->path = p.size() > 1 ? wire_unescape(p[1]) : "";
+        }
+        webview_dispatch(g_w, do_record, req);
       } else if (line == "SAYSTOP") {
         webview_dispatch(g_w, do_saystop, nullptr);
       } else if (line.rfind("VOICES ", 0) == 0) {

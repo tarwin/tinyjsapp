@@ -4,6 +4,17 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.18.0 — 2026-07-14
+
+- **`app.recorder`** — record a display to an .mp4: `start({ path,
+  screenId? })` resolves once capture is running, `stop()` resolves
+  `{ path, duration }` once the file is finalized. ScreenCaptureKit's
+  `SCStream` feeds H.264 frames into an `AVAssetWriter` on a dedicated
+  serial queue. Video only for now (no audio track); one recording at a
+  time. Needs the `'screen'` permission and macOS 14+ — the permission is
+  preflighted so an ungranted `start()` rejects immediately with a clear
+  message instead of hanging.
+
 ## 0.17.0 — 2026-07-14
 
 Media tier — apps that behave like real media citizens. (Screen recording

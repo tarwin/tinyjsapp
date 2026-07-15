@@ -69,6 +69,12 @@
   <section>
 
     <div class="rel">
+      <h2>0.18.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b><code>app.recorder</code></b> — record a display to an .mp4: <code>start({ path, screenId? })</code> resolves once capturing, <code>stop()</code> resolves <code>{ path, duration }</code> once finalized. SCStream → H.264 → AVAssetWriter, video only for now, one at a time. Needs the <code>'screen'</code> permission + macOS 14 (preflighted, so an ungranted start rejects immediately instead of hanging).</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.17.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b><code>app.nowPlaying</code></b> — <code>set({ title, artist, album, duration, elapsed, playing })</code> shows your app in Control Center / the lock screen and arms the hardware media keys; presses (F7/F8/F9, AirPods, Control Center) arrive as the <code>media-key</code> event / <code>onMediaKey</code> export with <code>{ command, time? }</code>.</li>

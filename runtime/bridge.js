@@ -518,6 +518,24 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     async authenticate(reason) {
       return (await ask('AUTH', esc(reason ?? 'authenticate')))?.ok === true;
     },
+    // Record a display to an .mp4 (SCStream → AVAssetWriter). start()
+    // resolves once capture is running; stop() resolves { path, duration }
+    // once the file is finalized. Needs the 'screen' permission + macOS 14;
+    // rejects with the reason. Video only (no audio track yet). One
+    // recording at a time.
+    recorder: {
+      async start({ screenId, path } = {}) {
+        if (!path) throw new Error('recorder.start needs a { path }');
+        const r = await ask('RECORD', 'start ' + (screenId ?? 0) + '\t' + esc(path));
+        if (!r?.ok) throw new Error(r?.error ?? 'record failed');
+        return true;
+      },
+      async stop() {
+        const r = await ask('RECORD', 'stop');
+        if (!r?.ok) throw new Error(r?.error ?? 'record failed');
+        return { path: r.path, duration: r.duration };
+      },
+    },
     // Run AppleScript in-process (no osascript spawn) — Apple Events hit
     // the same 'automation' TCC permissions.check('automation:…') covers.
     // Resolves the script result as a string (null if it isn't text);
@@ -739,6 +757,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'secrets.delete': async ({ key }) => app.secrets.delete(key),
     'app.authenticate': async ({ reason }) => app.authenticate(reason),
     'app.applescript': async ({ source }) => app.applescript(source),
+    'record.start': async (opts) => app.recorder.start(opts),
+    'record.stop': async () => app.recorder.stop(),
     'nowplaying.set': async (info) => app.nowPlaying.set(info),
     'nowplaying.clear': async () => app.nowPlaying.clear(),
     'app.say': async ({ text, voice, rate }) => app.say(text, { voice, rate }),

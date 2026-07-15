@@ -102,7 +102,8 @@ export function init(app) {          // window is up
   // idleTime(), quickLook(paths), captureScreen(screenId),
   // pickColor(), ocr(path), thumbnail(path, size),
   // secrets.get/set/delete, authenticate(reason), applescript(source),
-  // nowPlaying.set/clear, say(text, opts), voices(), stopSpeaking()
+  // nowPlaying.set/clear, say(text, opts), voices(), stopSpeaking(),
+  // recorder.start({ path, screenId })/stop()
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -359,6 +360,12 @@ tiny.notify('New message', 'from Alex', { actions: [
 tiny.app.onNotificationAction(({ id, action, reply }) => {
   if (action === 'reply') sendReply(reply);   // reply = the typed text
 });
+
+// record a display to an .mp4 (SCStream → H.264; video only for now).
+// Needs the 'screen' permission + macOS 14; one recording at a time.
+await tiny.app.recorder.start({ path: '/tmp/demo.mp4' });   // screenId optional
+// … later …
+const { path, duration } = await tiny.app.recorder.stop();  // finalized file
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null

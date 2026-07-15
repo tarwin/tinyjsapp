@@ -505,7 +505,12 @@ await <b>tiny.app.say</b>('Export finished', { voice: voices[0].id, rate: 0.5 })
 <b>tiny.app.onNotificationAction</b>(({ id, action, reply }) =&gt; {
   if (action === 'reply') sendReply(reply);   <i>// reply = the typed text</i>
 });
-<i>// backend twins: export onMediaKey(info, app), onNotificationAction(info, app)</i></pre>
+<i>// backend twins: export onMediaKey(info, app), onNotificationAction(info, app)</i>
+
+<i>// record a display to an .mp4 (SCStream → H.264; video only for now).</i>
+<i>// Needs the 'screen' permission + macOS 14; one recording at a time.</i>
+await <b>tiny.app.recorder.start</b>({ path: '/tmp/demo.mp4' });  <i>// screenId optional</i>
+const { path, duration } = await <b>tiny.app.recorder.stop</b>();  <i>// finalized file</i></pre>
   </section>
 
   <section id="system">
