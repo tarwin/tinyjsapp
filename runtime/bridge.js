@@ -324,7 +324,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     clipboard: {
       // { kind: 'files'|'image'|'color'|'text'|'empty', changeCount, text,
       //   html, paths, image (png temp path, valid until the clipboard
-      //   changes again — copy it to keep it), color ('#rrggbb[aa]') }
+      //   changes again — copy it to keep it), imageSize ({ width, height }
+      //   px), color ('#rrggbb[aa]'), concealed (password-manager marker —
+      //   history apps must skip), sourceApp ({ name, bundleId } — frontmost
+      //   when the change was noticed; exact while watch() runs), sourceURL
+      //   (page a Chromium-browser copy came from) }
       read: () => query('clipboard'),
       async changeCount() { return (await query('clipboard:count'))?.changeCount ?? 0; },
       // { text?, html?, paths?, image?, color? } — image: png path, data:

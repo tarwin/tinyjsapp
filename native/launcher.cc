@@ -1123,6 +1123,28 @@ static NSInteger g_clip_seen = -1;
 static NSInteger g_clip_self = -1;    // changeCount produced by our own CLIPWRITE
 static NSInteger g_clip_png_count = -1;
 static std::string g_clip_png_path;   // materialized image, one per changeCount
+static long g_clip_png_w = 0, g_clip_png_h = 0;
+static NSInteger g_clip_src_count = -1;
+static std::string g_clip_src_json;   // {"name":…,"bundleId":…} for that count
+
+// Pasteboards don't record their writer, so attribute a fresh changeCount to
+// the frontmost app the moment it's first noticed — exact from the watch
+// timer, best-effort from a later read(). Our own CLIPWRITEs are attributed
+// to this app: the palette scenario writes while some other app is frontmost.
+static void clip_note_source(NSInteger count) {
+  if (count == g_clip_src_count)
+    return;
+  NSRunningApplication *ra =
+      count == g_clip_self
+          ? [NSRunningApplication currentApplication]
+          : [[NSWorkspace sharedWorkspace] frontmostApplication];
+  std::string name = ra.localizedName ? [ra.localizedName UTF8String] : "";
+  std::string bid = ra.bundleIdentifier ? [ra.bundleIdentifier UTF8String] : "";
+  g_clip_src_json = "{\"name\":" + (name.empty() ? "null" : json_escape(name)) +
+                    ",\"bundleId\":" + (bid.empty() ? "null" : json_escape(bid)) +
+                    "}";
+  g_clip_src_count = count;
+}
 
 // image field: absolute png path, data: URL, or raw base64.
 static NSData *decode_image_field(const std::string &image) {
@@ -1195,6 +1217,7 @@ static void do_clip_write(webview_t, void *arg) {
       [pb writeObjects:objs];
     // Lets the watcher tag the resulting CLIPCHANGE as self-inflicted.
     g_clip_self = [pb changeCount];
+    clip_note_source(g_clip_self);
   }
   delete req;
 }
@@ -1220,6 +1243,7 @@ static void do_clip_watch(webview_t, void *arg) {
                                  if (c == g_clip_seen)
                                    return;
                                  g_clip_seen = c;
+                                 clip_note_source(c);
                                  sock_write_line(
                                      "CLIPCHANGE " + std::to_string((long)c) +
                                      (c == g_clip_self ? " 1" : " 0"));
@@ -1273,6 +1297,9 @@ static std::string clipboard_json(bool count_only) {
       if ([png writeToFile:ns(p) atomically:YES]) {
         g_clip_png_path = p;
         g_clip_png_count = count;
+        NSBitmapImageRep *ir = [NSBitmapImageRep imageRepWithData:png];
+        g_clip_png_w = ir ? (long)ir.pixelsWide : 0;
+        g_clip_png_h = ir ? (long)ir.pixelsHigh : 0;
       }
     }
     if (count == g_clip_png_count)
@@ -1301,6 +1328,15 @@ static std::string clipboard_json(bool count_only) {
     }
   }
 
+  // Password managers mark secrets with the nspasteboard.org types; apps
+  // that persist clipboard history must skip both concealed and transient.
+  NSArray *types = [pb types];
+  bool concealed = [types containsObject:@"org.nspasteboard.ConcealedType"] ||
+                   [types containsObject:@"org.nspasteboard.TransientType"];
+  // Chromium browsers stamp the page a copy came from.
+  NSString *surl = [pb stringForType:@"org.chromium.source-url"];
+  clip_note_source(count); // best-effort if the watcher didn't see it first
+
   const char *kind = has_paths                       ? "files"
                      : !image.empty()                ? "image"
                      : !color.empty()                ? "color"
@@ -1312,7 +1348,16 @@ static std::string clipboard_json(bool count_only) {
   json += ",\"html\":" + (html.length ? json_escape([html UTF8String]) : "null");
   json += ",\"paths\":" + paths;
   json += ",\"image\":" + (image.empty() ? "null" : json_escape(image));
+  if (!image.empty() && g_clip_png_w > 0)
+    json += ",\"imageSize\":{\"width\":" + std::to_string(g_clip_png_w) +
+            ",\"height\":" + std::to_string(g_clip_png_h) + "}";
+  else
+    json += ",\"imageSize\":null";
   json += ",\"color\":" + (color.empty() ? "null" : json_escape(color));
+  json += ",\"concealed\":" + std::string(concealed ? "true" : "false");
+  json += ",\"sourceApp\":" +
+          (count == g_clip_src_count ? g_clip_src_json : std::string("null"));
+  json += ",\"sourceURL\":" + (surl.length ? json_escape([surl UTF8String]) : "null");
   json += "}";
   return json;
 }

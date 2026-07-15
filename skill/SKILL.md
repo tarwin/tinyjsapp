@@ -171,7 +171,12 @@ tiny.api.on('sleep', fn); tiny.api.on('wake', fn);  // backend: export onSystem
 
 // clipboard (native NSPasteboard in the launcher — no pbpaste/osascript spawns)
 await tiny.clipboard.read();   // { kind: 'files'|'image'|'color'|'text'|'empty',
-                               //   changeCount, text, html, paths, image, color }
+                               //   changeCount, text, html, paths, image,
+                               //   imageSize ({width,height} px), color,
+                               //   concealed (password-manager marker — history
+                               //   apps must skip), sourceApp ({name,bundleId},
+                               //   exact while watch() runs), sourceURL
+                               //   (Chromium copy's page url) }
                                // image = png temp path, valid until the next
                                // clipboard change (copy the file to keep it)
 tiny.clipboard.write({ text, html, paths, image, color });  // any combo;

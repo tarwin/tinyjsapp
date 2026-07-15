@@ -320,8 +320,15 @@ await <b>tiny.store.all</b>();           <i>// { … }</i></pre>
     multi-file writes never lose their tail to a flush race.</p>
     <pre>const clip = await <b>tiny.clipboard.read</b>();
 <i>// { kind: 'files'|'image'|'color'|'text'|'empty', changeCount,</i>
-<i>//   text, html, paths, image, color } — image is a png temp path,</i>
-<i>//   valid until the clipboard changes again (copy the file to keep it)</i>
+<i>//   text, html, paths, image, imageSize, color,</i>
+<i>//   concealed, sourceApp, sourceURL }</i>
+<i>// image: png temp path, valid until the clipboard changes again</i>
+<i>//   (copy the file to keep it); imageSize: { width, height } px</i>
+<i>// concealed: password-manager marker (org.nspasteboard Concealed/</i>
+<i>//   Transient) — clipboard-history apps must skip these</i>
+<i>// sourceApp: { name, bundleId } — frontmost app when the change was</i>
+<i>//   noticed (exact while watch() runs, best-effort otherwise)</i>
+<i>// sourceURL: page a Chromium-browser copy came from</i>
 
 <b>tiny.clipboard.write</b>({ text: 'hi' });               <i>// any combination:</i>
 <b>tiny.clipboard.write</b>({ paths: ['/tmp/a.png', '/tmp/b.png'] });

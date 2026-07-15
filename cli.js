@@ -280,6 +280,7 @@ const app = await createApp({
   onOpenFiles: appMod.onOpenFiles,
   onNotificationClick: appMod.onNotificationClick,
   onWindowClosed: appMod.onWindowClosed,
+  onClipboardChange: appMod.onClipboardChange,
   chrome: ${JSON.stringify(cfg.chrome ?? null)},
   update: ${JSON.stringify(cfg.update ?? null)},
   activation: ${JSON.stringify(cfg.activation ?? null)},

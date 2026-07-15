@@ -69,6 +69,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.12.1 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b>Clipboard metadata</b> — <code>clipboard.read()</code> gains <code>concealed</code> (org.nspasteboard Concealed/Transient markers — clipboard-history apps skip password-manager copies by default), <code>sourceApp</code> (<code>{ name, bundleId }</code> the content came from; exact while <code>watch()</code> runs), <code>sourceURL</code> (the page a Chromium-browser copy came from), and <code>imageSize</code> (px — no more <code>sips</code> for dimensions).</li>
+        <li>Fix: a backend <code>export function onClipboardChange(e)</code> was silently dead in <code>tinyjs dev</code>/<code>build</code> apps — the generated entry didn't forward it to <code>createApp</code>.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.12.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b>Microphone + camera</b> — <code>getUserMedia()</code> now just works in tinyjs pages: the launcher answers WebKit's per-origin media prompt itself, so users see a single system dialog naming your app instead of a double prompt naming <code>file://</code>. <code>tiny.app.permissions.check/request()</code> gain <code>microphone</code> and <code>camera</code> for onboarding flows.</li>

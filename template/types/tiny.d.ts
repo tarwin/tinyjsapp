@@ -110,8 +110,18 @@ declare interface TinyClipboardData {
   /** png temp path (kind 'image'); valid until the clipboard changes again —
    *  copy the file to keep it */
   image: string | null;
+  /** pixel dimensions of `image` */
+  imageSize: { width: number; height: number } | null;
   /** '#rrggbb' or '#rrggbbaa' (kind 'color') */
   color: string | null;
+  /** org.nspasteboard Concealed/Transient marker (password managers) —
+   *  clipboard-history apps must skip these */
+  concealed: boolean;
+  /** app the content came from (frontmost when the change was noticed;
+   *  exact while watch() runs, best-effort otherwise) */
+  sourceApp: { name: string | null; bundleId: string | null } | null;
+  /** page URL a Chromium-browser copy came from */
+  sourceURL: string | null;
 }
 
 declare interface TinyClipboardWrite {

@@ -193,8 +193,12 @@ tiny.api.on('sleep', () => ...);  tiny.api.on('wake', () => ...);
 // osascript spawns, no scratch files, multi-file writes never lose the tail)
 const clip = await tiny.clipboard.read();
 // { kind: 'files'|'image'|'color'|'text'|'empty', changeCount, text, html,
-//   paths, image, color } — image is a png temp path, valid until the
-// clipboard changes again (copy the file to keep it)
+//   paths, image, imageSize, color, concealed, sourceApp, sourceURL }
+// image: png temp path, valid until the clipboard changes again (copy the
+//   file to keep it); imageSize: { width, height } px
+// concealed: password-manager marker (org.nspasteboard) — history apps skip
+// sourceApp: { name, bundleId } frontmost when the change was noticed
+//   (exact while watch() runs); sourceURL: Chromium copy's page url
 tiny.clipboard.write({ text: 'hi' });                    // any combination of
 tiny.clipboard.write({ paths: ['/tmp/a.png', '/tmp/b.png'] });  // text, html,
 tiny.clipboard.write({ image: pngPathOrBase64, color: '#ff8800' }); // paths…

@@ -96,7 +96,9 @@
     // Native clipboard (NSPasteboard in the launcher — no polling spawns).
     clipboard: {
       // -> { kind: 'files'|'image'|'color'|'text'|'empty', changeCount,
-      //      text, html, paths, image (png temp path), color }
+      //      text, html, paths, image (png temp path), imageSize, color,
+      //      concealed (password-manager marker — history apps must skip),
+      //      sourceApp ({ name, bundleId }), sourceURL (Chromium copies) }
       read: () => call('clip.read'),
       // { text?, html?, paths?, image? (png path/data-url/base64), color? }
       write: (data) => call('clip.write', data),

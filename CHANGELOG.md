@@ -4,6 +4,20 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.12.1 — 2026-07-14
+
+- **Clipboard metadata** — `clipboard.read()` now also returns `concealed`
+  (the org.nspasteboard Concealed/Transient markers password managers set —
+  clipboard-history apps must skip these), `sourceApp` (`{ name, bundleId }`
+  of the app the content came from: the frontmost app when the change was
+  first noticed — exact while `watch()` runs, best-effort on a later read;
+  your own `write()`s are attributed to your app), `sourceURL` (the page a
+  Chromium-browser copy came from), and `imageSize` (`{ width, height }` in
+  pixels, so no more shelling out to `sips` for dimensions).
+- Fix: a backend `export function onClipboardChange(e)` was silently dead in
+  `tinyjs dev`/`build` apps — the generated entry didn't forward it to
+  `createApp` (direct `createApp({ onClipboardChange })` users were fine).
+
 ## 0.12.0 — 2026-07-14
 
 - **Microphone + camera** — `getUserMedia()` now just works in tinyjs pages:
