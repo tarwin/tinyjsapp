@@ -18,6 +18,15 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.22.1 — 2026-07-15
+
+- **Tray icons keep their aspect ratio.** A PNG tray icon was force-scaled to
+  a hardcoded 18×18, squishing wide "pill"/wordmark icons into a square and
+  throwing away the PNG's DPI. Custom icons now scale to the 18pt menu-bar
+  height while preserving width (a 58×22pt icon becomes 47.5×18pt, not
+  18×18), and the variable-length status item widens to fit. Square icons are
+  unchanged; `sf:` SF Symbol icons were never affected.
+
 ## 0.22.0 — 2026-07-15
 
 - **`chrome.squareCorners`** — drop macOS's rounded window corners.

@@ -835,8 +835,17 @@ static void apply_tray(webview_t, void *arg) {
       }
     } else if (!spec->icon.empty()) {
       img = [[[NSImage alloc] initWithContentsOfFile:ns(spec->icon)] autorelease];
-      if (img)
-        [img setSize:NSMakeSize(18, 18)];
+      if (img) {
+        // Scale to the menu-bar height (18pt) while preserving aspect ratio, so
+        // wide "pill"/wordmark icons aren't squished into a square. Derive the
+        // aspect from the image's own size, which already honors DPI (pHYs on a
+        // 2x PNG reports point size, not pixels). Guard against a degenerate
+        // height so a malformed rep can't divide by zero.
+        NSSize orig = img.size;
+        CGFloat h = 18.0;
+        CGFloat aspect = orig.height > 0 ? (orig.width / orig.height) : 1.0;
+        [img setSize:NSMakeSize(h * aspect, h)];
+      }
     }
     if (img)
       [img setTemplate:spec->template_icon ? YES : NO];
