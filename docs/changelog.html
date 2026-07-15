@@ -69,6 +69,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.17.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b><code>app.nowPlaying</code></b> — <code>set({ title, artist, album, duration, elapsed, playing })</code> shows your app in Control Center / the lock screen and arms the hardware media keys; presses (F7/F8/F9, AirPods, Control Center) arrive as the <code>media-key</code> event / <code>onMediaKey</code> export with <code>{ command, time? }</code>.</li>
+        <li><b><code>app.say(text, { voice, rate })</code></b> — text-to-speech (AVSpeechSynthesizer), resolves when playback finishes; <code>app.voices()</code> lists installed voices, <code>app.stopSpeaking()</code> interrupts.</li>
+        <li><b>Notification actions &amp; reply</b> — <code>tiny.notify(title, body, { actions: [{ id, title, reply?, destructive? }] })</code> adds buttons / a reply field (packaged apps); taps arrive as <code>notification-action</code> / <code>onNotificationAction</code> with <code>{ id, action, reply }</code>.</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.16.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b><code>app.pickColor()</code></b> — the system eyedropper: any pixel, any app, <em>no screen-recording permission</em>. <code>'#rrggbb'</code> or <code>null</code> on cancel.</li>

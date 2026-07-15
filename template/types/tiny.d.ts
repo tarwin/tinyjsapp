@@ -83,11 +83,68 @@ declare interface TinyTraySpec {
   menu?: TinyMenuItem[];
 }
 
+declare interface TinyNotifyAction {
+  id: string;
+  title: string;
+  /** show a text field instead of a plain button (the submit sends `reply`) */
+  reply?: boolean;
+  /** placeholder for the reply field */
+  placeholder?: string;
+  /** button title for the reply field (defaults to `title`) */
+  buttonTitle?: string;
+  /** render the button in red */
+  destructive?: boolean;
+}
+
 declare interface TinyNotifyOptions {
   /** correlates notification clicks */
   id?: string;
   subtitle?: string;
   sound?: boolean;
+  /** action buttons / a reply field (packaged apps); taps arrive via
+   *  onNotificationAction / the 'notification-action' event */
+  actions?: TinyNotifyAction[];
+}
+
+/** A notification action button or reply-field submit. */
+declare interface TinyNotificationAction {
+  id: string;
+  action: string;
+  /** the typed text for a reply action, '' otherwise */
+  reply: string;
+}
+
+/** Now Playing metadata (Control Center / lock screen). */
+declare interface TinyNowPlaying {
+  title?: string;
+  artist?: string;
+  album?: string;
+  /** seconds */
+  duration?: number;
+  /** seconds */
+  elapsed?: number;
+  playing?: boolean;
+}
+
+/** A hardware media key / Control Center transport event. */
+declare interface TinyMediaKey {
+  command: 'play' | 'pause' | 'toggle' | 'next' | 'previous' | 'seek';
+  /** seek target in seconds (only for 'seek') */
+  time?: number;
+}
+
+declare interface TinyVoice {
+  id: string;
+  name: string;
+  lang: string;
+  quality: 'default' | 'enhanced' | 'premium';
+}
+
+declare interface TinySayOptions {
+  /** a voice id from voices(), or a BCP-47 language like 'en-AU' */
+  voice?: string;
+  /** 0..1 (~0.5 default) */
+  rate?: number;
 }
 
 declare interface TinyOpenWindowOptions {
@@ -465,6 +522,20 @@ declare interface Tiny {
      *  resolves the result as a string, null if it isn't text; rejects
      *  with the script error message */
     applescript(source: string): Promise<string | null>;
+    onNotificationClick(fn: (id: string) => void): void;
+    /** action button / reply field on a notification was used */
+    onNotificationAction(fn: (info: TinyNotificationAction) => void): void;
+    nowPlaying: {
+      /** also arms the media keys */
+      set(info: TinyNowPlaying): Promise<any>;
+      clear(): Promise<any>;
+    };
+    /** a hardware media key / Control Center transport fired */
+    onMediaKey(fn: (info: TinyMediaKey) => void): void;
+    /** speak text; resolves when playback finishes (false if interrupted) */
+    say(text: string, opts?: TinySayOptions): Promise<boolean>;
+    stopSpeaking(): Promise<any>;
+    voices(): Promise<TinyVoice[]>;
   };
 
   tray: {
@@ -625,6 +696,15 @@ declare interface TinyApp {
    *  resolves the result as a string, null if it isn't text; rejects
    *  with the script error message */
   applescript(source: string): Promise<string | null>;
+  nowPlaying: {
+    /** also arms the media keys */
+    set(info: TinyNowPlaying): boolean;
+    clear(): boolean;
+  };
+  /** speak text; resolves when playback finishes (false if interrupted) */
+  say(text: string, opts?: TinySayOptions): Promise<boolean>;
+  stopSpeaking(): boolean;
+  voices(): Promise<TinyVoice[]>;
   update: {
     /** notes = release notes from the manifest ("tinyjs publish --notes") */
     check(): Promise<{ available: boolean; current: string; latest: string | null; notes: string | null }>;

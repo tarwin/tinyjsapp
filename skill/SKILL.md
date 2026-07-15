@@ -69,7 +69,8 @@ export function init(app) {
   // beep()/playSound(target), window(id).share(opts), idleTime(),
   // quickLook(paths), captureScreen(screenId), pickColor(), ocr(path),
   // thumbnail(path, size), secrets.get/set/delete, authenticate(reason),
-  // applescript(source), show({ activate: false })
+  // applescript(source), nowPlaying.set/clear, say(text, opts), voices(),
+  // stopSpeaking(), show({ activate: false })
 }
 
 export function onMenu(id, app) { ... }  // optional: menu clicks, backend-side
@@ -277,6 +278,19 @@ await tiny.app.authenticate(reason);    // Touch ID / password sheet ->
 await tiny.app.applescript(src);        // in-process, no osascript spawn;
                                 // 'automation' TCC; -> result string | null,
                                 // rejects with the script error
+
+// Now Playing (Control Center / lock screen) + hardware media keys
+tiny.app.nowPlaying.set({ title, artist, album, duration, elapsed, playing });
+tiny.app.onMediaKey(({ command, time }) => …);  // play|pause|toggle|next|
+tiny.app.nowPlaying.clear();                    // previous|seek (time=secs)
+// text-to-speech; say() resolves when playback ends (false if interrupted)
+await tiny.app.voices();        // [{ id, name, lang, quality }]
+await tiny.app.say(text, { voice, rate });  tiny.app.stopSpeaking();
+// notifications with buttons / a reply field (packaged apps)
+tiny.notify(title, body, { actions: [{ id, title, reply?, placeholder?,
+                                       destructive? }] });
+tiny.app.onNotificationAction(({ id, action, reply }) => …);  // reply=text
+// backend exports: onMediaKey(info, app), onNotificationAction(info, app)
 
 tiny.win.print();                           // native print panel
 

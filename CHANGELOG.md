@@ -4,6 +4,28 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.17.0 — 2026-07-14
+
+Media tier — apps that behave like real media citizens. (Screen recording
+to .mp4 is next, in its own release.)
+
+- **`app.nowPlaying`** — `set({ title, artist, album, duration, elapsed,
+  playing })` puts your app in Control Center and on the lock screen, and
+  arms the hardware media keys; presses (F7/F8/F9, AirPods taps, Control
+  Center transport) arrive as the `media-key` page event /
+  `onMediaKey(info, app)` export with `{ command: 'play'|'pause'|'toggle'|
+  'next'|'previous'|'seek', time? }`. `clear()` tears it down. (MediaPlayer
+  framework: MPNowPlayingInfoCenter + MPRemoteCommandCenter.)
+- **`app.say(text, { voice, rate })`** — text-to-speech via
+  AVSpeechSynthesizer; resolves when playback *finishes* (false if
+  interrupted). `app.voices()` lists the installed voices (`{ id, name,
+  lang, quality }`), `app.stopSpeaking()` interrupts.
+- **Notification actions & reply** — `tiny.notify(title, body, { actions:
+  [{ id, title, reply?, placeholder?, destructive? }] })` adds buttons or a
+  text-reply field to a banner (packaged apps); taps come back as the
+  `notification-action` event / `onNotificationAction(info, app)` export
+  with `{ id, action, reply }` (reply = the typed text).
+
 ## 0.16.0 — 2026-07-14
 
 The Mac's superpowers — the frameworks macOS ships that JS can't normally

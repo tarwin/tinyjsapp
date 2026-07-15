@@ -32,6 +32,9 @@ const one = (s) => String(s ?? '').replace(/[\t\n\r]/g, ' ');
 const esc = (s) => String(s ?? '')
   .replace(/\\/g, '\\\\').replace(/\t/g, '\\t')
   .replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+// Reverse of esc() / the launcher's wire_escape, for inbound tab fields.
+const unesc = (s) => String(s ?? '').replace(/\\(.)/g,
+  (_, c) => c === 'n' ? '\n' : c === 't' ? '\t' : c === 'r' ? '\r' : c);
 const DIALOG_OPS = {
   'win.openFile': { op: 'open', args: () => [] },
   'win.openFiles': { op: 'openmulti', args: () => [] },
@@ -68,7 +71,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onWindowClosed, onClipboardChange, onUpdateAvailable, chrome = null, update = null, activation = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, chrome = null, update = null, activation = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -201,10 +204,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // 'notification-click' event (opts: { id, subtitle, sound }). Dev has no
   // bundle for UNUserNotificationCenter, so it falls back to osascript
   // (banner appears under "Script Editor").
-  async function notify({ title, body, subtitle, id: nid, sound } = {}) {
+  async function notify({ title, body, subtitle, id: nid, sound, actions } = {}) {
     if (attachPath) {
+      // actions: [{ id, title, reply?, placeholder?, destructive? }] — buttons
+      // (or a reply field) on the banner; taps come back as 'notification-action'.
+      const acts = actions?.length ? esc(JSON.stringify(actions)) : '';
       send('NOTIFY ' + [one(nid ?? ''), one(title ?? 'tinyjs'), one(body ?? ''),
-                        one(subtitle ?? ''), sound ? '1' : '0'].join('\t'));
+                        one(subtitle ?? ''), sound ? '1' : '0', acts].join('\t'));
       return true;
     }
     // notify() is naturally fire-and-forget; an unhandled rejection here
@@ -423,6 +429,27 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // audio file path. Resolve false if the name/file didn't load.
     async beep() { return (await ask('SOUND'))?.ok === true; },
     async playSound(target) { return (await ask('SOUND', esc(target)))?.ok === true; },
+    // Now Playing (Control Center / lock screen) + hardware media keys.
+    // set({ title, artist, album, duration, elapsed, playing }) also arms
+    // the media keys — presses arrive as the 'media-key' event / onMediaKey
+    // option with { command: 'play'|'pause'|'toggle'|'next'|'previous'|
+    // 'seek', time? }. clear() tears it down.
+    nowPlaying: {
+      set(info = {}) { send('NOWPLAYING ' + esc(JSON.stringify(info))); return true; },
+      clear() { send('NOWPLAYING clear'); return true; },
+    },
+    // Speak text with a system voice (AVSpeechSynthesizer). voice: a voice
+    // id from voices() or a BCP-47 language ('en-AU'); rate 0..1 (~0.5
+    // default). Resolves when playback FINISHES (false if interrupted).
+    async say(text, { voice, rate } = {}) {
+      return (await ask('SAY', esc(String(text ?? '')) + '\t' + esc(voice ?? '') +
+                        '\t' + (rate ?? 0)))?.ok === true;
+    },
+    stopSpeaking() { send('SAYSTOP'); return true; },
+    // Installed voices: [{ id, name, lang, quality: 'default'|'enhanced'|
+    // 'premium' }]. Enhanced/premium need a one-time download in System
+    // Settings > Accessibility > Spoken Content.
+    async voices() { return (await ask('VOICES'))?.voices ?? []; },
     // Seconds since the user's last input, session-wide — pause polling /
     // dim UI when they walk away.
     idleTime: async () => (await query('idle'))?.seconds ?? 0,
@@ -712,6 +739,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'secrets.delete': async ({ key }) => app.secrets.delete(key),
     'app.authenticate': async ({ reason }) => app.authenticate(reason),
     'app.applescript': async ({ source }) => app.applescript(source),
+    'nowplaying.set': async (info) => app.nowPlaying.set(info),
+    'nowplaying.clear': async () => app.nowPlaying.clear(),
+    'app.say': async ({ text, voice, rate }) => app.say(text, { voice, rate }),
+    'app.stopSpeaking': async () => app.stopSpeaking(),
+    'app.voices': async () => app.voices(),
   };
   const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };
@@ -816,6 +848,16 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           const id = line.slice(12);
           push('notification-click', { id });
           if (onNotificationClick) onNotificationClick(id, app);
+        } else if (line.startsWith('NOTIFYACTION ')) {
+          const [id, action, reply] = line.slice(13).split('\t');
+          const info = { id, action, reply: unesc(reply ?? '') };
+          push('notification-action', info);
+          if (onNotificationAction) onNotificationAction(info, app);
+        } else if (line.startsWith('MEDIAKEY ')) {
+          const [command, secs] = line.slice(9).split('\t');
+          const info = { command, time: secs != null ? +secs : undefined };
+          push('media-key', info);
+          if (onMediaKey) onMediaKey(info, app);
         } else if (line.startsWith('OPENURL ')) {
           // Deep link (custom URL scheme; packaged .app only).
           const url = line.slice(8);

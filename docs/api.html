@@ -97,6 +97,7 @@
     <a href="#permissions">permissions</a>
     <a href="#shell">shell &amp; dock</a>
     <a href="#superpowers">superpowers</a>
+    <a href="#media">media</a>
     <a href="#system">system</a>
     <a href="#open">deep links</a>
     <a href="#update">auto-update</a>
@@ -478,6 +479,33 @@ if (await <b>tiny.app.authenticate</b>('unlock the vault')) { … }
 <i>// AppleScript in-process — control Music, Spotify, Finder, anything</i>
 <i>// scriptable; no osascript spawn, same 'automation' permission</i>
 await <b>tiny.app.applescript</b>('tell application "Music" to playpause');</pre>
+  </section>
+
+  <section id="media">
+    <h2>media <span class="tag">Now Playing, speech, rich notifications</span></h2>
+    <pre><i>// Now Playing — show in Control Center / lock screen and receive the</i>
+<i>// hardware media keys (F7/F8/F9, AirPods taps, Control Center transport)</i>
+<b>tiny.app.nowPlaying.set</b>({ title: 'Song', artist: 'Band', album: 'LP',
+                        duration: 240, elapsed: 12, playing: true });
+<b>tiny.app.onMediaKey</b>(({ command, time }) =&gt; { <i>// play|pause|toggle|next|</i>
+  if (command === 'toggle') togglePlayback();     <i>// previous|seek (time=secs)</i>
+});
+<b>tiny.app.nowPlaying.clear</b>();
+
+<i>// text-to-speech; say() resolves when playback ends (false if interrupted)</i>
+const voices = await <b>tiny.app.voices</b>();   <i>// [{ id, name, lang, quality }]</i>
+await <b>tiny.app.say</b>('Export finished', { voice: voices[0].id, rate: 0.5 });
+<b>tiny.app.stopSpeaking</b>();
+
+<i>// notifications with action buttons + a reply field (packaged apps)</i>
+<b>tiny.notify</b>('New message', 'from Alex', { actions: [
+  { id: 'reply', title: 'Reply', reply: true, placeholder: 'Message…' },
+  { id: 'del', title: 'Delete', destructive: true },
+]});
+<b>tiny.app.onNotificationAction</b>(({ id, action, reply }) =&gt; {
+  if (action === 'reply') sendReply(reply);   <i>// reply = the typed text</i>
+});
+<i>// backend twins: export onMediaKey(info, app), onNotificationAction(info, app)</i></pre>
   </section>
 
   <section id="system">

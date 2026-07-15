@@ -129,6 +129,9 @@
       onOpenFiles(fn) { window.tiny.api.on('open-files', ({ paths }) => fn(paths)); },
       // fn(id): a notification banner was clicked (packaged apps).
       onNotificationClick(fn) { window.tiny.api.on('notification-click', ({ id }) => fn(id)); },
+      // fn({ id, action, reply }): a notification action button / reply field
+      // was used (tiny.notify(t, b, { actions: [{ id, title, reply? }] })).
+      onNotificationAction(fn) { window.tiny.api.on('notification-action', fn); },
       // Post a native keystroke (e.g. 'cmd+v') -> { ok, trusted }; needs the
       // Accessibility permission (which names your app, not osascript).
       keystroke: (combo) => call('app.keystroke', { combo }),
@@ -215,6 +218,21 @@
       // AppleScript in-process (no osascript) -> result string | null;
       // rejects with the script error. Uses the 'automation' permission.
       applescript: (source) => call('app.applescript', { source }),
+      // Now Playing (Control Center / lock screen) + media keys. set() arms
+      // the keys; presses arrive via onMediaKey.
+      nowPlaying: {
+        set: (info) => call('nowplaying.set', info ?? {}),   // { title, artist,
+        clear: () => call('nowplaying.clear'),               //  album, duration,
+      },                                                     //  elapsed, playing }
+      // fn({ command, time }): a media key / Control Center transport fired
+      // (command: play|pause|toggle|next|previous|seek; time = seek target).
+      onMediaKey(fn) { window.tiny.api.on('media-key', fn); },
+      // Speak text with a system voice -> resolves when playback finishes.
+      // opts: { voice (id from voices() or a lang like 'en-AU'), rate 0..1 }.
+      say: (text, opts) => call('app.say', { text, ...(opts ?? {}) }),
+      stopSpeaking: () => call('app.stopSpeaking'),
+      // [{ id, name, lang, quality }] — installed speech voices.
+      voices: () => call('app.voices'),
     },
 
     tray: {

@@ -279,6 +279,8 @@ const app = await createApp({
   onOpenUrl: appMod.onOpenUrl,
   onOpenFiles: appMod.onOpenFiles,
   onNotificationClick: appMod.onNotificationClick,
+  onNotificationAction: appMod.onNotificationAction,
+  onMediaKey: appMod.onMediaKey,
   onWindowClosed: appMod.onWindowClosed,
   onClipboardChange: appMod.onClipboardChange,
   onUpdateAvailable: appMod.onUpdateAvailable,

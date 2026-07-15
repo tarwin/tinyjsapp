@@ -101,7 +101,8 @@ export function init(app) {          // window is up
   // beep(), playSound(target), window(id).share(opts),
   // idleTime(), quickLook(paths), captureScreen(screenId),
   // pickColor(), ocr(path), thumbnail(path, size),
-  // secrets.get/set/delete, authenticate(reason), applescript(source)
+  // secrets.get/set/delete, authenticate(reason), applescript(source),
+  // nowPlaying.set/clear, say(text, opts), voices(), stopSpeaking()
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -334,6 +335,30 @@ if (await tiny.app.authenticate('unlock the vault')) { /* … */ }
 // app; no osascript spawn, same 'automation' permission as keystrokes
 await tiny.app.applescript('tell application "Music" to playpause');
 const sum = await tiny.app.applescript('return 2 + 3');   // '5'
+
+// Now Playing — your media app shows in Control Center / the lock screen
+// and the hardware media keys (F7/F8/F9, AirPods) route to you
+tiny.app.nowPlaying.set({ title: 'Song', artist: 'Band', album: 'LP',
+                          duration: 240, elapsed: 12, playing: true });
+tiny.app.onMediaKey(({ command, time }) => {  // play|pause|toggle|next|
+  if (command === 'toggle') togglePlayback();  // previous|seek (time = secs)
+});
+tiny.app.nowPlaying.clear();
+
+// text-to-speech with the system voices; say() resolves when playback ends
+const voices = await tiny.app.voices();  // [{ id, name, lang, quality }]
+await tiny.app.say('Export finished', { voice: voices[0].id, rate: 0.5 });
+tiny.app.stopSpeaking();
+
+// notifications with action buttons + a reply field (packaged apps)
+tiny.notify('New message', 'from Alex', { actions: [
+  { id: 'reply', title: 'Reply', reply: true, placeholder: 'Message…' },
+  { id: 'mute', title: 'Mute' },
+  { id: 'del', title: 'Delete', destructive: true },
+]});
+tiny.app.onNotificationAction(({ id, action, reply }) => {
+  if (action === 'reply') sendReply(reply);   // reply = the typed text
+});
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null

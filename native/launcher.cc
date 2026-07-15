@@ -63,8 +63,23 @@
 //                         HKREG <id>\t<combo> /
 //                         HKUNREG <id>               global hotkeys
 //                         NOTIFY <id>\t<title>\t<body>\t<subtitle>\t<snd01>
+//                                       [\t<actions-json>]
 //                                                    notification (bundle mode:
-//                                                    Notification Center)
+//                                                    Notification Center);
+//                                                    actions-json = [{id,
+//                                                    title, reply?,
+//                                                    placeholder?, destructive?}]
+//                                                    → buttons / a reply field
+//                         NOWPLAYING <json> | clear  set the Now Playing info
+//                                                    (title/artist/album/
+//                                                    duration/elapsed/playing)
+//                                                    + arm the media keys
+//                         SAY <qid> <text>\t<voice>\t<rate>
+//                                                    speak via AVSpeech; GOT
+//                                                    {ok} when done
+//                         SAYSTOP                    stop speaking
+//                         VOICES <qid>               list installed voices;
+//                                                    GOT {ok, voices}
 //                         CHROME <frame>\t<traffic>\t<transp>\t<vibrancy>
 //                                                    window chrome ('' = keep;
 //                                                    0|1 flags; vibrancy =
@@ -169,6 +184,13 @@
 //                                                    (self=1: our own CLIPWRITE)
 //                         NOTIFYCLICK <id>           a notification banner was
 //                                                    clicked
+//                         NOTIFYACTION <id>\t<action>\t<reply>
+//                                                    an action button / reply
+//                                                    field on a notification
+//                         MEDIAKEY <name>[\t<secs>]  a media key / Control
+//                                                    Center transport fired
+//                                                    (play/pause/toggle/next/
+//                                                    previous/seek)
 //
 // A default app menu (About + Quit) is always present; About shows the
 // standard panel with the app name, version, and a tinyjs credit.
@@ -183,6 +205,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
 #import <LocalAuthentication/LocalAuthentication.h> // Touch ID (AUTH)
+#import <MediaPlayer/MediaPlayer.h>  // Now Playing + media keys
 #import <Quartz/Quartz.h>             // QLPreviewPanel (Quick Look)
 #import <QuickLookThumbnailing/QuickLookThumbnailing.h> // THUMB
 #import <Security/Security.h>         // Keychain (SECRET)
@@ -408,6 +431,21 @@ static std::string wire_unescape(const std::string &s) {
     } else {
       out += s[i];
     }
+  }
+  return out;
+}
+
+// Reverse of wire_unescape / the bridge's esc(): make text safe to carry in
+// a tab-separated wire field (the bridge unescapes it on the way in).
+static std::string wire_escape(const std::string &s) {
+  std::string out;
+  out.reserve(s.size());
+  for (char c : s) {
+    if (c == '\\') out += "\\\\";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\t') out += "\\t";
+    else if (c == '\r') out += "\\r";
+    else out += c;
   }
   return out;
 }
@@ -2698,7 +2736,7 @@ static void do_get(webview_t, void *arg) {
 // `NOTIFYCLICK <id>` — including the click that launched the app.
 
 struct NotifReq {
-  std::string id, title, body, subtitle;
+  std::string id, title, body, subtitle, actions_json;
   bool sound = false;
 };
 
@@ -2709,10 +2747,19 @@ struct NotifReq {
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
     didReceiveNotificationResponse:(UNNotificationResponse *)response
              withCompletionHandler:(void (^)(void))completionHandler {
+  std::string nid = [response.notification.request.identifier UTF8String];
   if ([response.actionIdentifier
           isEqualToString:UNNotificationDefaultActionIdentifier]) {
-    sock_write_line(std::string("NOTIFYCLICK ") +
-                    [response.notification.request.identifier UTF8String]);
+    sock_write_line("NOTIFYCLICK " + nid);
+  } else if (![response.actionIdentifier
+                 isEqualToString:UNNotificationDismissActionIdentifier]) {
+    // A custom action button (or a reply field submit) was tapped.
+    std::string reply;
+    if ([response isKindOfClass:[UNTextInputNotificationResponse class]])
+      reply = [[(UNTextInputNotificationResponse *)response userText] UTF8String];
+    sock_write_line("NOTIFYACTION " + nid + "\t" +
+                    std::string([response.actionIdentifier UTF8String]) + "\t" +
+                    wire_escape(reply));
   }
   completionHandler();
 }
@@ -2762,6 +2809,60 @@ static void deliver_osascript(const NotifReq &req) {
               const_cast<char *const *>(sargv), environ);
 }
 
+// Action buttons / reply fields need a UNNotificationCategory registered
+// before delivery. Each notification with actions gets its own category
+// (id = "tinyjs-cat-" + notif id); categories accumulate because
+// setNotificationCategories replaces the whole set.
+static NSMutableDictionary<NSString *, UNNotificationCategory *> *g_notif_cats;
+
+static NSString *register_notif_category(const std::string &nid,
+                                         const std::string &actions_json) {
+  @autoreleasepool {
+    NSData *d = [ns(actions_json) dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray *arr = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+    if (![arr isKindOfClass:[NSArray class]] || arr.count == 0)
+      return nil;
+    NSMutableArray<UNNotificationAction *> *actions = [NSMutableArray array];
+    for (NSDictionary *a in arr) {
+      if (![a isKindOfClass:[NSDictionary class]])
+        continue;
+      NSString *aid = a[@"id"], *title = a[@"title"] ?: a[@"id"];
+      if (!aid)
+        continue;
+      UNNotificationActionOptions opt =
+          [a[@"destructive"] boolValue] ? UNNotificationActionOptionDestructive
+                                        : UNNotificationActionOptionNone;
+      if ([a[@"reply"] boolValue]) {
+        [actions addObject:[UNTextInputNotificationAction
+                               actionWithIdentifier:aid
+                                                title:title
+                                              options:opt
+                                 textInputButtonTitle:(a[@"buttonTitle"] ?: title)
+                                 textInputPlaceholder:(a[@"placeholder"] ?: @"")]];
+      } else {
+        [actions addObject:[UNNotificationAction actionWithIdentifier:aid
+                                                                title:title
+                                                              options:opt]];
+      }
+    }
+    if (actions.count == 0)
+      return nil;
+    NSString *catId =
+        [NSString stringWithFormat:@"tinyjs-cat-%s", nid.c_str()];
+    UNNotificationCategory *cat =
+        [UNNotificationCategory categoryWithIdentifier:catId
+                                               actions:actions
+                                     intentIdentifiers:@[]
+                                               options:UNNotificationCategoryOptionNone];
+    if (!g_notif_cats)
+      g_notif_cats = [[NSMutableDictionary alloc] init];
+    g_notif_cats[catId] = cat;
+    [[UNUserNotificationCenter currentNotificationCenter]
+        setNotificationCategories:[NSSet setWithArray:g_notif_cats.allValues]];
+    return catId;
+  }
+}
+
 static void deliver_notification(const NotifReq &req) {
   UNMutableNotificationContent *content =
       [[[UNMutableNotificationContent alloc] init] autorelease];
@@ -2772,6 +2873,12 @@ static void deliver_notification(const NotifReq &req) {
     content.subtitle = ns(req.subtitle);
   if (req.sound)
     content.sound = [UNNotificationSound defaultSound];
+  if (!req.actions_json.empty()) {
+    NSString *catId = register_notif_category(
+        req.id.empty() ? "anon" : req.id, req.actions_json);
+    if (catId)
+      content.categoryIdentifier = catId;
+  }
   NSString *nid =
       req.id.empty() ? [[NSUUID UUID] UUIDString] : ns(req.id);
   UNNotificationRequest *r =
@@ -2837,6 +2944,206 @@ static void do_notify(webview_t, void *arg) {
 #else
 static void install_notif_delegate() {}
 static void do_notify(webview_t, void *arg) { delete static_cast<NotifReq *>(arg); }
+#endif
+
+// --- Now Playing + media keys (macOS) -----------------------------------------------
+// NOWPLAYING <json> populates MPNowPlayingInfoCenter (Control Center / lock
+// screen) and, on first use, wires MPRemoteCommandCenter so the hardware
+// media keys, AirPods taps, and Control Center transport route to the app as
+// `MEDIAKEY <name>` (play/pause/toggle/next/previous/seek\t<secs>). Any
+// value nowPlayingInfo needs sits in the JSON; "clear" tears it all down.
+
+struct NowPlayingReq {
+  std::string json; // "" / "clear" = clear
+};
+
+#ifdef __APPLE__
+static bool g_media_armed = false;
+
+static void arm_media_commands() {
+  if (g_media_armed)
+    return;
+  g_media_armed = true;
+  MPRemoteCommandCenter *cc = [MPRemoteCommandCenter sharedCommandCenter];
+  auto bind = [](MPRemoteCommand *cmd, const char *name) {
+    cmd.enabled = YES;
+    [cmd addTargetWithHandler:^MPRemoteCommandHandlerStatus(
+             MPRemoteCommandEvent *ev) {
+      if ([ev isKindOfClass:[MPChangePlaybackPositionCommandEvent class]]) {
+        double t = ((MPChangePlaybackPositionCommandEvent *)ev).positionTime;
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "MEDIAKEY seek\t%.3f", t);
+        sock_write_line(buf);
+      } else {
+        sock_write_line(std::string("MEDIAKEY ") + name);
+      }
+      return MPRemoteCommandHandlerStatusSuccess;
+    }];
+  };
+  bind(cc.playCommand, "play");
+  bind(cc.pauseCommand, "pause");
+  bind(cc.togglePlayPauseCommand, "toggle");
+  bind(cc.nextTrackCommand, "next");
+  bind(cc.previousTrackCommand, "previous");
+  bind(cc.changePlaybackPositionCommand, "seek");
+}
+
+static void do_nowplaying(webview_t, void *arg) {
+  NowPlayingReq *req = static_cast<NowPlayingReq *>(arg);
+  @autoreleasepool {
+    MPNowPlayingInfoCenter *ic = [MPNowPlayingInfoCenter defaultCenter];
+    if (req->json.empty() || req->json == "clear") {
+      ic.nowPlayingInfo = nil;
+      ic.playbackState = MPNowPlayingPlaybackStateStopped;
+    } else {
+      arm_media_commands();
+      NSData *d = [ns(req->json) dataUsingEncoding:NSUTF8StringEncoding];
+      NSDictionary *j =
+          [NSJSONSerialization JSONObjectWithData:d options:0 error:nil];
+      NSMutableDictionary *info = [NSMutableDictionary dictionary];
+      if ([j[@"title"] isKindOfClass:[NSString class]])
+        info[MPMediaItemPropertyTitle] = j[@"title"];
+      if ([j[@"artist"] isKindOfClass:[NSString class]])
+        info[MPMediaItemPropertyArtist] = j[@"artist"];
+      if ([j[@"album"] isKindOfClass:[NSString class]])
+        info[MPMediaItemPropertyAlbumTitle] = j[@"album"];
+      if ([j[@"duration"] isKindOfClass:[NSNumber class]])
+        info[MPMediaItemPropertyPlaybackDuration] = j[@"duration"];
+      if ([j[@"elapsed"] isKindOfClass:[NSNumber class]])
+        info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = j[@"elapsed"];
+      bool playing = [j[@"playing"] boolValue];
+      info[MPNowPlayingInfoPropertyPlaybackRate] = @(playing ? 1.0 : 0.0);
+      ic.nowPlayingInfo = info;
+      ic.playbackState = playing ? MPNowPlayingPlaybackStatePlaying
+                                 : MPNowPlayingPlaybackStatePaused;
+    }
+  }
+  delete req;
+}
+#else
+static void do_nowplaying(webview_t, void *arg) {
+  delete static_cast<NowPlayingReq *>(arg);
+}
+#endif
+
+// --- speech synthesis (macOS) -------------------------------------------------------
+// SAY <qid> <text>\t<voice>\t<rate> speaks with AVSpeechSynthesizer and
+// answers GOT {ok} when the utterance FINISHES (so `await say()` waits for
+// playback). VOICES lists installed voices; SAYSTOP interrupts.
+
+struct SayReq {
+  std::string qid, text, voice;
+  double rate;
+};
+struct VoicesReq {
+  std::string qid;
+};
+
+#ifdef __APPLE__
+@interface TinySpeechDelegate : NSObject <AVSpeechSynthesizerDelegate>
+@property(strong) NSMutableDictionary<NSValue *, NSString *> *qids; // utterance -> qid
+@end
+@implementation TinySpeechDelegate
+- (void)finish:(AVSpeechUtterance *)u ok:(BOOL)ok {
+  NSValue *k = [NSValue valueWithNonretainedObject:u];
+  NSString *qid = self.qids[k];
+  if (qid) {
+    sock_write_line("GOT " + std::string([qid UTF8String]) +
+                    " {\"ok\":" + (ok ? "true" : "false") + "}");
+    [self.qids removeObjectForKey:k];
+  }
+}
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)s
+    didFinishSpeechUtterance:(AVSpeechUtterance *)u {
+  [self finish:u ok:YES];
+}
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)s
+    didCancelSpeechUtterance:(AVSpeechUtterance *)u {
+  [self finish:u ok:NO];
+}
+@end
+
+static AVSpeechSynthesizer *g_synth = nil;
+static TinySpeechDelegate *g_synth_delegate = nil;
+
+static void do_say(webview_t, void *arg) {
+  SayReq *req = static_cast<SayReq *>(arg);
+  @autoreleasepool {
+    if (!g_synth) {
+      g_synth = [[AVSpeechSynthesizer alloc] init];
+      g_synth_delegate = [[TinySpeechDelegate alloc] init];
+      g_synth_delegate.qids = [NSMutableDictionary dictionary];
+      g_synth.delegate = g_synth_delegate;
+    }
+    AVSpeechUtterance *u =
+        [AVSpeechUtterance speechUtteranceWithString:ns(req->text)];
+    if (!req->voice.empty()) {
+      AVSpeechSynthesisVoice *v =
+          [AVSpeechSynthesisVoice voiceWithIdentifier:ns(req->voice)]
+              ?: [AVSpeechSynthesisVoice voiceWithLanguage:ns(req->voice)];
+      if (v)
+        u.voice = v;
+    }
+    if (req->rate > 0)
+      u.rate = (float)req->rate; // 0..1 (AVSpeechUtteranceDefaultSpeechRate ~0.5)
+    g_synth_delegate.qids[[NSValue valueWithNonretainedObject:u]] =
+        ns(req->qid);
+    [g_synth speakUtterance:u];
+  }
+  delete req;
+}
+
+static void do_saystop(webview_t, void *) {
+  // Resolve every pending utterance as interrupted here rather than trust
+  // didCancelSpeechUtterance, which the framework skips when a stop lands
+  // during synthesis latency (before playback starts).
+  if (g_synth_delegate) {
+    for (NSValue *k in g_synth_delegate.qids.allKeys) {
+      NSString *qid = g_synth_delegate.qids[k];
+      sock_write_line("GOT " + std::string([qid UTF8String]) +
+                      " {\"ok\":false}");
+    }
+    [g_synth_delegate.qids removeAllObjects];
+  }
+  [g_synth stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+}
+
+static void do_voices(webview_t, void *arg) {
+  VoicesReq *req = static_cast<VoicesReq *>(arg);
+  @autoreleasepool {
+    std::string json = "[";
+    bool first = true;
+    for (AVSpeechSynthesisVoice *v in [AVSpeechSynthesisVoice speechVoices]) {
+      const char *q = v.quality == AVSpeechSynthesisVoiceQualityPremium
+                          ? "premium"
+                          : v.quality == AVSpeechSynthesisVoiceQualityEnhanced
+                                ? "enhanced"
+                                : "default";
+      if (!first)
+        json += ",";
+      first = false;
+      json += "{\"id\":" + json_escape([v.identifier UTF8String]) +
+              ",\"name\":" + json_escape([v.name UTF8String]) +
+              ",\"lang\":" + json_escape([v.language UTF8String]) +
+              ",\"quality\":\"" + q + "\"}";
+    }
+    json += "]";
+    sock_write_line("GOT " + req->qid + " {\"ok\":true,\"voices\":" + json + "}");
+  }
+  delete req;
+}
+#else
+static void do_say(webview_t, void *arg) {
+  SayReq *r = static_cast<SayReq *>(arg);
+  sock_write_line("GOT " + r->qid + " {\"ok\":false}");
+  delete r;
+}
+static void do_saystop(webview_t, void *) {}
+static void do_voices(webview_t, void *arg) {
+  VoicesReq *r = static_cast<VoicesReq *>(arg);
+  sock_write_line("GOT " + r->qid + " {\"ok\":true,\"voices\":[]}");
+  delete r;
+}
 #endif
 
 // --- window chrome: frameless / traffic lights / transparency / vibrancy ---------
@@ -3635,6 +3942,7 @@ static void sock_read_loop() {
         req->body = p.size() > 2 ? p[2] : "";
         req->subtitle = p.size() > 3 ? p[3] : "";
         req->sound = p.size() > 4 && p[4] == "1";
+        req->actions_json = p.size() > 5 ? wire_unescape(p[5]) : "";
         webview_dispatch(g_w, do_notify, req);
       } else if (line.rfind("CHROME", 0) == 0 &&
                  (line[6] == ' ' || line[6] == '@')) {
@@ -3759,6 +4067,24 @@ static void sock_read_loop() {
           if (!p[i].empty())
             req->paths.push_back(wire_unescape(p[i]));
         webview_dispatch(g_w, do_share, req);
+      } else if (line == "NOWPLAYING" || line.rfind("NOWPLAYING ", 0) == 0) {
+        NowPlayingReq *req = new NowPlayingReq;
+        req->json = line.size() > 11 ? wire_unescape(line.substr(11)) : "";
+        webview_dispatch(g_w, do_nowplaying, req);
+      } else if (line.rfind("SAY ", 0) == 0) {
+        size_t sp = line.find(' ', 4);
+        if (sp == std::string::npos) continue;
+        std::vector<std::string> p = split_tabs(line.substr(sp + 1));
+        SayReq *req = new SayReq;
+        req->qid = line.substr(4, sp - 4);
+        req->text = p.size() > 0 ? wire_unescape(p[0]) : "";
+        req->voice = p.size() > 1 ? wire_unescape(p[1]) : "";
+        req->rate = p.size() > 2 ? std::atof(p[2].c_str()) : 0;
+        webview_dispatch(g_w, do_say, req);
+      } else if (line == "SAYSTOP") {
+        webview_dispatch(g_w, do_saystop, nullptr);
+      } else if (line.rfind("VOICES ", 0) == 0) {
+        webview_dispatch(g_w, do_voices, new VoicesReq{line.substr(7)});
       } else if (line.rfind("PICKCOLOR ", 0) == 0) {
         webview_dispatch(g_w, do_pickcolor, new std::string(line.substr(10)));
       } else if (line.rfind("OCR ", 0) == 0) {
