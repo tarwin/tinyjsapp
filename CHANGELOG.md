@@ -4,6 +4,26 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.19.0 — 2026-07-14
+
+Window superpowers — the primitives behind overlays, HUDs, desktop pets,
+and window managers.
+
+- **Window stacking & behaviour** — `win.setClickThrough(bool)` (mouse
+  events pass straight through — draw-on-screen overlays), `win.setLevel(
+  'normal'|'floating'|'overlay'|'desktop')` (`overlay` floats above almost
+  everything incl. most fullscreen apps; `desktop` pins behind normal
+  windows for wallpaper/pets), `win.setAllSpaces(bool)` (follow the user
+  onto every Space). All three round-trip through `getState()` and have
+  backend twins on `app` and `app.window(id)`.
+- **`app.selectedText()`** — the text selected in the frontmost app, for
+  PopClip-style popovers (Accessibility permission; `null` if none).
+- **`app.otherWindows()` / `app.moveWindow(pid, rect)`** — enumerate other
+  apps' on-screen windows and move/resize their frontmost window: a
+  Rectangle/Magnet "snap the active window" primitive (Accessibility).
+- **`tray.position()`** — the tray icon's on-screen rect, so a dropdown
+  window can anchor under it (the Tauri `positioner` gap).
+
 ## 0.18.0 — 2026-07-14
 
 - **`app.recorder`** — record a display to an .mp4: `start({ path,

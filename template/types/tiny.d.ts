@@ -44,6 +44,23 @@ declare interface TinyChromeOptions {
   vibrancy?: string | null;
 }
 
+/** 'floating' = always-on-top; 'overlay' floats above almost everything
+ *  (incl. most fullscreen apps); 'desktop' pins behind normal windows. */
+declare type TinyWindowLevel = 'normal' | 'floating' | 'overlay' | 'desktop';
+
+/** A window belonging to another app (accessibility), top-left coords. */
+declare interface TinyOtherWindow {
+  app: string;
+  bundleId: string | null;
+  pid: number;
+  title: string;
+  index: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 declare interface TinyWinState {
   x: number;
   y: number;
@@ -55,6 +72,9 @@ declare interface TinyWinState {
   focused: boolean;
   alwaysOnTop: boolean;
   resizable: boolean;
+  clickThrough: boolean;
+  level: TinyWindowLevel;
+  allSpaces: boolean;
   chrome: {
     frame: boolean;
     trafficLights: boolean;
@@ -407,6 +427,11 @@ declare interface Tiny {
     setFullscreen(enabled: boolean): Promise<any>;
     setAlwaysOnTop(enabled: boolean): Promise<any>;
     setResizable(enabled: boolean): Promise<any>;
+    /** mouse events pass through to whatever is behind the window */
+    setClickThrough(enabled: boolean): Promise<any>;
+    setLevel(level: TinyWindowLevel): Promise<any>;
+    /** follow the user across every Space + float over fullscreen apps */
+    setAllSpaces(enabled: boolean): Promise<any>;
     /** top-left origin, screen points */
     setPosition(x: number, y: number): Promise<any>;
     getState(): Promise<TinyWinState>;
@@ -509,6 +534,12 @@ declare interface Tiny {
     power: TinyPower;
     /** the active app right now (who focus returns to after win.hide()) */
     frontmostApp(): Promise<TinyFrontmostApp | null>;
+    /** text selected in the frontmost app (Accessibility); null if none */
+    selectedText(): Promise<string | null>;
+    /** other apps' on-screen windows (Accessibility); null if not granted */
+    otherWindows(): Promise<TinyOtherWindow[] | null>;
+    /** move/resize another app's frontmost window (pid from otherWindows) */
+    moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
     beep(): Promise<boolean>;
     /** a system sound name ('Ping', 'Glass', …) or an audio file path;
      *  false if it didn't load */
@@ -557,6 +588,8 @@ declare interface Tiny {
   tray: {
     set(spec: TinyTraySpec): Promise<any>;
     remove(): Promise<any>;
+    /** the tray icon's rect { x, y, width, height } (top-left) | null */
+    position(): Promise<{ x: number; y: number; width: number; height: number } | null>;
     on(fn: (id: string) => void): void;
     onClick(fn: () => void): void;
   };
@@ -588,6 +621,9 @@ declare interface TinyWindowHandle {
   setFullscreen(enabled: boolean): void;
   setAlwaysOnTop(enabled: boolean): void;
   setResizable(enabled: boolean): void;
+  setClickThrough(enabled: boolean): void;
+  setLevel(level: TinyWindowLevel): void;
+  setAllSpaces(enabled: boolean): void;
   setChrome(opts: TinyChromeOptions): void;
   getState(): Promise<TinyWinState>;
   /** native share sheet anchored at page coordinates in this window */
@@ -623,6 +659,9 @@ declare interface TinyApp {
   setPosition(x: number, y: number): void;
   setAlwaysOnTop(enabled: boolean): void;
   setResizable(enabled: boolean): void;
+  setClickThrough(enabled: boolean): void;
+  setLevel(level: TinyWindowLevel): void;
+  setAllSpaces(enabled: boolean): void;
   setHideOnClose(enabled: boolean): void;
   setDockVisible(visible: boolean): void;
   print(): void;
@@ -638,6 +677,7 @@ declare interface TinyApp {
   tray: {
     set(spec: TinyTraySpec): void;
     remove(): void;
+    position(): Promise<{ x: number; y: number; width: number; height: number } | null>;
   };
   store: {
     get(key: string): Promise<any | null>;
@@ -685,6 +725,12 @@ declare interface TinyApp {
   power: TinyPower;
   /** the active app right now (who focus returns to after hide()) */
   frontmostApp(): Promise<TinyFrontmostApp | null>;
+  /** text selected in the frontmost app (Accessibility); null if none */
+  selectedText(): Promise<string | null>;
+  /** other apps' on-screen windows (Accessibility); null if not granted */
+  otherWindows(): Promise<TinyOtherWindow[] | null>;
+  /** move/resize another app's frontmost window (pid from otherWindows) */
+  moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
   beep(): Promise<boolean>;
   /** a system sound name ('Ping', 'Glass', …) or an audio file path;
    *  false if it didn't load */

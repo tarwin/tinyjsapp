@@ -98,6 +98,7 @@
     <a href="#shell">shell &amp; dock</a>
     <a href="#superpowers">superpowers</a>
     <a href="#media">media</a>
+    <a href="#windowfx">window fx</a>
     <a href="#system">system</a>
     <a href="#open">deep links</a>
     <a href="#update">auto-update</a>
@@ -511,6 +512,25 @@ await <b>tiny.app.say</b>('Export finished', { voice: voices[0].id, rate: 0.5 })
 <i>// Needs the 'screen' permission + macOS 14; one recording at a time.</i>
 await <b>tiny.app.recorder.start</b>({ path: '/tmp/demo.mp4' });  <i>// screenId optional</i>
 const { path, duration } = await <b>tiny.app.recorder.stop</b>();  <i>// finalized file</i></pre>
+  </section>
+
+  <section id="windowfx">
+    <h2>window fx <span class="tag">overlays, HUDs, pets, window managers</span></h2>
+    <pre><i>// stack + behaviour: draw-on-screen overlays, HUDs over fullscreen apps,</i>
+<i>// desktop pets, palettes that follow you onto every Space</i>
+<b>tiny.win.setClickThrough</b>(true);   <i>// mouse events pass through the window</i>
+<b>tiny.win.setLevel</b>('overlay');     <i>// 'normal'|'floating'|'overlay'|'desktop'</i>
+<b>tiny.win.setAllSpaces</b>(true);      <i>// follow across Spaces + over fullscreen</i>
+
+<i>// grab the text selected in ANY app — PopClip-style popovers (Accessibility)</i>
+const sel = await <b>tiny.app.selectedText</b>();   <i>// string | null</i>
+
+<i>// arrange other apps' windows — Rectangle/Magnet territory (Accessibility)</i>
+const wins = await <b>tiny.app.otherWindows</b>();  <i>// [{ app, pid, title, x,y,w,h }]</i>
+await <b>tiny.app.moveWindow</b>(wins[0].pid, { x: 0, y: 0, width: 1280, height: 800 });
+
+<i>// anchor a dropdown window under the tray icon</i>
+const spot = await <b>tiny.tray.position</b>();     <i>// { x, y, width, height } | null</i></pre>
   </section>
 
   <section id="system">

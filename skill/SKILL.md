@@ -296,6 +296,16 @@ tiny.app.onNotificationAction(({ id, action, reply }) => …);  // reply=text
 await tiny.app.recorder.start({ path, screenId });  // resolves once capturing
 const { path, duration } = await tiny.app.recorder.stop();
 
+// window superpowers (overlays/HUDs/pets/cross-Space palettes)
+tiny.win.setClickThrough(true);   // mouse events pass through
+tiny.win.setLevel('overlay');     // 'normal'|'floating'|'overlay'|'desktop'
+tiny.win.setAllSpaces(true);      // follow across Spaces + over fullscreen
+// AX (Accessibility perm): grab selection anywhere + arrange other windows
+await tiny.app.selectedText();    // string | null (frontmost app's selection)
+await tiny.app.otherWindows();    // [{ app, pid, title, x,y,width,height }]|null
+await tiny.app.moveWindow(pid, { x, y, width, height });  // resolves true/throws
+await tiny.tray.position();       // { x,y,width,height }|null (anchor dropdowns)
+
 tiny.win.print();                           // native print panel
 
 // auto-update: "update": { "url": …, "auto": "launch" | "daily" } checks in

@@ -69,6 +69,15 @@
   <section>
 
     <div class="rel">
+      <h2>0.19.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b>Window stacking &amp; behaviour</b> — <code>win.setClickThrough(bool)</code> (mouse events pass through — overlays), <code>win.setLevel('normal'|'floating'|'overlay'|'desktop')</code> (overlay floats above fullscreen apps, desktop pins behind windows for pets/wallpaper), <code>win.setAllSpaces(bool)</code> (follow onto every Space). All round-trip through <code>getState()</code>; backend twins on <code>app</code> and <code>app.window(id)</code>.</li>
+        <li><b><code>app.selectedText()</code></b> — the text selected in the frontmost app (PopClip-style popovers; Accessibility).</li>
+        <li><b><code>app.otherWindows()</code> / <code>app.moveWindow(pid, rect)</code></b> — enumerate and arrange other apps' windows (Rectangle/Magnet; Accessibility).</li>
+        <li><b><code>tray.position()</code></b> — the tray icon's on-screen rect, to anchor a dropdown window under it.</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.18.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b><code>app.recorder</code></b> — record a display to an .mp4: <code>start({ path, screenId? })</code> resolves once capturing, <code>stop()</code> resolves <code>{ path, duration }</code> once finalized. SCStream → H.264 → AVAssetWriter, video only for now, one at a time. Needs the <code>'screen'</code> permission + macOS 14 (preflighted, so an ungranted start rejects immediately instead of hanging).</li>

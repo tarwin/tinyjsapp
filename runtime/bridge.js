@@ -289,6 +289,15 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     fullscreen() { send('WINOP fullscreen'); },
     setAlwaysOnTop(v) { send('WINOP ontop ' + (v ? 1 : 0)); },
     setResizable(v) { send('WINOP resizable ' + (v ? 1 : 0)); },
+    // Mouse events pass through to whatever is behind (draw-on-screen
+    // overlays, HUDs). Pair with setChrome({ transparent: true }).
+    setClickThrough(v) { send('WINOP clickthrough ' + (v ? 1 : 0)); },
+    // Stack the window in a band: 'normal' | 'floating' (= alwaysOnTop) |
+    // 'overlay' (above almost everything, incl. most fullscreen apps) |
+    // 'desktop' (behind normal windows — wallpaper/pets).
+    setLevel(level) { send('WINOP level ' + one(level ?? 'normal')); },
+    // Follow the user onto every Space and float over fullscreen apps.
+    setAllSpaces(v) { send('WINOP allspaces ' + (v ? 1 : 0)); },
     // Top-left origin in screen points (CSS-style coordinates).
     setPosition(x, y) { send(`WINOP pos ${x | 0} ${y | 0}`); },
     // false: no Dock icon / no app menu (menu-bar-only app); true: normal app.
@@ -316,6 +325,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         send('TRAYEND');
       },
       remove() { send('TRAYREMOVE'); },
+      // The tray icon's on-screen rect { x, y, width, height } (top-left
+      // coords) — anchor a dropdown window under it. null if no tray set.
+      position: () => query('traypos'),
     },
     print() { send('PRINT'); },
     // Window chrome: { frame?, trafficLights?, transparent?, vibrancy? }.
@@ -425,6 +437,22 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // The active app right now: { name, bundleId, pid } | null — who focus
     // returns to after hide() (pair with paste()).
     frontmostApp: () => query('frontmost'),
+    // The text currently selected in the frontmost app (PopClip-style
+    // popovers) — needs the Accessibility permission. null if nothing is
+    // selected or the app doesn't expose it.
+    selectedText: () => query('selectedtext'),
+    // Every on-screen window of OTHER apps (Rectangle/Magnet territory):
+    // [{ app, bundleId, pid, title, index, x, y, width, height }] in
+    // top-left screen coords. Needs Accessibility; null if not granted.
+    otherWindows: () => query('otherwindows'),
+    // Move + resize another app's frontmost window (pid from otherWindows()
+    // or frontmostApp()), top-left screen coords. Needs Accessibility;
+    // resolves true or throws.
+    async moveWindow(pid, { x, y, width, height } = {}) {
+      const r = await ask('WINCTRL', [pid | 0, x | 0, y | 0, width | 0, height | 0].join('\t'));
+      if (!r?.ok) throw new Error(r?.error ?? 'move failed');
+      return true;
+    },
     // System beep / a sound: system sound name ('Ping', 'Glass', …) or an
     // audio file path. Resolve false if the name/file didn't load.
     async beep() { return (await ask('SOUND'))?.ok === true; },
@@ -613,6 +641,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         setFullscreen: (v) => t('WINOP', 'fullscreen ' + (v ? 1 : 0)),
         setAlwaysOnTop: (v) => t('WINOP', 'ontop ' + (v ? 1 : 0)),
         setResizable: (v) => t('WINOP', 'resizable ' + (v ? 1 : 0)),
+        setClickThrough: (v) => t('WINOP', 'clickthrough ' + (v ? 1 : 0)),
+        setLevel: (level) => t('WINOP', 'level ' + one(level ?? 'normal')),
+        setAllSpaces: (v) => t('WINOP', 'allspaces ' + (v ? 1 : 0)),
         setChrome(opts = {}) {
           const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
           const vib = opts.vibrancy === undefined ? ''
@@ -669,6 +700,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.fullscreen': async (_p, _a, m) => (forWin(m).fullscreen(), true),
     'win.setAlwaysOnTop': async ({ enabled }, _a, m) => (forWin(m).setAlwaysOnTop(enabled), true),
     'win.setResizable': async ({ enabled }, _a, m) => (forWin(m).setResizable(enabled), true),
+    'win.setClickThrough': async ({ enabled }, _a, m) => (forWin(m).setClickThrough(enabled), true),
+    'win.setLevel': async ({ level }, _a, m) => (forWin(m).setLevel(level), true),
+    'win.setAllSpaces': async ({ enabled }, _a, m) => (forWin(m).setAllSpaces(enabled), true),
+    'app.selectedText': async () => app.selectedText(),
+    'app.otherWindows': async () => app.otherWindows(),
+    'app.moveWindow': async ({ pid, ...rect }) => app.moveWindow(pid, rect),
+    'tray.position': async () => app.tray.position(),
     'win.setPosition': async ({ x, y }, _a, m) => (forWin(m).setPosition(x, y), true),
     'win.open': async ({ id: wid, ...opts }) => (app.openWindow(wid, opts), true),
     'win.close': async ({ id: wid }, _a, m) => {

@@ -80,6 +80,13 @@
 //                         SAYSTOP                    stop speaking
 //                         VOICES <qid>               list installed voices;
 //                                                    GOT {ok, voices}
+//                         WINCTRL <qid> <pid>\t<x>\t<y>\t<w>\t<h>
+//                                                    move/resize another app's
+//                                                    frontmost window
+//                                                    (Accessibility); GOT {ok,
+//                                                    error}. Reads: GET
+//                                                    selectedtext, otherwindows,
+//                                                    traypos.
 //                         RECORD start <qid> <display>\t<path>
 //                         RECORD stop <qid>          record a display to an
 //                                                    .mp4 (SCStream →
@@ -948,6 +955,29 @@ static void do_winop(webview_t w, void *arg) {
       if (is_main)
         g_resizable_override = 0;
       win.styleMask &= ~NSWindowStyleMaskResizable;
+    } else if (*op == "clickthrough 1") {
+      // Mouse events pass straight through to whatever is behind the window
+      // (draw-on-screen overlays, HUDs that must not intercept clicks).
+      win.ignoresMouseEvents = YES;
+    } else if (*op == "clickthrough 0") {
+      win.ignoresMouseEvents = NO;
+    } else if (op->rfind("level ", 0) == 0) {
+      // Stack the window in a whole band of the screen. 'desktop' pins it
+      // behind normal windows (wallpaper/pets); 'overlay' floats above
+      // almost everything incl. most fullscreen apps; 'floating' = ontop;
+      // 'normal' resets.
+      std::string lv = op->substr(6);
+      win.level = lv == "desktop"  ? kCGDesktopWindowLevel
+                  : lv == "overlay" ? kCGScreenSaverWindowLevel
+                  : lv == "floating" ? NSFloatingWindowLevel
+                                     : NSNormalWindowLevel;
+    } else if (*op == "allspaces 1") {
+      // Follow the user onto every Space (and appear over fullscreen apps).
+      win.collectionBehavior |= NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                NSWindowCollectionBehaviorFullScreenAuxiliary;
+    } else if (*op == "allspaces 0") {
+      win.collectionBehavior &= ~(NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                  NSWindowCollectionBehaviorFullScreenAuxiliary);
     } else if (op->rfind("pos ", 0) == 0) {
       // Top-left origin in screen points (y grows downward, CSS-style).
       int x = 0, y = 0;
@@ -2675,6 +2705,179 @@ static void do_record(webview_t, void *arg) {
 }
 #endif
 
+// --- accessibility: read selection + move other apps' windows (macOS) ---------------
+// All under the Accessibility permission (permissions.check('accessibility')).
+// GET selectedtext → the text selected in the frontmost app (PopClip-style
+// popovers). GET otherwindows → every on-screen window of OTHER apps. WINCTRL
+// move re-fetches an app's frontmost window and repositions/resizes it (a
+// Rectangle/Magnet "snap the active window" primitive).
+
+struct WinCtrlReq {
+  std::string qid;
+  long pid;
+  int x, y, w, h;
+};
+
+#ifdef __APPLE__
+// AXFocusedUIElement → AXSelectedText of the system-wide focused element.
+static std::string ax_selected_text() {
+  AXUIElementRef sys = AXUIElementCreateSystemWide();
+  CFTypeRef focused = NULL;
+  std::string out;
+  bool have = false;
+  if (AXUIElementCopyAttributeValue(sys, kAXFocusedUIElementAttribute,
+                                    &focused) == kAXErrorSuccess &&
+      focused) {
+    CFTypeRef sel = NULL;
+    if (AXUIElementCopyAttributeValue((AXUIElementRef)focused,
+                                      kAXSelectedTextAttribute,
+                                      &sel) == kAXErrorSuccess &&
+        sel) {
+      if (CFGetTypeID(sel) == CFStringGetTypeID()) {
+        out = [(__bridge NSString *)sel UTF8String];
+        have = true;
+      }
+      CFRelease(sel);
+    }
+    CFRelease(focused);
+  }
+  CFRelease(sys);
+  return have ? json_escape(out) : std::string("null");
+}
+
+// AXPosition/AXSize come back as AXValue; unwrap to CG structs.
+static bool ax_rect(AXUIElementRef win, CGPoint *pos, CGSize *size) {
+  CFTypeRef p = NULL, s = NULL;
+  bool ok = false;
+  if (AXUIElementCopyAttributeValue(win, kAXPositionAttribute, &p) ==
+          kAXErrorSuccess &&
+      AXUIElementCopyAttributeValue(win, kAXSizeAttribute, &s) ==
+          kAXErrorSuccess &&
+      p && s) {
+    ok = AXValueGetValue((AXValueRef)p, kAXValueTypeCGPoint, pos) &&
+         AXValueGetValue((AXValueRef)s, kAXValueTypeCGSize, size);
+  }
+  if (p) CFRelease(p);
+  if (s) CFRelease(s);
+  return ok;
+}
+
+static std::string ax_other_windows() {
+  if (!AXIsProcessTrusted())
+    return "null"; // caller maps null → "needs Accessibility"
+  std::string json = "[";
+  bool first = true;
+  pid_t self = getpid();
+  for (NSRunningApplication *app in
+       [[NSWorkspace sharedWorkspace] runningApplications]) {
+    if (app.processIdentifier == self ||
+        app.activationPolicy != NSApplicationActivationPolicyRegular)
+      continue;
+    AXUIElementRef axApp = AXUIElementCreateApplication(app.processIdentifier);
+    CFTypeRef windows = NULL;
+    if (AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute, &windows) ==
+            kAXErrorSuccess &&
+        windows) {
+      NSArray *wins = (__bridge NSArray *)windows;
+      int idx = 0;
+      for (id w in wins) {
+        AXUIElementRef win = (AXUIElementRef)w;
+        CGPoint pos;
+        CGSize size;
+        if (ax_rect(win, &pos, &size)) {
+          CFTypeRef t = NULL;
+          std::string title;
+          if (AXUIElementCopyAttributeValue(win, kAXTitleAttribute, &t) ==
+                  kAXErrorSuccess &&
+              t) {
+            if (CFGetTypeID(t) == CFStringGetTypeID())
+              title = [(__bridge NSString *)t UTF8String];
+            CFRelease(t);
+          }
+          char geo[160];
+          std::snprintf(geo, sizeof(geo),
+                        ",\"pid\":%d,\"index\":%d,\"x\":%d,\"y\":%d,"
+                        "\"width\":%d,\"height\":%d}",
+                        (int)app.processIdentifier, idx, (int)pos.x,
+                        (int)pos.y, (int)size.width, (int)size.height);
+          if (!first)
+            json += ",";
+          first = false;
+          json += "{\"app\":" +
+                  json_escape(app.localizedName ? [app.localizedName UTF8String]
+                                                : "") +
+                  ",\"bundleId\":" +
+                  (app.bundleIdentifier
+                       ? json_escape([app.bundleIdentifier UTF8String])
+                       : "null") +
+                  ",\"title\":" + json_escape(title) + geo;
+        }
+        idx++;
+      }
+      CFRelease(windows);
+    }
+    CFRelease(axApp);
+  }
+  json += "]";
+  return json;
+}
+
+static void do_winctrl(webview_t, void *arg) {
+  WinCtrlReq *req = static_cast<WinCtrlReq *>(arg);
+  std::string qid = req->qid;
+  @autoreleasepool {
+    if (!AXIsProcessTrusted()) {
+      sock_write_line("GOT " + qid +
+                      " {\"ok\":false,\"error\":\"needs Accessibility\"}");
+      delete req;
+      return;
+    }
+    AXUIElementRef axApp = AXUIElementCreateApplication((pid_t)req->pid);
+    CFTypeRef win = NULL;
+    // The app's main/frontmost window (the one a user would arrange).
+    if (AXUIElementCopyAttributeValue(axApp, kAXMainWindowAttribute, &win) !=
+            kAXErrorSuccess ||
+        !win) {
+      CFTypeRef wins = NULL;
+      if (AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute, &wins) ==
+              kAXErrorSuccess &&
+          wins && CFArrayGetCount((CFArrayRef)wins) > 0) {
+        win = CFRetain(CFArrayGetValueAtIndex((CFArrayRef)wins, 0));
+      }
+      if (wins) CFRelease(wins);
+    }
+    bool ok = false;
+    if (win) {
+      CGPoint pos = CGPointMake(req->x, req->y);
+      CGSize size = CGSizeMake(req->w, req->h);
+      AXValueRef pv = AXValueCreate(kAXValueTypeCGPoint, &pos);
+      AXValueRef sv = AXValueCreate(kAXValueTypeCGSize, &size);
+      AXError e1 = AXUIElementSetAttributeValue((AXUIElementRef)win,
+                                                kAXPositionAttribute, pv);
+      AXError e2 = AXUIElementSetAttributeValue((AXUIElementRef)win,
+                                                kAXSizeAttribute, sv);
+      ok = (e1 == kAXErrorSuccess && e2 == kAXErrorSuccess);
+      CFRelease(pv);
+      CFRelease(sv);
+      CFRelease(win);
+    }
+    CFRelease(axApp);
+    sock_write_line("GOT " + qid + " {\"ok\":" + (ok ? "true" : "false") +
+                    ",\"error\":" +
+                    (ok ? "null" : "\"no movable window\"") + "}");
+  }
+  delete req;
+}
+#else
+static std::string ax_selected_text() { return "null"; }
+static std::string ax_other_windows() { return "null"; }
+static void do_winctrl(webview_t, void *arg) {
+  WinCtrlReq *req = static_cast<WinCtrlReq *>(arg);
+  sock_write_line("GOT " + req->qid + " {\"ok\":false,\"error\":\"unsupported\"}");
+  delete req;
+}
+#endif
+
 // --- custom context menu (macOS) -------------------------------------------------
 // CTXBEGIN, ITEM/SEP lines, CTXEND replaces the webview's right-click menu
 // with the declared items (clicks -> `CTX <id>`); CTXCLEAR restores WebKit's
@@ -2800,6 +3003,7 @@ static void do_get(webview_t w, void *arg) {
             "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
             "\"fullscreen\":%s,\"minimized\":%s,\"visible\":%s,\"focused\":%s,"
             "\"alwaysOnTop\":%s,\"resizable\":%s,"
+            "\"clickThrough\":%s,\"level\":\"%s\",\"allSpaces\":%s,"
             "\"chrome\":{\"frame\":%s,\"trafficLights\":%s,"
             "\"transparent\":%s,\"vibrancy\":%s},"
             "\"screen\":{\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
@@ -2809,6 +3013,15 @@ static void do_get(webview_t w, void *arg) {
             win.keyWindow ? "true" : "false",
             win.level != NSNormalWindowLevel ? "true" : "false",
             (win.styleMask & NSWindowStyleMaskResizable) ? "true" : "false",
+            win.ignoresMouseEvents ? "true" : "false",
+            win.level == kCGDesktopWindowLevel      ? "desktop"
+            : win.level == kCGScreenSaverWindowLevel ? "overlay"
+            : win.level == NSFloatingWindowLevel     ? "floating"
+                                                     : "normal",
+            (win.collectionBehavior &
+             NSWindowCollectionBehaviorCanJoinAllSpaces)
+                ? "true"
+                : "false",
             g_chrome_frameless ? "false" : "true",
             g_chrome_traffic ? "true" : "false",
             g_chrome_transparent ? "true" : "false",
@@ -2819,6 +3032,10 @@ static void do_get(webview_t w, void *arg) {
             (double)scr.backingScaleFactor);
         json = buf;
       }
+    } else if (req->what == "selectedtext") {
+      json = ax_selected_text();
+    } else if (req->what == "otherwindows") {
+      json = ax_other_windows();
     } else if (req->what == "clipboard" || req->what == "clipboard:count") {
       json = clipboard_json(req->what == "clipboard:count");
     } else if (req->what == "mouse" || req->what.rfind("mouse:", 0) == 0) {
@@ -2937,6 +3154,19 @@ static void do_get(webview_t w, void *arg) {
       json = std::string("{\"policy\":\"") + pol + "\"" +
              ",\"active\":" + ([NSApp isActive] ? "true" : "false") +
              ",\"hidden\":" + ([NSApp isHidden] ? "true" : "false") + "}";
+    } else if (req->what == "traypos") {
+      // The tray icon's on-screen rect in the same top-left coordinates as
+      // setPosition — anchor a dropdown/panel window under the icon.
+      if (g_status_item && g_status_item.button.window) {
+        NSRect f = g_status_item.button.window.frame;
+        CGFloat sTop = NSMaxY([[NSScreen screens][0] frame]);
+        char buf[128];
+        std::snprintf(buf, sizeof(buf),
+                      "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}",
+                      (int)f.origin.x, (int)(sTop - NSMaxY(f)),
+                      (int)f.size.width, (int)f.size.height);
+        json = buf;
+      }
     } else if (req->what == "debug:tray") {
       // NSStatusItem windows are system-hosted (invisible to CGWindowList),
       // so tests read the item's wiring here instead.
@@ -4351,6 +4581,19 @@ static void sock_read_loop() {
           req->path = p.size() > 1 ? wire_unescape(p[1]) : "";
         }
         webview_dispatch(g_w, do_record, req);
+      } else if (line.rfind("WINCTRL ", 0) == 0) {
+        // WINCTRL <qid> <pid>\t<x>\t<y>\t<w>\t<h>
+        size_t sp = line.find(' ', 8);
+        if (sp == std::string::npos) continue;
+        std::vector<std::string> p = split_tabs(line.substr(sp + 1));
+        WinCtrlReq *req = new WinCtrlReq;
+        req->qid = line.substr(8, sp - 8);
+        req->pid = p.size() > 0 ? std::atol(p[0].c_str()) : 0;
+        req->x = p.size() > 1 ? std::atoi(p[1].c_str()) : 0;
+        req->y = p.size() > 2 ? std::atoi(p[2].c_str()) : 0;
+        req->w = p.size() > 3 ? std::atoi(p[3].c_str()) : 0;
+        req->h = p.size() > 4 ? std::atoi(p[4].c_str()) : 0;
+        webview_dispatch(g_w, do_winctrl, req);
       } else if (line == "SAYSTOP") {
         webview_dispatch(g_w, do_saystop, nullptr);
       } else if (line.rfind("VOICES ", 0) == 0) {

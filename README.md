@@ -103,7 +103,9 @@ export function init(app) {          // window is up
   // pickColor(), ocr(path), thumbnail(path, size),
   // secrets.get/set/delete, authenticate(reason), applescript(source),
   // nowPlaying.set/clear, say(text, opts), voices(), stopSpeaking(),
-  // recorder.start({ path, screenId })/stop()
+  // recorder.start({ path, screenId })/stop(),
+  // selectedText(), otherWindows(), moveWindow(pid, rect),
+  // window(id).setClickThrough/setLevel/setAllSpaces, tray.position()
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -366,6 +368,24 @@ tiny.app.onNotificationAction(({ id, action, reply }) => {
 await tiny.app.recorder.start({ path: '/tmp/demo.mp4' });   // screenId optional
 // … later …
 const { path, duration } = await tiny.app.recorder.stop();  // finalized file
+
+// window superpowers — overlays, HUDs, desktop pets, palettes that follow
+// you across Spaces. clickThrough lets mouse events pass through the window.
+tiny.win.setClickThrough(true);              // draw-on-screen / HUD overlays
+tiny.win.setLevel('overlay');                // 'normal'|'floating'|'overlay'
+                                             //  |'desktop' (behind windows)
+tiny.win.setAllSpaces(true);                 // follow across every Space
+// (backend: app.setClickThrough/setLevel/setAllSpaces + app.window(id).*)
+
+// grab the text selected in ANY app (PopClip-style popovers; Accessibility)
+const sel = await tiny.app.selectedText();   // string | null
+
+// arrange other apps' windows (Rectangle/Magnet; Accessibility)
+const wins = await tiny.app.otherWindows();  // [{ app, pid, title, x,y,w,h }]
+await tiny.app.moveWindow(wins[0].pid, { x: 0, y: 0, width: 1280, height: 800 });
+
+// anchor a dropdown under the tray icon
+const spot = await tiny.tray.position();     // { x, y, width, height } | null
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null

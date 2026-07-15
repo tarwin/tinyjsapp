@@ -36,6 +36,12 @@
       fullscreen: () => call('win.fullscreen'),                    // toggles
       setAlwaysOnTop: (enabled) => call('win.setAlwaysOnTop', { enabled }),
       setResizable: (enabled) => call('win.setResizable', { enabled }),
+      // Mouse events pass through to what's behind (overlays/HUDs).
+      setClickThrough: (enabled) => call('win.setClickThrough', { enabled }),
+      // 'normal' | 'floating' | 'overlay' (above fullscreen) | 'desktop'.
+      setLevel: (level) => call('win.setLevel', { level }),
+      // Follow the user across every Space + float over fullscreen apps.
+      setAllSpaces: (enabled) => call('win.setAllSpaces', { enabled }),
       setPosition: (x, y) => call('win.setPosition', { x, y }),    // top-left origin
       restore: () => call('win.restore'),
       setFullscreen: (enabled) => call('win.setFullscreen', { enabled }),
@@ -185,6 +191,13 @@
       },
       // The active app right now: { name, bundleId, pid } | null.
       frontmostApp: () => call('app.frontmost'),
+      // Text selected in the frontmost app (Accessibility) — null if none.
+      selectedText: () => call('app.selectedText'),
+      // Other apps' on-screen windows (Accessibility): [{ app, bundleId,
+      // pid, title, index, x, y, width, height }] | null if not granted.
+      otherWindows: () => call('app.otherWindows'),
+      // Move/resize another app's frontmost window (pid from otherWindows()).
+      moveWindow: (pid, rect) => call('app.moveWindow', { pid, ...(rect ?? {}) }),
       // System beep / a system sound name ('Ping', 'Glass', …) or an audio
       // file path -> false if the name/file didn't load.
       beep: () => call('sound.play', {}),
@@ -249,6 +262,8 @@
       // left click fire onClick and moves the menu to right-click.
       set: (spec) => call('tray.set', spec),
       remove: () => call('tray.remove'),
+      // The tray icon's on-screen rect { x, y, width, height } | null.
+      position: () => call('tray.position'),
       on(fn) { window.tiny.api.on('tray', ({ id }) => fn(id)); },          // menu item clicks
       onClick(fn) { window.tiny.api.on('trayclick', () => fn()); },        // icon clicks
     },
