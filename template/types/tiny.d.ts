@@ -252,6 +252,41 @@ declare interface TinyCapture {
   height: number;
 }
 
+declare interface TinyOcrBlock {
+  text: string;
+  confidence: number;
+  /** normalized 0..1, top-left origin */
+  box: { x: number; y: number; width: number; height: number };
+}
+
+/** On-device Vision OCR result; text joins the blocks with newlines. */
+declare interface TinyOcrResult {
+  text: string;
+  blocks: TinyOcrBlock[];
+}
+
+/** A generated thumbnail; path is a temp png the caller owns. */
+declare interface TinyThumbnail {
+  path: string;
+  width: number;
+  height: number;
+}
+
+/** Keychain-backed secrets (generic passwords under the app id) — the
+ *  keytar/safeStorage role. Use for tokens; never tiny.store. */
+declare interface TinySecrets {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string): Promise<boolean>;
+  delete(key: string): Promise<boolean>;
+}
+
+/** Fired by "update": { "auto": … } when a newer version is available. */
+declare interface TinyUpdateInfo {
+  current: string;
+  latest: string;
+  notes: string | null;
+}
+
 declare interface TinyShareOptions {
   text?: string;
   url?: string;
@@ -415,6 +450,21 @@ declare interface Tiny {
      *  the temp dir, caller owns the file; needs the 'screen' permission
      *  and macOS 14+, rejects with the reason otherwise */
     captureScreen(screenId?: number): Promise<TinyCapture>;
+    /** system eyedropper — NO screen-recording permission needed;
+     *  '#rrggbb', or null if the user cancels */
+    pickColor(): Promise<string | null>;
+    /** on-device OCR (Vision, accurate mode) */
+    ocr(path: string): Promise<TinyOcrResult>;
+    /** thumbnail png for ANY file type Quick Look understands; size is the
+     *  bounding box in points (rendered @2x) */
+    thumbnail(path: string, size?: number): Promise<TinyThumbnail>;
+    secrets: TinySecrets;
+    /** Touch ID (or the account-password sheet); false covers cancel */
+    authenticate(reason?: string): Promise<boolean>;
+    /** run AppleScript in-process (no osascript spawn; 'automation' TCC);
+     *  resolves the result as a string, null if it isn't text; rejects
+     *  with the script error message */
+    applescript(source: string): Promise<string | null>;
   };
 
   tray: {
@@ -560,8 +610,24 @@ declare interface TinyApp {
    *  the temp dir, caller owns the file; needs the 'screen' permission
    *  and macOS 14+, rejects with the reason otherwise */
   captureScreen(screenId?: number): Promise<TinyCapture>;
+  /** system eyedropper — NO screen-recording permission needed;
+   *  '#rrggbb', or null if the user cancels */
+  pickColor(): Promise<string | null>;
+  /** on-device OCR (Vision, accurate mode) */
+  ocr(path: string): Promise<TinyOcrResult>;
+  /** thumbnail png for ANY file type Quick Look understands; size is the
+   *  bounding box in points (rendered @2x) */
+  thumbnail(path: string, size?: number): Promise<TinyThumbnail>;
+  secrets: TinySecrets;
+  /** Touch ID (or the account-password sheet); false covers cancel */
+  authenticate(reason?: string): Promise<boolean>;
+  /** run AppleScript in-process (no osascript spawn; 'automation' TCC);
+   *  resolves the result as a string, null if it isn't text; rejects
+   *  with the script error message */
+  applescript(source: string): Promise<string | null>;
   update: {
-    check(): Promise<{ available: boolean; current: string; latest: string | null }>;
+    /** notes = release notes from the manifest ("tinyjs publish --notes") */
+    check(): Promise<{ available: boolean; current: string; latest: string | null; notes: string | null }>;
     install(): Promise<boolean>;
   };
   info: TinyAppInfo;

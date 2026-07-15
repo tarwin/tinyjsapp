@@ -13,7 +13,7 @@
 //                                                     answers the call itself
 //                         QUIT                        close the window
 
-import { checkForUpdate, installUpdate, relaunch } from './update.js';
+import { bundlePath, checkForUpdate, installUpdate, relaunch } from './update.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -68,7 +68,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onWindowClosed, onClipboardChange, chrome = null, update = null, activation = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onWindowClosed, onClipboardChange, onUpdateAvailable, chrome = null, update = null, activation = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -442,6 +442,64 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       if (!r?.ok) throw new Error(r?.error ?? 'capture failed');
       return { path: r.path, width: r.width, height: r.height };
     },
+    // The system eyedropper (NSColorSampler) — works across every app and
+    // screen, and needs NO screen-recording permission. Resolves '#rrggbb',
+    // or null if the user cancels (esc).
+    async pickColor() {
+      const r = await ask('PICKCOLOR');
+      if (!r?.ok) throw new Error(r?.error ?? 'unsupported');
+      return r.color;
+    },
+    // On-device OCR (Vision, accurate mode) -> { text, blocks: [{ text,
+    // confidence, box }] }; box is normalized 0..1, top-left origin.
+    // Pairs with captureScreen() for screenshot-to-text.
+    async ocr(path) {
+      const r = await ask('OCR', esc(path));
+      if (!r?.ok) throw new Error(r?.error ?? 'ocr failed');
+      return { text: r.text, blocks: r.blocks };
+    },
+    // A thumbnail png for ANY file type Quick Look understands (PSD, video,
+    // 3D models, …) -> { path (temp png, yours), width, height }. size is
+    // the bounding box in points (rendered @2x).
+    async thumbnail(path, size = 256) {
+      const r = await ask('THUMB', esc(path) + '\t' + (size | 0));
+      if (!r?.ok) throw new Error(r?.error ?? 'no thumbnail');
+      return { path: r.path, width: r.width, height: r.height };
+    },
+    // Keychain-backed secrets (generic passwords under the app id) — the
+    // keytar/safeStorage role. Values survive reinstalls; never store
+    // tokens in tiny.store when this exists.
+    secrets: {
+      async get(key) {
+        const r = await ask('SECRET', 'get\t' + esc(id || 'tinyjs-app') + '\t' + esc(key));
+        if (!r?.ok) throw new Error(r?.error ?? 'keychain error');
+        return r.value ?? null;
+      },
+      async set(key, value) {
+        const r = await ask('SECRET', 'set\t' + esc(id || 'tinyjs-app') + '\t' + esc(key) + '\t' + esc(String(value)));
+        if (!r?.ok) throw new Error(r?.error ?? 'keychain error');
+        return true;
+      },
+      async delete(key) {
+        const r = await ask('SECRET', 'del\t' + esc(id || 'tinyjs-app') + '\t' + esc(key));
+        if (!r?.ok) throw new Error(r?.error ?? 'keychain error');
+        return true;
+      },
+    },
+    // Touch ID (or the account-password sheet on Macs without it) — "the
+    // user proved it's them". Resolves true/false; false covers cancel.
+    async authenticate(reason) {
+      return (await ask('AUTH', esc(reason ?? 'authenticate')))?.ok === true;
+    },
+    // Run AppleScript in-process (no osascript spawn) — Apple Events hit
+    // the same 'automation' TCC permissions.check('automation:…') covers.
+    // Resolves the script result as a string (null if it isn't text);
+    // throws with the script error message.
+    async applescript(source) {
+      const r = await ask('OSA', esc(source));
+      if (!r?.ok) throw new Error(r?.error ?? 'script error');
+      return r.result ?? null;
+    },
     // Standard per-app directories (data/cache/logs are per app id, not
     // auto-created — tjs.makeDir(..., { recursive: true }) first write).
     // Prefer these over hardcoding ~/Library paths.
@@ -532,8 +590,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // { version: <app>, tinyjs: <framework that built it>, runtime: <txiki> }
     info: { version, tinyjs: tinyjsVersion, runtime: 'txiki.js ' + tjs.version },
     // Auto-update (tinyjs.json "update": { "url": "https://…/manifest.json" }).
-    // check() -> { available, current, latest }; install() downloads, verifies,
-    // swaps the .app, relaunches the new version, and quits this instance.
+    // check() -> { available, current, latest, notes }; install() downloads,
+    // verifies, swaps the .app, relaunches the new version, and quits this
+    // instance. "auto": "launch" | "daily" checks in the background (packaged
+    // apps only) and fires the 'update-available' page event /
+    // onUpdateAvailable export with { current, latest, notes } — wire your
+    // own prompt, then update.install().
     update: {
       check: () => checkForUpdate({ url: update?.url, version }),
       async install() {
@@ -578,8 +640,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'tray.set': async (spec) => (app.tray.set(spec), true),
     'tray.remove': async () => (app.tray.remove(), true),
     'update.check': async () => {
-      const { available, current, latest } = await app.update.check();
-      return { available, current, latest };
+      const { available, current, latest, notes } = await app.update.check();
+      return { available, current, latest, notes };
     },
     'update.install': async () => app.update.install(),
     'win.print': async () => (app.print(), true),
@@ -642,6 +704,14 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.idleTime': async () => app.idleTime(),
     'app.quickLook': async ({ paths }) => app.quickLook(paths),
     'app.captureScreen': async ({ screenId }) => app.captureScreen(screenId),
+    'app.pickColor': async () => app.pickColor(),
+    'app.ocr': async ({ path }) => app.ocr(path),
+    'app.thumbnail': async ({ path, size }) => app.thumbnail(path, size ?? 256),
+    'secrets.get': async ({ key }) => app.secrets.get(key),
+    'secrets.set': async ({ key, value }) => app.secrets.set(key, value),
+    'secrets.delete': async ({ key }) => app.secrets.delete(key),
+    'app.authenticate': async ({ reason }) => app.authenticate(reason),
+    'app.applescript': async ({ source }) => app.applescript(source),
   };
   const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };
@@ -786,6 +856,25 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // A clipboard handler implies watching; apps needing a custom interval can
   // call app.clipboard.watch(ms) on top (idempotent).
   if (onClipboardChange) app.clipboard.watch();
+
+  // Background update checks ("update": { "auto": "launch" | "daily" }).
+  // Packaged apps only — dev processes have no bundle to update, and their
+  // 0.0.0 version would flag every manifest as "available". Failures are
+  // silent (offline is normal); the app decides the prompt UX.
+  const auto = update?.auto;
+  if ((auto === 'launch' || auto === 'daily') && update?.url && bundlePath()) {
+    const autoCheck = async () => {
+      try {
+        const r = await app.update.check();
+        if (!r.available) return;
+        const info = { current: r.current, latest: r.latest, notes: r.notes ?? null };
+        push('update-available', info);
+        if (onUpdateAvailable) onUpdateAvailable(info, app);
+      } catch {}
+    };
+    setTimeout(autoCheck, 5000); // let the window come up first
+    if (auto === 'daily') setInterval(autoCheck, 24 * 60 * 60 * 1000);
+  }
 
   return app;
 }

@@ -122,6 +122,24 @@
 //                                                    anchored at page coords
 //                         QUICKLOOK [<path>\t…]      Quick Look panel for the
 //                                                    file(s); bare = close
+//                         PICKCOLOR <qid>            system eyedropper; GOT
+//                                                    {ok, color '#rrggbb' |
+//                                                    null on cancel}
+//                         OCR <qid> <image-path>     on-device Vision OCR;
+//                                                    GOT {ok, text, blocks}
+//                         THUMB <qid> <path>\t<size> thumbnail png for ANY
+//                                                    file type; GOT {ok,
+//                                                    path, width, height}
+//                         SECRET <qid> get|set|del\t<service>\t<account>[\t<value>]
+//                                                    Keychain generic
+//                                                    password; GOT {ok,
+//                                                    value|null}
+//                         AUTH <qid> <reason>        Touch ID / password
+//                                                    sheet; GOT {ok, error}
+//                         OSA <qid> <source>         run AppleScript
+//                                                    in-process (no
+//                                                    osascript); GOT {ok,
+//                                                    result, error}
 //                         CAPTURE <qid> <displayId>  screenshot a display
 //                                                    (0 = primary; needs the
 //                                                    'screen' permission +
@@ -164,7 +182,11 @@
 #ifdef __APPLE__
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
+#import <LocalAuthentication/LocalAuthentication.h> // Touch ID (AUTH)
 #import <Quartz/Quartz.h>             // QLPreviewPanel (Quick Look)
+#import <QuickLookThumbnailing/QuickLookThumbnailing.h> // THUMB
+#import <Security/Security.h>         // Keychain (SECRET)
+#import <Vision/Vision.h>             // on-device OCR
 #import <ScreenCaptureKit/ScreenCaptureKit.h> // weak-linked; macOS 14+ used
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
@@ -2059,6 +2081,307 @@ static void do_capture(webview_t, void *arg) {
 }
 #endif
 
+// --- Mac superpowers: eyedropper, OCR, thumbnails, Keychain, Touch ID, ---------------
+// --- AppleScript (macOS) -------------------------------------------------------------
+// PICKCOLOR: NSColorSampler — the system-wide eyedropper, notably WITHOUT
+// needing the screen-recording permission. OCR: Vision, on-device. THUMB:
+// QLThumbnailGenerator — a preview png for any file type Quick Look knows.
+// SECRET: Keychain generic passwords (the keytar/safeStorage role). AUTH:
+// LocalAuthentication (Touch ID, falls back to the account password). OSA:
+// NSAppleScript in-process — Apple Events fire under the same 'automation'
+// TCC the permissions api already covers, with no osascript spawn.
+
+struct OcrReq {
+  std::string qid, path;
+};
+struct ThumbReq {
+  std::string qid, path;
+  int size;
+};
+struct SecretReq {
+  std::string qid, op, service, account, value;
+};
+struct AuthReq {
+  std::string qid, reason;
+};
+struct OsaReq {
+  std::string qid, source;
+};
+
+#ifdef __APPLE__
+static NSColorSampler *g_sampler = nil; // alive while the loupe is up
+
+static void do_pickcolor(webview_t, void *arg) {
+  std::string *qidp = static_cast<std::string *>(arg);
+  std::string qid = *qidp;
+  delete qidp;
+  if (@available(macOS 10.15, *)) {
+    g_sampler = [[NSColorSampler alloc] init];
+    [g_sampler showSamplerWithSelectionHandler:^(NSColor *c) {
+      if (!c) {
+        sock_write_line("GOT " + qid + " {\"ok\":true,\"color\":null}");
+        return;
+      }
+      NSColor *s = [c colorUsingColorSpace:[NSColorSpace sRGBColorSpace]] ?: c;
+      char buf[48];
+      std::snprintf(buf, sizeof(buf), "\"#%02x%02x%02x\"",
+                    (int)lround(s.redComponent * 255),
+                    (int)lround(s.greenComponent * 255),
+                    (int)lround(s.blueComponent * 255));
+      sock_write_line("GOT " + qid + " {\"ok\":true,\"color\":" + buf + "}");
+    }];
+  } else {
+    sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":\"unsupported\"}");
+  }
+}
+
+static void do_ocr(webview_t, void *arg) {
+  OcrReq *req = static_cast<OcrReq *>(arg);
+  std::string qid = req->qid, path = req->path;
+  delete req;
+  // Vision takes ~100ms+; keep it off the UI thread.
+  dispatch_async(
+      dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+          VNRecognizeTextRequest *r = [[VNRecognizeTextRequest alloc] init];
+          r.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+          r.usesLanguageCorrection = YES;
+          VNImageRequestHandler *h = [[VNImageRequestHandler alloc]
+              initWithURL:[NSURL fileURLWithPath:ns(path)]
+                  options:@{}];
+          NSError *e = nil;
+          if (![h performRequests:@[ r ] error:&e]) {
+            sock_write_line(
+                "GOT " + qid + " {\"ok\":false,\"error\":" +
+                json_escape(e ? [e.localizedDescription UTF8String]
+                              : "ocr failed") +
+                "}");
+            return;
+          }
+          std::string text, blocks = "[";
+          bool first = true;
+          for (VNRecognizedTextObservation *o in r.results) {
+            VNRecognizedText *t = [[o topCandidates:1] firstObject];
+            if (!t)
+              continue;
+            if (!text.empty())
+              text += "\n";
+            text += [t.string UTF8String];
+            // boundingBox is normalized with a bottom-left origin; flip to
+            // the top-left convention everything else in tinyjs uses.
+            CGRect b = o.boundingBox;
+            char geo[128];
+            std::snprintf(geo, sizeof(geo),
+                          ",\"confidence\":%.3f,\"box\":{\"x\":%.4f,"
+                          "\"y\":%.4f,\"width\":%.4f,\"height\":%.4f}}",
+                          (double)t.confidence, b.origin.x,
+                          1.0 - b.origin.y - b.size.height, b.size.width,
+                          b.size.height);
+            if (!first)
+              blocks += ",";
+            first = false;
+            blocks += "{\"text\":" + json_escape([t.string UTF8String]) + geo;
+          }
+          blocks += "]";
+          sock_write_line("GOT " + qid + " {\"ok\":true,\"text\":" +
+                          json_escape(text) + ",\"blocks\":" + blocks + "}");
+        }
+      });
+}
+
+static void do_thumb(webview_t, void *arg) {
+  ThumbReq *req = static_cast<ThumbReq *>(arg);
+  std::string qid = req->qid, path = req->path;
+  int size = req->size > 0 ? req->size : 256;
+  delete req;
+  if (@available(macOS 10.15, *)) {
+    QLThumbnailGenerationRequest *r = [[QLThumbnailGenerationRequest alloc]
+        initWithFileAtURL:[NSURL fileURLWithPath:ns(path)]
+                     size:CGSizeMake(size, size)
+                    scale:2.0
+      representationTypes:
+          QLThumbnailGenerationRequestRepresentationTypeThumbnail];
+    [[QLThumbnailGenerator sharedGenerator]
+        generateBestRepresentationForRequest:r
+                           completionHandler:^(
+                               QLThumbnailRepresentation *rep, NSError *e) {
+                             if (!rep) {
+                               sock_write_line(
+                                   "GOT " + qid + " {\"ok\":false,\"error\":" +
+                                   json_escape(
+                                       e ? [e.localizedDescription UTF8String]
+                                         : "no thumbnail") +
+                                   "}");
+                               return;
+                             }
+                             NSBitmapImageRep *bm = [[NSBitmapImageRep alloc]
+                                 initWithCGImage:rep.CGImage];
+                             NSData *png = [bm
+                                 representationUsingType:
+                                     NSBitmapImageFileTypePNG
+                                              properties:@{}];
+                             std::string p =
+                                 std::string(
+                                     [NSTemporaryDirectory() UTF8String]) +
+                                 "tinyjs-thumb-" + std::to_string(getpid()) +
+                                 "-" + qid + ".png";
+                             if (!png ||
+                                 ![png writeToFile:ns(p) atomically:YES]) {
+                               sock_write_line("GOT " + qid +
+                                               " {\"ok\":false,\"error\":"
+                                               "\"png write failed\"}");
+                               return;
+                             }
+                             sock_write_line(
+                                 "GOT " + qid + " {\"ok\":true,\"path\":" +
+                                 json_escape(p) + ",\"width\":" +
+                                 std::to_string((long)bm.pixelsWide) +
+                                 ",\"height\":" +
+                                 std::to_string((long)bm.pixelsHigh) + "}");
+                           }];
+  } else {
+    sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":\"unsupported\"}");
+  }
+}
+
+static void do_secret(webview_t, void *arg) {
+  SecretReq *req = static_cast<SecretReq *>(arg);
+  @autoreleasepool {
+    NSMutableDictionary *q = [@{
+      (__bridge id)kSecClass : (__bridge id)kSecClassGenericPassword,
+      (__bridge id)kSecAttrService : ns(req->service),
+      (__bridge id)kSecAttrAccount : ns(req->account),
+    } mutableCopy];
+    std::string out;
+    if (req->op == "get") {
+      q[(__bridge id)kSecReturnData] = @YES;
+      q[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+      CFTypeRef data = NULL;
+      OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)q, &data);
+      if (st == errSecSuccess && data) {
+        NSData *d = (__bridge_transfer NSData *)data;
+        NSString *s = [[NSString alloc] initWithData:d
+                                            encoding:NSUTF8StringEncoding];
+        out = "{\"ok\":true,\"value\":" +
+              (s ? json_escape([s UTF8String]) : std::string("null")) + "}";
+      } else if (st == errSecItemNotFound) {
+        out = "{\"ok\":true,\"value\":null}";
+      } else {
+        out = "{\"ok\":false,\"error\":\"keychain error " +
+              std::to_string((long)st) + "\"}";
+      }
+    } else if (req->op == "set") {
+      SecItemDelete((__bridge CFDictionaryRef)q); // replace semantics
+      q[(__bridge id)kSecValueData] =
+          [ns(req->value) dataUsingEncoding:NSUTF8StringEncoding];
+      OSStatus st = SecItemAdd((__bridge CFDictionaryRef)q, NULL);
+      out = st == errSecSuccess
+                ? "{\"ok\":true}"
+                : "{\"ok\":false,\"error\":\"keychain error " +
+                      std::to_string((long)st) + "\"}";
+    } else if (req->op == "del") {
+      OSStatus st = SecItemDelete((__bridge CFDictionaryRef)q);
+      out = (st == errSecSuccess || st == errSecItemNotFound)
+                ? "{\"ok\":true}"
+                : "{\"ok\":false,\"error\":\"keychain error " +
+                      std::to_string((long)st) + "\"}";
+    } else {
+      out = "{\"ok\":false,\"error\":\"unknown secret op\"}";
+    }
+    sock_write_line("GOT " + req->qid + " " + out);
+  }
+  delete req;
+}
+
+static void do_auth(webview_t, void *arg) {
+  AuthReq *req = static_cast<AuthReq *>(arg);
+  std::string qid = req->qid, reason = req->reason;
+  delete req;
+  @autoreleasepool {
+    LAContext *ctx = [[LAContext alloc] init];
+    NSError *e = nil;
+    // DeviceOwnerAuthentication = Touch ID when available, else the account
+    // password sheet — both count as "the user proved it's them".
+    if (![ctx canEvaluatePolicy:LAPolicyDeviceOwnerAuthentication error:&e]) {
+      sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":" +
+                      json_escape(e ? [e.localizedDescription UTF8String]
+                                    : "authentication unavailable") +
+                      "}");
+      return;
+    }
+    [ctx evaluatePolicy:LAPolicyDeviceOwnerAuthentication
+        localizedReason:ns(reason.empty() ? "authenticate" : reason)
+                  reply:^(BOOL ok, NSError *err) {
+                    sock_write_line(
+                        "GOT " + qid + " {\"ok\":" + (ok ? "true" : "false") +
+                        ",\"error\":" +
+                        (err ? json_escape(
+                                   [err.localizedDescription UTF8String])
+                             : "null") +
+                        "}");
+                  }];
+  }
+}
+
+static void do_osa(webview_t, void *arg) {
+  OsaReq *req = static_cast<OsaReq *>(arg);
+  @autoreleasepool {
+    // NSAppleScript is main-thread-only; long-running scripts briefly block
+    // the UI (typical Apple Events round-trips are milliseconds).
+    NSAppleScript *scr =
+        [[NSAppleScript alloc] initWithSource:ns(req->source)];
+    NSDictionary *err = nil;
+    NSAppleEventDescriptor *d = [scr executeAndReturnError:&err];
+    if (!d) {
+      NSString *msg = err[NSAppleScriptErrorMessage]
+                          ?: err[NSAppleScriptErrorBriefMessage];
+      sock_write_line("GOT " + req->qid + " {\"ok\":false,\"error\":" +
+                      json_escape(msg ? [msg UTF8String] : "script error") +
+                      "}");
+    } else {
+      NSString *s = [d stringValue];
+      sock_write_line("GOT " + req->qid + " {\"ok\":true,\"result\":" +
+                      (s ? json_escape([s UTF8String]) : "null") + "}");
+    }
+  }
+  delete req;
+}
+#else
+static void unsupported_reply(const std::string &qid) {
+  sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":\"unsupported\"}");
+}
+static void do_pickcolor(webview_t, void *arg) {
+  std::string *q = static_cast<std::string *>(arg);
+  unsupported_reply(*q);
+  delete q;
+}
+static void do_ocr(webview_t, void *arg) {
+  OcrReq *r = static_cast<OcrReq *>(arg);
+  unsupported_reply(r->qid);
+  delete r;
+}
+static void do_thumb(webview_t, void *arg) {
+  ThumbReq *r = static_cast<ThumbReq *>(arg);
+  unsupported_reply(r->qid);
+  delete r;
+}
+static void do_secret(webview_t, void *arg) {
+  SecretReq *r = static_cast<SecretReq *>(arg);
+  unsupported_reply(r->qid);
+  delete r;
+}
+static void do_auth(webview_t, void *arg) {
+  AuthReq *r = static_cast<AuthReq *>(arg);
+  unsupported_reply(r->qid);
+  delete r;
+}
+static void do_osa(webview_t, void *arg) {
+  OsaReq *r = static_cast<OsaReq *>(arg);
+  unsupported_reply(r->qid);
+  delete r;
+}
+#endif
+
 // --- custom context menu (macOS) -------------------------------------------------
 // CTXBEGIN, ITEM/SEP lines, CTXEND replaces the webview's right-click menu
 // with the declared items (clicks -> `CTX <id>`); CTXCLEAR restores WebKit's
@@ -3436,6 +3759,46 @@ static void sock_read_loop() {
           if (!p[i].empty())
             req->paths.push_back(wire_unescape(p[i]));
         webview_dispatch(g_w, do_share, req);
+      } else if (line.rfind("PICKCOLOR ", 0) == 0) {
+        webview_dispatch(g_w, do_pickcolor, new std::string(line.substr(10)));
+      } else if (line.rfind("OCR ", 0) == 0) {
+        size_t sp = line.find(' ', 4);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_ocr,
+                         new OcrReq{line.substr(4, sp - 4),
+                                    wire_unescape(line.substr(sp + 1))});
+      } else if (line.rfind("THUMB ", 0) == 0) {
+        size_t sp = line.find(' ', 6);
+        if (sp == std::string::npos) continue;
+        std::vector<std::string> p = split_tabs(line.substr(sp + 1));
+        webview_dispatch(
+            g_w, do_thumb,
+            new ThumbReq{line.substr(6, sp - 6),
+                         p.size() > 0 ? wire_unescape(p[0]) : "",
+                         p.size() > 1 ? std::atoi(p[1].c_str()) : 0});
+      } else if (line.rfind("SECRET ", 0) == 0) {
+        size_t sp = line.find(' ', 7);
+        if (sp == std::string::npos) continue;
+        std::vector<std::string> p = split_tabs(line.substr(sp + 1));
+        SecretReq *req = new SecretReq;
+        req->qid = line.substr(7, sp - 7);
+        req->op = p.size() > 0 ? p[0] : "";
+        req->service = p.size() > 1 ? wire_unescape(p[1]) : "";
+        req->account = p.size() > 2 ? wire_unescape(p[2]) : "";
+        req->value = p.size() > 3 ? wire_unescape(p[3]) : "";
+        webview_dispatch(g_w, do_secret, req);
+      } else if (line.rfind("AUTH ", 0) == 0) {
+        size_t sp = line.find(' ', 5);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_auth,
+                         new AuthReq{line.substr(5, sp - 5),
+                                     wire_unescape(line.substr(sp + 1))});
+      } else if (line.rfind("OSA ", 0) == 0) {
+        size_t sp = line.find(' ', 4);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_osa,
+                         new OsaReq{line.substr(4, sp - 4),
+                                    wire_unescape(line.substr(sp + 1))});
       } else if (line == "QUICKLOOK" || line.rfind("QUICKLOOK ", 0) == 0) {
         QLReq *req = new QLReq;
         if (line.size() > 10)

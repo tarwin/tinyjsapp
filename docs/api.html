@@ -96,6 +96,7 @@
     <a href="#keystrokes">keystrokes</a>
     <a href="#permissions">permissions</a>
     <a href="#shell">shell &amp; dock</a>
+    <a href="#superpowers">superpowers</a>
     <a href="#system">system</a>
     <a href="#open">deep links</a>
     <a href="#update">auto-update</a>
@@ -450,6 +451,35 @@ await <b>tiny.app.idleTime</b>();
 const { path, width, height } = await <b>tiny.app.captureScreen</b>();</pre>
   </section>
 
+  <section id="superpowers">
+    <h2>Mac superpowers <span class="tag">you can do that with JS?</span></h2>
+    <p class="note">The frameworks macOS ships that nobody in JS-land can
+    usually touch — all on-device, no cloud, no extra permissions
+    infrastructure.</p>
+    <pre><i>// the system eyedropper — any pixel, any app, NO screen-recording perm</i>
+const color = await <b>tiny.app.pickColor</b>();   <i>// '#rrggbb' | null on cancel</i>
+
+<i>// on-device OCR (Vision) — captureScreen + this = screenshot-to-text</i>
+const { text, blocks } = await <b>tiny.app.ocr</b>('/path/scan.png');
+<i>// blocks: [{ text, confidence, box }] — box normalized 0..1, top-left</i>
+
+<i>// a thumbnail png for ANY file type Quick Look understands</i>
+const thumb = await <b>tiny.app.thumbnail</b>('/path/file.psd', 256);
+<i>// -&gt; { path, width, height }</i>
+
+<i>// Keychain secrets — tokens live here, never in tiny.store</i>
+await <b>tiny.app.secrets.set</b>('api-token', 'abc123');
+await <b>tiny.app.secrets.get</b>('api-token');     <i>// string | null</i>
+await <b>tiny.app.secrets.delete</b>('api-token');
+
+<i>// Touch ID (or the account-password sheet on Macs without it)</i>
+if (await <b>tiny.app.authenticate</b>('unlock the vault')) { … }
+
+<i>// AppleScript in-process — control Music, Spotify, Finder, anything</i>
+<i>// scriptable; no osascript spawn, same 'automation' permission</i>
+await <b>tiny.app.applescript</b>('tell application "Music" to playpause');</pre>
+  </section>
+
   <section id="system">
     <h2>system <span class="tag">theme + power</span></h2>
     <pre>await <b>tiny.theme.get</b>();            <i>// { dark } | null</i>
@@ -473,8 +503,17 @@ const { path, width, height } = await <b>tiny.app.captureScreen</b>();</pre>
     <code>dist/publish/*</code> next to your manifest url. Installs verify
     sha256 + code signature (Team-ID pinned for Developer ID builds), swap
     atomically with rollback, and relaunch.</p>
-    <pre>const { available, latest } = await <b>tiny.api.call</b>('update.check');
-if (available) await <b>tiny.api.call</b>('update.install');</pre>
+    <pre>const { available, latest, notes } = await <b>tiny.api.call</b>('update.check');
+if (available) await <b>tiny.api.call</b>('update.install');
+
+<i>// or let tinyjs check for you — "update": { "url": …, "auto": "launch" }</i>
+<i>// (or "daily"); packaged apps get an 'update-available' event with</i>
+<i>// { current, latest, notes } (notes from `tinyjs publish --notes "…"`)</i>
+<b>tiny.api.on</b>('update-available', async ({ latest, notes }) =&gt; {
+  if (await <b>tiny.win.confirm</b>(`Update to ${latest}?`, { detail: notes ?? '' }))
+    await <b>tiny.api.call</b>('update.install');
+});
+<i>// backend twin: export function onUpdateAvailable(info, app) { … }</i></pre>
   </section>
 
   <footer>

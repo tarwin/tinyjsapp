@@ -4,6 +4,36 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.16.0 — 2026-07-14
+
+The Mac's superpowers — the frameworks macOS ships that JS can't normally
+touch. All on-device, plus auto-update quality-of-life.
+
+- **`app.pickColor()`** — the system eyedropper (NSColorSampler): pick any
+  pixel in any app, **no screen-recording permission needed**. Resolves
+  `'#rrggbb'`, or `null` when the user cancels.
+- **`app.ocr(path)`** — on-device OCR via Vision (accurate mode) →
+  `{ text, blocks: [{ text, confidence, box }] }` with normalized top-left
+  boxes. `captureScreen()` + `ocr()` = screenshot-to-text in two calls.
+- **`app.thumbnail(path, size?)`** — a preview png for *any* file type
+  Quick Look understands (PSD, video, 3D models, …) → `{ path, width,
+  height }`, rendered @2x.
+- **`app.secrets`** — Keychain-backed `get`/`set`/`delete` (generic
+  passwords under the app id) — the keytar/safeStorage role. Tokens go
+  here, never in `tiny.store`; values survive reinstalls.
+- **`app.authenticate(reason)`** — Touch ID, falling back to the account
+  password sheet → `true`/`false` (false covers cancel).
+- **`app.applescript(source)`** — run AppleScript in-process (NSAppleScript,
+  no osascript spawn) under the same `'automation'` permission the
+  framework already manages. Control Music, Spotify, Finder — anything
+  scriptable.
+- **Auto-update polish** — `"update": { "auto": "launch" | "daily" }`
+  checks in the background (packaged apps only) and fires the
+  `update-available` page event / `onUpdateAvailable(info, app)` backend
+  export with `{ current, latest, notes }`; `tinyjs publish --notes "…"`
+  (or `--notes-file FILE`) puts release notes in the manifest, and
+  `update.check()` now returns them.
+
 ## 0.15.0 — 2026-07-14
 
 Round three: preview, capture, and idle.

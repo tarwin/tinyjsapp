@@ -281,6 +281,7 @@ const app = await createApp({
   onNotificationClick: appMod.onNotificationClick,
   onWindowClosed: appMod.onWindowClosed,
   onClipboardChange: appMod.onClipboardChange,
+  onUpdateAvailable: appMod.onUpdateAvailable,
   chrome: ${JSON.stringify(cfg.chrome ?? null)},
   update: ${JSON.stringify(cfg.update ?? null)},
   activation: ${JSON.stringify(cfg.activation ?? null)},
@@ -711,6 +712,14 @@ async function cmdPublish() {
   // Zips live next to the manifest, so derive the download url from update.url.
   const base = cfg.update?.url ? cfg.update.url.replace(/\/[^/]*$/, '') : null;
   const manifest = { version, url: (base ?? 'https://YOUR-HOST/updates') + '/' + zipName, sha256: sha };
+  // Release notes for the in-app update prompt: --notes "text" or
+  // --notes-file CHANGES.md (fed to update.check() as `notes`).
+  const ni = args.findIndex((a) => a === '--notes' || a === '--notes-file');
+  if (ni >= 0 && args[ni + 1]) {
+    manifest.notes = args[ni] === '--notes-file'
+      ? dec.decode(await tjs.readFile(args[ni + 1])).trim()
+      : args[ni + 1];
+  }
   await tjs.writeFile(PUB + '/manifest.json', enc.encode(JSON.stringify(manifest, null, 2) + '\n'));
 
   console.log('==> dist/publish/ ready:');
@@ -749,6 +758,7 @@ usage:
   tinyjs dev          run the app in the current directory
   tinyjs build        build dist/<name> and dist/<Name>.app (--dmg: also a disk image)
   tinyjs publish      build + zip the .app + auto-update manifest
+                      (--notes "text" | --notes-file FILE → manifest notes)
   tinyjs notarize     submit dist/<Name>.app to Apple notarization + staple
   tinyjs update       update the tinyjs CLI itself (--check: only report)
   tinyjs version      print version`);

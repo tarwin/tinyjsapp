@@ -99,7 +99,9 @@ export function init(app) {          // window is up
   // launchAtLogin.get()/set(v), dock.setBadge(text)/bounce(opts),
   // power.preventSleep(reason, opts)/allowSleep(), frontmostApp(),
   // beep(), playSound(target), window(id).share(opts),
-  // idleTime(), quickLook(paths), captureScreen(screenId)
+  // idleTime(), quickLook(paths), captureScreen(screenId),
+  // pickColor(), ocr(path), thumbnail(path, size),
+  // secrets.get/set/delete, authenticate(reason), applescript(source)
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -306,6 +308,32 @@ tiny.app.quickLook([a, b, c]);   tiny.app.quickLook();
 // temp dir, you own the file. Needs the 'screen' permission + macOS 14;
 // rejects with the reason otherwise.
 const { path, width, height } = await tiny.app.captureScreen();
+
+// the system eyedropper — pick any pixel on screen, in any app; needs NO
+// screen-recording permission. '#rrggbb', or null if the user cancels.
+const color = await tiny.app.pickColor();
+
+// on-device OCR (Vision) — screenshot-to-text is captureScreen + this
+const { text, blocks } = await tiny.app.ocr('/path/scan.png');
+// blocks: [{ text, confidence, box }] — box normalized 0..1, top-left
+
+// a thumbnail png for ANY file type Quick Look understands (PSD, video,
+// 3D models, …) — file browsers stop caring about formats
+const thumb = await tiny.app.thumbnail('/path/file.psd', 256);
+
+// Keychain secrets (the keytar/safeStorage role) — tokens go here,
+// never in tiny.store; values survive reinstalls
+await tiny.app.secrets.set('api-token', 'abc123');
+const tok = await tiny.app.secrets.get('api-token');   // string | null
+await tiny.app.secrets.delete('api-token');
+
+// Touch ID (or the account-password sheet) — "the user proved it's them"
+if (await tiny.app.authenticate('unlock the vault')) { /* … */ }
+
+// AppleScript in-process — control Music, Spotify, Finder, any scriptable
+// app; no osascript spawn, same 'automation' permission as keystrokes
+await tiny.app.applescript('tell application "Music" to playpause');
+const sum = await tiny.app.applescript('return 2 + 3');   // '5'
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null
@@ -528,14 +556,28 @@ GitHub Releases, S3, nginx):
   "update": { "url": "https://example.com/myapp/manifest.json" } }
 ```
 
-Each release: `tinyjs publish` → `dist/publish/` contains
-`myapp-1.1.0.zip` + `manifest.json` (version, download url, sha256) — upload
-both to the directory `update.url` points at. In the app:
+Each release: `tinyjs publish --notes "What changed"` → `dist/publish/`
+contains `myapp-1.1.0.zip` + `manifest.json` (version, download url, sha256,
+notes) — upload both to the directory `update.url` points at
+(`--notes-file CHANGES.md` for longer notes). In the app:
 
 ```js
-const { available, latest } = await tiny.api.call('update.check');
+const { available, latest, notes } = await tiny.api.call('update.check');
 if (available) await tiny.api.call('update.install');   // downloads, verifies
 // sha256 + code signature, swaps the .app in place, relaunches
+```
+
+Or let tinyjs check for you: `"update": { "url": …, "auto": "launch" }`
+(or `"daily"`) checks in the background (packaged apps only) and fires the
+`update-available` page event / `onUpdateAvailable(info, app)` backend
+export with `{ current, latest, notes }` — show your own prompt, then
+`update.install()`:
+
+```js
+tiny.api.on('update-available', async ({ latest, notes }) => {
+  if (await tiny.win.confirm(`Update to ${latest}?`, { detail: notes ?? '' }))
+    await tiny.api.call('update.install');
+});
 ```
 
 (Backend equivalents: `app.update.check()` / `app.update.install()`.)

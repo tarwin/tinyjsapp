@@ -67,8 +67,9 @@ export function init(app) {
   // paths, shell.open/reveal/trash, launchAtLogin.get/set,
   // dock.setBadge/bounce, power.preventSleep/allowSleep, frontmostApp(),
   // beep()/playSound(target), window(id).share(opts), idleTime(),
-  // quickLook(paths), captureScreen(screenId),
-  // show({ activate: false })
+  // quickLook(paths), captureScreen(screenId), pickColor(), ocr(path),
+  // thumbnail(path, size), secrets.get/set/delete, authenticate(reason),
+  // applescript(source), show({ activate: false })
 }
 
 export function onMenu(id, app) { ... }  // optional: menu clicks, backend-side
@@ -262,7 +263,28 @@ await tiny.app.captureScreen(screenId?);  // -> { path (png, yours), width,
                                 // height }; needs 'screen' perm + macOS 14,
                                 // rejects with the reason otherwise
 
+await tiny.app.pickColor();     // system eyedropper (NO screen-recording
+                                // perm) -> '#rrggbb' | null on cancel
+await tiny.app.ocr(pngPath);    // on-device Vision OCR -> { text, blocks:
+                                // [{text, confidence, box (0..1 top-left)}] }
+await tiny.app.thumbnail(path, size?);  // preview png for ANY file type ->
+                                // { path, width, height }
+await tiny.app.secrets.get(key);        // Keychain (keytar role): tokens go
+await tiny.app.secrets.set(key, value); // here, NEVER in tiny.store;
+await tiny.app.secrets.delete(key);     // get -> string | null
+await tiny.app.authenticate(reason);    // Touch ID / password sheet ->
+                                        // true | false (false = cancel)
+await tiny.app.applescript(src);        // in-process, no osascript spawn;
+                                // 'automation' TCC; -> result string | null,
+                                // rejects with the script error
+
 tiny.win.print();                           // native print panel
+
+// auto-update: "update": { "url": …, "auto": "launch" | "daily" } checks in
+// the background (packaged apps) → 'update-available' page event /
+// onUpdateAvailable(info, app) export with { current, latest, notes };
+// notes come from `tinyjs publish --notes "…"` (or --notes-file FILE).
+// Then: await tiny.api.call('update.install')
 
 // multiple windows: any frontend html file can be a window
 tiny.win.open('settings', { page: 'settings.html', title: 'Settings', size: '420x300' });

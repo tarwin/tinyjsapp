@@ -194,6 +194,27 @@
       // { path (png temp file — copy to keep), width, height }. Needs the
       // 'screen' permission + macOS 14; rejects with the reason otherwise.
       captureScreen: (screenId) => call('app.captureScreen', { screenId }),
+      // System eyedropper (no screen-recording permission!) -> '#rrggbb'
+      // or null on cancel.
+      pickColor: () => call('app.pickColor'),
+      // On-device OCR -> { text, blocks: [{ text, confidence, box }] }
+      // (box normalized 0..1, top-left origin).
+      ocr: (path) => call('app.ocr', { path }),
+      // Thumbnail png for ANY file type -> { path, width, height };
+      // size = bounding box in points (rendered @2x).
+      thumbnail: (path, size) => call('app.thumbnail', { path, size }),
+      // Keychain secrets under the app id (keytar role) — use for tokens,
+      // never tiny.store.
+      secrets: {
+        get: (key) => call('secrets.get', { key }),          // string | null
+        set: (key, value) => call('secrets.set', { key, value }),
+        delete: (key) => call('secrets.delete', { key }),
+      },
+      // Touch ID / account-password sheet -> true | false (false = cancel).
+      authenticate: (reason) => call('app.authenticate', { reason }),
+      // AppleScript in-process (no osascript) -> result string | null;
+      // rejects with the script error. Uses the 'automation' permission.
+      applescript: (source) => call('app.applescript', { source }),
     },
 
     tray: {

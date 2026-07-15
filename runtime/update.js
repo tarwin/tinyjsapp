@@ -94,7 +94,13 @@ export async function checkForUpdate({ url, version }) {
   if (res.url) assertSafeUrl(res.url, 'update url (after redirect)');
   const manifest = await res.json();
   const latest = manifest?.version ?? null;
-  return { available: isNewer(version, latest), current: version, latest, manifest };
+  return {
+    available: isNewer(version, latest), current: version, latest,
+    // Release notes for the update prompt ("notes" in the manifest —
+    // `tinyjs publish --notes "…"` writes it).
+    notes: manifest?.notes ?? null,
+    manifest,
+  };
 }
 
 // Downloads, verifies, swaps the bundle. Returns the bundle path on success;

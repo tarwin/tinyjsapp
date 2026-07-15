@@ -69,6 +69,18 @@
   <section>
 
     <div class="rel">
+      <h2>0.16.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b><code>app.pickColor()</code></b> — the system eyedropper: any pixel, any app, <em>no screen-recording permission</em>. <code>'#rrggbb'</code> or <code>null</code> on cancel.</li>
+        <li><b><code>app.ocr(path)</code></b> — on-device OCR (Vision) → <code>{ text, blocks }</code> with normalized boxes. <code>captureScreen()</code> + <code>ocr()</code> = screenshot-to-text in two calls.</li>
+        <li><b><code>app.thumbnail(path, size?)</code></b> — a preview png for <em>any</em> file type Quick Look understands (PSD, video, 3D…), rendered @2x.</li>
+        <li><b><code>app.secrets</code></b> — Keychain <code>get/set/delete</code> under the app id (the keytar/safeStorage role) — tokens go here, never in <code>tiny.store</code>.</li>
+        <li><b><code>app.authenticate(reason)</code></b> — Touch ID (or the account-password sheet) → <code>true | false</code>.</li>
+        <li><b><code>app.applescript(source)</code></b> — AppleScript in-process, no osascript spawn, under the existing <code>automation</code> permission.</li>
+        <li><b>Auto-update polish</b> — <code>"update": { "auto": "launch" | "daily" }</code> background checks fire an <code>update-available</code> event / <code>onUpdateAvailable</code> export with <code>{ current, latest, notes }</code>; <code>tinyjs publish --notes "…"</code> ships release notes in the manifest.</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.15.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b><code>app.quickLook(paths)</code></b> — the real Finder-spacebar preview panel (QLPreviewPanel, no <code>qlmanage</code> spawn); an array pages with the arrow keys, <code>quickLook()</code> closes.</li>
