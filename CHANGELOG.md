@@ -4,6 +4,34 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.13.0 — 2026-07-14
+
+Theme: stop shelling out. Five small APIs replacing the `open`/osascript
+spawns and hardcoded paths tinyjs apps still needed.
+
+- **`app.shell`** — `open(target)` (URL with any scheme, or a file path,
+  in its default app), `reveal(path)` (show in Finder), `trash(path)`
+  (move to the Trash — recoverable, prefer it over deleting user files).
+  Each resolves `true` or rejects with the reason (`'no such file'`,
+  `'no application registered for URL'`).
+- **`app.launchAtLogin`** — `get()`/`set(v)` →
+  `'enabled' | 'disabled' | 'requires-approval' | 'unsupported'` via
+  SMAppService. Packaged .apps on macOS 13+; `'requires-approval'` means
+  the user must allow it in System Settings → General → Login Items. Dev
+  mode reports `'unsupported'` (no bundle identity to register).
+- **`app.screens()`** — every display in the same top-left coordinates as
+  `setPosition`: `{ id, name, x, y, width, height, visible, scale,
+  primary }` — `visible` excludes the menu bar and Dock, so multi-monitor
+  palette placement is one call.
+- **`app.paths`** — `{ home, data, cache, logs, temp, downloads, desktop,
+  documents }`, per-app-id where it matters. Prefer these over hardcoding
+  `~/Library` paths (they're what a future non-macOS backend would remap).
+- **`app.dock`** — `setBadge('3')` / `setBadge('')`, `bounce()` /
+  `bounce({ critical: true })`.
+- Docs: noted that `'screen'` permission never reads `'undetermined'`
+  (macOS only exposes a yes/no preflight), and that dev-mode TCC grants
+  attach to the shared launcher binary rather than your app.
+
 ## 0.12.1 — 2026-07-14
 
 - **Clipboard metadata** — `clipboard.read()` now also returns `concealed`

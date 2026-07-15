@@ -141,7 +141,10 @@ declare interface TinyKeystrokeResult {
   trusted: boolean;
 }
 
-/** 'automation' checks System Events; 'automation:<bundle-id>' any target. */
+/** 'automation' checks System Events; 'automation:<bundle-id>' any target.
+ *  Note: 'screen' never reports 'undetermined' — macOS only exposes a
+ *  yes/no preflight for screen recording, so it reads 'denied' until the
+ *  user grants it in System Settings. */
 declare type TinyPermissionName =
   | 'accessibility' | 'screen' | 'notifications'
   | 'microphone' | 'camera'
@@ -172,6 +175,58 @@ declare interface TinyMousePosition {
   window: { x: number; y: number; inside: boolean } | null;
   /** the display the cursor is on (frame in the same coords) */
   screen: { x: number; y: number; width: number; height: number; scale: number };
+}
+
+declare interface TinyScreen {
+  /** CGDirectDisplayID */
+  id: number;
+  /** e.g. 'Built-in Retina Display' (null before macOS 10.15) */
+  name: string | null;
+  /** display frame — same top-left coordinates as win.setPosition */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** frame minus the menu bar and Dock */
+  visible: { x: number; y: number; width: number; height: number };
+  scale: number;
+  /** the menu-bar screen (the coordinate origin) */
+  primary: boolean;
+}
+
+/** Standard per-app directories; data/cache/logs are per app id and NOT
+ *  auto-created. Prefer these over hardcoding ~/Library paths. */
+declare interface TinyPaths {
+  home: string;
+  data: string;
+  cache: string;
+  logs: string;
+  temp: string;
+  downloads: string;
+  desktop: string;
+  documents: string;
+}
+
+/** 'requires-approval': the user must allow the item in System Settings >
+ *  General > Login Items. 'unsupported': not a packaged .app (dev mode has
+ *  no bundle identity to register) or macOS < 13. */
+declare type TinyLoginStatus =
+  'enabled' | 'disabled' | 'requires-approval' | 'unsupported';
+
+/** NSWorkspace verbs — resolve true, reject with the reason on failure. */
+declare interface TinyShell {
+  /** open a URL (any scheme) or file path in the default app */
+  open(target: string): Promise<true>;
+  /** show the file in Finder */
+  reveal(path: string): Promise<true>;
+  /** move to the Trash (recoverable — prefer over deleting user files) */
+  trash(path: string): Promise<true>;
+}
+
+declare interface TinyLaunchAtLogin {
+  get(): Promise<TinyLoginStatus>;
+  /** returns the resulting status */
+  set(enabled: boolean): Promise<TinyLoginStatus>;
 }
 
 /** The `tiny` global available in every window's page. */
@@ -298,6 +353,18 @@ declare interface Tiny {
     };
     /** global cursor position + the screen it's on */
     mousePosition(): Promise<TinyMousePosition>;
+    /** every display, same top-left coords as win.setPosition */
+    screens(): Promise<TinyScreen[]>;
+    /** standard per-app directories */
+    paths(): Promise<TinyPaths>;
+    shell: TinyShell;
+    launchAtLogin: TinyLaunchAtLogin;
+    dock: {
+      /** '' clears the badge */
+      setBadge(text: string): Promise<any>;
+      /** bounce until activated; critical: until the user acts */
+      bounce(opts?: { critical?: boolean }): Promise<any>;
+    };
   };
 
   tray: {
@@ -414,6 +481,18 @@ declare interface TinyApp {
   };
   /** global cursor position + the screen it's on */
   mousePosition(): Promise<TinyMousePosition>;
+  /** every display, same top-left coords as setPosition */
+  screens(): Promise<TinyScreen[]>;
+  /** standard per-app directories */
+  paths: TinyPaths;
+  shell: TinyShell;
+  launchAtLogin: TinyLaunchAtLogin;
+  dock: {
+    /** '' clears the badge */
+    setBadge(text: string): boolean;
+    /** bounce until activated; critical: until the user acts */
+    bounce(opts?: { critical?: boolean }): boolean;
+  };
   update: {
     check(): Promise<{ available: boolean; current: string; latest: string | null }>;
     install(): Promise<boolean>;

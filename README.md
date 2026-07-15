@@ -94,7 +94,9 @@ export function init(app) {          // window is up
   // update.check()/update.install(),
   // clipboard.read()/write(data)/changeCount()/watch(ms)/unwatch(),
   // keystroke(combo), paste(), permissions.check(name)/request(name),
-  // mousePosition(), show({ activate: false })
+  // mousePosition(), screens(), paths, show({ activate: false }),
+  // shell.open(target)/reveal(path)/trash(path),
+  // launchAtLogin.get()/set(v), dock.setBadge(text)/bounce(opts)
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -227,10 +229,47 @@ await tiny.app.permissions.request('accessibility');  // prompt/open Settings
 // names: 'accessibility', 'screen', 'notifications' (packaged apps),
 //        'microphone', 'camera' (TCC layer under getUserMedia),
 //        'automation' (System Events) or 'automation:<bundle-id>'
+// 'screen' never reads 'undetermined' — macOS only exposes a yes/no
+// preflight for screen recording ('denied' until granted in Settings).
 // mic/camera: getUserMedia() just works — the launcher grants WebKit's
 // per-origin prompt so users only see the system dialog naming your app.
 // Packaged apps declare "permissions": {"microphone": "why", ...} in
 // tinyjs.json → Info.plist usage strings + hardened-runtime entitlements.
+// Dev-mode note: TCC grants attach to the SHARED launcher binary
+// (~/.tinyjs), not your app — all dev apps share them, and a launcher
+// update re-prompts. Packaged apps carry their own identity and grants.
+
+// shell — the NSWorkspace verbs apps otherwise spawn `open` for
+await tiny.app.shell.open('https://tinyjs.app');   // default browser
+await tiny.app.shell.open('/path/to/report.pdf');  // default app for the file
+await tiny.app.shell.reveal('/path/to/file');      // show in Finder
+await tiny.app.shell.trash('/path/to/file');       // recoverable (prefer over
+                                                   // deleting user files)
+// each resolves true, or rejects with the reason ('no such file',
+// 'no application registered for URL', …)
+
+// every display, same top-left coords as win.setPosition
+const screens = await tiny.app.screens();
+// [{ id, name, x, y, width, height, visible: { x, y, width, height },
+//    scale, primary }] — visible excludes the menu bar and Dock; primary
+// is the menu-bar screen (the coordinate origin)
+
+// standard per-app directories — prefer over hardcoding ~/Library paths
+const paths = await tiny.app.paths();
+// { home, data, cache, logs, temp, downloads, desktop, documents }
+// data/cache/logs are per app id; create them on first write
+// (backend: app.paths is a plain object, no await)
+
+// launch at login (packaged .app on macOS 13+; dev mode -> 'unsupported')
+await tiny.app.launchAtLogin.get();       // 'enabled' | 'disabled' |
+await tiny.app.launchAtLogin.set(true);   //   'requires-approval' | 'unsupported'
+// 'requires-approval': macOS wants the user to allow it in
+// System Settings > General > Login Items
+
+// Dock tile
+tiny.app.dock.setBadge('3');  tiny.app.dock.setBadge('');  // '' clears
+tiny.app.dock.bounce();                    // until the app is activated
+tiny.app.dock.bounce({ critical: true });  // until the user acts
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null

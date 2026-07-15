@@ -69,6 +69,17 @@
   <section>
 
     <div class="rel">
+      <h2>0.13.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b><code>app.shell</code></b> — <code>open(target)</code> (URL with any scheme, or a file path, in its default app), <code>reveal(path)</code> (show in Finder), <code>trash(path)</code> (move to the Trash — recoverable, prefer it over deleting user files). Each resolves <code>true</code> or rejects with the reason. No more <code>open</code> spawns.</li>
+        <li><b><code>app.launchAtLogin</code></b> — <code>get()</code>/<code>set(v)</code> → <code>enabled | disabled | requires-approval | unsupported</code> via SMAppService (packaged .apps, macOS 13+). <code>requires-approval</code>: the user must allow it in System Settings → Login Items.</li>
+        <li><b><code>app.screens()</code></b> — every display in the same top-left coordinates as <code>setPosition</code>: <code>{ id, name, x, y, width, height, visible, scale, primary }</code>; <code>visible</code> excludes the menu bar and Dock, so multi-monitor palette placement is one call.</li>
+        <li><b><code>app.paths</code></b> — <code>{ home, data, cache, logs, temp, downloads, desktop, documents }</code>, per-app-id where it matters — prefer over hardcoding <code>~/Library</code> paths.</li>
+        <li><b><code>app.dock</code></b> — <code>setBadge('3')</code> / <code>setBadge('')</code>, <code>bounce()</code> / <code>bounce({ critical: true })</code>.</li>
+        <li>Docs: <code>'screen'</code> permission never reads <code>undetermined</code> (macOS only exposes a yes/no preflight); dev-mode TCC grants attach to the shared launcher binary, not your app.</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.12.1 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b>Clipboard metadata</b> — <code>clipboard.read()</code> gains <code>concealed</code> (org.nspasteboard Concealed/Transient markers — clipboard-history apps skip password-manager copies by default), <code>sourceApp</code> (<code>{ name, bundleId }</code> the content came from; exact while <code>watch()</code> runs), <code>sourceURL</code> (the page a Chromium-browser copy came from), and <code>imageSize</code> (px — no more <code>sips</code> for dimensions).</li>

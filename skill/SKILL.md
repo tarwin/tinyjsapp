@@ -63,8 +63,9 @@ export function init(app) {
   // store.get/set/delete/all, hotkey.register/unregister,
   // setContextMenu(items), update.check()/update.install(),
   // clipboard.read/write/changeCount/watch/unwatch, keystroke(combo),
-  // paste(), permissions.check/request, mousePosition(),
-  // show({ activate: false })
+  // paste(), permissions.check/request, mousePosition(), screens(),
+  // paths, shell.open/reveal/trash, launchAtLogin.get/set,
+  // dock.setBadge/bounce, show({ activate: false })
 }
 
 export function onMenu(id, app) { ... }  // optional: menu clicks, backend-side
@@ -209,6 +210,34 @@ await tiny.app.permissions.request('accessibility'); // prompts / opens Settings
 // "permissions": {"microphone": "why", "camera": "why"} in tinyjs.json —
 // injected as Info.plist usage strings (required, or macOS kills the app) and,
 // when signIdentity is set, as hardened-runtime device entitlements.
+// dev-mode gotcha: TCC grants attach to the SHARED launcher binary
+// (~/.tinyjs), not your app — all dev apps share them; packaged apps get
+// their own. 'screen' never reads 'undetermined' (macOS only exposes a
+// yes/no preflight for screen recording).
+
+// shell — the NSWorkspace verbs apps otherwise spawn `open` for; each
+// resolves true or rejects with the reason
+await tiny.app.shell.open('https://x.com'); // URL (any scheme) or file path
+await tiny.app.shell.reveal(path);          // show in Finder
+await tiny.app.shell.trash(path);           // recoverable — prefer over delete
+
+await tiny.app.screens();  // every display, same coords as win.setPosition:
+                           // [{ id, name, x, y, width, height, scale,
+                           //    visible: {x,y,width,height} (minus menu bar/
+                           //    Dock), primary (menu-bar screen) }]
+
+await tiny.app.paths();    // { home, data, cache, logs, temp, downloads,
+                           //   desktop, documents } — data/cache/logs per
+                           // app id, create on first write; backend twin
+                           // app.paths is a plain object (no await)
+
+// launch at login (packaged .app on macOS 13+; dev mode -> 'unsupported')
+await tiny.app.launchAtLogin.get();         // 'enabled'|'disabled'|
+await tiny.app.launchAtLogin.set(true);     //  'requires-approval'|'unsupported'
+// 'requires-approval' = user must allow in System Settings > Login Items
+
+tiny.app.dock.setBadge('3');                // '' clears
+tiny.app.dock.bounce({ critical: false });  // bounce until activated
 
 tiny.win.print();                           // native print panel
 

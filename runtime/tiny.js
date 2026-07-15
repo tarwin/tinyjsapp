@@ -142,6 +142,35 @@
       //   scale } } — window is relative to THIS window's content area
       // (clientX/clientY units, works even while the cursor is outside it)
       mousePosition: () => call('app.mouse'),
+      // Every display (same top-left coords as win.setPosition): [{ id,
+      // name, x, y, width, height, visible: {x,y,width,height}, scale,
+      // primary }] — visible excludes the menu bar and Dock.
+      screens: () => call('app.screens'),
+      // Standard per-app directories: { home, data, cache, logs, temp,
+      // downloads, desktop, documents } (data/cache/logs are per app id).
+      paths: () => call('app.paths'),
+      // NSWorkspace verbs. open(): URL (any scheme) or file path in the
+      // default app; reveal(): show in Finder; trash(): move to Trash
+      // (recoverable). Resolve true; reject with the reason on failure.
+      shell: {
+        open: (target) => call('shell.open', { target }),
+        reveal: (path) => call('shell.reveal', { path }),
+        trash: (path) => call('shell.trash', { path }),
+      },
+      // Launch at login (packaged .app on macOS 13+, else 'unsupported').
+      // get()/set(v) -> 'enabled' | 'disabled' | 'requires-approval' |
+      // 'unsupported'; 'requires-approval' = user must allow it in System
+      // Settings > General > Login Items.
+      launchAtLogin: {
+        get: () => call('login.get'),
+        set: (enabled) => call('login.set', { enabled }),
+      },
+      // Dock tile: setBadge('3') / setBadge('') to clear; bounce() until
+      // activated, bounce({ critical: true }) until the user acts.
+      dock: {
+        setBadge: (text) => call('dock.setBadge', { text }),
+        bounce: (opts) => call('dock.bounce', opts ?? {}),
+      },
     },
 
     tray: {

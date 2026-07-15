@@ -95,6 +95,7 @@
     <a href="#hotkeys">hotkeys</a>
     <a href="#keystrokes">keystrokes</a>
     <a href="#permissions">permissions</a>
+    <a href="#shell">shell &amp; dock</a>
     <a href="#system">system</a>
     <a href="#open">deep links</a>
     <a href="#update">auto-update</a>
@@ -214,6 +215,12 @@ await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i>
 <i>// area ({ x, y, inside } — clientX/clientY units, valid even while the</i>
 <i>// cursor is outside it); screen = the display the cursor is on</i>
 const { x, y, window, screen } = await <b>tiny.app.mousePosition</b>();
+
+<i>// every display, same coords — position windows on any monitor</i>
+const screens = await <b>tiny.app.screens</b>();
+<i>// [{ id, name, x, y, width, height, visible: { x, y, width, height },</i>
+<i>//    scale, primary }] — visible excludes the menu bar and Dock; primary</i>
+<i>//    is the menu-bar screen (the coordinate origin)</i>
 <b>tiny.win.print</b>();                <i>// native print panel</i>
 
 <i>// files dragged onto the window — real filesystem paths</i>
@@ -380,6 +387,39 @@ await <b>tiny.app.permissions.request</b>('accessibility');
     in tinyjs.json: the strings become the dialog text (macOS kills a bundle
     that captures without them), and signed builds get the matching
     hardened-runtime device entitlements.</p>
+    <p class="note">Two quirks: <code>'screen'</code> never reads
+    <code>'undetermined'</code> — macOS only exposes a yes/no preflight for
+    screen recording, so it's <code>'denied'</code> until granted in System
+    Settings. And in dev mode, TCC grants attach to the <em>shared launcher
+    binary</em> (~/.tinyjs) rather than your app — every dev app shares
+    them, and a launcher update re-prompts; packaged apps carry their own
+    identity and grants.</p>
+  </section>
+
+  <section id="shell">
+    <h2>shell, login &amp; dock <span class="tag">stop shelling out</span></h2>
+    <p class="note">The NSWorkspace verbs apps otherwise spawn
+    <code>open</code> for, plus SMAppService login items and the Dock tile.
+    Shell calls resolve <code>true</code> or reject with the reason.</p>
+    <pre>await <b>tiny.app.shell.open</b>('https://tinyjs.app');  <i>// default browser</i>
+await <b>tiny.app.shell.open</b>('/path/report.pdf');    <i>// default app for the file</i>
+await <b>tiny.app.shell.reveal</b>(path);   <i>// show in Finder</i>
+await <b>tiny.app.shell.trash</b>(path);    <i>// recoverable — prefer over deleting</i>
+
+<i>// standard per-app directories — no hardcoded ~/Library paths</i>
+await <b>tiny.app.paths</b>();  <i>// { home, data, cache, logs, temp, downloads,</i>
+                         <i>//   desktop, documents } — data/cache/logs are per</i>
+                         <i>//   app id; create on first write. Backend twin</i>
+                         <i>//   app.paths is a plain object (no await).</i>
+
+<i>// launch at login (packaged .app on macOS 13+; dev mode -&gt; 'unsupported')</i>
+await <b>tiny.app.launchAtLogin.get</b>();      <i>// 'enabled' | 'disabled' |</i>
+await <b>tiny.app.launchAtLogin.set</b>(true);  <i>//  'requires-approval' | 'unsupported'</i>
+<i>// 'requires-approval': the user must allow it in System Settings &gt; Login Items</i>
+
+<b>tiny.app.dock.setBadge</b>('3');   <b>tiny.app.dock.setBadge</b>('');  <i>// '' clears</i>
+<b>tiny.app.dock.bounce</b>();                    <i>// until the app is activated</i>
+<b>tiny.app.dock.bounce</b>({ critical: true });  <i>// until the user acts</i></pre>
   </section>
 
   <section id="system">

@@ -93,6 +93,19 @@
 //                                                    microphone, camera,
 //                                                    automation[:<bundle-id>]);
 //                                                    answers GOT <qid> {status}
+//                         SHELL <qid> <op>\t<target> open a URL/path with the
+//                                                    default app (open), reveal
+//                                                    in Finder (reveal), or move
+//                                                    to Trash (trash); answers
+//                                                    GOT <qid> {ok, error}
+//                         LOGIN <qid> get|set 0|1    launch-at-login status /
+//                                                    register (SMAppService —
+//                                                    bundle mode + macOS 13;
+//                                                    else "unsupported");
+//                                                    answers GOT <qid>
+//                                                    {status, ok, error}
+//                         BADGE <text>               Dock badge ('' clears)
+//                         BOUNCE <critical01>        bounce the Dock icon
 //                         PRINT                      native print panel
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
@@ -129,6 +142,7 @@
 #ifdef __APPLE__
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
+#import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
 #include <Carbon/Carbon.h> // RegisterEventHotKey (global hotkeys)
@@ -1613,6 +1627,147 @@ static void install_media_capture_hook() {
 }
 #endif
 
+// --- shell, launch-at-login, dock (macOS) ------------------------------------------
+// SHELL wraps the NSWorkspace verbs apps otherwise spawn `open` for; trash
+// uses NSFileManager so the file is recoverable (vs tjs.remove). LOGIN wraps
+// SMAppService (macOS 13+, needs a real bundle identity — dev-mode's bare
+// launcher answers "unsupported"). BADGE/BOUNCE are Dock-tile fire-and-forget.
+
+struct ShellReq {
+  std::string qid, op, target;
+};
+struct LoginReq {
+  std::string qid;
+  int set; // -1 = get, 0 = unregister, 1 = register
+};
+
+#ifdef __APPLE__
+static void do_shell(webview_t, void *arg) {
+  ShellReq *req = static_cast<ShellReq *>(arg);
+  @autoreleasepool {
+    bool ok = false;
+    std::string err;
+    NSString *t = ns(req->target);
+    // Anything that parses with a scheme is a URL; everything else is a
+    // file path (~ expanded). file:// URLs are folded back to paths so
+    // reveal/trash accept both spellings.
+    NSURL *url = [NSURL URLWithString:t];
+    bool is_url = url && url.scheme.length > 0;
+    NSString *path = [t stringByExpandingTildeInPath];
+    if (is_url && url.fileURL) {
+      path = url.path;
+      is_url = req->op == "open"; // reveal/trash want the path form
+    }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    if (req->op == "open") {
+      if (is_url) {
+        ok = [[NSWorkspace sharedWorkspace] openURL:url];
+        if (!ok)
+          err = "no application registered for URL";
+      } else if ([fm fileExistsAtPath:path]) {
+        ok = [[NSWorkspace sharedWorkspace]
+            openURL:[NSURL fileURLWithPath:path]];
+        if (!ok)
+          err = "open failed";
+      } else {
+        err = "no such file";
+      }
+    } else if (req->op == "reveal") {
+      if ([fm fileExistsAtPath:path]) {
+        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[
+          [NSURL fileURLWithPath:path]
+        ]];
+        ok = true;
+      } else {
+        err = "no such file";
+      }
+    } else if (req->op == "trash") {
+      NSError *e = nil;
+      ok = [fm trashItemAtURL:[NSURL fileURLWithPath:path]
+              resultingItemURL:nil
+                         error:&e];
+      if (!ok)
+        err = e ? [e.localizedDescription UTF8String] : "trash failed";
+    } else {
+      err = "unknown shell op";
+    }
+    sock_write_line("GOT " + req->qid + " {\"ok\":" + (ok ? "true" : "false") +
+                    ",\"error\":" +
+                    (err.empty() ? "null" : json_escape(err)) + "}");
+  }
+  delete req;
+}
+
+static void do_login(webview_t, void *arg) {
+  LoginReq *req = static_cast<LoginReq *>(arg);
+  std::string qid = req->qid;
+  int set = req->set;
+  delete req;
+  @autoreleasepool {
+    if (@available(macOS 13.0, *)) {
+      if ([[NSBundle mainBundle] bundleIdentifier]) {
+        SMAppService *svc = [SMAppService mainAppService];
+        bool ok = true;
+        std::string err;
+        if (set == 1 && svc.status != SMAppServiceStatusEnabled) {
+          NSError *e = nil;
+          ok = [svc registerAndReturnError:&e];
+          if (!ok && e)
+            err = [e.localizedDescription UTF8String];
+        } else if (set == 0 && (svc.status == SMAppServiceStatusEnabled ||
+                                svc.status ==
+                                    SMAppServiceStatusRequiresApproval)) {
+          NSError *e = nil;
+          ok = [svc unregisterAndReturnError:&e];
+          if (!ok && e)
+            err = [e.localizedDescription UTF8String];
+        }
+        const char *st =
+            svc.status == SMAppServiceStatusEnabled ? "enabled"
+            : svc.status == SMAppServiceStatusRequiresApproval
+                ? "requires-approval"
+                : "disabled"; // notRegistered / notFound
+        sock_write_line("GOT " + qid + " {\"status\":\"" + st +
+                        "\",\"ok\":" + (ok ? "true" : "false") + ",\"error\":" +
+                        (err.empty() ? "null" : json_escape(err)) + "}");
+        return;
+      }
+    }
+    sock_write_line("GOT " + qid +
+                    " {\"status\":\"unsupported\",\"ok\":false,"
+                    "\"error\":null}");
+  }
+}
+
+static void do_badge(webview_t, void *arg) {
+  std::string *text = static_cast<std::string *>(arg);
+  [NSApp dockTile].badgeLabel = text->empty() ? nil : ns(*text);
+  delete text;
+}
+
+static void do_bounce(webview_t, void *arg) {
+  int *critical = static_cast<int *>(arg);
+  [NSApp requestUserAttention:*critical ? NSCriticalRequest
+                                        : NSInformationalRequest];
+  delete critical;
+}
+#else
+static void do_shell(webview_t, void *arg) {
+  ShellReq *req = static_cast<ShellReq *>(arg);
+  sock_write_line("GOT " + req->qid +
+                  " {\"ok\":false,\"error\":\"unsupported\"}");
+  delete req;
+}
+static void do_login(webview_t, void *arg) {
+  LoginReq *req = static_cast<LoginReq *>(arg);
+  sock_write_line("GOT " + req->qid +
+                  " {\"status\":\"unsupported\",\"ok\":false,\"error\":null}");
+  delete req;
+}
+static void do_badge(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
+static void do_bounce(webview_t, void *arg) { delete static_cast<int *>(arg); }
+#endif
+
 // --- custom context menu (macOS) -------------------------------------------------
 // CTXBEGIN, ITEM/SEP lines, CTXEND replaces the webview's right-click menu
 // with the declared items (clicks -> `CTX <id>`); CTXCLEAR restores WebKit's
@@ -1798,6 +1953,38 @@ static void do_get(webview_t w, void *arg) {
           (int)(top - NSMaxY(sf)), (int)sf.size.width, (int)sf.size.height,
           (double)scr.backingScaleFactor);
       json = buf;
+    } else if (req->what == "screens") {
+      // Every display, in the same top-left global coordinates WINOP pos /
+      // getState / mousePosition use, so setPosition against any screen's
+      // frame just works. visible excludes the menu bar and Dock. primary
+      // is the menu-bar screen (screens[0], the coordinate origin).
+      CGFloat top = NSMaxY([[NSScreen screens][0] frame]);
+      json = "[";
+      bool first_scr = true;
+      for (NSScreen *s in [NSScreen screens]) {
+        NSRect f = s.frame, v = s.visibleFrame;
+        NSNumber *num = s.deviceDescription[@"NSScreenNumber"];
+        std::string name = "null";
+        if (@available(macOS 10.15, *))
+          name = json_escape([s.localizedName UTF8String]);
+        char buf[512];
+        std::snprintf(
+            buf, sizeof(buf),
+            "{\"id\":%ld,\"name\":%s,"
+            "\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
+            "\"visible\":{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d},"
+            "\"scale\":%.2f,\"primary\":%s}",
+            (long)num.integerValue, name.c_str(), (int)f.origin.x,
+            (int)(top - NSMaxY(f)), (int)f.size.width, (int)f.size.height,
+            (int)v.origin.x, (int)(top - NSMaxY(v)), (int)v.size.width,
+            (int)v.size.height, (double)s.backingScaleFactor,
+            s == [NSScreen screens][0] ? "true" : "false");
+        if (!first_scr)
+          json += ",";
+        first_scr = false;
+        json += buf;
+      }
+      json += "]";
     } else if (req->what == "debug:trafficpos") {
       NSWindow *win = (NSWindow *)webview_get_native_handle(
           w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
@@ -2878,6 +3065,31 @@ static void sock_read_loop() {
         webview_dispatch(g_w, do_perm,
                          new PermReq{line.substr(8, sp - 8), line.substr(sp + 1),
                                      line.rfind("PERMREQ ", 0) == 0});
+      } else if (line.rfind("SHELL ", 0) == 0) {
+        size_t sp = line.find(' ', 6);
+        if (sp == std::string::npos) continue;
+        std::vector<std::string> p = split_tabs(line.substr(sp + 1));
+        ShellReq *req = new ShellReq;
+        req->qid = line.substr(6, sp - 6);
+        req->op = p.size() > 0 ? p[0] : "";
+        req->target = p.size() > 1 ? wire_unescape(p[1]) : "";
+        webview_dispatch(g_w, do_shell, req);
+      } else if (line.rfind("LOGIN ", 0) == 0) {
+        size_t sp = line.find(' ', 6);
+        if (sp == std::string::npos) continue;
+        std::string rest = line.substr(sp + 1); // "get" | "set 0|1"
+        int set = rest == "set 1" ? 1 : rest == "set 0" ? 0 : -1;
+        webview_dispatch(g_w, do_login,
+                         new LoginReq{line.substr(6, sp - 6), set});
+      } else if (line == "BADGE" || line.rfind("BADGE ", 0) == 0) {
+        webview_dispatch(g_w, do_badge,
+                         new std::string(
+                             line.size() > 6 ? wire_unescape(line.substr(6))
+                                             : ""));
+      } else if (line.rfind("BOUNCE", 0) == 0) {
+        webview_dispatch(g_w, do_bounce,
+                         new int(line.size() > 7 ? std::atoi(line.c_str() + 7)
+                                                 : 0));
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_print, nullptr);
       } else if (line == "RELOAD") {

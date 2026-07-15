@@ -173,6 +173,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     });
   }
   const query = (what) => ask('GET', what);
+  const shellOp = async (op, target) => {
+    const r = await ask('SHELL', op + '\t' + esc(target));
+    if (!r?.ok) throw new Error(r?.error ?? op + ' failed');
+    return true;
+  };
 
   // Menu items, shared by menu bar / tray / context menu. Items support
   // { id, label, key?, checked?, enabled?, submenu?: [...] } | { separator }.
@@ -365,6 +370,54 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // area (clientX/clientY units, even while the cursor is outside);
     // screen is the display the cursor is on.
     mousePosition: () => query('mouse'),
+    // Every display, same top-left coordinates as setPosition / getState:
+    // [{ id, name, x, y, width, height, visible: { x, y, width, height },
+    //   scale, primary }] — visible excludes the menu bar and Dock; primary
+    // is the menu-bar screen (the coordinate origin).
+    screens: () => query('screens'),
+    // NSWorkspace verbs — no `open` spawns. open() takes a URL (any scheme)
+    // or a file path; reveal() shows the file in Finder; trash() moves it to
+    // the Trash (recoverable — prefer it over tjs.remove for user files).
+    // Resolve true; throw with the reason ('no such file', 'no application
+    // registered for URL', …) on failure.
+    shell: {
+      open: (target) => shellOp('open', target),
+      reveal: (path) => shellOp('reveal', path),
+      trash: (path) => shellOp('trash', path),
+    },
+    // Launch at login (SMAppService — bundle mode on macOS 13+, otherwise
+    // 'unsupported'; dev mode has no bundle identity to register). get() ->
+    // 'enabled' | 'disabled' | 'requires-approval' | 'unsupported'. set(v)
+    // returns the resulting status: 'requires-approval' means macOS wants
+    // the user to allow it in System Settings > General > Login Items.
+    launchAtLogin: {
+      async get() { return (await ask('LOGIN', 'get'))?.status ?? 'unsupported'; },
+      async set(enabled) {
+        const r = await ask('LOGIN', 'set ' + (enabled ? 1 : 0));
+        if (r?.ok === false && r?.error) throw new Error(r.error);
+        return r?.status ?? 'unsupported';
+      },
+    },
+    // Dock tile. setBadge('3') shows a badge, setBadge('') clears it.
+    // bounce() bounces the icon until the app activates; { critical: true }
+    // keeps bouncing until the user acts.
+    dock: {
+      setBadge(text) { send('BADGE ' + esc(text)); return true; },
+      bounce(opts) { send('BOUNCE ' + (opts?.critical ? 1 : 0)); return true; },
+    },
+    // Standard per-app directories (data/cache/logs are per app id, not
+    // auto-created — tjs.makeDir(..., { recursive: true }) first write).
+    // Prefer these over hardcoding ~/Library paths.
+    paths: {
+      home: tjs.homeDir,
+      data: tjs.homeDir + '/Library/Application Support/' + (id || 'tinyjs-app'),
+      cache: tjs.homeDir + '/Library/Caches/' + (id || 'tinyjs-app'),
+      logs: tjs.homeDir + '/Library/Logs/' + (id || 'tinyjs-app'),
+      temp: tjs.tmpDir,
+      downloads: tjs.homeDir + '/Downloads',
+      desktop: tjs.homeDir + '/Desktop',
+      documents: tjs.homeDir + '/Documents',
+    },
     // Raw launcher read-back (debug/test surface; the page twin is the
     // 'debug.get' builtin).
     debug: (what) => query(String(what)),
@@ -528,6 +581,15 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     },
     'theme.get': async () => lastTheme,
     'app.info': async () => app.info,
+    'app.screens': async () => app.screens(),
+    'app.paths': async () => app.paths,
+    'shell.open': async ({ target }) => app.shell.open(target),
+    'shell.reveal': async ({ path }) => app.shell.reveal(path),
+    'shell.trash': async ({ path }) => app.shell.trash(path),
+    'login.get': async () => app.launchAtLogin.get(),
+    'login.set': async ({ enabled }) => app.launchAtLogin.set(enabled),
+    'dock.setBadge': async ({ text }) => app.dock.setBadge(text ?? ''),
+    'dock.bounce': async (p) => app.dock.bounce(p),
   };
   const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };
