@@ -178,6 +178,16 @@
 //                                                    <qid> {ok, path (png),
 //                                                    width, height, error}
 //                         PRINT                      native print panel
+//                         PDF <qid> <path>           render the page to a PDF;
+//                                                    GOT {ok, path, error}
+//                         HAPTIC <pattern>           trackpad haptic feedback
+//                                                    (generic|alignment|level)
+//                         DOCKICON <path>            set the Dock icon from a
+//                                                    png ('' = reset)
+//                         SPOTLIGHT <qid> <query>    find files by content
+//                                                    (NSMetadataQuery); GOT
+//                                                    {ok, paths}
+//                                                    Reads: GET battery, wifi.
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
 //                                                    clicked
@@ -230,8 +240,11 @@
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
+#import <CoreWLAN/CoreWLAN.h> // Wi-Fi info
 #include <Carbon/Carbon.h> // RegisterEventHotKey (global hotkeys)
 #include <IOKit/pwr_mgt/IOPMLib.h> // IOPMAssertion (prevent sleep)
+#include <IOKit/ps/IOPowerSources.h> // battery
+#include <IOKit/ps/IOPSKeys.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include "tiny_client.h" // generated from runtime/tiny.js (gen-client.sh)
@@ -2978,6 +2991,9 @@ static void do_menu_update(webview_t, void *arg) {
   delete req;
 }
 
+static std::string battery_json();
+static std::string wifi_json();
+
 static void do_get(webview_t w, void *arg) {
   GetReq *req = static_cast<GetReq *>(arg);
   std::string json = "null";
@@ -3032,6 +3048,10 @@ static void do_get(webview_t w, void *arg) {
             (double)scr.backingScaleFactor);
         json = buf;
       }
+    } else if (req->what == "battery") {
+      json = battery_json();
+    } else if (req->what == "wifi") {
+      json = wifi_json();
     } else if (req->what == "selectedtext") {
       json = ax_selected_text();
     } else if (req->what == "otherwindows") {
@@ -4138,6 +4158,193 @@ static void do_print(webview_t w, void *) {
 #endif
 }
 
+// --- deep-Mac citizen: PDF, haptics, dock icon, battery, wifi, spotlight ------------
+// The small native niceties apps otherwise shell out (or give up) for.
+
+struct PdfReq {
+  std::string qid, path;
+};
+struct SpotlightReq {
+  std::string qid, query;
+};
+
+#ifdef __APPLE__
+static void do_pdf(webview_t w, void *arg) {
+  PdfReq *req = static_cast<PdfReq *>(arg);
+  std::string qid = req->qid, path = req->path;
+  delete req;
+  WKWebView *wv = (WKWebView *)webview_get_native_handle(
+      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  if (!wv) {
+    sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":\"no webview\"}");
+    return;
+  }
+  WKPDFConfiguration *cfg = [[WKPDFConfiguration alloc] init]; // whole page
+  [wv createPDFWithConfiguration:cfg
+               completionHandler:^(NSData *data, NSError *err) {
+                 if (!data || ![data writeToFile:ns(path) atomically:YES]) {
+                   sock_write_line(
+                       "GOT " + qid + " {\"ok\":false,\"error\":" +
+                       json_escape(err ? [err.localizedDescription UTF8String]
+                                       : "pdf write failed") +
+                       "}");
+                   return;
+                 }
+                 sock_write_line("GOT " + qid + " {\"ok\":true,\"path\":" +
+                                 json_escape(path) + ",\"error\":null}");
+               }];
+}
+
+static void do_haptic(webview_t, void *arg) {
+  std::string *pat = static_cast<std::string *>(arg);
+  NSHapticFeedbackPattern p =
+      *pat == "alignment" ? NSHapticFeedbackPatternAlignment
+      : *pat == "level"   ? NSHapticFeedbackPatternLevelChange
+                          : NSHapticFeedbackPatternGeneric;
+  [[NSHapticFeedbackManager defaultPerformer]
+      performFeedbackPattern:p
+             performanceTime:NSHapticFeedbackPerformanceTimeDefault];
+  delete pat;
+}
+
+static void do_dockicon(webview_t, void *arg) {
+  std::string *path = static_cast<std::string *>(arg);
+  @autoreleasepool {
+    if (path->empty()) {
+      [NSApp setApplicationIconImage:nil]; // reset to the bundle icon
+    } else {
+      NSImage *img = [[NSImage alloc] initWithContentsOfFile:ns(*path)];
+      if (img)
+        [NSApp setApplicationIconImage:img];
+    }
+  }
+  delete path;
+}
+
+static std::string battery_json() {
+  CFTypeRef info = IOPSCopyPowerSourcesInfo();
+  CFArrayRef list = info ? IOPSCopyPowerSourcesList(info) : NULL;
+  std::string out = "null";
+  if (list && CFArrayGetCount(list) > 0) {
+    CFDictionaryRef d =
+        IOPSGetPowerSourceDescription(info, CFArrayGetValueAtIndex(list, 0));
+    if (d) {
+      NSDictionary *ps = (__bridge NSDictionary *)d;
+      double cur = [ps[@kIOPSCurrentCapacityKey] doubleValue];
+      double max = [ps[@kIOPSMaxCapacityKey] doubleValue];
+      bool charging = [ps[@kIOPSIsChargingKey] boolValue];
+      NSString *state = ps[@kIOPSPowerSourceStateKey];
+      bool plugged = [state isEqualToString:@kIOPSACPowerValue];
+      int toEmpty = [ps[@kIOPSTimeToEmptyKey] intValue];
+      int toFull = [ps[@kIOPSTimeToFullChargeKey] intValue];
+      int mins = charging ? toFull : toEmpty; // -1 = calculating
+      char buf[192];
+      std::snprintf(buf, sizeof(buf),
+                    "{\"percent\":%d,\"charging\":%s,\"plugged\":%s,"
+                    "\"minutesRemaining\":%s}",
+                    max > 0 ? (int)lround(cur / max * 100) : 0,
+                    charging ? "true" : "false", plugged ? "true" : "false",
+                    mins < 0 ? "null" : std::to_string(mins).c_str());
+      out = buf;
+    }
+  }
+  if (list) CFRelease(list);
+  if (info) CFRelease(info);
+  return out;
+}
+
+static std::string wifi_json() {
+  @autoreleasepool {
+    CWInterface *itf = [[CWWiFiClient sharedWiFiClient] interface];
+    if (!itf || !itf.powerOn)
+      return "null";
+    // ssid is nil without the Location permission on macOS 14+; the rest of
+    // the fields still come through.
+    NSString *ssid = itf.ssid;
+    return std::string("{\"ssid\":") +
+           (ssid ? json_escape([ssid UTF8String]) : "null") + ",\"bssid\":" +
+           (itf.bssid ? json_escape([itf.bssid UTF8String]) : "null") +
+           ",\"rssi\":" + std::to_string((long)itf.rssiValue) +
+           ",\"noise\":" + std::to_string((long)itf.noiseMeasurement) +
+           ",\"txRate\":" + std::to_string((long)itf.transmitRate) + "}";
+  }
+}
+
+// NSMetadataQuery gathers asynchronously off the main runloop; observe the
+// finish notification, snapshot up to 100 paths, tear the query down.
+@class TinySpotlight;
+static TinySpotlight *g_spotlight_hold = nil;
+@interface TinySpotlight : NSObject
+@property(strong) NSMetadataQuery *query;
+@property(assign) id observer;
+@property std::string qid;
+@end
+@implementation TinySpotlight
+- (void)finished:(NSNotification *)note {
+  [self.query stopQuery];
+  std::string json = "[";
+  bool first = true;
+  NSUInteger n = MIN(self.query.resultCount, (NSUInteger)100);
+  for (NSUInteger i = 0; i < n; i++) {
+    NSMetadataItem *it = [self.query resultAtIndex:i];
+    NSString *path = [it valueForAttribute:(NSString *)kMDItemPath];
+    if (!path)
+      continue;
+    if (!first)
+      json += ",";
+    first = false;
+    json += json_escape([path UTF8String]);
+  }
+  json += "]";
+  sock_write_line("GOT " + self.qid + " {\"ok\":true,\"paths\":" + json + "}");
+  [[NSNotificationCenter defaultCenter] removeObserver:self.observer];
+  self.query = nil;
+  g_spotlight_hold = nil; // release self
+}
+@end
+
+static void do_spotlight(webview_t, void *arg) {
+  SpotlightReq *req = static_cast<SpotlightReq *>(arg);
+  @autoreleasepool {
+    NSMetadataQuery *q = [[NSMetadataQuery alloc] init];
+    // Match display name OR text content (the two things users mean by
+    // "find files about X").
+    q.predicate = [NSPredicate
+        predicateWithFormat:@"(kMDItemDisplayName CONTAINS[cd] %@) OR "
+                            @"(kMDItemTextContent CONTAINS[cd] %@)",
+                            ns(req->query), ns(req->query)];
+    q.searchScopes = @[ NSMetadataQueryUserHomeScope ];
+    TinySpotlight *sl = [[TinySpotlight alloc] init];
+    sl.query = q;
+    sl.qid = req->qid;
+    sl.observer = sl;
+    g_spotlight_hold = sl; // keep alive until the notification fires
+    [[NSNotificationCenter defaultCenter]
+        addObserver:sl
+           selector:@selector(finished:)
+               name:NSMetadataQueryDidFinishGatheringNotification
+             object:q];
+    [q startQuery];
+  }
+  delete req;
+}
+#else
+static void do_pdf(webview_t, void *arg) {
+  PdfReq *r = static_cast<PdfReq *>(arg);
+  sock_write_line("GOT " + r->qid + " {\"ok\":false,\"error\":\"unsupported\"}");
+  delete r;
+}
+static void do_haptic(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
+static void do_dockicon(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
+static std::string battery_json() { return "null"; }
+static std::string wifi_json() { return "null"; }
+static void do_spotlight(webview_t, void *arg) {
+  SpotlightReq *r = static_cast<SpotlightReq *>(arg);
+  sock_write_line("GOT " + r->qid + " {\"ok\":true,\"paths\":[]}");
+  delete r;
+}
+#endif
+
 // --- WebGPU (macOS) ----------------------------------------------------------
 // WKWebView gates WebGPU behind a WebKit feature flag (still "experimental"
 // as of macOS 15; no public API to enable it). Flip it through the private
@@ -4665,6 +4872,25 @@ static void sock_read_loop() {
         webview_dispatch(g_w, do_bounce,
                          new int(line.size() > 7 ? std::atoi(line.c_str() + 7)
                                                  : 0));
+      } else if (line.rfind("PDF ", 0) == 0) {
+        size_t sp = line.find(' ', 4);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_pdf,
+                         new PdfReq{line.substr(4, sp - 4),
+                                    wire_unescape(line.substr(sp + 1))});
+      } else if (line.rfind("HAPTIC ", 0) == 0) {
+        webview_dispatch(g_w, do_haptic, new std::string(line.substr(7)));
+      } else if (line == "DOCKICON" || line.rfind("DOCKICON ", 0) == 0) {
+        webview_dispatch(g_w, do_dockicon,
+                         new std::string(line.size() > 9
+                                             ? wire_unescape(line.substr(9))
+                                             : ""));
+      } else if (line.rfind("SPOTLIGHT ", 0) == 0) {
+        size_t sp = line.find(' ', 10);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_spotlight,
+                         new SpotlightReq{line.substr(10, sp - 10),
+                                          wire_unescape(line.substr(sp + 1))});
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_print, nullptr);
       } else if (line == "RELOAD") {

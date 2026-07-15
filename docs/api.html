@@ -530,7 +530,21 @@ const wins = await <b>tiny.app.otherWindows</b>();  <i>// [{ app, pid, title, x,
 await <b>tiny.app.moveWindow</b>(wins[0].pid, { x: 0, y: 0, width: 1280, height: 800 });
 
 <i>// anchor a dropdown window under the tray icon</i>
-const spot = await <b>tiny.tray.position</b>();     <i>// { x, y, width, height } | null</i></pre>
+const spot = await <b>tiny.tray.position</b>();     <i>// { x, y, width, height } | null</i>
+
+<i>// render the page to a vector PDF (WKWebView) — invoices, reports</i>
+const { path } = await <b>tiny.win.printToPDF</b>('/tmp/report.pdf');
+
+<i>// trackpad haptics + a dynamic Dock icon (render a canvas → progress rings)</i>
+<b>tiny.app.haptic</b>('generic');       <i>// 'generic'|'alignment'|'level'</i>
+<b>tiny.app.dockIcon</b>(canvasPngPath);  <i>// '' resets to the bundle icon</i>
+
+<i>// battery + Wi-Fi for menu-bar monitors</i>
+const bat = await <b>tiny.app.battery</b>();  <i>// { percent, charging, plugged, minutesRemaining } | null</i>
+const net = await <b>tiny.app.wifi</b>();     <i>// { ssid, bssid, rssi, txRate } | null (ssid needs Location)</i>
+
+<i>// find files by name/content (Spotlight, no mdfind spawn) — 100 paths max</i>
+const docs = await <b>tiny.app.spotlight</b>('quarterly report');</pre>
   </section>
 
   <section id="system">

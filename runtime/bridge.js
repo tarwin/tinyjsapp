@@ -330,6 +330,29 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       position: () => query('traypos'),
     },
     print() { send('PRINT'); },
+    // Render the page to a PDF file (WKWebView vector PDF) -> { path }.
+    async printToPDF(path) {
+      const r = await ask('PDF', esc(path));
+      if (!r?.ok) throw new Error(r?.error ?? 'pdf failed');
+      return { path: r.path };
+    },
+    // Trackpad haptic feedback: 'generic' | 'alignment' | 'level'. No-op on
+    // Macs without a Force Touch trackpad.
+    haptic(pattern = 'generic') { send('HAPTIC ' + one(pattern)); return true; },
+    // Replace the Dock icon from a png (render a canvas → progress rings,
+    // unread counts). '' resets to the bundle icon.
+    dockIcon(pngPath) { send('DOCKICON ' + esc(pngPath ?? '')); return true; },
+    // Battery: { percent, charging, plugged, minutesRemaining } | null (on
+    // desktops without a battery).
+    battery: () => query('battery'),
+    // Current Wi-Fi: { ssid, bssid, rssi, noise, txRate } | null. ssid/bssid
+    // are null without the Location permission on macOS 14+.
+    wifi: () => query('wifi'),
+    // Find files by name or content (Spotlight/NSMetadataQuery, home scope)
+    // -> up to 100 absolute paths.
+    async spotlight(queryText) {
+      return (await ask('SPOTLIGHT', esc(String(queryText ?? ''))))?.paths ?? [];
+    },
     // Window chrome: { frame?, trafficLights?, transparent?, vibrancy? }.
     // frame:false hides the titlebar (content extends under it; keep your own
     // drag region via data-tiny-drag). vibrancy: material name or null.
@@ -707,6 +730,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.otherWindows': async () => app.otherWindows(),
     'app.moveWindow': async ({ pid, ...rect }) => app.moveWindow(pid, rect),
     'tray.position': async () => app.tray.position(),
+    'win.printToPDF': async ({ path }) => app.printToPDF(path),
+    'app.haptic': async ({ pattern }) => app.haptic(pattern),
+    'app.dockIcon': async ({ path }) => app.dockIcon(path),
+    'app.battery': async () => app.battery(),
+    'app.wifi': async () => app.wifi(),
+    'app.spotlight': async ({ query: q }) => app.spotlight(q),
     'win.setPosition': async ({ x, y }, _a, m) => (forWin(m).setPosition(x, y), true),
     'win.open': async ({ id: wid, ...opts }) => (app.openWindow(wid, opts), true),
     'win.close': async ({ id: wid }, _a, m) => {

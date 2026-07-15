@@ -4,6 +4,25 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.20.0 — 2026-07-14
+
+Deep-Mac citizen — the small native niceties apps otherwise shell out (or
+give up) for.
+
+- **`win.printToPDF(path)`** — render the page to a vector PDF via
+  WKWebView → `{ path }`. Invoices, reports, receipts without a print
+  dialog.
+- **`app.haptic(pattern)`** — trackpad haptic feedback (`'generic'` |
+  `'alignment'` | `'level'`), a no-op on Macs without a Force Touch pad.
+- **`app.dockIcon(pngPath)`** — replace the Dock icon (render a canvas for
+  progress rings or unread badges); `''` resets to the bundle icon.
+- **`app.battery()`** — `{ percent, charging, plugged, minutesRemaining }`
+  (or `null` on a desktop) from IOPowerSources.
+- **`app.wifi()`** — `{ ssid, bssid, rssi, noise, txRate }` from CoreWLAN
+  (`ssid`/`bssid` need the Location permission on macOS 14+).
+- **`app.spotlight(query)`** — find files by name or content via
+  NSMetadataQuery (home scope, up to 100 paths) — no `mdfind` spawn.
+
 ## 0.19.0 — 2026-07-14
 
 Window superpowers — the primitives behind overlays, HUDs, desktop pets,

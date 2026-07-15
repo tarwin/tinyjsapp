@@ -48,6 +48,25 @@ declare interface TinyChromeOptions {
  *  (incl. most fullscreen apps); 'desktop' pins behind normal windows. */
 declare type TinyWindowLevel = 'normal' | 'floating' | 'overlay' | 'desktop';
 
+declare interface TinyBattery {
+  percent: number;
+  charging: boolean;
+  plugged: boolean;
+  /** minutes to full (charging) or empty; null while calculating */
+  minutesRemaining: number | null;
+}
+
+declare interface TinyWifi {
+  /** null without the Location permission on macOS 14+ */
+  ssid: string | null;
+  bssid: string | null;
+  /** signal strength, dBm */
+  rssi: number;
+  noise: number;
+  /** Mbps */
+  txRate: number;
+}
+
 /** A window belonging to another app (accessibility), top-left coords. */
 declare interface TinyOtherWindow {
   app: string;
@@ -445,6 +464,8 @@ declare interface Tiny {
     zoom(): Promise<any>;
     setHideOnClose(enabled: boolean): Promise<any>;
     print(): Promise<any>;
+    /** render the page to a PDF file (vector) */
+    printToPDF(path: string): Promise<{ path: string }>;
     /** files dragged onto the window — real filesystem paths */
     onDrop(fn: (paths: string[]) => void): void;
 
@@ -540,6 +561,14 @@ declare interface Tiny {
     otherWindows(): Promise<TinyOtherWindow[] | null>;
     /** move/resize another app's frontmost window (pid from otherWindows) */
     moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
+    /** trackpad haptic feedback (no-op without a Force Touch trackpad) */
+    haptic(pattern?: 'generic' | 'alignment' | 'level'): Promise<any>;
+    /** replace the Dock icon from a png ('' resets to the bundle icon) */
+    dockIcon(path: string): Promise<any>;
+    battery(): Promise<TinyBattery | null>;
+    wifi(): Promise<TinyWifi | null>;
+    /** find files by name/content (Spotlight) — up to 100 paths */
+    spotlight(query: string): Promise<string[]>;
     beep(): Promise<boolean>;
     /** a system sound name ('Ping', 'Glass', …) or an audio file path;
      *  false if it didn't load */
@@ -665,6 +694,8 @@ declare interface TinyApp {
   setHideOnClose(enabled: boolean): void;
   setDockVisible(visible: boolean): void;
   print(): void;
+  /** render the page to a PDF file (vector) */
+  printToPDF(path: string): Promise<{ path: string }>;
   startDrag(): void;
   zoom(): void;
   setChrome(opts: TinyChromeOptions): void;
@@ -731,6 +762,14 @@ declare interface TinyApp {
   otherWindows(): Promise<TinyOtherWindow[] | null>;
   /** move/resize another app's frontmost window (pid from otherWindows) */
   moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
+  /** trackpad haptic feedback (no-op without a Force Touch trackpad) */
+  haptic(pattern?: 'generic' | 'alignment' | 'level'): boolean;
+  /** replace the Dock icon from a png ('' resets to the bundle icon) */
+  dockIcon(path: string): boolean;
+  battery(): Promise<TinyBattery | null>;
+  wifi(): Promise<TinyWifi | null>;
+  /** find files by name/content (Spotlight) — up to 100 paths */
+  spotlight(query: string): Promise<string[]>;
   beep(): Promise<boolean>;
   /** a system sound name ('Ping', 'Glass', …) or an audio file path;
    *  false if it didn't load */

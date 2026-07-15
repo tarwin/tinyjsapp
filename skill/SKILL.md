@@ -305,6 +305,13 @@ await tiny.app.selectedText();    // string | null (frontmost app's selection)
 await tiny.app.otherWindows();    // [{ app, pid, title, x,y,width,height }]|null
 await tiny.app.moveWindow(pid, { x, y, width, height });  // resolves true/throws
 await tiny.tray.position();       // { x,y,width,height }|null (anchor dropdowns)
+// deep-Mac citizen
+await tiny.win.printToPDF(path);  // -> { path } (vector PDF; invoices/reports)
+tiny.app.haptic('generic');       // 'generic'|'alignment'|'level' (Force Touch)
+tiny.app.dockIcon(pngPath);       // '' resets (render a canvas for badges)
+await tiny.app.battery();         // { percent, charging, plugged, minutesRemaining }|null
+await tiny.app.wifi();            // { ssid, bssid, rssi, noise, txRate }|null (ssid→Location)
+await tiny.app.spotlight(query);  // find files by name/content -> up to 100 paths
 
 tiny.win.print();                           // native print panel
 

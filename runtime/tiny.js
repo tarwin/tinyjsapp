@@ -59,6 +59,8 @@
       dragOut: (opts) => call('win.dragOut', opts),
       zoom: () => call('win.zoom'),
       print: () => call('win.print'),
+      // Render the page to a PDF file (vector) -> { path }.
+      printToPDF: (path) => call('win.printToPDF', { path }),
       // fn(paths): files dragged onto the window, as real filesystem paths.
       onDrop(fn) { window.tiny.api.on('drop', ({ paths }) => fn(paths)); },
       // Native share sheet ({ text?, url?, paths?, x?, y? }) — anchor it at
@@ -191,6 +193,17 @@
       },
       // The active app right now: { name, bundleId, pid } | null.
       frontmostApp: () => call('app.frontmost'),
+      // Trackpad haptic feedback: 'generic'|'alignment'|'level'.
+      haptic: (pattern) => call('app.haptic', { pattern }),
+      // Replace the Dock icon from a png ('' resets). Render a canvas for
+      // progress rings / unread badges.
+      dockIcon: (path) => call('app.dockIcon', { path }),
+      // { percent, charging, plugged, minutesRemaining } | null.
+      battery: () => call('app.battery'),
+      // { ssid, bssid, rssi, noise, txRate } | null (ssid needs Location).
+      wifi: () => call('app.wifi'),
+      // Find files by name/content (Spotlight) -> up to 100 paths.
+      spotlight: (query) => call('app.spotlight', { query }),
       // Text selected in the frontmost app (Accessibility) — null if none.
       selectedText: () => call('app.selectedText'),
       // Other apps' on-screen windows (Accessibility): [{ app, bundleId,

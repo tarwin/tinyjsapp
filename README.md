@@ -105,7 +105,9 @@ export function init(app) {          // window is up
   // nowPlaying.set/clear, say(text, opts), voices(), stopSpeaking(),
   // recorder.start({ path, screenId })/stop(),
   // selectedText(), otherWindows(), moveWindow(pid, rect),
-  // window(id).setClickThrough/setLevel/setAllSpaces, tray.position()
+  // window(id).setClickThrough/setLevel/setAllSpaces, tray.position(),
+  // printToPDF(path), haptic(pattern), dockIcon(png), battery(), wifi(),
+  // spotlight(query)
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -386,6 +388,22 @@ await tiny.app.moveWindow(wins[0].pid, { x: 0, y: 0, width: 1280, height: 800 })
 
 // anchor a dropdown under the tray icon
 const spot = await tiny.tray.position();     // { x, y, width, height } | null
+
+// render the page to a PDF (vector, WKWebView) — invoices, reports
+const { path } = await tiny.win.printToPDF('/tmp/report.pdf');
+
+// trackpad haptics, a dynamic Dock icon (render a canvas → progress rings)
+tiny.app.haptic('generic');                  // 'generic'|'alignment'|'level'
+tiny.app.dockIcon(canvasPngPath);            // '' resets to the bundle icon
+
+// battery + Wi-Fi for menu-bar monitors
+const bat = await tiny.app.battery();        // { percent, charging, plugged,
+                                             //   minutesRemaining } | null
+const net = await tiny.app.wifi();           // { ssid, bssid, rssi, txRate }
+                                             //   (ssid needs Location) | null
+
+// find files by name or content (Spotlight, no mdfind spawn) — 100 paths max
+const docs = await tiny.app.spotlight('quarterly report');
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null
