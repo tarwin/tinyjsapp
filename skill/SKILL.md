@@ -82,6 +82,13 @@ Runtime is txiki.js (`tjs` global): `tjs.readFile/writeFile/readDir/stat`,
 FFI. Docs: https://txikijs.org. Gotchas: streams need `getReader()` (no
 `for await`); `tjs.cwd` is a property; spawn stdio silencer is `'ignore'`.
 
+Webview gotchas: (1) occluded/off-screen windows are THROTTLED (WebKit
+starves rAF + timers), so a hidden window can't drive a visible one — do
+continuous work in the visible window or the (un-throttled) backend. (2)
+`file://` media (`<audio>`/`<img>`) only loads assets under the frontend
+dir by default; widen with `createApp({ readAccess: true | '/path' })` or
+`"readAccess"` in tinyjs.json — else `MEDIA_ERR_SRC_NOT_SUPPORTED`.
+
 ## Frontend
 
 The `tiny` global is injected into every page automatically (no script tag);
@@ -327,6 +334,8 @@ tiny.win.print();                           // native print panel
 
 // multiple windows: any frontend html file can be a window
 tiny.win.open('settings', { page: 'settings.html', title: 'Settings', size: '420x300' });
+// chrome + x/y are applied BEFORE first paint (no titlebar flash / center-jump):
+tiny.win.open('hud', { page: 'hud.html', x: 40, y: 40, chrome: { frame: false } });
 tiny.win.id; tiny.win.close(); await tiny.win.windows();
 // win.* calls target the caller's window; backend: app.openWindow/app.window(id)
 // (eval/push/close/setTitle/setSize/chrome/getState…), app.push broadcasts,

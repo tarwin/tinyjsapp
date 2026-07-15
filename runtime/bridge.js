@@ -57,21 +57,33 @@ function makeStore(appId) {
     catch { data = {}; }
     return data;
   }
+  // Persistence is best-effort: the in-memory value is always updated, and a
+  // write failure (bad path, full disk, permissions) resolves false instead
+  // of rejecting — an un-awaited store.set() must never crash the backend.
+  let tmpSeq = 0;
   async function save() {
-    await tjs.makeDir(dir, { recursive: true }).catch(() => {});
-    const tmp = path + '.tmp';
-    await tjs.writeFile(tmp, enc.encode(JSON.stringify(data, null, 2) + '\n'));
-    await tjs.rename(tmp, path);
+    try {
+      await tjs.makeDir(dir, { recursive: true }).catch(() => {});
+      // Unique tmp per write so concurrent (un-awaited) set()s don't race on
+      // the same rename source.
+      const tmp = path + '.' + (tmpSeq = (tmpSeq + 1) % 1e6) + '.tmp';
+      await tjs.writeFile(tmp, enc.encode(JSON.stringify(data, null, 2) + '\n'));
+      await tjs.rename(tmp, path);
+      return true;
+    } catch (e) {
+      console.log('tinyjs store write failed:', e?.message ?? String(e));
+      return false;
+    }
   }
   return {
     async get(key) { return (await load())[key] ?? null; },
-    async set(key, value) { await load(); data[key] = value; await save(); return true; },
-    async delete(key) { await load(); delete data[key]; await save(); return true; },
+    async set(key, value) { await load(); data[key] = value; return save(); },
+    async delete(key) { await load(); delete data[key]; return save(); },
     async all() { return { ...(await load()) }; },
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, chrome = null, update = null, activation = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, chrome = null, update = null, activation = null, readAccess = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -134,8 +146,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
 
     // Accessory activation (menu-bar agents) rides in on the env; packaged
     // apps get it from the plist instead (LSUIElement + TinyjsActivation).
-    const spawnOpts = { stderr: 'inherit' };
-    if (activation === 'accessory') spawnOpts.env = { ...tjs.env, TINYJS_ACTIVATION: 'accessory' };
+    // readAccess widens the page's file:// read root (same, via the env in
+    // dev / the TinyjsReadAccess plist key in packaged apps).
+    const spawnEnv = { ...tjs.env };
+    if (activation === 'accessory') spawnEnv.TINYJS_ACTIVATION = 'accessory';
+    if (readAccess) spawnEnv.TINYJS_READ_ACCESS = readAccess === true ? tjs.homeDir : String(readAccess);
+    const spawnOpts = { stderr: 'inherit', env: spawnEnv };
     proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], spawnOpts);
 
     cleanup = async () => {
@@ -647,13 +663,24 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Open (or focus) a secondary window. `page` is an html file in your
     // frontend dir (e.g. 'settings.html') or an absolute path. Each window
     // runs the same tiny.* bridge; win.* calls from its page target itself.
-    openWindow(id, { page, title, size } = {}) {
+    // chrome ({ frame?, trafficLights?, transparent?, vibrancy? }) and
+    // position ({ x, y }) are applied BEFORE the window paints — no titlebar
+    // flash for frameless panels, no jump from center.
+    openWindow(id, { page, title, size, chrome, x, y } = {}) {
       let p = String(page ?? 'index.html');
       if (!isUrl(p) && !p.startsWith('/')) {
         if (!frontendDir) throw new Error('win.open needs an absolute page path or URL here');
         p = frontendDir + '/' + p;
       }
-      send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400')].join('\t'));
+      const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
+      const c = chrome ?? {};
+      const vib = c.vibrancy === undefined ? ''
+                : c.vibrancy === null || c.vibrancy === false ? 'none'
+                : String(c.vibrancy);
+      const hasPos = x != null && y != null;
+      send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400'),
+                         bit(c.frame), bit(c.trafficLights), bit(c.transparent), one(vib),
+                         hasPos ? (x | 0) : '', hasPos ? (y | 0) : ''].join('\t'));
     },
     // Handle for any window ('main' or a secondary id).
     window(id) {

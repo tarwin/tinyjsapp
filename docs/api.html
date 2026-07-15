@@ -252,6 +252,10 @@ const s = await <b>tiny.win.getState</b>();
 <b>tiny.win.close</b>();             <i>// the calling window ('main' quits the app)</i>
 await <b>tiny.win.windows</b>();     <i>// ['main', 'settings', …]</i>
 
+<i>// chrome + x/y apply BEFORE first paint — no titlebar flash, no center-jump</i>
+<b>tiny.win.open</b>('hud', { page: 'hud.html', x: 40, y: 40,
+                     chrome: { frame: false, trafficLights: false, vibrancy: 'hud' } });
+
 <i>// every window runs the full tiny.* bridge; win.* targets its own window.</i>
 <i>// backend: app.openWindow(id, opts), app.window(id).setTitle/push/close/…,</i>
 <i>// app.push broadcasts to all windows, export onWindowClosed(id, app);</i>

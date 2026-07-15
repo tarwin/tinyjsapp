@@ -69,6 +69,15 @@
   <section>
 
     <div class="rel">
+      <h2>0.21.0 <span class="date">2026-07-15</span></h2>
+      <ul>
+        <li><b>Fix: <code>store.set()</code>/<code>delete()</code> can no longer crash the backend</b> — a write failure used to surface as an unhandled rejection and take the process down. The store now swallows its own write errors (resolves <code>false</code>, keeps the in-memory value) and uses a unique temp file per write so un-awaited bursts don't race.</li>
+        <li><b><code>openWindow</code> gains <code>chrome</code> + <code>{ x, y }</code></b>, applied <em>before</em> first paint — a frameless/vibrancy panel never flashes its titlebar and a positioned window opens where you asked. <code>getState().chrome</code> is now per-window.</li>
+        <li><b><code>readAccess</code> option</b> — widen the <code>file://</code> read root (<code>createApp({ readAccess: true })</code> = home, or a path; also <code>"readAccess"</code> in tinyjs.json) so <code>&lt;audio&gt;</code>/<code>&lt;img&gt;</code> can load media outside the frontend dir without a base64 round-trip.</li>
+        <li>Docs: WebKit throttles rAF/timers in occluded/off-screen windows — do continuous work in the visible window or the un-throttled backend.</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.20.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b><code>win.printToPDF(path)</code></b> — render the page to a vector PDF (WKWebView) → <code>{ path }</code>; invoices/reports without a dialog.</li>

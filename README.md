@@ -466,6 +466,12 @@ tiny.win.open('settings', { page: 'settings.html', title: 'Settings', size: '420
 tiny.win.id;                       // which window this page lives in
 tiny.win.close();                  // close the calling window ('main' quits)
 await tiny.win.windows();          // ['main', 'settings', ...]
+
+// chrome + position are applied BEFORE the window paints — a frameless
+// panel never flashes its titlebar, and it opens where you asked (not
+// center-then-jump):
+tiny.win.open('hud', { page: 'hud.html', size: '300x120', x: 40, y: 40,
+                       chrome: { frame: false, trafficLights: false, vibrancy: 'hud' } });
 ```
 
 Every window runs the full `tiny.*` bridge, and `tiny.win.*` calls from a
@@ -814,6 +820,20 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
   `WKPreferences _setEnabled:forFeature:` API (no-op where it's already on,
   as on macOS 26).
 - The webview headers don't compile under ARC; build without `-fobjc-arc`.
+- **Occluded windows are throttled.** WebKit starves `requestAnimationFrame`
+  and timers in a window that's covered or off-screen, so a hidden window
+  can't reliably drive a visible one (e.g. a background renderer feeding a
+  foreground viz). Do time-critical/continuous work in the *visible* window,
+  or in the backend (which isn't a webview and isn't throttled) and push
+  results to the page.
+- **`file://` media is sandboxed to the page's own directory.** By default
+  `<audio>`/`<video>`/`<img>` can only load assets under the frontend dir;
+  a file elsewhere fails with `MEDIA_ERR_SRC_NOT_SUPPORTED`. Widen the read
+  root with the **`readAccess`** option — `createApp({ readAccess: true })`
+  (the user's home dir) or `readAccess: '/abs/media/root'`, or
+  `"readAccess"` in tinyjs.json (`true` / a path). Then `file://` assets
+  anywhere under that root load directly — no base64 → Blob round-trip.
+  (It's opt-in because it widens what the page can read from disk.)
 
 ### On-device AI (`tiny.app.ai`)
 

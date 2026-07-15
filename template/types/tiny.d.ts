@@ -218,6 +218,11 @@ declare interface TinyOpenWindowOptions {
   title?: string;
   /** 'WxH', e.g. '420x300' */
   size?: string;
+  /** applied BEFORE first paint — no titlebar flash for frameless panels */
+  chrome?: TinyChromeOptions;
+  /** top-left screen position, applied before the window is shown */
+  x?: number;
+  y?: number;
 }
 
 declare interface TinyClipboardData {

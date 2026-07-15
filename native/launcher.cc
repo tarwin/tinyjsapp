@@ -305,6 +305,10 @@ static bool g_chrome_frameless = false;
 static bool g_chrome_traffic = true;
 static bool g_chrome_transparent = false;
 static std::string g_chrome_vibrancy; // empty = none
+// Extra directory the page may read file:// assets from (readAccess option) —
+// widens WebKit's default (the page's own folder) so <audio>/<img>/fetch can
+// reach files elsewhere. Empty = default (page dir only).
+static std::string g_read_access;
 // Lines produced before the backend is connected (bundle mode: Apple Events
 // and page calls can arrive before the spawned backend attaches). Flushed by
 // sock_set_connected().
@@ -422,8 +426,13 @@ static bool load_html_file(webview_t w, const std::string &path) {
   if (wv) {
     NSURL *url =
         [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
-    [wv loadFileURL:url
-        allowingReadAccessToURL:[url URLByDeletingLastPathComponent]];
+    NSURL *access =
+        g_read_access.empty()
+            ? [url URLByDeletingLastPathComponent]
+            : [NSURL fileURLWithPath:[NSString stringWithUTF8String:
+                                          g_read_access.c_str()]
+                         isDirectory:YES];
+    [wv loadFileURL:url allowingReadAccessToURL:access];
     return true;
   }
 #endif
@@ -3045,12 +3054,19 @@ static void do_get(webview_t w, void *arg) {
              NSWindowCollectionBehaviorCanJoinAllSpaces)
                 ? "true"
                 : "false",
-            g_chrome_frameless ? "false" : "true",
-            g_chrome_traffic ? "true" : "false",
-            g_chrome_transparent ? "true" : "false",
-            g_chrome_vibrancy.empty()
-                ? "null"
-                : json_escape(g_chrome_vibrancy).c_str(),
+            // Chrome derived from the live window, so secondary windows
+            // report their own state (not the main globals).
+            ((win.styleMask & NSWindowStyleMaskFullSizeContentView) &&
+             win.titlebarAppearsTransparent)
+                ? "false"
+                : "true",
+            [win standardWindowButton:NSWindowCloseButton].hidden ? "false"
+                                                                  : "true",
+            win.opaque ? "false" : "true",
+            // vibrancy name is tracked for main only; secondary → null.
+            (wid == "main" && !g_chrome_vibrancy.empty())
+                ? json_escape(g_chrome_vibrancy).c_str()
+                : "null",
             (int)scr.frame.size.width, (int)scr.frame.size.height,
             (double)scr.backingScaleFactor);
         json = buf;
@@ -3746,17 +3762,11 @@ static NSWindow *window_for_id(webview_t w, const std::string &id);
 static WKWebView *webview_for_id(webview_t w, const std::string &id);
 static NSVisualEffectView **effect_slot_for(const std::string &id); // main/secondary
 
-static void do_chrome(webview_t w, void *arg) {
-  ChromeReq *req = static_cast<ChromeReq *>(arg);
-  @autoreleasepool {
-    NSWindow *win = window_for_id(w, req->win);
-    WKWebView *wv = webview_for_id(w, req->win);
-    bool is_main = req->win == "main";
-    NSVisualEffectView **effect = effect_slot_for(req->win);
-    if (!win || !wv || !effect) {
-      delete req;
-      return;
-    }
+// The chrome-application core, factored out so do_winopen can apply chrome
+// to a secondary window BEFORE it's ordered on screen (no titlebar flash).
+static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
+                                NSVisualEffectView **effect, bool is_main,
+                                ChromeReq *req) {
     bool req_frameless = req->frame == "0";
     bool req_traffic_off = req->traffic == "0";
     if (!req->frame.empty()) {
@@ -3834,6 +3844,16 @@ static void do_chrome(webview_t w, void *arg) {
         win.backgroundColor = [NSColor clearColor];
       }
     }
+}
+
+static void do_chrome(webview_t w, void *arg) {
+  ChromeReq *req = static_cast<ChromeReq *>(arg);
+  @autoreleasepool {
+    NSWindow *win = window_for_id(w, req->win);
+    WKWebView *wv = webview_for_id(w, req->win);
+    NSVisualEffectView **effect = effect_slot_for(req->win);
+    if (win && wv && effect)
+      apply_chrome_fields(win, wv, effect, req->win == "main", req);
   }
   delete req;
 }
@@ -4022,6 +4042,10 @@ static void do_reply(webview_t w, void *arg) {
 struct WinOpenReq {
   std::string id, page, title;
   int width = 600, height = 400;
+  // Chrome + position applied BEFORE the window is shown (no titlebar flash).
+  std::string frame, traffic, transparent, vibrancy; // '' = default
+  bool hasPos = false;
+  int x = 0, y = 0;
 };
 
 static void enable_webgpu_prefs(id preferences); // defined in WebGPU section
@@ -4068,8 +4092,11 @@ static void do_winopen(webview_t w, void *arg) {
       [wv loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:ns(req->page)]]];
     } else {
       NSURL *url = [NSURL fileURLWithPath:ns(req->page)];
-      [wv loadFileURL:url
-          allowingReadAccessToURL:[url URLByDeletingLastPathComponent]];
+      NSURL *access = g_read_access.empty()
+                          ? [url URLByDeletingLastPathComponent]
+                          : [NSURL fileURLWithPath:ns(g_read_access)
+                                       isDirectory:YES];
+      [wv loadFileURL:url allowingReadAccessToURL:access];
     }
 
     TinyWinDelegate *del = [[TinyWinDelegate alloc] init];
@@ -4079,6 +4106,27 @@ static void do_winopen(webview_t w, void *arg) {
     tw.win = win;
     tw.wv = wv;
     tw.wdelegate = del;
+
+    // Apply chrome + position BEFORE ordering the window on screen, so a
+    // frameless/positioned secondary window never flashes a titlebar or
+    // jumps from center. The slot exists now (tw is in g_windows).
+    if (!req->frame.empty() || !req->traffic.empty() ||
+        !req->transparent.empty() || !req->vibrancy.empty()) {
+      ChromeReq cr;
+      cr.win = req->id;
+      cr.frame = req->frame;
+      cr.traffic = req->traffic;
+      cr.transparent = req->transparent;
+      cr.vibrancy = req->vibrancy;
+      NSVisualEffectView **effect = effect_slot_for(req->id);
+      if (effect)
+        apply_chrome_fields(win, wv, effect, false, &cr);
+    }
+    if (req->hasPos) {
+      CGFloat screenTop = NSMaxY([[NSScreen screens][0] frame]);
+      [win setFrameTopLeftPoint:NSMakePoint(req->x, screenTop - req->y)];
+    }
+
     [win makeKeyAndOrderFront:nil];
   }
   delete req;
@@ -4128,7 +4176,13 @@ static void do_eval_win(webview_t w, void *arg) {
 }
 #else
 struct ReplyReq { std::string composite; int status; std::string json; };
-struct WinOpenReq { std::string id, page, title; int width, height; };
+struct WinOpenReq {
+  std::string id, page, title;
+  int width, height;
+  std::string frame, traffic, transparent, vibrancy;
+  bool hasPos;
+  int x, y;
+};
 struct EvalReq { std::string win, js; };
 static void reply_to_call(webview_t, const std::string &, int, const std::string &) {}
 static void do_reply(webview_t, void *arg) { delete static_cast<ReplyReq *>(arg); }
@@ -4566,6 +4620,7 @@ static void sock_read_loop() {
         std::sscanf(line.c_str() + 5, "%d %d", &s->width, &s->height);
         webview_dispatch(g_w, do_size, s);
       } else if (line.rfind("WINOPEN ", 0) == 0) {
+        // <id>\t<page>\t<title>\t<WxH>[\t<frame>\t<traffic>\t<transp>\t<vib>\t<x>\t<y>]
         std::vector<std::string> p = split_tabs(line.substr(8));
         WinOpenReq *wr = new WinOpenReq;
         wr->id = p.size() > 0 ? p[0] : "";
@@ -4573,6 +4628,15 @@ static void sock_read_loop() {
         wr->title = p.size() > 2 ? p[2] : "";
         if (p.size() > 3)
           std::sscanf(p[3].c_str(), "%dx%d", &wr->width, &wr->height);
+        wr->frame = p.size() > 4 ? p[4] : "";
+        wr->traffic = p.size() > 5 ? p[5] : "";
+        wr->transparent = p.size() > 6 ? p[6] : "";
+        wr->vibrancy = p.size() > 7 ? p[7] : "";
+        if (p.size() > 9 && !p[8].empty() && !p[9].empty()) {
+          wr->hasPos = true;
+          wr->x = std::atoi(p[8].c_str());
+          wr->y = std::atoi(p[9].c_str());
+        }
         webview_dispatch(g_w, do_winopen, wr);
       } else if (line.rfind("WINCLOSE ", 0) == 0) {
         webview_dispatch(g_w, do_winclose, new std::string(line.substr(9)));
@@ -5216,6 +5280,17 @@ int main(int argc, char *argv[]) {
     }
     if (accessory)
       install_accessory_mode();
+  }
+  // readAccess: widen the page's file:// read root (dev via env, packaged via
+  // the Info.plist key cli.js writes). '~' expands to the home directory.
+  {
+    const char *ra = getenv("TINYJS_READ_ACCESS");
+    NSString *root = ra ? [NSString stringWithUTF8String:ra] : nil;
+    if (!root) {
+      root = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"TinyjsReadAccess"];
+    }
+    if (root.length)
+      g_read_access = [[root stringByExpandingTildeInPath] UTF8String];
   }
 #endif
 

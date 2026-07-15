@@ -287,6 +287,7 @@ const app = await createApp({
   chrome: ${JSON.stringify(cfg.chrome ?? null)},
   update: ${JSON.stringify(cfg.update ?? null)},
   activation: ${JSON.stringify(cfg.activation ?? null)},
+  readAccess: ${JSON.stringify(cfg.readAccess ?? null)},
 });
 if (appMod.init) appMod.init(app);
 `;
@@ -544,6 +545,13 @@ async function cmdBuild() {
   // ("fileExtensions": ["md", ...]) from tinyjs.json.
   let extraKeys = `
   <key>TinyjsWindowSize</key>    <string>${cfg.size}</string>`;
+  if (cfg.readAccess) {
+    // Widen the page's file:// read root (see createApp readAccess). true =
+    // the user's home dir; a string = that path.
+    const ra = cfg.readAccess === true ? '~' : String(cfg.readAccess);
+    extraKeys += `
+  <key>TinyjsReadAccess</key>    <string>${ra}</string>`;
+  }
   if (cfg.activation === 'accessory') {
     // Menu-bar agent: LSUIElement starts the process with no Dock icon at the
     // system level; TinyjsActivation makes the launcher keep the window hidden

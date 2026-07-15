@@ -18,6 +18,31 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.21.0 — 2026-07-15
+
+Fixes and window ergonomics from real-app usage.
+
+- **Fix: `store.set()`/`delete()` can no longer crash the backend.** A write
+  failure (bad path, full disk) used to surface as an unhandled rejection
+  and take the process down; the store now swallows its own write errors
+  (resolving `false`, keeping the in-memory value) and uses a unique temp
+  file per write so a burst of un-awaited `set()`s can't race on the rename.
+- **`openWindow` gains `chrome` and `{ x, y }`** — applied *before* the
+  window first paints, so a frameless/vibrancy panel never flashes its
+  titlebar and a positioned window opens where you asked instead of
+  center-then-jumping. `getState().chrome` is now per-window (secondary
+  windows report their own frame/trafficLights/transparent, not the main
+  window's).
+- **`readAccess` option** — `<audio>`/`<video>`/`<img>` can only load
+  `file://` assets under the frontend dir by default (`MEDIA_ERR_SRC_NOT_
+  SUPPORTED` otherwise). `createApp({ readAccess: true })` (home) or
+  `readAccess: '/path'` (also `"readAccess"` in tinyjs.json) widens the
+  read root so media anywhere under it loads directly — no base64 → Blob
+  round-trip.
+- Docs: noted that WebKit throttles `requestAnimationFrame`/timers in
+  occluded or off-screen windows (do continuous work in the visible window
+  or the un-throttled backend).
+
 ## 0.20.0 — 2026-07-14
 
 Deep-Mac citizen — the small native niceties apps otherwise shell out (or
