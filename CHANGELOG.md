@@ -4,6 +4,20 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **`tiny.app.ai`** (on-device LLM) — landed behind an opt-in build, not yet
+  in the released tarballs. `ai.generate(prompt, { instructions })` runs
+  Apple's FoundationModels locally (offline, no API key, private);
+  `ai.availability()` → `'available' | 'unavailable' | 'unsupported'`.
+  Implemented as a small Swift shim linked into the launcher with
+  `TINYJS_AI=1 ./setup.sh` (needs the macOS 26 SDK); the binary keeps the
+  macOS 14 floor and weak-links FoundationModels, so stock builds and older
+  systems just report `'unsupported'`. Shipping it in the release tarballs
+  needs the CI runner bumped to a macOS 26 image — held for a deliberate
+  pipeline change so the default `macos-14` build never depends on the newer
+  SDK. Proven working end-to-end locally (real generation, ~250ms).
+
 ## 0.20.0 — 2026-07-14
 
 Deep-Mac citizen — the small native niceties apps otherwise shell out (or

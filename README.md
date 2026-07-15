@@ -405,6 +405,13 @@ const net = await tiny.app.wifi();           // { ssid, bssid, rssi, txRate }
 // find files by name or content (Spotlight, no mdfind spawn) — 100 paths max
 const docs = await tiny.app.spotlight('quarterly report');
 
+// on-device LLM — Apple's FoundationModels (offline, no API key, private).
+// Ships only in a TINYJS_AI build on macOS 26 (see below); check first.
+if (await tiny.app.ai.availability() === 'available') {
+  const reply = await tiny.app.ai.generate('Summarise this in one line: ' + text,
+    { instructions: 'You are terse.' });   // instructions = a system prompt
+}
+
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null
 const files = await tiny.win.openFiles();    // paths[] | null
@@ -807,6 +814,32 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
   `WKPreferences _setEnabled:forFeature:` API (no-op where it's already on,
   as on macOS 26).
 - The webview headers don't compile under ARC; build without `-fobjc-arc`.
+
+### On-device AI (`tiny.app.ai`)
+
+`tiny.app.ai.generate()` runs Apple's FoundationModels LLM locally — offline,
+no API key, fully private. It needs the macOS 26 SDK + `swiftc`, so it's an
+**opt-in build** (a tiny Swift shim linked into the launcher):
+
+```sh
+TINYJS_AI=1 ./setup.sh      # builds the launcher with FoundationModels
+```
+
+The resulting binary keeps the **macOS 14 floor** and weak-links
+FoundationModels, so it still launches on macOS 14+ — `ai.availability()`
+just returns `'unsupported'` below macOS 26. Stock release builds (and any
+build without the flag) ship the same `'unsupported'` fallback, so app code
+that guards on `availability()` is always safe:
+
+```js
+if (await tiny.app.ai.availability() === 'available')
+  await tiny.app.ai.generate(prompt, { instructions });
+```
+
+To ship AI in the released tarballs, the release workflow's runner needs the
+macOS 26 SDK (a `macos-26` image / Xcode 26) and the `TINYJS_AI=1` build step
+— it's kept off the default `macos-14` pipeline so stock builds never depend
+on the newer SDK.
 
 ### Portability
 

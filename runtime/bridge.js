@@ -353,6 +353,20 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     async spotlight(queryText) {
       return (await ask('SPOTLIGHT', esc(String(queryText ?? ''))))?.paths ?? [];
     },
+    // On-device LLM (Apple's FoundationModels — offline, no API key). Only
+    // in builds made with TINYJS_AI=1 on macOS 26; check availability first.
+    ai: {
+      // 'available' | 'unavailable' (Apple Intelligence off / not downloaded)
+      // | 'unsupported' (older macOS or a non-AI build).
+      async availability() { return (await ask('AI available'))?.status ?? 'unsupported'; },
+      // generate(prompt, { instructions }) -> the completion text; throws
+      // with the reason (incl. 'not built in' on stock builds).
+      async generate(prompt, { instructions } = {}) {
+        const r = await ask('AI generate', esc(String(prompt ?? '')) + '\t' + esc(instructions ?? ''));
+        if (!r?.ok) throw new Error(r?.error ?? 'generation failed');
+        return r.text;
+      },
+    },
     // Window chrome: { frame?, trafficLights?, transparent?, vibrancy? }.
     // frame:false hides the titlebar (content extends under it; keep your own
     // drag region via data-tiny-drag). vibrancy: material name or null.
@@ -736,6 +750,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.battery': async () => app.battery(),
     'app.wifi': async () => app.wifi(),
     'app.spotlight': async ({ query: q }) => app.spotlight(q),
+    'ai.availability': async () => app.ai.availability(),
+    'ai.generate': async ({ prompt, instructions }) => app.ai.generate(prompt, { instructions }),
     'win.setPosition': async ({ x, y }, _a, m) => (forWin(m).setPosition(x, y), true),
     'win.open': async ({ id: wid, ...opts }) => (app.openWindow(wid, opts), true),
     'win.close': async ({ id: wid }, _a, m) => {

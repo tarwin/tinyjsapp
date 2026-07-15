@@ -204,6 +204,14 @@
       wifi: () => call('app.wifi'),
       // Find files by name/content (Spotlight) -> up to 100 paths.
       spotlight: (query) => call('app.spotlight', { query }),
+      // On-device LLM (FoundationModels; offline, no key). Only in TINYJS_AI
+      // builds on macOS 26 — check ai.availability() first.
+      ai: {
+        // 'available' | 'unavailable' | 'unsupported'
+        availability: () => call('ai.availability'),
+        // generate(prompt, { instructions }) -> completion text; throws.
+        generate: (prompt, opts) => call('ai.generate', { prompt, ...(opts ?? {}) }),
+      },
       // Text selected in the frontmost app (Accessibility) — null if none.
       selectedText: () => call('app.selectedText'),
       // Other apps' on-screen windows (Accessibility): [{ app, bundleId,

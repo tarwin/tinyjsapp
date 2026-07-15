@@ -48,6 +48,18 @@ declare interface TinyChromeOptions {
  *  (incl. most fullscreen apps); 'desktop' pins behind normal windows. */
 declare type TinyWindowLevel = 'normal' | 'floating' | 'overlay' | 'desktop';
 
+/** On-device LLM (Apple FoundationModels). 'available' = ready; 'unavailable'
+ *  = Apple Intelligence off / model not downloaded; 'unsupported' = older
+ *  macOS, or a stock build (tiny.ai ships only in TINYJS_AI builds). */
+declare type TinyAiAvailability = 'available' | 'unavailable' | 'unsupported';
+
+declare interface TinyAi {
+  availability(): Promise<TinyAiAvailability>;
+  /** offline, no API key. opts.instructions = a system prompt. Throws with
+   *  the reason (incl. 'not built in' on stock builds). */
+  generate(prompt: string, opts?: { instructions?: string }): Promise<string>;
+}
+
 declare interface TinyBattery {
   percent: number;
   charging: boolean;
@@ -569,6 +581,8 @@ declare interface Tiny {
     wifi(): Promise<TinyWifi | null>;
     /** find files by name/content (Spotlight) — up to 100 paths */
     spotlight(query: string): Promise<string[]>;
+    /** on-device LLM (FoundationModels; TINYJS_AI builds on macOS 26) */
+    ai: TinyAi;
     beep(): Promise<boolean>;
     /** a system sound name ('Ping', 'Glass', …) or an audio file path;
      *  false if it didn't load */
@@ -770,6 +784,8 @@ declare interface TinyApp {
   wifi(): Promise<TinyWifi | null>;
   /** find files by name/content (Spotlight) — up to 100 paths */
   spotlight(query: string): Promise<string[]>;
+  /** on-device LLM (FoundationModels; TINYJS_AI builds on macOS 26) */
+  ai: TinyAi;
   beep(): Promise<boolean>;
   /** a system sound name ('Ping', 'Glass', …) or an audio file path;
    *  false if it didn't load */

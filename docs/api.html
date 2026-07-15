@@ -544,7 +544,12 @@ const bat = await <b>tiny.app.battery</b>();  <i>// { percent, charging, plugged
 const net = await <b>tiny.app.wifi</b>();     <i>// { ssid, bssid, rssi, txRate } | null (ssid needs Location)</i>
 
 <i>// find files by name/content (Spotlight, no mdfind spawn) — 100 paths max</i>
-const docs = await <b>tiny.app.spotlight</b>('quarterly report');</pre>
+const docs = await <b>tiny.app.spotlight</b>('quarterly report');
+
+<i>// on-device LLM — Apple's FoundationModels (offline, no API key, private).</i>
+<i>// Ships only in a TINYJS_AI build on macOS 26; guard on availability().</i>
+if (await <b>tiny.app.ai.availability</b>() === 'available')
+  await <b>tiny.app.ai.generate</b>('Summarise: ' + text, { instructions: 'Be terse.' });</pre>
   </section>
 
   <section id="system">

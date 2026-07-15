@@ -312,6 +312,10 @@ tiny.app.dockIcon(pngPath);       // '' resets (render a canvas for badges)
 await tiny.app.battery();         // { percent, charging, plugged, minutesRemaining }|null
 await tiny.app.wifi();            // { ssid, bssid, rssi, noise, txRate }|null (ssid→Location)
 await tiny.app.spotlight(query);  // find files by name/content -> up to 100 paths
+// on-device LLM (Apple FoundationModels; offline, no key). Ships only in a
+// TINYJS_AI build on macOS 26 — always guard on availability().
+if (await tiny.app.ai.availability() === 'available')   // |'unavailable'|'unsupported'
+  await tiny.app.ai.generate(prompt, { instructions }); // instructions = system prompt
 
 tiny.win.print();                           // native print panel
 

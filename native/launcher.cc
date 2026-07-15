@@ -188,6 +188,13 @@
 //                                                    (NSMetadataQuery); GOT
 //                                                    {ok, paths}
 //                                                    Reads: GET battery, wifi.
+//                         AI available <qid> /
+//                         AI generate <qid> <prompt>\t<instructions>
+//                                                    on-device LLM
+//                                                    (FoundationModels; only
+//                                                    when built TINYJS_AI=1 on
+//                                                    macOS 26); GOT {ok, text |
+//                                                    status, error}
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
 //                                                    clicked
@@ -4345,6 +4352,64 @@ static void do_spotlight(webview_t, void *arg) {
 }
 #endif
 
+// --- on-device AI: FoundationModels via the Swift shim (macOS 26) --------------------
+// Built only with TINYJS_AI=1 (needs the macOS 26 SDK + swiftc; see setup.sh).
+// Generation blocks for seconds, so it runs on a dedicated background queue,
+// never the UI thread. Without the flag every call answers "unsupported".
+
+struct AiReq {
+  std::string qid, op, prompt, instructions;
+};
+
+#if defined(__APPLE__) && defined(TINYJS_AI)
+extern "C" int tiny_ai_available();
+extern "C" char *tiny_ai_generate(const char *prompt, const char *instructions,
+                                  char **errOut);
+
+static dispatch_queue_t g_ai_queue = nullptr;
+
+static void do_ai(webview_t, void *arg) {
+  AiReq *req = static_cast<AiReq *>(arg);
+  if (!g_ai_queue)
+    g_ai_queue = dispatch_queue_create("app.tinyjs.ai", DISPATCH_QUEUE_SERIAL);
+  std::string qid = req->qid, op = req->op, prompt = req->prompt,
+              instr = req->instructions;
+  delete req;
+  dispatch_async(g_ai_queue, ^{
+    if (op == "available") {
+      int a = tiny_ai_available();
+      const char *st = a == 1 ? "available" : a == 0 ? "unavailable" : "unsupported";
+      sock_write_line("GOT " + qid + " {\"ok\":true,\"status\":\"" + st + "\"}");
+      return;
+    }
+    char *err = nullptr;
+    char *out = tiny_ai_generate(prompt.c_str(),
+                                 instr.empty() ? nullptr : instr.c_str(), &err);
+    if (out) {
+      sock_write_line("GOT " + qid + " {\"ok\":true,\"text\":" +
+                      json_escape(out) + "}");
+      free(out);
+    } else {
+      sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":" +
+                      json_escape(err ? err : "generation failed") + "}");
+      if (err) free(err);
+    }
+  });
+}
+#else
+static void do_ai(webview_t, void *arg) {
+  AiReq *req = static_cast<AiReq *>(arg);
+  if (req->op == "available")
+    sock_write_line("GOT " + req->qid +
+                    " {\"ok\":true,\"status\":\"unsupported\"}");
+  else
+    sock_write_line("GOT " + req->qid +
+                    " {\"ok\":false,\"error\":\"tiny.ai not built in "
+                    "(needs macOS 26 + TINYJS_AI=1)\"}");
+  delete req;
+}
+#endif
+
 // --- WebGPU (macOS) ----------------------------------------------------------
 // WKWebView gates WebGPU behind a WebKit feature flag (still "experimental"
 // as of macOS 15; no public API to enable it). Flip it through the private
@@ -4891,6 +4956,23 @@ static void sock_read_loop() {
         webview_dispatch(g_w, do_spotlight,
                          new SpotlightReq{line.substr(10, sp - 10),
                                           wire_unescape(line.substr(sp + 1))});
+      } else if (line.rfind("AI ", 0) == 0) {
+        // AI <op> <qid> [<prompt>\t<instructions>]
+        size_t o = line.find(' ', 3);
+        if (o == std::string::npos) continue;
+        std::string op = line.substr(3, o - 3);
+        size_t q = line.find(' ', o + 1);
+        AiReq *req = new AiReq;
+        req->op = op;
+        if (q == std::string::npos) {
+          req->qid = line.substr(o + 1);
+        } else {
+          req->qid = line.substr(o + 1, q - o - 1);
+          std::vector<std::string> p = split_tabs(line.substr(q + 1));
+          req->prompt = p.size() > 0 ? wire_unescape(p[0]) : "";
+          req->instructions = p.size() > 1 ? wire_unescape(p[1]) : "";
+        }
+        webview_dispatch(g_w, do_ai, req);
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_print, nullptr);
       } else if (line == "RELOAD") {
