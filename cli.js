@@ -565,6 +565,15 @@ async function cmdBuild() {
     <array>${schemes.map((s) => `<string>${s}</string>`).join('')}</array>
   </dict></array>`;
   }
+  // Mic/camera ("permissions": { "microphone": "why", "camera": "why" }):
+  // TCC kills a bundled app that requests capture without the usage string,
+  // and the hardened runtime additionally denies the device without its
+  // entitlement — the strings land here, the entitlements at codesign below.
+  const perms = cfg.permissions ?? {};
+  if (perms.microphone) extraKeys += `
+  <key>NSMicrophoneUsageDescription</key> <string>${perms.microphone}</string>`;
+  if (perms.camera) extraKeys += `
+  <key>NSCameraUsageDescription</key>     <string>${perms.camera}</string>`;
   const exts = cfg.fileExtensions ?? [];
   if (exts.length) {
     extraKeys += `
@@ -606,9 +615,25 @@ async function cmdBuild() {
   const identity = cfg.signIdentity || tjs.env.TINYJS_SIGN_IDENTITY || '-';
   console.log('==> codesigning' + (identity === '-' ? ' (ad-hoc)' : ' as ' + identity));
   // A real identity gets the hardened runtime + a secure timestamp — both
-  // required by notarization. No entitlements needed: QuickJS interprets
-  // (no JIT/executable memory) and WKWebView content runs out-of-process.
+  // required by notarization. QuickJS interprets (no JIT/executable memory)
+  // and WKWebView content runs out-of-process, so the only entitlements ever
+  // needed are the capture devices: the hardened runtime denies mic/camera
+  // outright — even with TCC granted — unless the binary carries them.
   const sigFlags = identity === '-' ? [] : ['--options', 'runtime', '--timestamp'];
+  const devices = [perms.microphone && 'com.apple.security.device.audio-input',
+                   perms.camera && 'com.apple.security.device.camera'].filter(Boolean);
+  if (identity !== '-' && devices.length) {
+    const ENT = '.build/entitlements.plist';
+    await tjs.writeFile(ENT, enc.encode(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>${devices.map((d) => `
+  <key>${d}</key> <true/>`).join('')}
+</dict>
+</plist>
+`));
+    sigFlags.push('--entitlements', ENT);
+  }
   for (const bin of ['dist/launcher',
                      APP + '/Contents/MacOS/' + cfg.name,
                      APP + '/Contents/MacOS/tjs',

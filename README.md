@@ -65,6 +65,7 @@ A project is just:
 myapp/
   tinyjs.json            # { name, title, size, id, version, icon?, signIdentity?,
                          #   urlScheme?, fileExtensions?, chrome?, update?, notarize?,
+                         #   permissions? ({ microphone: "why", camera: "why" } for getUserMedia),
                          #   activation? ("accessory" = menu-bar agent: no Dock, starts hidden) }
   icon.png                # 1024×1024 app icon (template ships a default)
   src/main.js             # backend: export const api = {...}; export function init(app) {}
@@ -220,7 +221,12 @@ await tiny.app.permissions.check('accessibility');
 // 'granted' | 'denied' | 'undetermined' | 'unsupported'
 await tiny.app.permissions.request('accessibility');  // prompt/open Settings
 // names: 'accessibility', 'screen', 'notifications' (packaged apps),
+//        'microphone', 'camera' (TCC layer under getUserMedia),
 //        'automation' (System Events) or 'automation:<bundle-id>'
+// mic/camera: getUserMedia() just works — the launcher grants WebKit's
+// per-origin prompt so users only see the system dialog naming your app.
+// Packaged apps declare "permissions": {"microphone": "why", ...} in
+// tinyjs.json → Info.plist usage strings + hardened-runtime entitlements.
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null

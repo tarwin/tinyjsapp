@@ -32,6 +32,7 @@ TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        update?: { url: "https://…/manifest.json" },
                        urlScheme?: "myapp", fileExtensions?: ["md"],
+                       permissions?: { microphone?: "why", camera?: "why" },
                        chrome?: { frame, trafficLights, transparent, vibrancy },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build: "npm run build", dist: "dist",
@@ -196,7 +197,13 @@ await tiny.app.paste();                     // = keystroke('cmd+v'); hide() firs
 await tiny.app.permissions.check('accessibility');  // 'granted'|'denied'|
                                             // 'undetermined'|'unsupported'
 await tiny.app.permissions.request('accessibility'); // prompts / opens Settings
-// names: accessibility | screen | notifications | automation[:<bundle-id>]
+// names: accessibility | screen | notifications | microphone | camera |
+//        automation[:<bundle-id>]
+// mic/camera: getUserMedia() works in the page (launcher auto-grants WebKit's
+// per-origin prompt; only the system TCC dialog shows). Packaged apps must set
+// "permissions": {"microphone": "why", "camera": "why"} in tinyjs.json —
+// injected as Info.plist usage strings (required, or macOS kills the app) and,
+// when signIdentity is set, as hardened-runtime device entitlements.
 
 tiny.win.print();                           // native print panel
 

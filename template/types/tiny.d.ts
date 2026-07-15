@@ -134,6 +134,7 @@ declare interface TinyKeystrokeResult {
 /** 'automation' checks System Events; 'automation:<bundle-id>' any target. */
 declare type TinyPermissionName =
   | 'accessibility' | 'screen' | 'notifications'
+  | 'microphone' | 'camera'
   | 'automation' | `automation:${string}`;
 
 declare type TinyPermissionStatus =

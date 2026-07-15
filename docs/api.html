@@ -127,6 +127,7 @@ tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i>
   "signIdentity": "Developer ID Application: …",  <i>// default: ad-hoc</i>
   "urlScheme": "myapp",         <i>// deep links: myapp://…</i>
   "fileExtensions": ["md"],     <i>// "Open With" file associations</i>
+  "permissions": { "microphone": "why", "camera": "why" },  <i>// getUserMedia</i>
   "chrome": { "frame": false, "vibrancy": "hud" },  <i>// frameless window</i>
   "backend": "backend/main.ts",           <i>// entry; .ts → esbuild bundle</i>
   "frontend": {                           <i>// bundler hooks (Vite etc.)</i>
@@ -363,7 +364,15 @@ await <b>tiny.app.paste</b>();              <i>// = keystroke('cmd+v')</i>
 await <b>tiny.app.permissions.request</b>('accessibility');
 <i>// prompts; accessibility opens System Settings pointed at your app</i>
 <i>// names: 'accessibility', 'screen', 'notifications' (packaged apps),</i>
+<i>//        'microphone', 'camera' (the TCC layer under getUserMedia),</i>
 <i>//        'automation' (System Events) or 'automation:&lt;bundle-id&gt;'</i></pre>
+    <p class="note">Mic + camera: <code>getUserMedia()</code> just works in a
+    tinyjs page — the launcher answers WebKit's per-origin prompt itself, so
+    users see the one system dialog naming your app. A packaged app must
+    declare <code>"permissions": { "microphone": "why", "camera": "why" }</code>
+    in tinyjs.json: the strings become the dialog text (macOS kills a bundle
+    that captures without them), and signed builds get the matching
+    hardened-runtime device entitlements.</p>
   </section>
 
   <section id="system">

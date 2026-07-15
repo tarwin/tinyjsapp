@@ -69,6 +69,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.12.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b>Microphone + camera</b> — <code>getUserMedia()</code> now just works in tinyjs pages: the launcher answers WebKit's per-origin media prompt itself, so users see a single system dialog naming your app instead of a double prompt naming <code>file://</code>. <code>tiny.app.permissions.check/request()</code> gain <code>microphone</code> and <code>camera</code> for onboarding flows.</li>
+        <li><b><code>"permissions"</code> in tinyjs.json</b> — packaged apps declare <code>{ "microphone": "why", "camera": "why" }</code>: injected as the required Info.plist usage strings, and builds signed with <code>signIdentity</code> get the matching hardened-runtime device entitlements — without which the hardened runtime denies capture even after the TCC grant.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.11.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b>Native clipboard</b> — <code>tiny.clipboard</code> read/writes text, html, <em>multiple</em> files, images (png in/out), and colors via NSPasteboard in the launcher process; <code>changeCount()</code> plus <code>watch()</code>/<code>onChange</code> change events with a <code>self</code> flag for your own writes. No more per-second osascript/pbpaste spawns, scratch files, or lost multi-file writes.</li>

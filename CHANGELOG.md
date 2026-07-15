@@ -4,6 +4,22 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.12.0 — 2026-07-14
+
+- **Microphone + camera** — `getUserMedia()` now just works in tinyjs pages:
+  the launcher answers WebKit's per-origin media-capture prompt itself, so
+  users see a single system dialog naming your app instead of a double prompt
+  naming `file://` or localhost. `tiny.app.permissions.check/request` gain
+  `'microphone'` and `'camera'` (the TCC layer underneath, via
+  AVCaptureDevice) for onboarding flows.
+- **`"permissions"` in tinyjs.json** — packaged apps declare
+  `{ "microphone": "why", "camera": "why" }`: the strings are injected as
+  `NSMicrophoneUsageDescription`/`NSCameraUsageDescription` (required — macOS
+  kills a bundled app that captures without them), and builds signed with
+  `signIdentity` get the matching hardened-runtime device entitlements
+  (`com.apple.security.device.audio-input`/`.camera`) — without which the
+  hardened runtime denies capture outright even after the TCC grant.
+
 ## 0.11.0 — 2026-07-14
 
 - **Native clipboard** — `tiny.clipboard` / `app.clipboard`: NSPasteboard in

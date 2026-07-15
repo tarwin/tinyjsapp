@@ -90,6 +90,7 @@
 //                         PERMREQ <qid> <name>       check/request a TCC
 //                                                    permission (accessibility,
 //                                                    screen, notifications,
+//                                                    microphone, camera,
 //                                                    automation[:<bundle-id>]);
 //                                                    answers GOT <qid> {status}
 //                         PRINT                      native print panel
@@ -126,6 +127,7 @@
 #include "webview.h"
 
 #ifdef __APPLE__
+#import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
@@ -1486,6 +1488,23 @@ static void do_perm(webview_t, void *arg) {
                        : "granted");
       }];
     }
+  } else if (name == "microphone" || name == "camera") {
+    // The TCC layer under getUserMedia. Bundled apps also need the usage
+    // string in Info.plist and — under the hardened runtime — the device
+    // entitlement, both injected by `tinyjs build` from cfg.permissions.
+    AVMediaType type = name == "camera" ? AVMediaTypeVideo : AVMediaTypeAudio;
+    AVAuthorizationStatus st =
+        [AVCaptureDevice authorizationStatusForMediaType:type];
+    if (ask && st == AVAuthorizationStatusNotDetermined) {
+      [AVCaptureDevice requestAccessForMediaType:type
+                               completionHandler:^(BOOL granted) {
+                                 perm_reply(qid, granted ? "granted" : "denied");
+                               }];
+      return;
+    }
+    perm_reply(qid, st == AVAuthorizationStatusAuthorized ? "granted"
+               : st == AVAuthorizationStatusNotDetermined ? "undetermined"
+                                                          : "denied");
   } else if (name == "automation" || name.rfind("automation:", 0) == 0) {
     // Per-target: automation:<bundle-id>; bare = System Events. The consent
     // dialog (and a possible target launch) can block, so ask off-main.
@@ -1523,6 +1542,29 @@ static void do_perm(webview_t, void *arg) {
   PermReq *req = static_cast<PermReq *>(arg);
   sock_write_line("GOT " + req->qid + " {\"status\":\"unsupported\"}");
   delete req;
+}
+#endif
+
+// --- media capture (macOS) ---------------------------------------------------
+// getUserMedia asks the WKUIDelegate per-origin before macOS asks TCC. The
+// page is the app's own code, so that origin prompt is pure noise (it names
+// file:// or localhost) and would double up with the system dialog — grant it
+// and let the one TCC prompt naming the app be the real consent. The vendored
+// delegate class is registered at runtime, so the handler (macOS 12+ selector,
+// never called on older systems) is added here instead of patching the header.
+#ifdef __APPLE__
+static void install_media_capture_hook() {
+  Class cls = objc_lookUpClass("WebviewWKUIDelegate");
+  if (!cls) return;
+  SEL sel = sel_registerName("webView:requestMediaCapturePermissionForOrigin:"
+                             "initiatedByFrame:type:decisionHandler:");
+  if (class_getInstanceMethod(cls, sel)) return;
+  class_addMethod(cls, sel,
+                  (IMP)(+[](id, SEL, id, id, id, NSInteger,
+                            void (^decision)(NSInteger)) {
+                    decision(1 /* WKPermissionDecisionGrant */);
+                  }),
+                  "v@:@@@q@?");
 }
 #endif
 
@@ -3047,6 +3089,7 @@ int main(int argc, char *argv[]) {
   enable_webgpu(g_w);
   install_close_hook(g_w);
   install_drop_hook();
+  install_media_capture_hook();
   install_ctx_hook();
   install_system_observers();
   install_open_handlers();
