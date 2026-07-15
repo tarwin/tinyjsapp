@@ -18,6 +18,19 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.22.0 — 2026-07-15
+
+- **`chrome.squareCorners`** — drop macOS's rounded window corners.
+  `setChrome({ squareCorners: true })` (or `"chrome": { "squareCorners":
+  true }` in tinyjs.json, applied before first paint) makes the window
+  **borderless**: square, no titlebar, no traffic lights. It's a deliberate,
+  explicit choice — you lose the native titlebar drag (use `data-tiny-drag`)
+  and it reads as un-native — but resize edges, the drop shadow, and
+  keyboard focus are all kept (a `canBecomeKeyWindow` override restores focus
+  that borderless windows normally can't take). Works on the main window and
+  secondary `openWindow` windows; `getState().chrome.squareCorners` reports
+  it, and it survives `setSize`.
+
 ## 0.21.0 — 2026-07-15
 
 Fixes and window ergonomics from real-app usage.

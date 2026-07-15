@@ -69,6 +69,12 @@
   <section>
 
     <div class="rel">
+      <h2>0.22.0 <span class="date">2026-07-15</span></h2>
+      <ul>
+        <li><b><code>chrome.squareCorners</code></b> — drop macOS's rounded window corners. <code>setChrome({ squareCorners: true })</code> (or <code>"chrome": { "squareCorners": true }</code> in tinyjs.json, applied before first paint) makes the window <b>borderless</b>: square, no titlebar, no traffic lights. Deliberate/un-native — you lose the native titlebar drag (use <code>data-tiny-drag</code>) but keep resize edges, shadow, and keyboard focus (a <code>canBecomeKeyWindow</code> override restores focus). Works on main + secondary windows; survives <code>setSize</code>; reported in <code>getState().chrome</code>.</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.21.0 <span class="date">2026-07-15</span></h2>
       <ul>
         <li><b>Fix: <code>store.set()</code>/<code>delete()</code> can no longer crash the backend</b> — a write failure used to surface as an unhandled rejection and take the process down. The store now swallows its own write errors (resolves <code>false</code>, keeps the in-memory value) and uses a unique temp file per write so un-awaited bursts don't race.</li>

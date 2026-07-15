@@ -231,6 +231,10 @@ const screens = await <b>tiny.app.screens</b>();
 
 <i>// frameless / transparent / vibrancy (native resize + focus kept)</i>
 <b>tiny.win.setChrome</b>({ frame: false, trafficLights: false, vibrancy: 'hud' });
+<i>// squareCorners: true → BORDERLESS (square, no titlebar/traffic lights;</i>
+<i>// no native titlebar drag — use data-tiny-drag; resize/shadow/focus kept).</i>
+<i>// Put it in tinyjs.json "chrome" to apply before first paint.</i>
+<b>tiny.win.setChrome</b>({ squareCorners: true });
 <i>// drag regions: &lt;header data-tiny-drag&gt; — drag moves, double-click zooms</i>
 <b>tiny.win.startDrag</b>();  <b>tiny.win.zoom</b>();
 

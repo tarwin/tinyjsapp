@@ -383,16 +383,22 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         return r.text;
       },
     },
-    // Window chrome: { frame?, trafficLights?, transparent?, vibrancy? }.
-    // frame:false hides the titlebar (content extends under it; keep your own
-    // drag region via data-tiny-drag). vibrancy: material name or null.
+    // Window chrome: { frame?, trafficLights?, transparent?, vibrancy?,
+    // squareCorners? }. frame:false hides the titlebar (content extends under
+    // it; keep your own drag region via data-tiny-drag). vibrancy: material
+    // name or null. squareCorners:true drops macOS's rounded corners by
+    // making the window BORDERLESS — square, no titlebar, no traffic lights.
+    // The tradeoff: no native titlebar drag (use data-tiny-drag) and it's a
+    // deliberately un-native look; resize edges, shadow, and keyboard focus
+    // are kept. Declare it in tinyjs.json "chrome" so it applies before the
+    // first paint (no rounded→square flash on launch).
     setChrome(opts = {}) {
       const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
       const vib = opts.vibrancy === undefined ? ''
                 : opts.vibrancy === null || opts.vibrancy === false ? 'none'
                 : String(opts.vibrancy);
       send('CHROME ' + [bit(opts.frame), bit(opts.trafficLights),
-                        bit(opts.transparent), one(vib)].join('\t'));
+                        bit(opts.transparent), one(vib), bit(opts.squareCorners)].join('\t'));
     },
     startDrag() { send('DRAGWIN'); },
     zoom() { send('WINOP zoom'); },
@@ -680,6 +686,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       const hasPos = x != null && y != null;
       send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400'),
                          bit(c.frame), bit(c.trafficLights), bit(c.transparent), one(vib),
+                         bit(c.squareCorners),
                          hasPos ? (x | 0) : '', hasPos ? (y | 0) : ''].join('\t'));
     },
     // Handle for any window ('main' or a secondary id).
@@ -714,7 +721,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                     : opts.vibrancy === null || opts.vibrancy === false ? 'none'
                     : String(opts.vibrancy);
           t('CHROME', [bit(opts.frame), bit(opts.trafficLights),
-                       bit(opts.transparent), one(vib)].join('\t'));
+                       bit(opts.transparent), one(vib), bit(opts.squareCorners)].join('\t'));
         },
         getState: () => query(id === 'main' ? 'win' : 'win:' + id),
         // Native share sheet ({ text?, url?, paths? }) anchored at page

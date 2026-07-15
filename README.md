@@ -173,6 +173,14 @@ tiny.win.setChrome({ frame: false, trafficLights: false, vibrancy: 'hud' });
 // (packaged apps apply it before first paint — no titlebar flash).
 tiny.win.startDrag();  tiny.win.zoom();   // manual equivalents
 
+// square corners (drop macOS's rounded window corners). This makes the
+// window BORDERLESS — square, no titlebar, no traffic lights — and is
+// deliberately un-native: you lose the native titlebar drag (use
+// data-tiny-drag) but keep resize edges, the shadow, and keyboard focus.
+tiny.win.setChrome({ squareCorners: true });
+// declare it in tinyjs.json "chrome": { "squareCorners": true } so it
+// applies before first paint (no rounded→square flash on launch).
+
 // read the window back
 const s = await tiny.win.getState();
 // { x, y, width, height, fullscreen, minimized, visible, focused,

@@ -304,6 +304,7 @@ static int g_resizable_override = -1; // -1 default, 0 forced off, 1 forced on
 static bool g_chrome_frameless = false;
 static bool g_chrome_traffic = true;
 static bool g_chrome_transparent = false;
+static bool g_chrome_square = false;  // borderless: square corners, no titlebar
 static std::string g_chrome_vibrancy; // empty = none
 // Extra directory the page may read file:// assets from (readAccess option) —
 // widens WebKit's default (the page's own folder) so <audio>/<img>/fetch can
@@ -3037,7 +3038,7 @@ static void do_get(webview_t w, void *arg) {
             "\"alwaysOnTop\":%s,\"resizable\":%s,"
             "\"clickThrough\":%s,\"level\":\"%s\",\"allSpaces\":%s,"
             "\"chrome\":{\"frame\":%s,\"trafficLights\":%s,"
-            "\"transparent\":%s,\"vibrancy\":%s},"
+            "\"transparent\":%s,\"vibrancy\":%s,\"squareCorners\":%s},"
             "\"screen\":{\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
             (int)f.origin.x, (int)(top - NSMaxY(f)), (int)f.size.width,
             (int)f.size.height, fs ? "true" : "false",
@@ -3055,18 +3056,24 @@ static void do_get(webview_t w, void *arg) {
                 ? "true"
                 : "false",
             // Chrome derived from the live window, so secondary windows
-            // report their own state (not the main globals).
-            ((win.styleMask & NSWindowStyleMaskFullSizeContentView) &&
-             win.titlebarAppearsTransparent)
+            // report their own state (not the main globals). A borderless
+            // (square) window has neither titlebar nor traffic lights.
+            (!(win.styleMask & NSWindowStyleMaskTitled) ||
+             ((win.styleMask & NSWindowStyleMaskFullSizeContentView) &&
+              win.titlebarAppearsTransparent))
                 ? "false"
                 : "true",
-            [win standardWindowButton:NSWindowCloseButton].hidden ? "false"
-                                                                  : "true",
+            (!(win.styleMask & NSWindowStyleMaskTitled) ||
+             [win standardWindowButton:NSWindowCloseButton].hidden)
+                ? "false"
+                : "true",
             win.opaque ? "false" : "true",
             // vibrancy name is tracked for main only; secondary → null.
             (wid == "main" && !g_chrome_vibrancy.empty())
                 ? json_escape(g_chrome_vibrancy).c_str()
                 : "null",
+            // Square = borderless = no Titled style bit.
+            (win.styleMask & NSWindowStyleMaskTitled) ? "false" : "true",
             (int)scr.frame.size.width, (int)scr.frame.size.height,
             (double)scr.backingScaleFactor);
         json = buf;
@@ -3684,7 +3691,7 @@ static void do_voices(webview_t, void *arg) {
 
 struct ChromeReq {
   std::string win = "main";
-  std::string frame, traffic, transparent, vibrancy;
+  std::string frame, traffic, transparent, vibrancy, square;
 };
 
 #ifdef __APPLE__
@@ -3761,6 +3768,36 @@ static void webview_draws_background(WKWebView *wv, bool draws) {
 static NSWindow *window_for_id(webview_t w, const std::string &id);
 static WKWebView *webview_for_id(webview_t w, const std::string &id);
 static NSVisualEffectView **effect_slot_for(const std::string &id); // main/secondary
+
+// Borderless windows (square corners) return NO for canBecomeKeyWindow, so
+// they can't take keyboard focus. Force YES on the window's class — always
+// the correct answer for our windows, so a per-class replace is safe.
+static void ensure_window_can_key(Class cls) {
+  if (!cls)
+    return;
+  IMP yes = (IMP)(+[](id, SEL) -> BOOL { return YES; });
+  class_replaceMethod(cls, @selector(canBecomeKeyWindow), yes, "c@:");
+  class_replaceMethod(cls, @selector(canBecomeMainWindow), yes, "c@:");
+}
+
+// Switch a window between titled (rounded corners) and borderless (square).
+// Borderless keeps Resizable (drag-resize edges) and the shadow; the page
+// owns every pixel and moves the window via data-tiny-drag, exactly like
+// frameless. This is the ONLY way to lose macOS's window corner radius.
+static void apply_square(NSWindow *win, bool square) {
+  NSRect keep = win.frame;
+  if (square) {
+    ensure_window_can_key(object_getClass(win));
+    win.styleMask = NSWindowStyleMaskResizable; // no Titled bit → square
+    win.hasShadow = YES;
+    [win setFrame:keep display:YES];
+    [win makeKeyAndOrderFront:nil]; // re-key after the styleMask swap
+  } else {
+    win.styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                    NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+    [win setFrame:keep display:YES];
+  }
+}
 
 // The chrome-application core, factored out so do_winopen can apply chrome
 // to a secondary window BEFORE it's ordered on screen (no titlebar flash).
@@ -3844,6 +3881,14 @@ static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
         win.backgroundColor = [NSColor clearColor];
       }
     }
+    // Square corners LAST — it rewrites the styleMask wholesale (borderless),
+    // so it must win over the frame/traffic titlebar work above.
+    if (!req->square.empty()) {
+      bool sq = req->square == "1";
+      if (is_main)
+        g_chrome_square = sq;
+      apply_square(win, sq);
+    }
 }
 
 static void do_chrome(webview_t w, void *arg) {
@@ -3863,6 +3908,12 @@ static void reapply_window_overrides(webview_t w) {
       w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
   if (!win)
     return;
+  // set_size rewrote the styleMask wholesale; a square (borderless) main
+  // window would snap back to titled/rounded — reassert it.
+  if (g_chrome_square) {
+    apply_square(win, true);
+    return;
+  }
   if (g_resizable_override == 0)
     win.styleMask &= ~NSWindowStyleMaskResizable;
   if (g_chrome_frameless) {
@@ -4043,7 +4094,7 @@ struct WinOpenReq {
   std::string id, page, title;
   int width = 600, height = 400;
   // Chrome + position applied BEFORE the window is shown (no titlebar flash).
-  std::string frame, traffic, transparent, vibrancy; // '' = default
+  std::string frame, traffic, transparent, vibrancy, square; // '' = default
   bool hasPos = false;
   int x = 0, y = 0;
 };
@@ -4111,13 +4162,15 @@ static void do_winopen(webview_t w, void *arg) {
     // frameless/positioned secondary window never flashes a titlebar or
     // jumps from center. The slot exists now (tw is in g_windows).
     if (!req->frame.empty() || !req->traffic.empty() ||
-        !req->transparent.empty() || !req->vibrancy.empty()) {
+        !req->transparent.empty() || !req->vibrancy.empty() ||
+        !req->square.empty()) {
       ChromeReq cr;
       cr.win = req->id;
       cr.frame = req->frame;
       cr.traffic = req->traffic;
       cr.transparent = req->transparent;
       cr.vibrancy = req->vibrancy;
+      cr.square = req->square;
       NSVisualEffectView **effect = effect_slot_for(req->id);
       if (effect)
         apply_chrome_fields(win, wv, effect, false, &cr);
@@ -4179,7 +4232,7 @@ struct ReplyReq { std::string composite; int status; std::string json; };
 struct WinOpenReq {
   std::string id, page, title;
   int width, height;
-  std::string frame, traffic, transparent, vibrancy;
+  std::string frame, traffic, transparent, vibrancy, square;
   bool hasPos;
   int x, y;
 };
@@ -4632,10 +4685,11 @@ static void sock_read_loop() {
         wr->traffic = p.size() > 5 ? p[5] : "";
         wr->transparent = p.size() > 6 ? p[6] : "";
         wr->vibrancy = p.size() > 7 ? p[7] : "";
-        if (p.size() > 9 && !p[8].empty() && !p[9].empty()) {
+        wr->square = p.size() > 8 ? p[8] : "";
+        if (p.size() > 10 && !p[9].empty() && !p[10].empty()) {
           wr->hasPos = true;
-          wr->x = std::atoi(p[8].c_str());
-          wr->y = std::atoi(p[9].c_str());
+          wr->x = std::atoi(p[9].c_str());
+          wr->y = std::atoi(p[10].c_str());
         }
         webview_dispatch(g_w, do_winopen, wr);
       } else if (line.rfind("WINCLOSE ", 0) == 0) {
@@ -4782,6 +4836,7 @@ static void sock_read_loop() {
         req->traffic = p.size() > 1 ? p[1] : "";
         req->transparent = p.size() > 2 ? p[2] : "";
         req->vibrancy = p.size() > 3 ? p[3] : "";
+        req->square = p.size() > 4 ? p[4] : "";
         webview_dispatch(g_w, do_chrome, req);
       } else if (line == "DRAGWIN") {
         webview_dispatch(g_w, do_dragwin, nullptr);
@@ -5321,6 +5376,7 @@ int main(int argc, char *argv[]) {
       req->traffic = p.size() > 1 ? p[1] : "";
       req->transparent = p.size() > 2 ? p[2] : "";
       req->vibrancy = p.size() > 3 ? p[3] : "";
+      req->square = p.size() > 4 ? p[4] : "";
       do_chrome(g_w, req);
     }
   }

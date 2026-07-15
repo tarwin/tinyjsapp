@@ -42,6 +42,12 @@ declare interface TinyChromeOptions {
    *  'content' | 'header' | 'sheet' | 'tooltip' | 'fullscreen' |
    *  'underwindow' | 'underpage' | 'titlebar' | 'selection') or null */
   vibrancy?: string | null;
+  /** drop macOS's rounded window corners by making the window BORDERLESS:
+   *  square, no titlebar, no traffic lights. Tradeoff — no native titlebar
+   *  drag (use data-tiny-drag) and a deliberately un-native look; resize
+   *  edges, shadow, and focus are kept. Set it in tinyjs.json "chrome" to
+   *  apply before first paint (no rounded→square flash on launch). */
+  squareCorners?: boolean;
 }
 
 /** 'floating' = always-on-top; 'overlay' floats above almost everything
@@ -111,6 +117,7 @@ declare interface TinyWinState {
     trafficLights: boolean;
     transparent: boolean;
     vibrancy: string | null;
+    squareCorners: boolean;
   };
   screen: { width: number; height: number; scale: number };
 }

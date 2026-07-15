@@ -133,6 +133,11 @@ await tiny.win.getState();  // { x, y, width, height, fullscreen, minimized,
 tiny.win.setPosition(x, y);                 // top-left origin
 tiny.win.setChrome({ frame: false, trafficLights: false,
                      transparent: false, vibrancy: 'hud' });  // frameless etc.
+// squareCorners: true drops macOS's rounded corners → BORDERLESS window
+// (square, no titlebar/traffic lights; no native titlebar drag — use
+// data-tiny-drag; resize/shadow/focus kept). Put it in tinyjs.json "chrome"
+// to apply before first paint (no rounded→square flash).
+tiny.win.setChrome({ squareCorners: true });
 // drag regions: <header data-tiny-drag> — drag moves window, dblclick zooms;
 // interactive children excluded (data-tiny-nodrag to opt out manually)
 tiny.win.setAlwaysOnTop(v); tiny.win.setResizable(v);
