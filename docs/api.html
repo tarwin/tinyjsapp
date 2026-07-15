@@ -419,7 +419,24 @@ await <b>tiny.app.launchAtLogin.set</b>(true);  <i>//  'requires-approval' | 'un
 
 <b>tiny.app.dock.setBadge</b>('3');   <b>tiny.app.dock.setBadge</b>('');  <i>// '' clears</i>
 <b>tiny.app.dock.bounce</b>();                    <i>// until the app is activated</i>
-<b>tiny.app.dock.bounce</b>({ critical: true });  <i>// until the user acts</i></pre>
+<b>tiny.app.dock.bounce</b>({ critical: true });  <i>// until the user acts</i>
+
+<i>// keep the system awake — replaces spawning `caffeinate` (the assertion</i>
+<i>// dies with the app, so a crash never wedges sleep)</i>
+await <b>tiny.app.power.preventSleep</b>('Exporting video');
+await <b>tiny.app.power.preventSleep</b>('Playing', { display: true }); <i>// screen too</i>
+await <b>tiny.app.power.allowSleep</b>();
+
+<i>// the active app right now — who focus returns to after win.hide()</i>
+await <b>tiny.app.frontmostApp</b>();   <i>// { name, bundleId, pid } | null</i>
+
+<i>// sounds: system beep, a system sound by name, or an audio file path</i>
+await <b>tiny.app.beep</b>();
+await <b>tiny.app.playSound</b>('Ping');   <i>// -&gt; false if it didn't load</i>
+
+<i>// native share sheet — anchor it at the click</i>
+btn.addEventListener('click', (e) =&gt;
+  <b>tiny.win.share</b>({ url, text, paths, x: e.clientX, y: e.clientY }));</pre>
   </section>
 
   <section id="system">

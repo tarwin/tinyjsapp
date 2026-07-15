@@ -96,7 +96,9 @@ export function init(app) {          // window is up
   // keystroke(combo), paste(), permissions.check(name)/request(name),
   // mousePosition(), screens(), paths, show({ activate: false }),
   // shell.open(target)/reveal(path)/trash(path),
-  // launchAtLogin.get()/set(v), dock.setBadge(text)/bounce(opts)
+  // launchAtLogin.get()/set(v), dock.setBadge(text)/bounce(opts),
+  // power.preventSleep(reason, opts)/allowSleep(), frontmostApp(),
+  // beep(), playSound(target), window(id).share(opts)
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -270,6 +272,26 @@ await tiny.app.launchAtLogin.set(true);   //   'requires-approval' | 'unsupporte
 tiny.app.dock.setBadge('3');  tiny.app.dock.setBadge('');  // '' clears
 tiny.app.dock.bounce();                    // until the app is activated
 tiny.app.dock.bounce({ critical: true });  // until the user acts
+
+// keep the system awake — replaces spawning `caffeinate` (the assertion
+// dies with the app, so a crash never wedges sleep); the reason shows in
+// `pmset -g assertions`
+await tiny.app.power.preventSleep('Exporting video');
+await tiny.app.power.preventSleep('Playing', { display: true }); // screen too
+await tiny.app.power.allowSleep();
+
+// the active app right now — who focus returns to after win.hide()
+const front = await tiny.app.frontmostApp();  // { name, bundleId, pid } | null
+
+// sounds — system beep, a system sound by name, or an audio file
+await tiny.app.beep();
+await tiny.app.playSound('Ping');            // -> false if it didn't load
+await tiny.app.playSound('/path/to/done.aiff');
+
+// native share sheet — anchor it at the click
+btn.addEventListener('click', (e) =>
+  tiny.win.share({ url: 'https://tinyjs.app', text: 'Look at this',
+                   paths: ['/tmp/report.pdf'], x: e.clientX, y: e.clientY }));
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null

@@ -65,7 +65,9 @@ export function init(app) {
   // clipboard.read/write/changeCount/watch/unwatch, keystroke(combo),
   // paste(), permissions.check/request, mousePosition(), screens(),
   // paths, shell.open/reveal/trash, launchAtLogin.get/set,
-  // dock.setBadge/bounce, show({ activate: false })
+  // dock.setBadge/bounce, power.preventSleep/allowSleep, frontmostApp(),
+  // beep()/playSound(target), window(id).share(opts),
+  // show({ activate: false })
 }
 
 export function onMenu(id, app) { ... }  // optional: menu clicks, backend-side
@@ -238,6 +240,20 @@ await tiny.app.launchAtLogin.set(true);     //  'requires-approval'|'unsupported
 
 tiny.app.dock.setBadge('3');                // '' clears
 tiny.app.dock.bounce({ critical: false });  // bounce until activated
+
+// keep the system awake (replaces caffeinate; auto-released on exit/crash)
+await tiny.app.power.preventSleep('reason', { display: false });
+await tiny.app.power.allowSleep();
+
+await tiny.app.frontmostApp();  // { name, bundleId, pid } | null — the
+                                // active app (focus target after hide())
+
+await tiny.app.beep();                   // system beep
+await tiny.app.playSound('Ping');        // system sound name or audio file
+                                         // path -> false if it didn't load
+
+// native share sheet — anchor at the click's clientX/clientY
+tiny.win.share({ text, url, paths, x: e.clientX, y: e.clientY });
 
 tiny.win.print();                           // native print panel
 

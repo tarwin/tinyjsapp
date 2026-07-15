@@ -229,6 +229,32 @@ declare interface TinyLaunchAtLogin {
   set(enabled: boolean): Promise<TinyLoginStatus>;
 }
 
+/** The active application (frontmostApp / clipboard sourceApp). */
+declare interface TinyFrontmostApp {
+  name: string | null;
+  bundleId: string | null;
+  pid: number;
+}
+
+/** Keep the system awake — one IOPMAssertion, replaced per call and
+ *  released automatically when the app exits (unlike spawned caffeinate). */
+declare interface TinyPower {
+  /** reason shows in `pmset -g assertions`; display: true also keeps the
+   *  screen on */
+  preventSleep(reason?: string, opts?: { display?: boolean }): Promise<boolean>;
+  allowSleep(): Promise<boolean>;
+}
+
+declare interface TinyShareOptions {
+  text?: string;
+  url?: string;
+  /** real file paths */
+  paths?: string[];
+  /** anchor at page coordinates (the click's clientX/clientY) */
+  x?: number;
+  y?: number;
+}
+
 /** The `tiny` global available in every window's page. */
 declare interface Tiny {
   api: {
@@ -284,6 +310,8 @@ declare interface Tiny {
     /** files dragged onto the window — real filesystem paths */
     onDrop(fn: (paths: string[]) => void): void;
 
+    /** native share sheet — anchor at the click's clientX/clientY */
+    share(opts?: TinyShareOptions): Promise<any>;
     openFile(): Promise<string | null>;
     openFiles(): Promise<string[] | null>;
     pickFolder(): Promise<string | null>;
@@ -365,6 +393,13 @@ declare interface Tiny {
       /** bounce until activated; critical: until the user acts */
       bounce(opts?: { critical?: boolean }): Promise<any>;
     };
+    power: TinyPower;
+    /** the active app right now (who focus returns to after win.hide()) */
+    frontmostApp(): Promise<TinyFrontmostApp | null>;
+    beep(): Promise<boolean>;
+    /** a system sound name ('Ping', 'Glass', …) or an audio file path;
+     *  false if it didn't load */
+    playSound(target: string): Promise<boolean>;
   };
 
   tray: {
@@ -403,6 +438,8 @@ declare interface TinyWindowHandle {
   setResizable(enabled: boolean): void;
   setChrome(opts: TinyChromeOptions): void;
   getState(): Promise<TinyWinState>;
+  /** native share sheet anchored at page coordinates in this window */
+  share(opts?: TinyShareOptions): boolean;
 }
 
 /** The backend `app` handle (passed to init, api handlers, and events). */
@@ -493,6 +530,13 @@ declare interface TinyApp {
     /** bounce until activated; critical: until the user acts */
     bounce(opts?: { critical?: boolean }): boolean;
   };
+  power: TinyPower;
+  /** the active app right now (who focus returns to after hide()) */
+  frontmostApp(): Promise<TinyFrontmostApp | null>;
+  beep(): Promise<boolean>;
+  /** a system sound name ('Ping', 'Glass', …) or an audio file path;
+   *  false if it didn't load */
+  playSound(target: string): Promise<boolean>;
   update: {
     check(): Promise<{ available: boolean; current: string; latest: string | null }>;
     install(): Promise<boolean>;

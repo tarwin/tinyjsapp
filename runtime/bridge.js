@@ -405,6 +405,24 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       setBadge(text) { send('BADGE ' + esc(text)); return true; },
       bounce(opts) { send('BOUNCE ' + (opts?.critical ? 1 : 0)); return true; },
     },
+    // Keep the system awake (one IOPMAssertion, replaced on each call —
+    // it dies with the process, so a crashed app never wedges sleep,
+    // unlike a spawned `caffeinate`). { display: true } also keeps the
+    // screen on. The reason shows in `pmset -g assertions`.
+    power: {
+      async preventSleep(reason, opts) {
+        const r = await ask('POWER', 'on\t' + (opts?.display ? 1 : 0) + '\t' + esc(reason));
+        return r?.ok === true;
+      },
+      async allowSleep() { return (await ask('POWER', 'off'))?.ok === true; },
+    },
+    // The active app right now: { name, bundleId, pid } | null — who focus
+    // returns to after hide() (pair with paste()).
+    frontmostApp: () => query('frontmost'),
+    // System beep / a sound: system sound name ('Ping', 'Glass', …) or an
+    // audio file path. Resolve false if the name/file didn't load.
+    async beep() { return (await ask('SOUND'))?.ok === true; },
+    async playSound(target) { return (await ask('SOUND', esc(target)))?.ok === true; },
     // Standard per-app directories (data/cache/logs are per app id, not
     // auto-created — tjs.makeDir(..., { recursive: true }) first write).
     // Prefer these over hardcoding ~/Library paths.
@@ -482,6 +500,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                        bit(opts.transparent), one(vib)].join('\t'));
         },
         getState: () => query(id === 'main' ? 'win' : 'win:' + id),
+        // Native share sheet ({ text?, url?, paths? }) anchored at page
+        // coordinates (pass the click's clientX/clientY; 0,0 otherwise).
+        share({ text, url, paths, x, y } = {}) {
+          t('SHARE', [(x | 0) + '', (y | 0) + '', esc(text), esc(url),
+                      ...(paths ?? []).map(esc)].join('\t'));
+          return true;
+        },
       };
     },
     windows: () => query('windows'),
@@ -590,6 +615,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'login.set': async ({ enabled }) => app.launchAtLogin.set(enabled),
     'dock.setBadge': async ({ text }) => app.dock.setBadge(text ?? ''),
     'dock.bounce': async (p) => app.dock.bounce(p),
+    'power.prevent': async ({ reason, display }) => app.power.preventSleep(reason, { display }),
+    'power.allow': async () => app.power.allowSleep(),
+    'app.frontmost': async () => app.frontmostApp(),
+    'sound.play': async ({ target }) => (target ? app.playSound(target) : app.beep()),
+    'win.share': async (p, _a, m) => forWin(m).share(p),
   };
   const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };

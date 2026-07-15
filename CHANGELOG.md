@@ -4,6 +4,23 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.14.0 — 2026-07-14
+
+More stop-shelling-out, round two.
+
+- **`app.power`** — `preventSleep(reason, { display? })` / `allowSleep()`
+  hold a single IOPMAssertion instead of spawning `caffeinate`: the
+  assertion dies with the process, so a crashed app can never wedge the
+  Mac's sleep. The reason string shows up in `pmset -g assertions`.
+- **`app.frontmostApp()`** — `{ name, bundleId, pid }` of the active app
+  (who focus returns to after `hide()` — pairs with `paste()`).
+- **`app.beep()` / `app.playSound(target)`** — system beep, a system sound
+  by name (`'Ping'`, `'Glass'`, …), or an audio file path; resolves `false`
+  if the sound didn't load. No more `afplay` spawns.
+- **`win.share({ text?, url?, paths?, x?, y? })`** — the native share sheet
+  (NSSharingServicePicker), anchored at page coordinates — pass the click's
+  `clientX`/`clientY`. Backend twin: `app.window(id).share(opts)`.
+
 ## 0.13.0 — 2026-07-14
 
 Theme: stop shelling out. Five small APIs replacing the `open`/osascript

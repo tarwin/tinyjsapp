@@ -55,6 +55,9 @@
       print: () => call('win.print'),
       // fn(paths): files dragged onto the window, as real filesystem paths.
       onDrop(fn) { window.tiny.api.on('drop', ({ paths }) => fn(paths)); },
+      // Native share sheet ({ text?, url?, paths?, x?, y? }) — anchor it at
+      // the click: tiny.win.share({ url, x: e.clientX, y: e.clientY }).
+      share: (opts) => call('win.share', opts ?? {}),
       openFile: () => call('win.openFile'),                 // path | null
       openFiles: () => call('win.openFiles'),               // paths[] | null
       pickFolder: () => call('win.pickFolder'),             // path | null
@@ -171,6 +174,18 @@
         setBadge: (text) => call('dock.setBadge', { text }),
         bounce: (opts) => call('dock.bounce', opts ?? {}),
       },
+      // Keep the system awake (replaces `caffeinate`; released on quit or
+      // crash automatically). { display: true } also keeps the screen on.
+      power: {
+        preventSleep: (reason, opts) => call('power.prevent', { reason, ...opts }),
+        allowSleep: () => call('power.allow'),
+      },
+      // The active app right now: { name, bundleId, pid } | null.
+      frontmostApp: () => call('app.frontmost'),
+      // System beep / a system sound name ('Ping', 'Glass', …) or an audio
+      // file path -> false if the name/file didn't load.
+      beep: () => call('sound.play', {}),
+      playSound: (target) => call('sound.play', { target }),
     },
 
     tray: {

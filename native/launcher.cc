@@ -106,6 +106,20 @@
 //                                                    {status, ok, error}
 //                         BADGE <text>               Dock badge ('' clears)
 //                         BOUNCE <critical01>        bounce the Dock icon
+//                         POWER <qid> on\t<display01>\t<reason> / off
+//                                                    prevent/allow idle sleep
+//                                                    (IOPMAssertion — dies
+//                                                    with the process, unlike
+//                                                    a spawned caffeinate);
+//                                                    answers GOT <qid>
+//                                                    {ok, active}
+//                         SOUND <qid> <target>       beep ('' ), a system
+//                                                    sound name ('Ping'), or
+//                                                    an audio file path;
+//                                                    answers GOT <qid> {ok}
+//                         SHARE[@win] <x>\t<y>\t<text>\t<url>\t<path>…
+//                                                    native share sheet
+//                                                    anchored at page coords
 //                         PRINT                      native print panel
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
@@ -146,6 +160,7 @@
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
 #include <Carbon/Carbon.h> // RegisterEventHotKey (global hotkeys)
+#include <IOKit/pwr_mgt/IOPMLib.h> // IOPMAssertion (prevent sleep)
 #include <objc/message.h>
 #include <objc/runtime.h>
 #include "tiny_client.h" // generated from runtime/tiny.js (gen-client.sh)
@@ -1768,6 +1783,129 @@ static void do_badge(webview_t, void *arg) { delete static_cast<std::string *>(a
 static void do_bounce(webview_t, void *arg) { delete static_cast<int *>(arg); }
 #endif
 
+// --- power, sound, share (macOS) ----------------------------------------------------
+// POWER holds a single IOPMAssertion (replacing spawned `caffeinate` — the
+// assertion dies with the launcher, so a crashed app never wedges sleep).
+// SOUND plays a beep, a system sound by name, or an audio file. SHARE shows
+// NSSharingServicePicker anchored at page coordinates.
+
+struct PowerReq {
+  std::string qid, reason;
+  bool on, display;
+};
+struct SoundReq {
+  std::string qid, target;
+};
+struct ShareReq {
+  std::string win, text, url;
+  std::vector<std::string> paths;
+  int x, y;
+};
+
+#ifdef __APPLE__
+static IOPMAssertionID g_power_assertion = kIOPMNullAssertionID;
+
+static void do_power(webview_t, void *arg) {
+  PowerReq *req = static_cast<PowerReq *>(arg);
+  bool ok = true;
+  if (g_power_assertion != kIOPMNullAssertionID) {
+    IOPMAssertionRelease(g_power_assertion);
+    g_power_assertion = kIOPMNullAssertionID;
+  }
+  if (req->on) {
+    CFStringRef reason = CFStringCreateWithCString(
+        NULL, req->reason.empty() ? "tinyjs app" : req->reason.c_str(),
+        kCFStringEncodingUTF8);
+    ok = IOPMAssertionCreateWithName(
+             req->display ? kIOPMAssertionTypePreventUserIdleDisplaySleep
+                          : kIOPMAssertionTypePreventUserIdleSystemSleep,
+             kIOPMAssertionLevelOn, reason,
+             &g_power_assertion) == kIOReturnSuccess;
+    CFRelease(reason);
+    if (!ok)
+      g_power_assertion = kIOPMNullAssertionID;
+  }
+  sock_write_line("GOT " + req->qid + " {\"ok\":" + (ok ? "true" : "false") +
+                  ",\"active\":" +
+                  (g_power_assertion != kIOPMNullAssertionID ? "true"
+                                                             : "false") +
+                  "}");
+  delete req;
+}
+
+// NSSound stops when released; hold the last one until the next play.
+static NSSound *g_sound = nil;
+
+static void do_sound(webview_t, void *arg) {
+  SoundReq *req = static_cast<SoundReq *>(arg);
+  @autoreleasepool {
+    bool ok = true;
+    if (req->target.empty()) {
+      NSBeep();
+    } else {
+      NSSound *snd =
+          req->target[0] == '/'
+              ? [[NSSound alloc] initWithContentsOfFile:ns(req->target)
+                                            byReference:YES]
+              : [NSSound soundNamed:ns(req->target)];
+      ok = snd != nil;
+      if (snd) {
+        [g_sound stop];
+        g_sound = snd;
+        [snd play];
+      }
+    }
+    sock_write_line("GOT " + req->qid + " {\"ok\":" + (ok ? "true" : "false") +
+                    "}");
+  }
+  delete req;
+}
+
+// The picker dismisses itself; keep it alive while it's up.
+static NSSharingServicePicker *g_share_picker = nil;
+
+static void do_share(webview_t w, void *arg) {
+  ShareReq *req = static_cast<ShareReq *>(arg);
+  @autoreleasepool {
+    NSMutableArray *items = [NSMutableArray array];
+    if (!req->text.empty())
+      [items addObject:ns(req->text)];
+    if (!req->url.empty()) {
+      NSURL *u = [NSURL URLWithString:ns(req->url)];
+      if (u)
+        [items addObject:u];
+    }
+    for (auto &p : req->paths)
+      [items addObject:[NSURL fileURLWithPath:ns(p)]];
+    WKWebView *wv = webview_for_id(w, req->win);
+    if (wv && items.count) {
+      g_share_picker =
+          [[NSSharingServicePicker alloc] initWithItems:items];
+      // Page coords are top-left of the content area; WKWebView is flipped,
+      // but convert defensively.
+      CGFloat y = wv.isFlipped ? req->y : wv.bounds.size.height - req->y;
+      [g_share_picker
+          showRelativeToRect:NSMakeRect(req->x, y, 1, 1)
+                      ofView:wv
+               preferredEdge:NSMinYEdge];
+    }
+  }
+  delete req;
+}
+#else
+static void do_power(webview_t, void *arg) {
+  PowerReq *req = static_cast<PowerReq *>(arg);
+  sock_write_line("GOT " + req->qid + " {\"ok\":false,\"active\":false}");
+  delete req;
+}
+static void do_sound(webview_t, void *arg) {
+  SoundReq *req = static_cast<SoundReq *>(arg);
+  sock_write_line("GOT " + req->qid + " {\"ok\":false}");
+  delete req;
+}
+static void do_share(webview_t, void *arg) { delete static_cast<ShareReq *>(arg); }
+#endif
+
 // --- custom context menu (macOS) -------------------------------------------------
 // CTXBEGIN, ITEM/SEP lines, CTXEND replaces the webview's right-click menu
 // with the declared items (clicks -> `CTX <id>`); CTXCLEAR restores WebKit's
@@ -1985,6 +2123,20 @@ static void do_get(webview_t w, void *arg) {
         json += buf;
       }
       json += "]";
+    } else if (req->what == "frontmost") {
+      // The active app right now (palettes: who focus returns to on hide()).
+      NSRunningApplication *fa =
+          [[NSWorkspace sharedWorkspace] frontmostApplication];
+      if (fa) {
+        json = std::string("{\"name\":") +
+               (fa.localizedName ? json_escape([fa.localizedName UTF8String])
+                                 : "null") +
+               ",\"bundleId\":" +
+               (fa.bundleIdentifier
+                    ? json_escape([fa.bundleIdentifier UTF8String])
+                    : "null") +
+               ",\"pid\":" + std::to_string((long)fa.processIdentifier) + "}";
+      }
     } else if (req->what == "debug:trafficpos") {
       NSWindow *win = (NSWindow *)webview_get_native_handle(
           w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
@@ -3081,6 +3233,48 @@ static void sock_read_loop() {
         int set = rest == "set 1" ? 1 : rest == "set 0" ? 0 : -1;
         webview_dispatch(g_w, do_login,
                          new LoginReq{line.substr(6, sp - 6), set});
+      } else if (line.rfind("POWER ", 0) == 0) {
+        // POWER <qid> on\t<display01>\t<reason> | POWER <qid> off
+        size_t sp = line.find(' ', 6);
+        if (sp == std::string::npos) continue;
+        std::vector<std::string> p = split_tabs(line.substr(sp + 1));
+        PowerReq *req = new PowerReq;
+        req->qid = line.substr(6, sp - 6);
+        req->on = p.size() > 0 && p[0] == "on";
+        req->display = p.size() > 1 && p[1] == "1";
+        req->reason = p.size() > 2 ? wire_unescape(p[2]) : "";
+        webview_dispatch(g_w, do_power, req);
+      } else if (line.rfind("SOUND ", 0) == 0) {
+        size_t sp = line.find(' ', 6);
+        SoundReq *req = new SoundReq;
+        if (sp == std::string::npos) {
+          req->qid = line.substr(6);
+        } else {
+          req->qid = line.substr(6, sp - 6);
+          req->target = wire_unescape(line.substr(sp + 1));
+        }
+        webview_dispatch(g_w, do_sound, req);
+      } else if (line.rfind("SHARE", 0) == 0 &&
+                 (line[5] == ' ' || line[5] == '@')) {
+        std::string winid = "main";
+        size_t body = 6;
+        if (line[5] == '@') {
+          size_t sp = line.find(' ', 6);
+          if (sp == std::string::npos) continue;
+          winid = line.substr(6, sp - 6);
+          body = sp + 1;
+        }
+        std::vector<std::string> p = split_tabs(line.substr(body));
+        ShareReq *req = new ShareReq;
+        req->win = winid;
+        req->x = p.size() > 0 ? std::atoi(p[0].c_str()) : 0;
+        req->y = p.size() > 1 ? std::atoi(p[1].c_str()) : 0;
+        req->text = p.size() > 2 ? wire_unescape(p[2]) : "";
+        req->url = p.size() > 3 ? wire_unescape(p[3]) : "";
+        for (size_t i = 4; i < p.size(); i++)
+          if (!p[i].empty())
+            req->paths.push_back(wire_unescape(p[i]));
+        webview_dispatch(g_w, do_share, req);
       } else if (line == "BADGE" || line.rfind("BADGE ", 0) == 0) {
         webview_dispatch(g_w, do_badge,
                          new std::string(

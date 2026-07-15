@@ -69,6 +69,15 @@
   <section>
 
     <div class="rel">
+      <h2>0.14.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b><code>app.power</code></b> — <code>preventSleep(reason, { display? })</code> / <code>allowSleep()</code>: one IOPMAssertion instead of spawning <code>caffeinate</code> — it dies with the process, so a crashed app never wedges the Mac's sleep. The reason shows in <code>pmset -g assertions</code>.</li>
+        <li><b><code>app.frontmostApp()</code></b> — <code>{ name, bundleId, pid }</code> of the active app (who focus returns to after <code>hide()</code> — pairs with <code>paste()</code>).</li>
+        <li><b><code>app.beep()</code> / <code>app.playSound(target)</code></b> — system beep, a system sound by name (<code>'Ping'</code>), or an audio file path; <code>false</code> if it didn't load. No more <code>afplay</code> spawns.</li>
+        <li><b><code>win.share({ text?, url?, paths?, x?, y? })</code></b> — the native share sheet, anchored at page coordinates (pass the click's <code>clientX</code>/<code>clientY</code>). Backend twin: <code>app.window(id).share(opts)</code>.</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.13.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b><code>app.shell</code></b> — <code>open(target)</code> (URL with any scheme, or a file path, in its default app), <code>reveal(path)</code> (show in Finder), <code>trash(path)</code> (move to the Trash — recoverable, prefer it over deleting user files). Each resolves <code>true</code> or rejects with the reason. No more <code>open</code> spawns.</li>
