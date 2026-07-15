@@ -4,6 +4,22 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.15.0 — 2026-07-14
+
+Round three: preview, capture, and idle.
+
+- **`app.quickLook(paths)`** — the real Finder-spacebar preview panel
+  (QLPreviewPanel — no `qlmanage` spawn) for any file(s) tinyjs apps
+  manage; an array pages with the arrow keys, `quickLook()` closes.
+- **`app.captureScreen(screenId?)`** — screenshot a display via
+  ScreenCaptureKit → `{ path, width, height }` (a png in the temp dir the
+  caller owns). Takes a display id from `screens()`, defaults to the
+  primary. Needs the `'screen'` permission and macOS 14+ — rejects with
+  the reason otherwise (the framework is weak-linked, so older systems
+  still launch).
+- **`app.idleTime()`** — seconds since the user's last input, session-wide
+  (pause pollers / dim UI when they walk away).
+
 ## 0.14.0 — 2026-07-14
 
 More stop-shelling-out, round two.

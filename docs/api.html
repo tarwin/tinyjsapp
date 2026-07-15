@@ -436,7 +436,18 @@ await <b>tiny.app.playSound</b>('Ping');   <i>// -&gt; false if it didn't load</
 
 <i>// native share sheet — anchor it at the click</i>
 btn.addEventListener('click', (e) =&gt;
-  <b>tiny.win.share</b>({ url, text, paths, x: e.clientX, y: e.clientY }));</pre>
+  <b>tiny.win.share</b>({ url, text, paths, x: e.clientX, y: e.clientY }));
+
+<i>// seconds since the user's last input — pause polling when they're away</i>
+await <b>tiny.app.idleTime</b>();
+
+<i>// Quick Look — the Finder-spacebar preview panel (no qlmanage spawn)</i>
+<b>tiny.app.quickLook</b>('/path/photo.heic');   <i>// array pages with arrow keys</i>
+<b>tiny.app.quickLook</b>();                     <i>// close</i>
+
+<i>// screenshot a display (id from screens(); default primary) — png in the</i>
+<i>// temp dir, you own the file. Needs the 'screen' permission + macOS 14.</i>
+const { path, width, height } = await <b>tiny.app.captureScreen</b>();</pre>
   </section>
 
   <section id="system">

@@ -98,7 +98,8 @@ export function init(app) {          // window is up
   // shell.open(target)/reveal(path)/trash(path),
   // launchAtLogin.get()/set(v), dock.setBadge(text)/bounce(opts),
   // power.preventSleep(reason, opts)/allowSleep(), frontmostApp(),
-  // beep(), playSound(target), window(id).share(opts)
+  // beep(), playSound(target), window(id).share(opts),
+  // idleTime(), quickLook(paths), captureScreen(screenId)
 }
 
 export function onMenu(id, app) {}   // optional: handle menu clicks backend-side
@@ -292,6 +293,19 @@ await tiny.app.playSound('/path/to/done.aiff');
 btn.addEventListener('click', (e) =>
   tiny.win.share({ url: 'https://tinyjs.app', text: 'Look at this',
                    paths: ['/tmp/report.pdf'], x: e.clientX, y: e.clientY }));
+
+// seconds since the user's last input (pause polling when they're away)
+const idle = await tiny.app.idleTime();
+
+// Quick Look — the Finder-spacebar preview panel (no qlmanage spawn);
+// an array pages with the arrow keys, no args closes it
+tiny.app.quickLook('/path/to/photo.heic');
+tiny.app.quickLook([a, b, c]);   tiny.app.quickLook();
+
+// screenshot a display (id from screens(); default primary) — png in the
+// temp dir, you own the file. Needs the 'screen' permission + macOS 14;
+// rejects with the reason otherwise.
+const { path, width, height } = await tiny.app.captureScreen();
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
 const file  = await tiny.win.openFile();     // path | null

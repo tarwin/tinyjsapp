@@ -423,6 +423,25 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // audio file path. Resolve false if the name/file didn't load.
     async beep() { return (await ask('SOUND'))?.ok === true; },
     async playSound(target) { return (await ask('SOUND', esc(target)))?.ok === true; },
+    // Seconds since the user's last input, session-wide — pause polling /
+    // dim UI when they walk away.
+    idleTime: async () => (await query('idle'))?.seconds ?? 0,
+    // Quick Look (the Finder-spacebar preview panel, no qlmanage spawn).
+    // Path or array of paths (arrow keys page through); quickLook() closes.
+    quickLook(paths) {
+      const list = paths == null ? [] : [].concat(paths);
+      send('QUICKLOOK' + (list.length ? ' ' + list.map(esc).join('\t') : ''));
+      return true;
+    },
+    // Screenshot a display (id from screens(); default primary) ->
+    // { path (png in the temp dir — the caller owns it), width, height }.
+    // Needs the 'screen' permission and macOS 14+; throws with the reason
+    // otherwise.
+    async captureScreen(screenId) {
+      const r = await ask('CAPTURE', String(screenId ?? 0));
+      if (!r?.ok) throw new Error(r?.error ?? 'capture failed');
+      return { path: r.path, width: r.width, height: r.height };
+    },
     // Standard per-app directories (data/cache/logs are per app id, not
     // auto-created — tjs.makeDir(..., { recursive: true }) first write).
     // Prefer these over hardcoding ~/Library paths.
@@ -620,6 +639,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.frontmost': async () => app.frontmostApp(),
     'sound.play': async ({ target }) => (target ? app.playSound(target) : app.beep()),
     'win.share': async (p, _a, m) => forWin(m).share(p),
+    'app.idleTime': async () => app.idleTime(),
+    'app.quickLook': async ({ paths }) => app.quickLook(paths),
+    'app.captureScreen': async ({ screenId }) => app.captureScreen(screenId),
   };
   const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };

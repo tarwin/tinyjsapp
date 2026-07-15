@@ -66,7 +66,8 @@ export function init(app) {
   // paste(), permissions.check/request, mousePosition(), screens(),
   // paths, shell.open/reveal/trash, launchAtLogin.get/set,
   // dock.setBadge/bounce, power.preventSleep/allowSleep, frontmostApp(),
-  // beep()/playSound(target), window(id).share(opts),
+  // beep()/playSound(target), window(id).share(opts), idleTime(),
+  // quickLook(paths), captureScreen(screenId),
   // show({ activate: false })
 }
 
@@ -254,6 +255,12 @@ await tiny.app.playSound('Ping');        // system sound name or audio file
 
 // native share sheet — anchor at the click's clientX/clientY
 tiny.win.share({ text, url, paths, x: e.clientX, y: e.clientY });
+
+await tiny.app.idleTime();      // seconds since the user's last input
+tiny.app.quickLook(pathOrArray); tiny.app.quickLook();  // preview / close
+await tiny.app.captureScreen(screenId?);  // -> { path (png, yours), width,
+                                // height }; needs 'screen' perm + macOS 14,
+                                // rejects with the reason otherwise
 
 tiny.win.print();                           // native print panel
 

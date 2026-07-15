@@ -245,6 +245,13 @@ declare interface TinyPower {
   allowSleep(): Promise<boolean>;
 }
 
+/** A captured screenshot; path is a png in the temp dir the caller owns. */
+declare interface TinyCapture {
+  path: string;
+  width: number;
+  height: number;
+}
+
 declare interface TinyShareOptions {
   text?: string;
   url?: string;
@@ -400,6 +407,14 @@ declare interface Tiny {
     /** a system sound name ('Ping', 'Glass', …) or an audio file path;
      *  false if it didn't load */
     playSound(target: string): Promise<boolean>;
+    /** seconds since the user's last input, session-wide */
+    idleTime(): Promise<number>;
+    /** Quick Look panel for the path(s); no args closes it */
+    quickLook(paths?: string | string[] | null): Promise<any>;
+    /** screenshot a display (id from screens(); default primary) — png in
+     *  the temp dir, caller owns the file; needs the 'screen' permission
+     *  and macOS 14+, rejects with the reason otherwise */
+    captureScreen(screenId?: number): Promise<TinyCapture>;
   };
 
   tray: {
@@ -537,6 +552,14 @@ declare interface TinyApp {
   /** a system sound name ('Ping', 'Glass', …) or an audio file path;
    *  false if it didn't load */
   playSound(target: string): Promise<boolean>;
+  /** seconds since the user's last input, session-wide */
+  idleTime(): Promise<number>;
+  /** Quick Look panel for the path(s); no args closes it */
+  quickLook(paths?: string | string[] | null): boolean;
+  /** screenshot a display (id from screens(); default primary) — png in
+   *  the temp dir, caller owns the file; needs the 'screen' permission
+   *  and macOS 14+, rejects with the reason otherwise */
+  captureScreen(screenId?: number): Promise<TinyCapture>;
   update: {
     check(): Promise<{ available: boolean; current: string; latest: string | null }>;
     install(): Promise<boolean>;

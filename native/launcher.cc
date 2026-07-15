@@ -120,6 +120,14 @@
 //                         SHARE[@win] <x>\t<y>\t<text>\t<url>\t<path>…
 //                                                    native share sheet
 //                                                    anchored at page coords
+//                         QUICKLOOK [<path>\t…]      Quick Look panel for the
+//                                                    file(s); bare = close
+//                         CAPTURE <qid> <displayId>  screenshot a display
+//                                                    (0 = primary; needs the
+//                                                    'screen' permission +
+//                                                    macOS 14); answers GOT
+//                                                    <qid> {ok, path (png),
+//                                                    width, height, error}
 //                         PRINT                      native print panel
 //                         QUIT                       close the window
 //   launcher -> backend:  MENU <id>                  a custom menu item was
@@ -156,6 +164,8 @@
 #ifdef __APPLE__
 #import <AVFoundation/AVFoundation.h>
 #import <AppKit/AppKit.h>
+#import <Quartz/Quartz.h>             // QLPreviewPanel (Quick Look)
+#import <ScreenCaptureKit/ScreenCaptureKit.h> // weak-linked; macOS 14+ used
 #import <ServiceManagement/ServiceManagement.h>
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
@@ -1906,6 +1916,149 @@ static void do_sound(webview_t, void *arg) {
 static void do_share(webview_t, void *arg) { delete static_cast<ShareReq *>(arg); }
 #endif
 
+// --- quick look + screen capture (macOS) --------------------------------------------
+// QUICKLOOK drives the shared QLPreviewPanel (the Finder-spacebar preview,
+// no qlmanage spawn). CAPTURE screenshots a display via ScreenCaptureKit
+// (weak-linked; macOS 14+ and the 'screen' permission — errors cleanly
+// otherwise) and materializes a png in the temp dir, named per request:
+// the caller owns the file.
+
+struct QLReq {
+  std::vector<std::string> paths;
+};
+struct CaptureReq {
+  std::string qid;
+  long display; // CGDirectDisplayID; 0 = primary
+};
+
+#ifdef __APPLE__
+@interface TinyQLSource : NSObject <QLPreviewPanelDataSource>
+@property(strong) NSMutableArray<NSURL *> *items;
+@end
+@implementation TinyQLSource
+- (NSInteger)numberOfPreviewItemsInPreviewPanel:(QLPreviewPanel *)panel {
+  return (NSInteger)self.items.count;
+}
+- (id<QLPreviewItem>)previewPanel:(QLPreviewPanel *)panel
+              previewItemAtIndex:(NSInteger)idx {
+  return self.items[(NSUInteger)idx];
+}
+@end
+
+static TinyQLSource *g_ql_source = nil;
+
+static void do_quicklook(webview_t, void *arg) {
+  QLReq *req = static_cast<QLReq *>(arg);
+  @autoreleasepool {
+    if (!g_ql_source) {
+      g_ql_source = [[TinyQLSource alloc] init];
+      g_ql_source.items = [NSMutableArray array];
+    }
+    [g_ql_source.items removeAllObjects];
+    for (auto &p : req->paths)
+      [g_ql_source.items addObject:[NSURL fileURLWithPath:ns(p)]];
+    if (req->paths.empty()) {
+      if ([QLPreviewPanel sharedPreviewPanelExists] &&
+          [QLPreviewPanel sharedPreviewPanel].visible)
+        [[QLPreviewPanel sharedPreviewPanel] orderOut:nil];
+    } else {
+      QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
+      panel.dataSource = g_ql_source;
+      [panel reloadData];
+      [panel makeKeyAndOrderFront:nil];
+    }
+  }
+  delete req;
+}
+
+static void capture_fail(const std::string &qid, const std::string &err) {
+  sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":" +
+                  json_escape(err) + "}");
+}
+
+static void do_capture(webview_t, void *arg) {
+  CaptureReq *req = static_cast<CaptureReq *>(arg);
+  std::string qid = req->qid;
+  long want = req->display;
+  delete req;
+  if (@available(macOS 14.0, *)) {
+    [SCShareableContent
+        getShareableContentWithCompletionHandler:^(SCShareableContent *content,
+                                                   NSError *error) {
+          if (!content) {
+            capture_fail(qid, error ? [error.localizedDescription UTF8String]
+                                    : "no shareable content "
+                                      "(screen-recording permission?)");
+            return;
+          }
+          SCDisplay *disp = nil;
+          for (SCDisplay *d in content.displays)
+            if (!want || (long)d.displayID == want) {
+              disp = d;
+              break;
+            }
+          if (!disp) {
+            capture_fail(qid, "no such display");
+            return;
+          }
+          CGFloat scale = 1;
+          for (NSScreen *s in [NSScreen screens])
+            if ([s.deviceDescription[@"NSScreenNumber"] longValue] ==
+                (long)disp.displayID) {
+              scale = s.backingScaleFactor;
+              break;
+            }
+          SCContentFilter *filter =
+              [[SCContentFilter alloc] initWithDisplay:disp
+                                      excludingWindows:@[]];
+          SCStreamConfiguration *cfg = [[SCStreamConfiguration alloc] init];
+          cfg.width = (size_t)(disp.width * scale);
+          cfg.height = (size_t)(disp.height * scale);
+          cfg.showsCursor = NO;
+          [SCScreenshotManager
+              captureImageWithFilter:filter
+                        configuration:cfg
+                    completionHandler:^(CGImageRef img, NSError *err2) {
+                      if (!img) {
+                        capture_fail(
+                            qid, err2 ? [err2.localizedDescription UTF8String]
+                                      : "capture failed");
+                        return;
+                      }
+                      NSBitmapImageRep *rep =
+                          [[NSBitmapImageRep alloc] initWithCGImage:img];
+                      NSData *png = [rep
+                          representationUsingType:NSBitmapImageFileTypePNG
+                                       properties:@{}];
+                      std::string p =
+                          std::string([NSTemporaryDirectory() UTF8String]) +
+                          "tinyjs-shot-" + std::to_string(getpid()) + "-" +
+                          qid + ".png";
+                      if (!png || ![png writeToFile:ns(p) atomically:YES]) {
+                        capture_fail(qid, "png write failed");
+                        return;
+                      }
+                      sock_write_line(
+                          "GOT " + qid + " {\"ok\":true,\"path\":" +
+                          json_escape(p) +
+                          ",\"width\":" + std::to_string((long)rep.pixelsWide) +
+                          ",\"height\":" +
+                          std::to_string((long)rep.pixelsHigh) + "}");
+                    }];
+        }];
+  } else {
+    capture_fail(qid, "needs macOS 14");
+  }
+}
+#else
+static void do_quicklook(webview_t, void *arg) { delete static_cast<QLReq *>(arg); }
+static void do_capture(webview_t, void *arg) {
+  CaptureReq *req = static_cast<CaptureReq *>(arg);
+  sock_write_line("GOT " + req->qid + " {\"ok\":false,\"error\":\"unsupported\"}");
+  delete req;
+}
+#endif
+
 // --- custom context menu (macOS) -------------------------------------------------
 // CTXBEGIN, ITEM/SEP lines, CTXEND replaces the webview's right-click menu
 // with the declared items (clicks -> `CTX <id>`); CTXCLEAR restores WebKit's
@@ -2123,6 +2276,14 @@ static void do_get(webview_t w, void *arg) {
         json += buf;
       }
       json += "]";
+    } else if (req->what == "idle") {
+      // Seconds since the user's last input, session-wide (pause polling /
+      // dim UI when the user walks away).
+      double s = CGEventSourceSecondsSinceLastEventType(
+          kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType);
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "{\"seconds\":%.3f}", s);
+      json = buf;
     } else if (req->what == "frontmost") {
       // The active app right now (palettes: who focus returns to on hide()).
       NSRunningApplication *fa =
@@ -3275,6 +3436,24 @@ static void sock_read_loop() {
           if (!p[i].empty())
             req->paths.push_back(wire_unescape(p[i]));
         webview_dispatch(g_w, do_share, req);
+      } else if (line == "QUICKLOOK" || line.rfind("QUICKLOOK ", 0) == 0) {
+        QLReq *req = new QLReq;
+        if (line.size() > 10)
+          for (auto &p : split_tabs(line.substr(10)))
+            if (!p.empty())
+              req->paths.push_back(wire_unescape(p));
+        webview_dispatch(g_w, do_quicklook, req);
+      } else if (line.rfind("CAPTURE ", 0) == 0) {
+        size_t sp = line.find(' ', 8);
+        CaptureReq *req = new CaptureReq;
+        if (sp == std::string::npos) {
+          req->qid = line.substr(8);
+          req->display = 0;
+        } else {
+          req->qid = line.substr(8, sp - 8);
+          req->display = std::atol(line.c_str() + sp + 1);
+        }
+        webview_dispatch(g_w, do_capture, req);
       } else if (line == "BADGE" || line.rfind("BADGE ", 0) == 0) {
         webview_dispatch(g_w, do_badge,
                          new std::string(

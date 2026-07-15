@@ -69,6 +69,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.15.0 <span class="date">2026-07-14</span></h2>
+      <ul>
+        <li><b><code>app.quickLook(paths)</code></b> — the real Finder-spacebar preview panel (QLPreviewPanel, no <code>qlmanage</code> spawn); an array pages with the arrow keys, <code>quickLook()</code> closes.</li>
+        <li><b><code>app.captureScreen(screenId?)</code></b> — screenshot a display via ScreenCaptureKit → <code>{ path, width, height }</code> (png in the temp dir, yours to keep). Display id from <code>screens()</code>, default primary. Needs the <code>'screen'</code> permission + macOS 14; rejects with the reason otherwise.</li>
+        <li><b><code>app.idleTime()</code></b> — seconds since the user's last input, session-wide (pause pollers when they walk away).</li>
+      </ul>
+    </div>
+    <div class="rel">
       <h2>0.14.0 <span class="date">2026-07-14</span></h2>
       <ul>
         <li><b><code>app.power</code></b> — <code>preventSleep(reason, { display? })</code> / <code>allowSleep()</code>: one IOPMAssertion instead of spawning <code>caffeinate</code> — it dies with the process, so a crashed app never wedges the Mac's sleep. The reason shows in <code>pmset -g assertions</code>.</li>

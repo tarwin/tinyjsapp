@@ -186,6 +186,14 @@
       // file path -> false if the name/file didn't load.
       beep: () => call('sound.play', {}),
       playSound: (target) => call('sound.play', { target }),
+      // Seconds since the user's last input (pause polling when idle).
+      idleTime: () => call('app.idleTime'),
+      // Quick Look panel for path(s); quickLook() closes it.
+      quickLook: (paths) => call('app.quickLook', { paths }),
+      // Screenshot a display (id from screens(); default primary) ->
+      // { path (png temp file — copy to keep), width, height }. Needs the
+      // 'screen' permission + macOS 14; rejects with the reason otherwise.
+      captureScreen: (screenId) => call('app.captureScreen', { screenId }),
     },
 
     tray: {
