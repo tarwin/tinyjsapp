@@ -3,10 +3,13 @@
 // Spawns the native webview launcher and bridges it to your API over a Unix
 // domain socket in a private (0700) temp dir. No network, no ports.
 //
-// Wire protocol (newline-delimited; payloads are JSON so never contain raw \n):
+// Wire protocol (newline-delimited; payloads are JSON, or wire-escaped via
+// esc() so they never contain a raw \n that would break line framing):
 //   launcher -> backend:  CALL <id> <json-args-array>
 //   backend -> launcher:  RET <id> <status> <json>    resolve/reject a call
 //                         EVAL <js>                   run JS in the page
+//                                                     (js is esc()-escaped;
+//                                                     launcher wire_unescapes)
 //                         TITLE <text>                set window title
 //                         SIZE <w> <h>                resize window
 //                         DLG <id> <op>               native dialog; launcher
@@ -251,7 +254,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
 
   function push(event, data) {
     // Broadcast so secondary windows receive backend events too.
-    send('EVAL@* window.__emit && window.__emit(' + JSON.stringify({ event, data }) + ')');
+    // esc() so any backslash in the JSON survives wire_unescape on the launcher.
+    send('EVAL@* ' + esc('window.__emit && window.__emit(' + JSON.stringify({ event, data }) + ')'));
   }
 
   const app = {
@@ -260,7 +264,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     setSize(w, h) { send(`SIZE ${w | 0} ${h | 0}`); },
     // Not JS eval(): sends script to the app's own page via webview_eval,
     // the same channel push() uses. Never receives external input.
-    eval(js) { send('EVAL ' + String(js).replace(/\n/g, ' ')); },
+    // esc() keeps newlines intact — flattening them would let a // line
+    // comment swallow the rest of a multi-line snippet.
+    eval(js) { send('EVAL ' + esc(js)); },
     // Re-render the page from disk. `newHtml` only applies to materialized
     // pages (html-string mode); direct htmlPath pages always reload the
     // real file, which is the point.
@@ -695,9 +701,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         ? cmd + (rest != null ? ' ' + rest : '')
         : cmd + '@' + id + (rest != null ? ' ' + rest : ''));
       return {
-        eval: (js) => t('EVAL', String(js).replace(/\n/g, ' ')),
+        eval: (js) => t('EVAL', esc(js)),
         push: (event, data) =>
-          t('EVAL', 'window.__emit && window.__emit(' + JSON.stringify({ event, data }) + ')'),
+          t('EVAL', esc('window.__emit && window.__emit(' + JSON.stringify({ event, data }) + ')')),
         close: () => { if (id !== 'main') send('WINCLOSE ' + id); },
         setTitle: (v) => t('TITLE', String(v).replace(/\n/g, ' ')),
         setSize: (w2, h2) => t('SIZE', `${w2 | 0} ${h2 | 0}`),

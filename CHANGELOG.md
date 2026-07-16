@@ -18,6 +18,17 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.22.4 — 2026-07-16
+
+- **Multi-line JavaScript sent to the page keeps its newlines.** Script pushed
+  across the bridge — `app.eval`, a window handle's `eval`, and the event
+  pushes behind `app.push` / `push` — was flattened onto a single line before
+  it crossed the socket, so a `//` line comment silently commented out
+  everything after it (a whole multi-line snippet could vanish after its first
+  comment). Snippets now travel wire-escaped and are unescaped in the launcher,
+  so real newlines survive intact; event payloads containing newlines or
+  backslashes round-trip unchanged.
+
 ## 0.22.3 — 2026-07-15
 
 - **`tinyjs notarize` fails fast on the wrong signature.** It now inspects what

@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.22.4 <span class="date">2026-07-16</span></h2>
+      <ul>
+        <li><b>Multi-line JavaScript sent to the page keeps its newlines.</b> Script pushed across the bridge — <code>app.eval</code>, a window handle's <code>eval</code>, and the event pushes behind <code>app.push</code> / <code>push</code> — was flattened onto a single line before it crossed the socket, so a <code>//</code> line comment silently commented out everything after it (a whole multi-line snippet could vanish after its first comment). Snippets now travel wire-escaped and are unescaped in the launcher, so real newlines survive intact; event payloads containing newlines or backslashes round-trip unchanged.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.22.3 <span class="date">2026-07-15</span></h2>
       <ul>
         <li><b><code>tinyjs notarize</code> fails fast on the wrong signature.</b> It now inspects what the built <code>.app</code> is actually signed with (via <code>codesign</code>) and stops immediately unless that's a <em>Developer ID Application</em> certificate — naming what it found (ad-hoc, unsigned, or e.g. an "Apple Development" cert) instead of uploading, waiting minutes, and coming back with Apple's opaque "Invalid". It checks the artifact on disk, not just the configured identity, so a build that predates a config change is caught too.</li>

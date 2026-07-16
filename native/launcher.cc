@@ -15,6 +15,8 @@
 //   launcher -> backend:  CALL <winid>:<seq> <json-args-array>
 //   backend -> launcher:  RET <id> <status> <json>   resolve/reject a call
 //                         EVAL <js>                  run JS in the page
+//                                                    (js is esc()-escaped;
+//                                                    wire_unescape restores it)
 //                         TITLE <text>               set window title
 //                         SIZE <w> <h>               resize window
 //                         DLG <id> <op>              run a native dialog on the
@@ -4652,15 +4654,17 @@ static void sock_read_loop() {
       } else if (line.rfind("EVAL", 0) == 0 &&
                  (line[4] == ' ' || line[4] == '@')) {
         // EVAL <js> (main) | EVAL@* <js> (broadcast) | EVAL@<id> <js>
+        // js is esc()-escaped by the bridge so multi-line snippets keep their
+        // newlines (a flattened // comment would swallow the rest); undo it.
         EvalReq *er = new EvalReq;
         if (line[4] == ' ') {
           er->win = "main";
-          er->js = line.substr(5);
+          er->js = wire_unescape(line.substr(5));
         } else {
           size_t sp = line.find(' ', 5);
           if (sp == std::string::npos) { delete er; continue; }
           er->win = line.substr(5, sp - 5);
-          er->js = line.substr(sp + 1);
+          er->js = wire_unescape(line.substr(sp + 1));
         }
         webview_dispatch(g_w, do_eval_win, er);
       } else if (line.rfind("TITLE@", 0) == 0) {
