@@ -48,6 +48,12 @@ declare interface TinyChromeOptions {
    *  edges, shadow, and focus are kept. Set it in tinyjs.json "chrome" to
    *  apply before first paint (no rounded→square flash on launch). */
   squareCorners?: boolean;
+  /** make the click that focuses an unfocused window ALSO reach the page.
+   *  macOS normally swallows that first click into web content ("click once
+   *  to focus, again to act"); true delivers it straight through — useful for
+   *  palettes/toolbars and for DOM drag regions on unfocused windows.
+   *  Off by default (matches the platform). */
+  acceptsFirstMouse?: boolean;
 }
 
 /** 'floating' = always-on-top; 'overlay' floats above almost everything
@@ -118,6 +124,7 @@ declare interface TinyWinState {
     transparent: boolean;
     vibrancy: string | null;
     squareCorners: boolean;
+    acceptsFirstMouse: boolean;
   };
   screen: { width: number; height: number; scale: number };
 }

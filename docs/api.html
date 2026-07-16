@@ -235,6 +235,10 @@ const screens = await <b>tiny.app.screens</b>();
 <i>// no native titlebar drag — use data-tiny-drag; resize/shadow/focus kept).</i>
 <i>// Put it in tinyjs.json "chrome" to apply before first paint.</i>
 <b>tiny.win.setChrome</b>({ squareCorners: true });
+<i>// acceptsFirstMouse: true → the click that focuses an unfocused window ALSO</i>
+<i>// reaches the page (macOS swallows it by default). Good for palettes/toolbars</i>
+<i>// and DOM drag regions on unfocused windows.</i>
+<b>tiny.win.setChrome</b>({ acceptsFirstMouse: true });
 <i>// drag regions: &lt;header data-tiny-drag&gt; — drag moves, double-click zooms</i>
 <b>tiny.win.startDrag</b>();  <b>tiny.win.zoom</b>();
 

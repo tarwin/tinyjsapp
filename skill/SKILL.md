@@ -33,7 +33,7 @@ tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        update?: { url: "https://…/manifest.json" },
                        urlScheme?: "myapp", fileExtensions?: ["md"],
                        permissions?: { microphone?: "why", camera?: "why" },
-                       chrome?: { frame, trafficLights, transparent, vibrancy },
+                       chrome?: { frame, trafficLights, transparent, vibrancy, squareCorners, acceptsFirstMouse },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build: "npm run build", dist: "dist",
                                     dev: "npm run dev", devUrl: "http://127.0.0.1:5173" } }
@@ -138,6 +138,10 @@ tiny.win.setChrome({ frame: false, trafficLights: false,
 // data-tiny-drag; resize/shadow/focus kept). Put it in tinyjs.json "chrome"
 // to apply before first paint (no rounded→square flash).
 tiny.win.setChrome({ squareCorners: true });
+// acceptsFirstMouse: true → the click that focuses an unfocused window also
+// reaches the page (macOS swallows it by default). Good for palettes/toolbars
+// and DOM drag regions on unfocused windows.
+tiny.win.setChrome({ acceptsFirstMouse: true });
 // drag regions: <header data-tiny-drag> — drag moves window, dblclick zooms;
 // interactive children excluded (data-tiny-nodrag to opt out manually)
 tiny.win.setAlwaysOnTop(v); tiny.win.setResizable(v);

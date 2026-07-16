@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.22.5 <span class="date">2026-07-16</span></h2>
+      <ul>
+        <li><b><code>chrome: { acceptsFirstMouse: true }</code>.</b> Opt a window into delivering the click that focuses it straight through to the page. macOS normally swallows that first click into web content ("click once to focus, again to act"), which also bites between an app's own windows and makes an unfocused window's DOM drag region need an extra click. On per window (main or secondary), via <code>tiny.win.setChrome</code>, <code>app.openWindow</code>'s <code>chrome</code>, or <code>tinyjs.json</code> <code>"chrome"</code> (applied before first paint); reported back in <code>getState().chrome</code>. Off by default — matches the platform, no change for existing apps.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.22.4 <span class="date">2026-07-16</span></h2>
       <ul>
         <li><b>Multi-line JavaScript sent to the page keeps its newlines.</b> Script pushed across the bridge — <code>app.eval</code>, a window handle's <code>eval</code>, and the event pushes behind <code>app.push</code> / <code>push</code> — was flattened onto a single line before it crossed the socket, so a <code>//</code> line comment silently commented out everything after it (a whole multi-line snippet could vanish after its first comment). Snippets now travel wire-escaped and are unescaped in the launcher, so real newlines survive intact; event payloads containing newlines or backslashes round-trip unchanged.</li>

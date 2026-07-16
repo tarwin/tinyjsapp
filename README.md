@@ -181,11 +181,17 @@ tiny.win.setChrome({ squareCorners: true });
 // declare it in tinyjs.json "chrome": { "squareCorners": true } so it
 // applies before first paint (no rounded→square flash on launch).
 
+// acceptsFirstMouse: true delivers the click that focuses an unfocused window
+// through to the page (macOS swallows it by default — "click once to focus,
+// again to act"). Handy for palettes/toolbars and DOM drag regions.
+tiny.win.setChrome({ acceptsFirstMouse: true });
+
 // read the window back
 const s = await tiny.win.getState();
 // { x, y, width, height, fullscreen, minimized, visible, focused,
 //   alwaysOnTop, resizable, chrome: { frame, trafficLights, transparent,
-//   vibrancy }, screen: { width, height, scale } }
+//   vibrancy, squareCorners, acceptsFirstMouse },
+//   screen: { width, height, scale } }
 
 // files dragged onto the window arrive with REAL filesystem paths
 tiny.win.onDrop((paths) => tiny.log(paths.join(', ')));

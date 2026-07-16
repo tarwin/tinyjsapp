@@ -1557,6 +1557,7 @@ struct DragOutReq {
 
 #ifdef __APPLE__
 static WKWebView *webview_for_id(webview_t w, const std::string &id); // below
+static bool get_accepts_first_mouse(WKWebView *wv);                   // below
 
 @interface TinyDragSource : NSObject <NSDraggingSource>
 @end
@@ -3034,6 +3035,7 @@ static void do_get(webview_t w, void *arg) {
     } else if (req->what == "win" || req->what.rfind("win:", 0) == 0) {
       std::string wid = req->what == "win" ? "main" : req->what.substr(4);
       NSWindow *win = window_for_id(w, wid);
+      WKWebView *gwv = webview_for_id(w, wid);
       if (win) {
         NSRect f = win.frame;
         // width/height are frame size — the same units setSize uses, so
@@ -3049,7 +3051,8 @@ static void do_get(webview_t w, void *arg) {
             "\"alwaysOnTop\":%s,\"resizable\":%s,"
             "\"clickThrough\":%s,\"level\":\"%s\",\"allSpaces\":%s,"
             "\"chrome\":{\"frame\":%s,\"trafficLights\":%s,"
-            "\"transparent\":%s,\"vibrancy\":%s,\"squareCorners\":%s},"
+            "\"transparent\":%s,\"vibrancy\":%s,\"squareCorners\":%s,"
+            "\"acceptsFirstMouse\":%s},"
             "\"screen\":{\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
             (int)f.origin.x, (int)(top - NSMaxY(f)), (int)f.size.width,
             (int)f.size.height, fs ? "true" : "false",
@@ -3085,6 +3088,7 @@ static void do_get(webview_t w, void *arg) {
                 : "null",
             // Square = borderless = no Titled style bit.
             (win.styleMask & NSWindowStyleMaskTitled) ? "false" : "true",
+            get_accepts_first_mouse(gwv) ? "true" : "false",
             (int)scr.frame.size.width, (int)scr.frame.size.height,
             (double)scr.backingScaleFactor);
         json = buf;
@@ -3702,7 +3706,7 @@ static void do_voices(webview_t, void *arg) {
 
 struct ChromeReq {
   std::string win = "main";
-  std::string frame, traffic, transparent, vibrancy, square;
+  std::string frame, traffic, transparent, vibrancy, square, first_mouse;
 };
 
 #ifdef __APPLE__
@@ -3789,6 +3793,36 @@ static void ensure_window_can_key(Class cls) {
   IMP yes = (IMP)(+[](id, SEL) -> BOOL { return YES; });
   class_replaceMethod(cls, @selector(canBecomeKeyWindow), yes, "c@:");
   class_replaceMethod(cls, @selector(canBecomeMainWindow), yes, "c@:");
+}
+
+// First-mouse ("click-through focus"): WKWebView answers NO to
+// acceptsFirstMouse: — Apple's guard against stray clicks into web content —
+// so a click that only makes the window key is swallowed and the page never
+// sees the mousedown (the classic "click once to focus, again to act", and
+// why an unfocused window's DOM drag region needs an extra click). We opt in
+// per window: a swizzle on WKWebView returns a per-instance flag (default NO,
+// exactly Apple's behavior), set via an associated object so only windows
+// that asked for it change.
+static const void *kFirstMouseKey = &kFirstMouseKey;
+
+static void set_accepts_first_mouse(WKWebView *wv, bool on) {
+  if (wv)
+    objc_setAssociatedObject(wv, kFirstMouseKey, @(on),
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static bool get_accepts_first_mouse(WKWebView *wv) {
+  return wv && [objc_getAssociatedObject(wv, kFirstMouseKey) boolValue];
+}
+
+static void install_first_mouse_hook() {
+  // Instances the webview library creates are plain WKWebView, so patching the
+  // class reaches them; the per-instance flag keeps every other webview at NO.
+  swizzle([WKWebView class], @selector(acceptsFirstMouse:),
+          (IMP)(+[](id self, SEL, NSEvent *) -> BOOL {
+            return get_accepts_first_mouse((WKWebView *)self);
+          }),
+          "c@:@");
 }
 
 // Switch a window between titled (rounded corners) and borderless (square).
@@ -3900,6 +3934,10 @@ static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
         g_chrome_square = sq;
       apply_square(win, sq);
     }
+    // First-mouse is a per-view flag on the webview (survives styleMask/size
+    // rewrites, so no reapply needed).
+    if (!req->first_mouse.empty())
+      set_accepts_first_mouse(wv, req->first_mouse == "1");
 }
 
 static void do_chrome(webview_t w, void *arg) {
@@ -4105,7 +4143,7 @@ struct WinOpenReq {
   std::string id, page, title;
   int width = 600, height = 400;
   // Chrome + position applied BEFORE the window is shown (no titlebar flash).
-  std::string frame, traffic, transparent, vibrancy, square; // '' = default
+  std::string frame, traffic, transparent, vibrancy, square, first_mouse; // '' = default
   bool hasPos = false;
   int x = 0, y = 0;
 };
@@ -4174,7 +4212,7 @@ static void do_winopen(webview_t w, void *arg) {
     // jumps from center. The slot exists now (tw is in g_windows).
     if (!req->frame.empty() || !req->traffic.empty() ||
         !req->transparent.empty() || !req->vibrancy.empty() ||
-        !req->square.empty()) {
+        !req->square.empty() || !req->first_mouse.empty()) {
       ChromeReq cr;
       cr.win = req->id;
       cr.frame = req->frame;
@@ -4182,6 +4220,7 @@ static void do_winopen(webview_t w, void *arg) {
       cr.transparent = req->transparent;
       cr.vibrancy = req->vibrancy;
       cr.square = req->square;
+      cr.first_mouse = req->first_mouse;
       NSVisualEffectView **effect = effect_slot_for(req->id);
       if (effect)
         apply_chrome_fields(win, wv, effect, false, &cr);
@@ -4243,7 +4282,7 @@ struct ReplyReq { std::string composite; int status; std::string json; };
 struct WinOpenReq {
   std::string id, page, title;
   int width, height;
-  std::string frame, traffic, transparent, vibrancy, square;
+  std::string frame, traffic, transparent, vibrancy, square, first_mouse;
   bool hasPos;
   int x, y;
 };
@@ -4686,7 +4725,8 @@ static void sock_read_loop() {
         std::sscanf(line.c_str() + 5, "%d %d", &s->width, &s->height);
         webview_dispatch(g_w, do_size, s);
       } else if (line.rfind("WINOPEN ", 0) == 0) {
-        // <id>\t<page>\t<title>\t<WxH>[\t<frame>\t<traffic>\t<transp>\t<vib>\t<x>\t<y>]
+        // <id>\t<page>\t<title>\t<WxH>[\t<frame>\t<traffic>\t<transp>\t<vib>
+        //   \t<square>\t<firstMouse>\t<x>\t<y>]
         std::vector<std::string> p = split_tabs(line.substr(8));
         WinOpenReq *wr = new WinOpenReq;
         wr->id = p.size() > 0 ? p[0] : "";
@@ -4699,10 +4739,11 @@ static void sock_read_loop() {
         wr->transparent = p.size() > 6 ? p[6] : "";
         wr->vibrancy = p.size() > 7 ? p[7] : "";
         wr->square = p.size() > 8 ? p[8] : "";
-        if (p.size() > 10 && !p[9].empty() && !p[10].empty()) {
+        wr->first_mouse = p.size() > 9 ? p[9] : "";
+        if (p.size() > 11 && !p[10].empty() && !p[11].empty()) {
           wr->hasPos = true;
-          wr->x = std::atoi(p[9].c_str());
-          wr->y = std::atoi(p[10].c_str());
+          wr->x = std::atoi(p[10].c_str());
+          wr->y = std::atoi(p[11].c_str());
         }
         webview_dispatch(g_w, do_winopen, wr);
       } else if (line.rfind("WINCLOSE ", 0) == 0) {
@@ -4850,6 +4891,7 @@ static void sock_read_loop() {
         req->transparent = p.size() > 2 ? p[2] : "";
         req->vibrancy = p.size() > 3 ? p[3] : "";
         req->square = p.size() > 4 ? p[4] : "";
+        req->first_mouse = p.size() > 5 ? p[5] : "";
         webview_dispatch(g_w, do_chrome, req);
       } else if (line == "DRAGWIN") {
         webview_dispatch(g_w, do_dragwin, nullptr);
@@ -5373,6 +5415,7 @@ int main(int argc, char *argv[]) {
   install_close_hook(g_w);
   install_drop_hook();
   install_media_capture_hook();
+  install_first_mouse_hook();
   install_ctx_hook();
   install_system_observers();
   install_open_handlers();
@@ -5390,6 +5433,7 @@ int main(int argc, char *argv[]) {
       req->transparent = p.size() > 2 ? p[2] : "";
       req->vibrancy = p.size() > 3 ? p[3] : "";
       req->square = p.size() > 4 ? p[4] : "";
+      req->first_mouse = p.size() > 5 ? p[5] : "";
       do_chrome(g_w, req);
     }
   }

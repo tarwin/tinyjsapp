@@ -18,6 +18,17 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.22.5 — 2026-07-16
+
+- **`chrome: { acceptsFirstMouse: true }`** — opt a window into delivering the
+  click that focuses it straight through to the page. macOS normally swallows
+  that first click into web content ("click once to focus, again to act"),
+  which also bites between an app's own windows and makes an unfocused window's
+  DOM drag region need an extra click. On per window (main or secondary), via
+  `tiny.win.setChrome`, `app.openWindow`'s `chrome`, or `tinyjs.json` `"chrome"`
+  (applied before first paint); reported back in `getState().chrome`. Off by
+  default — matches the platform, no change for existing apps.
+
 ## 0.22.4 — 2026-07-16
 
 - **Multi-line JavaScript sent to the page keeps its newlines.** Script pushed

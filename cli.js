@@ -645,7 +645,7 @@ async function cmdBuild() {
     const ch = cfg.chrome;
     const vib = ch.vibrancy === undefined ? '' : (ch.vibrancy === null ? 'none' : ch.vibrancy);
     extraKeys += `
-  <key>TinyjsChrome</key>        <string>${[bit(ch.frame), bit(ch.trafficLights), bit(ch.transparent), vib, bit(ch.squareCorners)].join('&#9;')}</string>`;
+  <key>TinyjsChrome</key>        <string>${[bit(ch.frame), bit(ch.trafficLights), bit(ch.transparent), vib, bit(ch.squareCorners), bit(ch.acceptsFirstMouse)].join('&#9;')}</string>`;
   }
   const schemes = cfg.urlScheme ? [].concat(cfg.urlScheme) : [];
   if (schemes.length) {

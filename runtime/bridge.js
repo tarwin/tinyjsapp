@@ -390,21 +390,25 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       },
     },
     // Window chrome: { frame?, trafficLights?, transparent?, vibrancy?,
-    // squareCorners? }. frame:false hides the titlebar (content extends under
-    // it; keep your own drag region via data-tiny-drag). vibrancy: material
-    // name or null. squareCorners:true drops macOS's rounded corners by
-    // making the window BORDERLESS — square, no titlebar, no traffic lights.
-    // The tradeoff: no native titlebar drag (use data-tiny-drag) and it's a
-    // deliberately un-native look; resize edges, shadow, and keyboard focus
-    // are kept. Declare it in tinyjs.json "chrome" so it applies before the
-    // first paint (no rounded→square flash on launch).
+    // squareCorners?, acceptsFirstMouse? }. frame:false hides the titlebar
+    // (content extends under it; keep your own drag region via data-tiny-drag).
+    // vibrancy: material name or null. squareCorners:true drops macOS's rounded
+    // corners by making the window BORDERLESS — square, no titlebar, no traffic
+    // lights. The tradeoff: no native titlebar drag (use data-tiny-drag) and
+    // it's a deliberately un-native look; resize edges, shadow, and keyboard
+    // focus are kept. acceptsFirstMouse:true makes the click that focuses an
+    // unfocused window ALSO reach the page (default macOS behavior swallows it
+    // — "click once to focus, again to act"); handy for palettes/toolbars, and
+    // for DOM drag regions on unfocused windows. Declare it in tinyjs.json
+    // "chrome" so it applies before the first paint (no rounded→square flash).
     setChrome(opts = {}) {
       const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
       const vib = opts.vibrancy === undefined ? ''
                 : opts.vibrancy === null || opts.vibrancy === false ? 'none'
                 : String(opts.vibrancy);
       send('CHROME ' + [bit(opts.frame), bit(opts.trafficLights),
-                        bit(opts.transparent), one(vib), bit(opts.squareCorners)].join('\t'));
+                        bit(opts.transparent), one(vib), bit(opts.squareCorners),
+                        bit(opts.acceptsFirstMouse)].join('\t'));
     },
     startDrag() { send('DRAGWIN'); },
     zoom() { send('WINOP zoom'); },
@@ -675,9 +679,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Open (or focus) a secondary window. `page` is an html file in your
     // frontend dir (e.g. 'settings.html') or an absolute path. Each window
     // runs the same tiny.* bridge; win.* calls from its page target itself.
-    // chrome ({ frame?, trafficLights?, transparent?, vibrancy? }) and
-    // position ({ x, y }) are applied BEFORE the window paints — no titlebar
-    // flash for frameless panels, no jump from center.
+    // chrome ({ frame?, trafficLights?, transparent?, vibrancy?,
+    // squareCorners?, acceptsFirstMouse? }) and position ({ x, y }) are applied
+    // BEFORE the window paints — no titlebar flash for frameless panels, no
+    // jump from center.
     openWindow(id, { page, title, size, chrome, x, y } = {}) {
       let p = String(page ?? 'index.html');
       if (!isUrl(p) && !p.startsWith('/')) {
@@ -692,7 +697,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       const hasPos = x != null && y != null;
       send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400'),
                          bit(c.frame), bit(c.trafficLights), bit(c.transparent), one(vib),
-                         bit(c.squareCorners),
+                         bit(c.squareCorners), bit(c.acceptsFirstMouse),
                          hasPos ? (x | 0) : '', hasPos ? (y | 0) : ''].join('\t'));
     },
     // Handle for any window ('main' or a secondary id).
@@ -727,7 +732,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                     : opts.vibrancy === null || opts.vibrancy === false ? 'none'
                     : String(opts.vibrancy);
           t('CHROME', [bit(opts.frame), bit(opts.trafficLights),
-                       bit(opts.transparent), one(vib), bit(opts.squareCorners)].join('\t'));
+                       bit(opts.transparent), one(vib), bit(opts.squareCorners),
+                       bit(opts.acceptsFirstMouse)].join('\t'));
         },
         getState: () => query(id === 'main' ? 'win' : 'win:' + id),
         // Native share sheet ({ text?, url?, paths? }) anchored at page
