@@ -4,6 +4,7 @@
 //   tinyjs dev           run the app in the current directory
 //   tinyjs build         build dist/<name> + dist/<Name>.app
 //   tinyjs update        self-update from the latest GitHub release
+//   tinyjs uninstall     remove ~/.tinyjs and the PATH symlink
 //
 // Runs on txiki.js itself (via the `tinyjs` wrapper script).
 
@@ -67,6 +68,20 @@ async function tryRun(argv, opts = {}) {
   const p = tjs.spawn(argv, { stdin: 'inherit', stdout: 'ignore', stderr: 'ignore', ...opts });
   const st = await p.wait();
   return st.exit_status === 0 && !st.term_signal;
+}
+
+// Capture stdout, tolerating a non-zero exit (returns whatever was printed).
+async function capture(argv, opts = {}) {
+  const p = tjs.spawn(argv, { stdout: 'pipe', stderr: 'ignore', ...opts });
+  const reader = p.stdout.getReader();
+  let out = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    out += dec.decode(value, { stream: true });
+  }
+  await p.wait();
+  return out;
 }
 
 // --- self-update -------------------------------------------------------------
@@ -161,6 +176,71 @@ async function cmdUpdate() {
   // The installer re-resolves "latest", verifies checksums, and swaps
   // ~/.tinyjs (or $TINYJS_HOME) in place.
   await run(['sh', '-c', 'curl -fsSL https://tinyjs.app/install | sh']);
+  tjs.exit(0);
+}
+
+// Read a symlink's target (absolute or relative), or null if p isn't a symlink.
+async function readLink(p) {
+  const t = (await capture(['readlink', p])).trim();
+  return t || null;
+}
+
+// Ask a yes/no question on the controlling terminal. No tty → treat as "no",
+// so a piped/non-interactive `tinyjs uninstall` never deletes without --yes.
+async function confirmTty(prompt) {
+  const out = (await capture(['sh', '-c',
+    'printf "%s" "$1" >/dev/tty 2>/dev/null && IFS= read -r r </dev/tty && printf "%s" "$r"',
+    'sh', prompt])).trim();
+  return /^y(es)?$/i.test(out);
+}
+
+async function cmdUninstall() {
+  const version = await toolVersion();
+  if (version === 'dev') {
+    fail('running from a source checkout — nothing to uninstall (just delete the repo)');
+  }
+  // The install dir is the directory this CLI runs from — the installer created
+  // it as ${TINYJS_HOME:-~/.tinyjs}. Trust the running location over the env so
+  // we remove exactly the install that's executing.
+  const installDir = TOOL_DIR.replace(/\/+$/, '');
+  // Safety rails: never rm -rf a root or a git checkout.
+  if (!installDir || installDir === '/' || await exists(installDir + '/.git')) {
+    fail(`refusing to remove ${installDir || '/'} — does not look like a tinyjs install`);
+  }
+
+  // Collect PATH symlinks that point back into this install dir (the same
+  // candidate dirs the installer picks from).
+  const home = tjs.env.HOME || '';
+  const wrapper = installDir + '/tinyjs';
+  const links = [];
+  for (const d of ['/usr/local/bin', '/opt/homebrew/bin', home + '/.local/bin']) {
+    const link = d + '/tinyjs';
+    const target = await readLink(link);
+    if (!target) continue;
+    // Resolve a relative target against the link's own directory.
+    const abs = target.startsWith('/') ? target : d + '/' + target;
+    if (abs === wrapper) links.push(link);
+  }
+
+  console.log(`this will remove tinyjs ${version}:`);
+  console.log('  ' + installDir + '   (runtime + CLI)');
+  for (const l of links) console.log('  ' + l + '   (PATH symlink)');
+  if (!links.length) {
+    console.log('  (no PATH symlink found pointing here — remove any stray one by hand)');
+  }
+
+  const yes = args.some(a => a === '-y' || a === '--yes' || a === '-f' || a === '--force');
+  if (!yes && !(await confirmTty('\nremove it? [y/N] '))) {
+    console.log('cancelled');
+    tjs.exit(0);
+  }
+
+  for (const l of links) await run(['rm', '-f', l]);
+  await run(['rm', '-rf', installDir]);
+
+  console.log(`\nuninstalled tinyjs ${version}.`);
+  console.log('if the installer added a PATH line to your shell profile, delete the');
+  console.log('block marked "# added by tinyjs installer" (harmless if left).');
   tjs.exit(0);
 }
 
@@ -758,6 +838,7 @@ switch (cmd) {
   case 'notarize': await cmdNotarize(); break;
   case 'version': case '--version': case '-v': await cmdVersion(); break;
   case 'update': await cmdUpdate(); break;
+  case 'uninstall': await cmdUninstall(); break;
   default:
     console.log(`tinyjs — tiny desktop apps with txiki.js + webview
 
@@ -771,6 +852,7 @@ usage:
                       (--notes "text" | --notes-file FILE → manifest notes)
   tinyjs notarize     submit dist/<Name>.app to Apple notarization + staple
   tinyjs update       update the tinyjs CLI itself (--check: only report)
+  tinyjs uninstall    remove ~/.tinyjs and the PATH symlink (--yes: no prompt)
   tinyjs version      print version`);
     tjs.exit(cmd ? 1 : 0);
 }

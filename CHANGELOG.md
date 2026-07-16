@@ -18,6 +18,22 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.22.2 — 2026-07-15
+
+- **`tinyjs uninstall`.** Cleanly removes the install (`~/.tinyjs`, or
+  `$TINYJS_HOME`) and the `tinyjs` PATH symlink — the exact inverse of the
+  installer. It removes only a symlink that points back into the install it's
+  running from (so an unrelated `tinyjs` on your PATH is left alone), prints
+  what it'll delete, and prompts before doing it (`--yes` skips the prompt; a
+  non-interactive run without `--yes` refuses rather than deleting silently).
+  Safe by construction: it won't touch a source checkout, `/`, or a directory
+  containing `.git`. The shell-profile PATH line is left in place with a note,
+  since editing dotfiles on uninstall is too invasive to do silently.
+- **Friendlier installer finish.** The install script now explains that it
+  linked into a dir *because it's already on your PATH*, and warns that a
+  running shell caches command lookups — so if this same terminal still says
+  `tinyjs: command not found`, run `hash -r` or open a new one.
+
 ## 0.22.1 — 2026-07-15
 
 - **Tray icons keep their aspect ratio.** A PNG tray icon was force-scaled to

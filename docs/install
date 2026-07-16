@@ -65,10 +65,17 @@ fi
 ln -sf "$INSTALL_DIR/tinyjs" "$BIN_DIR/tinyjs"
 
 echo "==> installed: $("$INSTALL_DIR/tinyjs" version 2>/dev/null || echo tinyjs $VERSION)"
-echo "    $BIN_DIR/tinyjs -> $INSTALL_DIR/tinyjs"
+echo "    linked $BIN_DIR/tinyjs -> $INSTALL_DIR/tinyjs"
 
 case ":$PATH:" in
   *":$BIN_DIR:"*)
+    # BIN_DIR was picked precisely because it's already on PATH, so tinyjs is
+    # ready — but a running shell caches command lookups, so this same terminal
+    # can still say "command not found" until its hash table is refreshed.
+    echo "    ($BIN_DIR is already on your PATH — a good home for it)"
+    echo ""
+    echo "If this terminal says \`tinyjs: command not found\`, run \`hash -r\`"
+    echo "(or just open a new terminal) so your shell sees the new command."
     echo ""
     echo "get started:  tinyjs new myapp && cd myapp && tinyjs dev"
     ;;
