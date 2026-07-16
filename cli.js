@@ -767,12 +767,31 @@ async function cmdNotarize() {
   if (!(await exists(APP))) fail(`${APP} not found — run \`tinyjs build\` first`);
   const identity = cfg.signIdentity || tjs.env.TINYJS_SIGN_IDENTITY;
   if (!identity || identity === '-') {
-    fail('notarization needs a real Developer ID — set "signIdentity" in tinyjs.json and rebuild');
+    fail('notarization needs a real Developer ID — set "signIdentity" in tinyjs.json ' +
+         'or export TINYJS_SIGN_IDENTITY, then rebuild');
   }
   const profile = cfg.notarize?.profile || tjs.env.TINYJS_NOTARY_PROFILE;
   if (!profile) {
     fail('no notarytool profile — set tinyjs.json "notarize": { "profile": "…" } or TINYJS_NOTARY_PROFILE');
   }
+
+  // Fail fast on the wrong signature instead of waiting minutes for Apple to
+  // reject it. notarytool only accepts a "Developer ID Application" signature;
+  // an ad-hoc, unsigned, or "Apple Development" build uploads fine and then
+  // comes back "Invalid". Read what the .app is actually signed with (codesign
+  // prints to stderr) rather than trusting the configured identity, since the
+  // build on disk may predate a config change.
+  const sig = await capture(['sh', '-c', 'codesign -dvvv "$1" 2>&1', 'sh', APP]);
+  const authorities = (sig.match(/^Authority=.*/gm) || []).map(l => l.slice(10));
+  if (!authorities.some(a => a.startsWith('Developer ID Application:'))) {
+    const found = authorities[0] ? `signed as "${authorities[0]}"`
+      : /\bSignature=adhoc\b/.test(sig) ? 'ad-hoc signed'
+      : 'not signed with a Developer ID';
+    fail(`${APP} won't notarize — it's ${found}. Rebuild with a "Developer ID ` +
+         `Application" certificate: set "signIdentity" in tinyjs.json (or export ` +
+         'TINYJS_SIGN_IDENTITY) and re-run `tinyjs build`.');
+  }
+
   const zip = '.build/notarize.zip';
   console.log('==> zipping for submission');
   await run(['ditto', '-c', '-k', '--keepParent', APP, zip]);

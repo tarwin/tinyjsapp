@@ -18,6 +18,20 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.22.3 — 2026-07-15
+
+- **`tinyjs notarize` fails fast on the wrong signature.** It now inspects what
+  the built `.app` is actually signed with (via `codesign`) and stops
+  immediately unless that's a *Developer ID Application* certificate — naming
+  what it found (ad-hoc, unsigned, or e.g. an "Apple Development" cert) instead
+  of uploading, waiting minutes, and coming back with Apple's opaque "Invalid".
+  It checks the artifact on disk, not just the configured identity, so a build
+  that predates a config change is caught too.
+- The notarize "needs a real Developer ID" error now mentions the
+  `TINYJS_SIGN_IDENTITY` env var, not just `signIdentity` in tinyjs.json — both
+  have always worked (so does `TINYJS_NOTARY_PROFILE` for the notary profile);
+  the message just never said so.
+
 ## 0.22.2 — 2026-07-15
 
 - **`tinyjs uninstall`.** Cleanly removes the install (`~/.tinyjs`, or
