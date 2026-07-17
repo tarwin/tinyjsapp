@@ -364,10 +364,12 @@ const app = await createApp({
   onWindowClosed: appMod.onWindowClosed,
   onClipboardChange: appMod.onClipboardChange,
   onUpdateAvailable: appMod.onUpdateAvailable,
+  onAudioTap: appMod.onAudioTap,
   chrome: ${JSON.stringify(cfg.chrome ?? null)},
   update: ${JSON.stringify(cfg.update ?? null)},
   activation: ${JSON.stringify(cfg.activation ?? null)},
   readAccess: ${JSON.stringify(cfg.readAccess ?? null)},
+  audioTap: ${JSON.stringify(cfg.audioTap ?? null)},
 });
 if (appMod.init) appMod.init(app);
 `;
@@ -684,6 +686,15 @@ async function cmdBuild() {
   <key>NSMicrophoneUsageDescription</key> <string>${perms.microphone}</string>`;
   if (perms.camera) extraKeys += `
   <key>NSCameraUsageDescription</key>     <string>${perms.camera}</string>`;
+  // tiny.audioTap ("audioTap": "app" | "system"): Core Audio process taps read
+  // rendered output. The usage string is required for the capture TCC; a
+  // custom reason via "audioTapReason" overrides the default.
+  if (cfg.audioTap) {
+    const why = cfg.audioTapReason ||
+      `${cfg.title} reads audio output for metering and visualization.`;
+    extraKeys += `
+  <key>NSAudioCaptureUsageDescription</key> <string>${why}</string>`;
+  }
   const exts = cfg.fileExtensions ?? [];
   if (exts.length) {
     extraKeys += `
@@ -730,8 +741,9 @@ async function cmdBuild() {
   // needed are the capture devices: the hardened runtime denies mic/camera
   // outright — even with TCC granted — unless the binary carries them.
   const sigFlags = identity === '-' ? [] : ['--options', 'runtime', '--timestamp'];
-  const devices = [perms.microphone && 'com.apple.security.device.audio-input',
-                   perms.camera && 'com.apple.security.device.camera'].filter(Boolean);
+  const devices = [...new Set(
+    [(perms.microphone || cfg.audioTap) && 'com.apple.security.device.audio-input',
+     perms.camera && 'com.apple.security.device.camera'].filter(Boolean))];
   if (identity !== '-' && devices.length) {
     const ENT = '.build/entitlements.plist';
     await tjs.writeFile(ENT, enc.encode(`<?xml version="1.0" encoding="UTF-8"?>

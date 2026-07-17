@@ -35,6 +35,7 @@ tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        update?: { url: "https://…/manifest.json" },
                        urlScheme?: "myapp", fileExtensions?: ["md"],
                        permissions?: { microphone?: "why", camera?: "why" },
+                       audioTap?: "app" | "system",   // enable tiny.audioTap
                        chrome?: { frame, trafficLights, transparent, vibrancy, squareCorners, acceptsFirstMouse },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build: "npm run build", dist: "dist",
@@ -114,6 +115,16 @@ const s = await tiny.fetch(streamUrl, { stream: true });        // s.body.getRea
 // streams it through the native layer with permissive CORS so it's untainted.
 audio.crossOrigin = 'anonymous';
 audio.src = tiny.proxyURL('https://host/stream.mp3');  // now drives EQ/analyser
+
+// tiny.audioTap — read the app's rendered OUTPUT as PCM (VU meters, viz),
+// including audio that bypasses Web Audio (native HLS, tainted streams). Needs
+// "audioTap":"app"|"system" in tinyjs.json. macOS 14.4+. Read-only.
+await tiny.audioTap.start({ scope: 'app', interval: 80 });  // true, or throws { code }
+tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
+  const bin = atob(pcm), n = bin.length >> 1;   // base64 -> interleaved LE Int16
+  // sample i: ((bin.charCodeAt(2*i) | bin.charCodeAt(2*i+1)<<8) << 16 >> 16) / 32768
+});                                              // tiny.audioTap.stop()
+// NOTE: silent under `tinyjs dev` (terminal owns the audio); build the .app.
 
 tiny.win.setTitle(t); tiny.win.setSize(w, h);
 await tiny.win.openFile();                  // path | null (native panel)

@@ -94,6 +94,7 @@
     <a href="#store">store</a>
     <a href="#clipboard">clipboard</a>
     <a href="#hotkeys">hotkeys</a>
+    <a href="#audiotap">audioTap</a>
     <a href="#keystrokes">keystrokes</a>
     <a href="#permissions">permissions</a>
     <a href="#shell">shell &amp; dock</a>
@@ -134,6 +135,7 @@ tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i>
   "urlScheme": "myapp",         <i>// deep links: myapp://…</i>
   "fileExtensions": ["md"],     <i>// "Open With" file associations</i>
   "permissions": { "microphone": "why", "camera": "why" },  <i>// getUserMedia</i>
+  "audioTap": "app",            <i>// enable tiny.audioTap ("app" | "system")</i>
   "chrome": { "frame": false, "vibrancy": "hud" },  <i>// frameless window</i>
   "backend": "backend/main.ts",           <i>// entry; .ts → esbuild bundle</i>
   "frontend": {                           <i>// bundler hooks (Vite etc.)</i>
@@ -238,8 +240,13 @@ const ctx = new AudioContext();
 ctx.createMediaElementSource(audio)
    .connect(ctx.createAnalyser());   <i>// …→ your EQ → ctx.destination</i>
 audio.play();</pre>
-    <p class="note">The native layer does the HTTP (redirects, byte-range/seek), so
-    playback keeps CoreMedia's buffering and reconnect. http/https upstreams only.</p>
+    <p class="note">The native layer does the HTTP (following redirects), http/https
+    only. Driving <code>&lt;audio&gt;</code> this way needs a stream whose server honors
+    HTTP <code>Range</code> (returns <code>206</code>) — CoreMedia loads media over the
+    proxy with byte-range requests. SomaFM and most CDN-backed streams qualify; a
+    non-seekable live stream that answers <code>200</code> (no length / no
+    <code>Accept-Ranges</code>) can't play through the proxy element — fall back to the
+    raw URL for plain (non-EQ) playback.</p>
   </section>
 
   <section id="window">
@@ -411,6 +418,37 @@ await <b>tiny.clipboard.changeCount</b>();   <i>// cheap "did it change?" probe<
     <pre><b>tiny.hotkey.register</b>('boss', 'cmd+shift+k');   <i>// fires even unfocused</i>
 <b>tiny.hotkey.on</b>((id) =&gt; tiny.win.show());
 <b>tiny.hotkey.unregister</b>('boss');</pre>
+  </section>
+
+  <section id="audiotap">
+    <h2>tiny.audioTap <span class="tag">read the audio output</span></h2>
+    <p>Read the app's (or the system's) <b>rendered</b> audio output as PCM — for
+    VU meters and visualizers, including audio that never touches Web Audio
+    (native HLS, CORS-tainted streams, other apps). Read-only: it observes the
+    mix in sync with what's audible, it can't process it (EQ still needs the
+    signal in the graph — see <a href="#fetch">proxyURL</a>). Add
+    <code>"audioTap": "app"</code> (or <code>"system"</code>) to tinyjs.json.
+    macOS 14.4+.</p>
+    <pre>await <b>tiny.audioTap.start</b>({ scope: 'app', interval: 80 }); <i>// resolves true, or throws { code }</i>
+<b>tiny.audioTap.on</b>(({ pcm, sampleRate, channels, frames, t }) =&gt; {
+  const bin = atob(pcm), n = bin.length &gt;&gt; 1;   <i>// base64 -&gt; interleaved LE Int16</i>
+  let peak = 0;
+  for (let i = 0; i &lt; n; i++) {
+    const v = ((bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) &lt;&lt; 8)) &lt;&lt; 16 &gt;&gt; 16) / 32768;
+    if (Math.abs(v) &gt; peak) peak = Math.abs(v);
+  }
+  drawMeter(peak);                              <i>// samples interleave by `channels`</i>
+});
+<b>tiny.audioTap.stop</b>();                            <i>// (or the owning window closing)</i></pre>
+    <p class="note"><code>scope:'app'</code> taps only your app and needs no
+    prompt; <code>scope:'system'</code> hears every app and trips the "System
+    Audio Recording" permission (<code>excludeSelf</code> drops your own output).
+    <code>start()</code> throws an Error with a <code>.code</code>:
+    <code>unsupported</code> (pre-14.4), <code>not-declared</code> (manifest
+    missing the scope), <code>denied</code> (TCC refused — also shows up as
+    silent chunks) or <code>failed</code>. Under <code>tinyjs dev</code> the tap
+    is silent — the terminal, not your app, owns the audio; build the .app to
+    hear it.</p>
   </section>
 
   <section id="keystrokes">

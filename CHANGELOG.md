@@ -18,6 +18,36 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.25.0 — 2026-07-17
+
+- **`tiny.audioTap`** — read the app's (or the system's) *rendered* audio
+  output as PCM, for VU meters and visualizers — including audio that never
+  touches Web Audio (native HLS, CORS-tainted streams, other apps). Read-only:
+  it observes the mix in sync with what's audible, it can't process it (EQ
+  still needs the signal in the graph — that's `proxyURL`; the two compose).
+  `await tiny.audioTap.start({ scope: 'app' | 'system', interval })` then
+  `tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => …)` where
+  `pcm` is base64 of interleaved little-endian Int16; `stop()` (or the owning
+  window closing) tears it down. Gated by an `"audioTap": "app" | "system"`
+  key in tinyjs.json (the build bakes `NSAudioCaptureUsageDescription`).
+  Implemented with Core Audio process taps (macOS 14.2+): a `CATapDescription`
+  → `AudioHardwareCreateProcessTap` → an aggregate device → an IOProc that
+  downmixes to stereo Int16, chunked out to the page over the existing bridge.
+  `scope:'app'` selects exactly this app's audio process objects by matching
+  the *responsible pid* (WKWebView renders audio in a `com.apple.WebKit.GPU`
+  XPC helper that isn't a child process) — and, verified in a real bundle,
+  tapping your **own** app tree needs no permission prompt and yields real
+  audio (RMS matched a test tone to 3 decimals). `scope:'system'` trips the
+  "System Audio Recording" permission. Survives output-device changes
+  (headphones) by re-arming. Cross-platform by design (Windows process-loopback
+  / WASAPI, Linux PipeWire), macOS-only for now. Note: silent under
+  `tinyjs dev` (the terminal, not the app, is the audio owner) — build the
+  .app to hear it.
+- **docs:** corrected the `tiny.proxyURL` docs — driving `<audio>` through the
+  proxy needs a byte-range-capable (HTTP `206`) stream; a non-seekable live
+  stream that answers `200` can't play through the proxy element (fall back to
+  the raw URL). Redirects were never the issue.
+
 ## 0.24.0 — 2026-07-16
 
 - **`tiny.proxyURL(url)`** — get a cross-origin stream (internet radio) into

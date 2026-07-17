@@ -229,13 +229,36 @@ audio.src = tiny.proxyURL('https://ice1.somafm.com/groovesalad-128-mp3');
 const ctx = new AudioContext();
 ctx.createMediaElementSource(audio).connect(ctx.createAnalyser()); // …→ EQ → destination
 audio.play();
-// The native layer does the HTTP (redirects, byte-range/seek), so playback
-// keeps CoreMedia's buffering/reconnect. http/https upstreams only.
+// The native layer does the HTTP (following redirects), http/https only.
+// NOTE: driving <audio> this way needs a stream whose server honors HTTP Range
+// (returns 206) — CoreMedia loads media over the proxy via byte-range requests.
+// SomaFM and most CDN-backed streams qualify. A non-seekable live stream that
+// answers 200 (no Content-Length/Accept-Ranges) can't be played through the
+// proxy element — fall back to the raw URL for plain (non-EQ) playback there.
 
 // system-wide hotkeys (work while other apps are focused)
 tiny.hotkey.register('boss', 'cmd+shift+k');
 tiny.hotkey.on((id) => tiny.win.show());
 tiny.hotkey.unregister('boss');
+
+// tiny.audioTap — read the app's rendered audio OUTPUT as PCM (VU meters,
+// visualizers) — including audio that bypasses Web Audio (native HLS,
+// CORS-tainted streams). Read-only; needs "audioTap": "app" in tinyjs.json.
+await tiny.audioTap.start({ scope: 'app', interval: 80 }); // 'system' also possible
+tiny.audioTap.on(({ pcm, sampleRate, channels, frames }) => {
+  const bin = atob(pcm), n = bin.length >> 1;   // base64 -> interleaved LE Int16
+  let peak = 0;
+  for (let i = 0; i < n; i++) {
+    const v = ((bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) << 8)) << 16 >> 16) / 32768;
+    if (Math.abs(v) > peak) peak = Math.abs(v);
+  }
+  meter.style.height = (peak * 100) + '%';       // channels/frames describe the layout
+});
+// tiny.audioTap.stop();  // (or the owning window closing) tears the tap down.
+// macOS 14.4+. `scope:'app'` taps only your app (no prompt); `scope:'system'`
+// hears every app and trips the System Audio Recording permission. NOTE: under
+// `tinyjs dev` the tap is silent (the terminal, not your app, is the audio
+// "owner"); build the .app to hear it — or grant your terminal the permission.
 
 // custom right-click menu (native NSMenu; null restores WebKit's default)
 tiny.menu.setContext([{ id: 'copy-path', label: 'Copy Path' }, { separator: true }, { id: 'del', label: 'Delete' }]);
@@ -789,6 +812,8 @@ only remaining step.
 | launcher → backend | `CTX <id>`                 | a context menu item was clicked  |
 | backend → launcher | `HKREG <id>\t<combo>` / `HKUNREG <id>` | global hotkeys       |
 | launcher → backend | `HOTKEY <id>`              | a global hotkey fired            |
+| backend → launcher | `AUDIOTAP <qid> <scope>\t<excludeSelf>\t<interval>` / `AUDIOTAP STOP` | start/stop an output PCM tap (start answered as `GOT`) |
+| launcher → backend | `AUDIOTAP <b64>\t<sr>\t<ch>\t<frames>\t<t>` | a tap PCM chunk (base64 interleaved Int16) |
 | launcher → backend | `SYS theme dark\|light` / `SYS sleep` / `SYS wake` | system events (theme also once at startup) |
 | backend → launcher | `CLIPWRITE <text>\t<html>\t<image>\t<color>\t<path>…` | write the clipboard (fields escape `\n`/`\t`; image: png path or base64) |
 | backend → launcher | `GET <qid> clipboard[:count]` | read the clipboard (answered as `GOT`) |

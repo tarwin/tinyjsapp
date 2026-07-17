@@ -64,6 +64,8 @@
 //                                                    right-click menu
 //                         HKREG <id>\t<combo> /
 //                         HKUNREG <id>               global hotkeys
+//                         AUDIOTAP <qid> <scope>\t<excludeSelf>\t<interval> /
+//                         AUDIOTAP STOP              read output PCM (reply GOT)
 //                         NOTIFY <id>\t<title>\t<body>\t<subtitle>\t<snd01>
 //                                       [\t<actions-json>]
 //                                                    notification (bundle mode:
@@ -203,6 +205,8 @@
 //                         CTX <id>                   a context menu item was
 //                                                    clicked
 //                         HOTKEY <id>                a global hotkey fired
+//                         AUDIOTAP <b64>\t<sr>\t<ch>\t<frames>\t<t>
+//                                                    a tap PCM chunk
 //                         SYS theme dark|light /
 //                         SYS sleep / SYS wake       system events (theme also
 //                                                    sent once at startup)
@@ -250,6 +254,10 @@
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
 #import <CoreWLAN/CoreWLAN.h> // Wi-Fi info
+#import <CoreAudio/CoreAudio.h>              // process taps (tiny.audioTap)
+#import <CoreAudio/AudioHardwareTapping.h>   // AudioHardwareCreateProcessTap (14.2+)
+#import <CoreAudio/CATapDescription.h>       // CATapDescription (14.2+)
+#import <AudioToolbox/AudioToolbox.h>        // AudioDeviceCreateIOProcIDWithBlock
 #include <Carbon/Carbon.h> // RegisterEventHotKey (global hotkeys)
 #include <IOKit/pwr_mgt/IOPMLib.h> // IOPMAssertion (prevent sleep)
 #include <IOKit/ps/IOPowerSources.h> // battery
@@ -265,6 +273,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
+#include <cmath> // lrintf (audioTap float->int16)
+#include <ctime> // clock_gettime_nsec_np (audioTap chunk timestamps)
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -3980,6 +3990,268 @@ static void install_media_scheme_hook() {
       "@@:{CGRect={CGPoint=dd}{CGSize=dd}}@");
 }
 
+// ============================ tiny.audioTap ================================
+// Read the app's (or the whole system's) *rendered* audio output as PCM, for
+// VU meters / visualizers — including audio that never touches Web Audio
+// (native HLS, CORS-tainted <audio>, other apps). Uses Core Audio process
+// taps (macOS 14.2+): a CATapDescription -> AudioHardwareCreateProcessTap ->
+// an aggregate device with that sub-tap -> an IOProc that reads float32,
+// converts to interleaved Int16, and a main-queue timer that chunks + base64s
+// it out as `AUDIOTAP <b64>\t<sr>\t<ch>\t<frames>\t<t>` frames to the backend
+// (which push()es an 'audio-tap' page event). Read-only: it observes the mix,
+// it can't process it (EQ still needs the signal in the graph — proxyURL).
+//
+// scope 'app'  -> tap every audio process object whose *responsible pid*
+//   matches ours. WKWebView renders audio in a com.apple.WebKit.GPU XPC helper
+//   (ppid 1, so not findable by walking children); the responsible-pid link is
+//   the reliable way to select exactly our app's WebKit processes. In a bundle
+//   the launcher is its own responsible root, so this is tight; in `dev` the
+//   terminal is the root, so it can over-capture (dev-only).
+// scope 'system' -> a global tap (optionally excluding our own processes).
+//   Trips the "System Audio Recording" TCC prompt.
+// TCC note: an unauthorized tap returns success but delivers SILENCE (zeroed
+// buffers), not an error — so `denied` cannot be reported synchronously; it
+// surfaces as chunks whose samples are all zero.
+extern "C" pid_t responsibility_get_pid_responsible_for_pid(pid_t);
+
+struct AudioTapReq { std::string qid; std::string scope; bool excludeSelf; int interval; };
+
+static AudioObjectID g_tap_id = 0;
+static AudioObjectID g_tap_agg = 0;
+static AudioDeviceIOProcID g_tap_proc = nullptr;
+static bool g_tap_active = false;
+static bool g_tap_dev_listener = false;
+static std::string g_tap_scope = "app";
+static bool g_tap_exclude_self = false;
+static int g_tap_interval = 80;
+static double g_tap_sr = 48000;
+static int g_tap_ch = 2;
+static std::vector<int16_t> g_tap_pcm;      // interleaved Int16 accumulator
+static std::mutex g_tap_pcm_lock;
+static double g_tap_chunk_t0 = 0;           // monotonic ms of the chunk's first sample
+static dispatch_source_t g_tap_timer = nullptr;
+
+static double tiny_now_ms() {
+  return (double)clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) / 1.0e6;
+}
+
+// Audio process objects belonging to our app (same responsible pid). Captures
+// the whole app tree — launcher + WebKit GPU/WebContent/Networking helpers.
+API_AVAILABLE(macos(14.2))
+static NSArray<NSNumber *> *tiny_app_process_objects() {
+  NSMutableArray *out = [NSMutableArray array];
+  pid_t myResp = responsibility_get_pid_responsible_for_pid(getpid());
+  AudioObjectPropertyAddress la = { kAudioHardwarePropertyProcessObjectList,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+  UInt32 sz = 0;
+  if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &la, 0, NULL, &sz) != noErr)
+    return out;
+  int n = sz / sizeof(AudioObjectID);
+  std::vector<AudioObjectID> objs(n > 0 ? n : 0);
+  if (n <= 0 ||
+      AudioObjectGetPropertyData(kAudioObjectSystemObject, &la, 0, NULL, &sz, objs.data()) != noErr)
+    return out;
+  for (int i = 0; i < n; i++) {
+    pid_t pid = 0; UInt32 s = sizeof(pid);
+    AudioObjectPropertyAddress pa = { kAudioProcessPropertyPID,
+        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+    if (AudioObjectGetPropertyData(objs[i], &pa, 0, NULL, &s, &pid) != noErr || pid <= 0)
+      continue;
+    if (pid == getpid() ||
+        (myResp > 0 && responsibility_get_pid_responsible_for_pid(pid) == myResp))
+      [out addObject:@(objs[i])];
+  }
+  return out;
+}
+
+// Tear down the running tap graph (not the device-change listener). Safe to
+// call repeatedly; leaves g_tap_active untouched (the caller owns that flag).
+API_AVAILABLE(macos(14.2))
+static void tiny_audiotap_teardown() {
+  if (g_tap_timer) { dispatch_source_cancel(g_tap_timer); g_tap_timer = nullptr; }
+  if (g_tap_agg && g_tap_proc) {
+    AudioDeviceStop(g_tap_agg, g_tap_proc);
+    AudioDeviceDestroyIOProcID(g_tap_agg, g_tap_proc);
+  }
+  g_tap_proc = nullptr;
+  if (g_tap_agg) { AudioHardwareDestroyAggregateDevice(g_tap_agg); g_tap_agg = 0; }
+  if (g_tap_id) { AudioHardwareDestroyProcessTap(g_tap_id); g_tap_id = 0; }
+  std::lock_guard<std::mutex> lk(g_tap_pcm_lock);
+  g_tap_pcm.clear();
+  g_tap_chunk_t0 = 0;
+}
+
+API_AVAILABLE(macos(14.2))
+static void tiny_audiotap_start_timer() {
+  g_tap_timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+  uint64_t iv = (uint64_t)g_tap_interval * NSEC_PER_MSEC;
+  dispatch_source_set_timer(g_tap_timer, dispatch_time(DISPATCH_TIME_NOW, iv), iv, iv / 10);
+  dispatch_source_set_event_handler(g_tap_timer, ^{
+    std::vector<int16_t> chunk; double t0 = 0;
+    {
+      std::lock_guard<std::mutex> lk(g_tap_pcm_lock);
+      if (g_tap_pcm.empty()) return;
+      chunk.swap(g_tap_pcm);
+      t0 = g_tap_chunk_t0;
+      g_tap_chunk_t0 = 0;
+    }
+    NSData *d = [NSData dataWithBytesNoCopy:chunk.data()
+                                    length:chunk.size() * sizeof(int16_t)
+                              freeWhenDone:NO];
+    NSString *b64 = [d base64EncodedStringWithOptions:0];
+    int ch = g_tap_ch > 0 ? g_tap_ch : 1;
+    int frames = (int)(chunk.size() / ch);
+    char meta[96];
+    snprintf(meta, sizeof(meta), "\t%d\t%d\t%d\t%.1f", (int)g_tap_sr, g_tap_ch, frames, t0);
+    sock_write_line(std::string("AUDIOTAP ") + [b64 UTF8String] + meta);
+  });
+  dispatch_resume(g_tap_timer);
+}
+
+// Build tap -> aggregate device -> IOProc and start it. Sets g_tap_sr/ch.
+API_AVAILABLE(macos(14.2))
+static OSStatus tiny_audiotap_build() {
+  CATapDescription *desc;
+  if (g_tap_scope == "system") {
+    NSArray *excl = g_tap_exclude_self ? tiny_app_process_objects() : @[];
+    desc = [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:excl];
+  } else {
+    NSArray *incl = tiny_app_process_objects();
+    if (incl.count == 0) return kAudioHardwareBadObjectError;
+    desc = [[CATapDescription alloc] initStereoMixdownOfProcesses:incl];
+  }
+  desc.name = @"tinyjs-audioTap";
+  desc.privateTap = YES;
+  desc.muteBehavior = CATapUnmuted; // still play through the speakers
+
+  OSStatus st = AudioHardwareCreateProcessTap(desc, &g_tap_id);
+  if (st != noErr) { g_tap_id = 0; return st; }
+
+  CFStringRef uid = NULL; UInt32 s = sizeof(uid);
+  AudioObjectPropertyAddress ua = { kAudioTapPropertyUID,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+  AudioObjectGetPropertyData(g_tap_id, &ua, 0, NULL, &s, &uid);
+  AudioStreamBasicDescription fmt = {}; s = sizeof(fmt);
+  AudioObjectPropertyAddress fa = { kAudioTapPropertyFormat,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+  AudioObjectGetPropertyData(g_tap_id, &fa, 0, NULL, &s, &fmt);
+  g_tap_sr = fmt.mSampleRate > 0 ? fmt.mSampleRate : 48000;
+  g_tap_ch = fmt.mChannelsPerFrame > 0 ? (int)fmt.mChannelsPerFrame : 2;
+
+  NSString *aggUID = [[NSUUID UUID] UUIDString];
+  NSDictionary *aggd = @{
+    @"name": @"tinyjs-audioTap-agg",
+    @"uid": aggUID,
+    @"private": @1,
+    @"tapautostart": @1,
+    @"taps": @[ @{ @"uid": (uid ? (__bridge NSString *)uid : @""), @"drift": @0 } ],
+  };
+  st = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)aggd, &g_tap_agg);
+  if (uid) CFRelease(uid);
+  if (st != noErr) { g_tap_agg = 0; tiny_audiotap_teardown(); return st; }
+
+  st = AudioDeviceCreateIOProcIDWithBlock(&g_tap_proc, g_tap_agg, NULL,
+      ^(const AudioTimeStamp *now, const AudioBufferList *in, const AudioTimeStamp *inT,
+        AudioBufferList *out, const AudioTimeStamp *outT) {
+        if (!in) return;
+        std::lock_guard<std::mutex> lk(g_tap_pcm_lock);
+        if (g_tap_pcm.empty()) g_tap_chunk_t0 = tiny_now_ms();
+        for (UInt32 b = 0; b < in->mNumberBuffers; b++) {
+          const AudioBuffer &buf = in->mBuffers[b];
+          const float *f = (const float *)buf.mData;
+          if (!f) continue;
+          UInt32 cnt = buf.mDataByteSize / sizeof(float);
+          size_t base = g_tap_pcm.size();
+          g_tap_pcm.resize(base + cnt);
+          for (UInt32 i = 0; i < cnt; i++) {
+            float v = f[i];
+            if (v > 1.0f) v = 1.0f; else if (v < -1.0f) v = -1.0f;
+            g_tap_pcm[base + i] = (int16_t)lrintf(v * 32767.0f);
+          }
+        }
+      });
+  if (st != noErr) { g_tap_proc = nullptr; tiny_audiotap_teardown(); return st; }
+
+  st = AudioDeviceStart(g_tap_agg, g_tap_proc);
+  if (st != noErr) { tiny_audiotap_teardown(); return st; }
+  return noErr;
+}
+
+// Default-output-device changed (e.g. headphones plugged): re-arm on the new
+// device. A brief audio gap is acceptable.
+API_AVAILABLE(macos(14.2))
+static OSStatus tiny_audiotap_dev_changed(AudioObjectID, UInt32,
+                                          const AudioObjectPropertyAddress *, void *) {
+  if (!g_tap_active) return noErr;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!g_tap_active) return;
+    tiny_audiotap_teardown();
+    if (tiny_audiotap_build() == noErr) tiny_audiotap_start_timer();
+  });
+  return noErr;
+}
+
+static const AudioObjectPropertyAddress kDefaultOutAddr = {
+    kAudioHardwarePropertyDefaultOutputDevice,
+    kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+
+// Handles AUDIOTAP start (scope != "__stop__") and stop, on the main thread.
+static void do_audiotap(webview_t, void *arg) {
+  std::unique_ptr<AudioTapReq> req((AudioTapReq *)arg);
+  if (@available(macOS 14.2, *)) {
+    bool stop = (req->scope == "__stop__");
+    if (stop) {
+      if (g_tap_active) {
+        g_tap_active = false;
+        if (g_tap_dev_listener) {
+          AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &kDefaultOutAddr,
+                                            tiny_audiotap_dev_changed, NULL);
+          g_tap_dev_listener = false;
+        }
+        tiny_audiotap_teardown();
+      }
+      return;
+    }
+    auto reply_ok = [&]() {
+      sock_write_line("GOT " + req->qid + " {\"ok\":true,\"sampleRate\":" +
+                      std::to_string((int)g_tap_sr) + ",\"channels\":" +
+                      std::to_string(g_tap_ch) + "}");
+    };
+    int iv = req->interval < 20 ? 20 : (req->interval > 500 ? 500 : req->interval);
+    if (g_tap_active) {
+      if (g_tap_scope == req->scope && g_tap_exclude_self == req->excludeSelf &&
+          g_tap_interval == iv) { reply_ok(); return; }   // idempotent
+      g_tap_active = false;                                // restart with new opts
+      if (g_tap_dev_listener) {
+        AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &kDefaultOutAddr,
+                                          tiny_audiotap_dev_changed, NULL);
+        g_tap_dev_listener = false;
+      }
+      tiny_audiotap_teardown();
+    }
+    g_tap_scope = req->scope;
+    g_tap_exclude_self = req->excludeSelf;
+    g_tap_interval = iv;
+    OSStatus st = tiny_audiotap_build();
+    if (st != noErr) {
+      tiny_audiotap_teardown();
+      sock_write_line("GOT " + req->qid +
+                      " {\"ok\":false,\"code\":\"failed\",\"status\":" +
+                      std::to_string((int)st) + "}");
+      return;
+    }
+    g_tap_active = true;
+    AudioObjectAddPropertyListener(kAudioObjectSystemObject, &kDefaultOutAddr,
+                                   tiny_audiotap_dev_changed, NULL);
+    g_tap_dev_listener = true;
+    tiny_audiotap_start_timer();
+    reply_ok();
+  } else {
+    if (req->scope != "__stop__")
+      sock_write_line("GOT " + req->qid + " {\"ok\":false,\"code\":\"unsupported\"}");
+  }
+}
+
 // Switch a window between titled (rounded corners) and borderless (square).
 // Borderless keeps Resizable (drag-resize edges) and the shadow; the page
 // owns every pixel and moves the window via data-tiny-drag, exactly like
@@ -5004,6 +5276,19 @@ static void sock_read_loop() {
           webview_dispatch(g_w, do_hotkey, new HotkeyReq{p[0], p[1]});
       } else if (line.rfind("HKUNREG ", 0) == 0) {
         webview_dispatch(g_w, do_hotkey, new HotkeyReq{line.substr(8), ""});
+      } else if (line.rfind("AUDIOTAP STOP", 0) == 0) {
+        webview_dispatch(g_w, do_audiotap, new AudioTapReq{"", "__stop__", false, 0});
+      } else if (line.rfind("AUDIOTAP ", 0) == 0) {
+        // AUDIOTAP <qid> <scope>\t<excludeSelf>\t<interval>
+        std::string rest = line.substr(9);
+        size_t sp = rest.find(' ');
+        std::string qid = sp == std::string::npos ? rest : rest.substr(0, sp);
+        std::vector<std::string> p =
+            split_tabs(sp == std::string::npos ? "" : rest.substr(sp + 1));
+        webview_dispatch(g_w, do_audiotap,
+                         new AudioTapReq{qid, p.size() > 0 ? p[0] : "app",
+                                         p.size() > 1 && p[1] == "1",
+                                         p.size() > 2 ? atoi(p[2].c_str()) : 80});
       } else if (line.rfind("MENUUPD ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(8));
         MenuUpdReq *req = new MenuUpdReq;

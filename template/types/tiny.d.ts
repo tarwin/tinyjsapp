@@ -566,6 +566,43 @@ declare interface Tiny {
     on(fn: (id: string) => void): void;
   };
 
+  /**
+   * Read the app's (or the system's) *rendered* audio output as PCM chunks —
+   * for VU meters / visualizers, including audio that bypasses Web Audio
+   * (native HLS, CORS-tainted streams). Read-only: it observes the mix, it
+   * can't process it (EQ still needs the signal in the graph — see proxyURL).
+   * Requires an `"audioTap"` key in tinyjs.json. macOS 14.4+.
+   */
+  audioTap: {
+    /**
+     * Start tapping. Resolves `true`, or throws an Error whose `.code` is one
+     * of `'unsupported'` (pre-14.4), `'not-declared'` (manifest missing the
+     * scope), `'denied'` (TCC refused — surfaces as silent chunks) or
+     * `'failed'` (Core Audio error). Idempotent for identical options.
+     */
+    start(opts?: {
+      /** 'app' (default) = this app's own output; 'system' = everything. */
+      scope?: 'app' | 'system';
+      /** system scope only: drop this app's own output from the mix. */
+      excludeSelf?: boolean;
+      /** ms of audio per chunk, clamped ~[20, 500] (default 80). */
+      interval?: number;
+    }): Promise<true>;
+    stop(): Promise<any>;
+    /**
+     * Register a chunk handler. `pcm` is base64 of interleaved little-endian
+     * Int16 (decode: `s[i] = int16(bin[2i] | bin[2i+1]<<8); float = s[i]/32768`);
+     * `t` is the monotonic ms of the chunk's first sample.
+     */
+    on(fn: (chunk: {
+      pcm: string;
+      sampleRate: number;
+      channels: number;
+      frames: number;
+      t: number;
+    }) => void): void;
+  };
+
   theme: {
     get(): Promise<{ dark: boolean } | null>;
     on(fn: (dark: boolean) => void): void;

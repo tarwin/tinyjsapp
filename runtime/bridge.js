@@ -86,7 +86,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, chrome = null, update = null, activation = null, readAccess = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -777,6 +777,14 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // backpressure and never buffers unbounded. Keyed by a page-supplied id and
   // cancelled by fetch.cancel or when the owner window closes.
   const fetchStreams = new Map(); // id -> { reader, win }
+  // tiny.audioTap: one native tap per app; `audioTapOwner` is the window that
+  // started it, so closing that window tears the tap down (like fetchStreams).
+  let audioTapOwner = null;
+  function stopAudioTap() {
+    if (!audioTapOwner) return;
+    send('AUDIOTAP STOP');
+    audioTapOwner = null;
+  }
   const u8ToB64 = (u8) => {
     let s = '';
     for (let i = 0; i < u8.length; i += 0x8000)
@@ -887,6 +895,22 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'store.all': async () => app.store.all(),
     'hotkey.register': async ({ id: hid, combo }) => (app.hotkey.register(hid, combo), true),
     'hotkey.unregister': async ({ id: hid }) => (app.hotkey.unregister(hid), true),
+    // Read the app's (or system's) rendered audio output as PCM chunks
+    // ('audio-tap' events). Gated by the "audioTap" manifest key; the requested
+    // scope must be covered by the declared one.
+    'audioTap.start': async ({ scope = 'app', excludeSelf = false, interval = 80 } = {}, _a, m) => {
+      if (!audioTap)
+        return { ok: false, code: 'not-declared',
+                 message: 'add "audioTap": "app" | "system" to tinyjs.json' };
+      if (scope === 'system' && audioTap !== 'system')
+        return { ok: false, code: 'not-declared',
+                 message: 'system scope requires "audioTap": "system" in tinyjs.json' };
+      const iv = Math.max(20, Math.min(500, interval | 0));
+      const r = await ask('AUDIOTAP', scope + '\t' + (excludeSelf ? 1 : 0) + '\t' + iv);
+      if (r && r.ok) audioTapOwner = m?.window || 'main';
+      return r ?? { ok: false, code: 'failed' };
+    },
+    'audioTap.stop': async () => (stopAudioTap(), true),
     'menu.setContext': async ({ items }) => (app.setContextMenu(items), true),
     'menu.update': async ({ id: mid, ...patch }) => (app.updateMenuItem(mid, patch), true),
     'menu.get': async ({ id: mid }) => app.getMenuItem(mid),
@@ -1024,6 +1048,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           const id = line.slice(7);
           push('hotkey', { id });
           if (onHotkey) onHotkey(id, app);
+        } else if (line.startsWith('AUDIOTAP ')) {
+          // A tap PCM chunk: AUDIOTAP <pcmB64>\t<sampleRate>\t<channels>\t<frames>\t<t>
+          const [pcm, sr, ch, frames, t] = line.slice(9).split('\t');
+          const chunk = { pcm, sampleRate: +sr, channels: +ch, frames: +frames, t: +t };
+          push('audio-tap', chunk);
+          if (onAudioTap) onAudioTap(chunk, app);
         } else if (line.startsWith('CTX ')) {
           const id = line.slice(4);
           push('contextmenu', { id });
@@ -1055,6 +1085,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           const id = line.slice(10);
           // Tear down any streaming tiny.fetch the closed window still owns.
           for (const [sid, s] of fetchStreams) if (s.win === id) cancelFetchStream(sid);
+          // …and the audio tap, if this was the window that started it.
+          if (audioTapOwner === id) stopAudioTap();
           push('window-closed', { id });
           if (onWindowClosed) onWindowClosed(id, app);
         } else if (line.startsWith('NOTIFYCLICK ')) {

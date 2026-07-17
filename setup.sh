@@ -36,7 +36,7 @@ echo "==> compiling launcher"
 # Non-weak frameworks (shared); ScreenCaptureKit + FoundationModels are
 # weak-linked per-linker below. macOS 14 floor throughout — weak-linked
 # frameworks activate only on newer OSes via @available guards.
-FW="-framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -framework AVFoundation -framework ServiceManagement -framework IOKit -framework Quartz -framework Vision -framework QuickLookThumbnailing -framework Security -framework LocalAuthentication -framework MediaPlayer -framework CoreMedia -framework CoreWLAN"
+FW="-framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -framework AVFoundation -framework ServiceManagement -framework IOKit -framework Quartz -framework Vision -framework QuickLookThumbnailing -framework Security -framework LocalAuthentication -framework MediaPlayer -framework CoreMedia -framework CoreWLAN -framework CoreAudio -framework AudioToolbox"
 MIN_OS="-mmacosx-version-min=14.0"
 
 if [ "${TINYJS_AI:-0}" = "1" ]; then

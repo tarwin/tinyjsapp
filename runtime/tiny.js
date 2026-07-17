@@ -192,6 +192,35 @@
       on(fn) { window.tiny.api.on('hotkey', ({ id }) => fn(id)); },
     },
 
+    // Read the app's (or system's) rendered audio output as PCM — for VU
+    // meters / visualizers, including audio that bypasses Web Audio (native
+    // HLS, CORS-tainted streams). Read-only: it observes, it can't process.
+    // Requires an "audioTap" key in tinyjs.json. macOS 14.4+.
+    //   await tiny.audioTap.start({ scope: 'app', interval: 80 });
+    //   tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
+    //     const bin = atob(pcm), n = bin.length / 2, s = new Int16Array(n);
+    //     for (let i = 0; i < n; i++) s[i] = (bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) << 8)) << 16 >> 16;
+    //     // …float = s[i] / 32768, interleaved by `channels`
+    //   });
+    audioTap: {
+      // opts: { scope?: 'app'|'system', excludeSelf?: boolean, interval?: ms }.
+      // Resolves true, or throws an Error with a .code: 'unsupported' |
+      // 'not-declared' | 'denied' | 'failed'.
+      async start(opts = {}) {
+        const r = await call('audioTap.start', opts);
+        if (!r || !r.ok) {
+          const e = new Error(r?.message || ('audioTap: ' + (r?.code || 'failed')));
+          e.code = r?.code || 'failed';
+          throw e;
+        }
+        return true;
+      },
+      stop: () => call('audioTap.stop'),
+      // fn({ pcm, sampleRate, channels, frames, t }); pcm is base64 of
+      // interleaved little-endian Int16.
+      on(fn) { window.tiny.api.on('audio-tap', fn); },
+    },
+
     // Native clipboard (NSPasteboard in the launcher — no polling spawns).
     clipboard: {
       // -> { kind: 'files'|'image'|'color'|'text'|'empty', changeCount,
