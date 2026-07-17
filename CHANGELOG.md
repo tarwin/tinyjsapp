@@ -18,6 +18,17 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.22.6 — 2026-07-16
+
+- **`tinyjs notarize --dmg`** — rebuild the installer dmg from the *stapled*
+  .app. `stapler` mutates the bundle in place after Apple's verdict, so a dmg
+  made at `build --dmg` time holds the pre-staple .app with no ticket embedded —
+  online Gatekeeper hides this (it fetches the ticket), but offline / first
+  launch before network it blocks the app. `notarize` now rebuilds the dmg from
+  the stapled bundle when `--dmg` is passed, and refreshes an existing dmg on
+  disk automatically (that copy is guaranteed stale). Ship a dmg with
+  `tinyjs build --dmg && tinyjs notarize --dmg`.
+
 ## 0.22.5 — 2026-07-16
 
 - **`chrome: { acceptsFirstMouse: true }`** — opt a window into delivering the

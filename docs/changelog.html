@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.22.6 <span class="date">2026-07-16</span></h2>
+      <ul>
+        <li><b><code>tinyjs notarize --dmg</code> rebuilds the installer from the stapled .app.</b> <code>stapler</code> mutates the bundle in place after Apple's verdict, so a dmg made at <code>build --dmg</code> time holds the pre-staple .app with no ticket embedded — online Gatekeeper hides this (it fetches the ticket), but offline / first launch before network it blocks the app. <code>notarize</code> now rebuilds the dmg from the stapled bundle when <code>--dmg</code> is passed, and refreshes an existing dmg on disk automatically (that copy is guaranteed stale). Ship a dmg with <code>tinyjs build --dmg &amp;&amp; tinyjs notarize --dmg</code>.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.22.5 <span class="date">2026-07-16</span></h2>
       <ul>
         <li><b><code>chrome: { acceptsFirstMouse: true }</code>.</b> Opt a window into delivering the click that focuses it straight through to the page. macOS normally swallows that first click into web content ("click once to focus, again to act"), which also bites between an app's own windows and makes an unfocused window's DOM drag region need an extra click. On per window (main or secondary), via <code>tiny.win.setChrome</code>, <code>app.openWindow</code>'s <code>chrome</code>, or <code>tinyjs.json</code> <code>"chrome"</code> (applied before first paint); reported back in <code>getState().chrome</code>. Off by default — matches the platform, no change for existing apps.</li>

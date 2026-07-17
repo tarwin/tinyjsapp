@@ -594,7 +594,11 @@ or `TINYJS_SIGN_IDENTITY` for a Developer ID).
 .app plus an /Applications shortcut, the classic installer image. With a real
 Developer ID, `tinyjs notarize` submits the built .app via `notarytool`
 (keychain profile from tinyjs.json `"notarize": { "profile": … }` or
-`TINYJS_NOTARY_PROFILE`) and staples the ticket.
+`TINYJS_NOTARY_PROFILE`) and staples the ticket. Pass `tinyjs notarize --dmg`
+to also rebuild the dmg from the **stapled** .app — a dmg made at build time
+holds the pre-staple bundle, so its ticket is missing and offline Gatekeeper
+rejects it. (If a dmg already exists on disk, `notarize` refreshes it
+automatically, since that copy is guaranteed stale.)
 
 ### Distributing to other people (Developer ID + notarization)
 
@@ -640,8 +644,9 @@ valid on your own registered devices — not for distribution. One-time setup:
 
    and point `tinyjs.json` at the profile:
    `"notarize": { "profile": "tinyjs-notary" }`.
-5. **Ship**: `tinyjs build && tinyjs notarize` (add `--dmg` to the build for
-   an installer image). The stapled .app opens anywhere, no warnings.
+5. **Ship**: `tinyjs build && tinyjs notarize` (for a dmg installer, use
+   `tinyjs build --dmg && tinyjs notarize --dmg` so the image is rebuilt from
+   the stapled .app). The stapled .app opens anywhere, no warnings.
 
 ### Shipping updates (auto-update)
 

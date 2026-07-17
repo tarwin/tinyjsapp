@@ -23,6 +23,8 @@ tinyjs build        # dist/<name> binary + dist/<Name>.app (codesigned)
                     #   --dmg: also dist/<name>-<ver>.dmg installer image
 tinyjs publish      # build + dist/publish/<name>-<ver>.zip + auto-update manifest
 tinyjs notarize     # notarytool submit + staple (needs Developer ID + profile)
+                    #   --dmg: rebuild the dmg from the stapled .app (else its
+                    #   ticket is missing; auto-rebuilt if a dmg already exists)
 TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 ```
 

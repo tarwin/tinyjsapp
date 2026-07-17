@@ -575,6 +575,24 @@ async function cmdDev() {
   }
 }
 
+// Installer disk image: the .app plus an /Applications shortcut. Kept as a
+// helper so `notarize` can rebuild it from the STAPLED .app — a dmg made at
+// build time holds the pre-staple bundle, so offline Gatekeeper can't find the
+// ticket inside it.
+async function makeDmg(cfg, APP) {
+  console.log('==> creating dmg');
+  const STAGE = '.build/dmg';
+  await run(['rm', '-rf', STAGE]);
+  await tjs.makeDir(STAGE, { recursive: true });
+  await run(['cp', '-R', APP, STAGE + '/']);
+  await run(['ln', '-s', '/Applications', STAGE + '/Applications']);
+  const dmg = 'dist/' + cfg.name + '-' + (cfg.version || '0.0.0') + '.dmg';
+  await run(['hdiutil', 'create', '-volname', cfg.title, '-srcfolder', STAGE,
+             '-ov', '-quiet', '-format', 'UDZO', dmg]);
+  console.log('    ' + dmg);
+  return dmg;
+}
+
 async function cmdBuild() {
   const cfg = await loadConfig();
   await generateBuild(cfg);
@@ -740,18 +758,9 @@ async function cmdBuild() {
   }
 
   // Optional installer disk image: the .app plus an /Applications shortcut.
-  if (args.includes('--dmg')) {
-    console.log('==> creating dmg');
-    const STAGE = '.build/dmg';
-    await run(['rm', '-rf', STAGE]);
-    await tjs.makeDir(STAGE, { recursive: true });
-    await run(['cp', '-R', APP, STAGE + '/']);
-    await run(['ln', '-s', '/Applications', STAGE + '/Applications']);
-    const dmg = 'dist/' + cfg.name + '-' + (cfg.version || '0.0.0') + '.dmg';
-    await run(['hdiutil', 'create', '-volname', cfg.title, '-srcfolder', STAGE,
-               '-ov', '-quiet', '-format', 'UDZO', dmg]);
-    console.log('    ' + dmg);
-  }
+  // Note: this dmg holds the un-notarized .app — `notarize --dmg` rebuilds it
+  // from the stapled bundle so it validates offline.
+  if (args.includes('--dmg')) await makeDmg(cfg, APP);
 
   console.log('==> done');
   await run(['ls', '-lh', 'dist/' + cfg.name, 'dist/launcher']);
@@ -799,6 +808,13 @@ async function cmdNotarize() {
   await run(['xcrun', 'notarytool', 'submit', zip, '--keychain-profile', profile, '--wait']);
   console.log('==> stapling ticket');
   await run(['xcrun', 'stapler', 'staple', APP]);
+
+  // Rebuild the installer dmg from the now-stapled .app. A dmg made at build
+  // time contains the pre-staple bundle (no ticket), which offline Gatekeeper
+  // rejects — so refresh it whenever --dmg is passed, or whenever one already
+  // exists on disk (from `build --dmg`), since that copy is guaranteed stale.
+  const dmg = 'dist/' + cfg.name + '-' + (cfg.version || '0.0.0') + '.dmg';
+  if (args.includes('--dmg') || (await exists(dmg))) await makeDmg(cfg, APP);
   console.log('==> done: ' + APP + ' is notarized');
 }
 
@@ -870,6 +886,8 @@ usage:
   tinyjs publish      build + zip the .app + auto-update manifest
                       (--notes "text" | --notes-file FILE → manifest notes)
   tinyjs notarize     submit dist/<Name>.app to Apple notarization + staple
+                      (--dmg: also rebuild dist/<name>-<version>.dmg from the
+                      stapled .app; auto-rebuilt if a dmg already exists)
   tinyjs update       update the tinyjs CLI itself (--check: only report)
   tinyjs uninstall    remove ~/.tinyjs and the PATH symlink (--yes: no prompt)
   tinyjs version      print version`);
