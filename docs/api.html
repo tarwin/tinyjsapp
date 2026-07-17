@@ -440,15 +440,21 @@ await <b>tiny.clipboard.changeCount</b>();   <i>// cheap "did it change?" probe<
   drawMeter(peak);                              <i>// samples interleave by `channels`</i>
 });
 <b>tiny.audioTap.stop</b>();                            <i>// (or the owning window closing)</i></pre>
-    <p class="note"><code>scope:'app'</code> taps only your app and needs no
-    prompt; <code>scope:'system'</code> hears every app and trips the "System
-    Audio Recording" permission (<code>excludeSelf</code> drops your own output).
-    <code>start()</code> throws an Error with a <code>.code</code>:
-    <code>unsupported</code> (pre-14.4), <code>not-declared</code> (manifest
-    missing the scope), <code>denied</code> (TCC refused — also shows up as
-    silent chunks) or <code>failed</code>. Under <code>tinyjs dev</code> the tap
-    is silent — the terminal, not your app, owns the audio; build the .app to
-    hear it.</p>
+    <p class="note">Authorization is deferred to the first <code>start()</code> —
+    declaring the manifest key does nothing until you call it, so you can
+    lazy-arm the tap the first time a meter appears. The <b>first</b>
+    <code>start()</code> prompts for "System Audio Recording" — even
+    <code>scope:'app'</code>, because WKWebView renders audio in a separate
+    <code>com.apple.WebKit.GPU</code> helper, making the tap a cross-process
+    capture; the grant persists per app. <code>scope:'system'</code> also hears
+    other apps (<code>excludeSelf</code> drops your own). <code>start()</code>
+    throws an Error with a <code>.code</code>: <code>unsupported</code>
+    (pre-14.4), <code>not-declared</code> (manifest missing the scope),
+    <code>denied</code> (TCC refused) or <code>failed</code>; a denied tap
+    can't be reported synchronously — it arrives as silent (all-zero) chunks.
+    Under <code>tinyjs dev</code> the audio "owner" is your terminal, not your
+    app, so the tap delivers real PCM only if that terminal holds the grant —
+    otherwise silence; a built .app owns its own grant.</p>
   </section>
 
   <section id="keystrokes">

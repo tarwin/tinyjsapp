@@ -255,10 +255,16 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames }) => {
   meter.style.height = (peak * 100) + '%';       // channels/frames describe the layout
 });
 // tiny.audioTap.stop();  // (or the owning window closing) tears the tap down.
-// macOS 14.4+. `scope:'app'` taps only your app (no prompt); `scope:'system'`
-// hears every app and trips the System Audio Recording permission. NOTE: under
-// `tinyjs dev` the tap is silent (the terminal, not your app, is the audio
-// "owner"); build the .app to hear it — or grant your terminal the permission.
+// macOS 14.4+. Authorization is deferred to the first start() — declaring the
+// manifest key does nothing until you call it — so you can lazy-arm the tap the
+// first time a meter is shown. The FIRST start() prompts for "System Audio
+// Recording" (even scope:'app' — WKWebView renders audio in a separate
+// com.apple.WebKit.GPU helper, so the tap is a cross-process capture); the
+// grant persists per app. scope:'system' also hears other apps (excludeSelf
+// drops your own). NOTE: under `tinyjs dev` the audio "owner" is your terminal,
+// not your app — the tap delivers real PCM only if that terminal holds the
+// System Audio Recording grant, otherwise silent chunks; a built .app owns its
+// own grant. Denial can't be reported synchronously — it surfaces as silence.
 
 // custom right-click menu (native NSMenu; null restores WebKit's default)
 tiny.menu.setContext([{ id: 'copy-path', label: 'Copy Path' }, { separator: true }, { id: 'del', label: 'Delete' }]);

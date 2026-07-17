@@ -35,14 +35,17 @@ https://tinyjs.app/changelog.
   downmixes to stereo Int16, chunked out to the page over the existing bridge.
   `scope:'app'` selects exactly this app's audio process objects by matching
   the *responsible pid* (WKWebView renders audio in a `com.apple.WebKit.GPU`
-  XPC helper that isn't a child process) — and, verified in a real bundle,
-  tapping your **own** app tree needs no permission prompt and yields real
-  audio (RMS matched a test tone to 3 decimals). `scope:'system'` trips the
-  "System Audio Recording" permission. Survives output-device changes
-  (headphones) by re-arming. Cross-platform by design (Windows process-loopback
-  / WASAPI, Linux PipeWire), macOS-only for now. Note: silent under
-  `tinyjs dev` (the terminal, not the app, is the audio owner) — build the
-  .app to hear it.
+  XPC helper that isn't a child process). Authorization is deferred to the
+  first `start()` (declaring the manifest key does nothing until then), so the
+  tap can be lazy-armed; that first `start()` prompts for "System Audio
+  Recording" — even `scope:'app'`, since the GPU-helper tap is a cross-process
+  capture — and once granted yields real audio (verified in a real bundle: RMS
+  matched a test tone to 3 decimals). `scope:'system'` also hears other apps.
+  Survives output-device changes (headphones) by re-arming. Cross-platform by
+  design (Windows process-loopback / WASAPI, Linux PipeWire), macOS-only for
+  now. Note: under `tinyjs dev` the audio *owner* is the terminal, not the app,
+  so the tap delivers only if that terminal holds the grant (else silence);
+  a built .app owns its own grant.
 - **docs:** corrected the `tiny.proxyURL` docs — driving `<audio>` through the
   proxy needs a byte-range-capable (HTTP `206`) stream; a non-seekable live
   stream that answers `200` can't play through the proxy element (fall back to

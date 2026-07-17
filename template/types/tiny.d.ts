@@ -579,6 +579,12 @@ declare interface Tiny {
      * of `'unsupported'` (pre-14.4), `'not-declared'` (manifest missing the
      * scope), `'denied'` (TCC refused — surfaces as silent chunks) or
      * `'failed'` (Core Audio error). Idempotent for identical options.
+     *
+     * Authorization is deferred to this call (declaring the manifest key does
+     * nothing until you call it) — so you can lazy-arm the tap. The *first*
+     * `start()` prompts for "System Audio Recording", even for `scope:'app'`
+     * (WKWebView renders audio in a separate `com.apple.WebKit.GPU` helper, so
+     * the tap is a cross-process capture); the grant persists per app.
      */
     start(opts?: {
       /** 'app' (default) = this app's own output; 'system' = everything. */

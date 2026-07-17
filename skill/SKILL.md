@@ -124,7 +124,12 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
   const bin = atob(pcm), n = bin.length >> 1;   // base64 -> interleaved LE Int16
   // sample i: ((bin.charCodeAt(2*i) | bin.charCodeAt(2*i+1)<<8) << 16 >> 16) / 32768
 });                                              // tiny.audioTap.stop()
-// NOTE: silent under `tinyjs dev` (terminal owns the audio); build the .app.
+// Auth is deferred to the FIRST start() (declaring the manifest does nothing
+// until then — lazy-arm friendly). That first start() prompts for "System
+// Audio Recording" even for scope:'app' (WKWebView audio is in a separate
+// com.apple.WebKit.GPU helper = cross-process). Under `tinyjs dev` the OWNER
+// is the terminal, so it delivers only if the terminal holds the grant, else
+// silent; a built .app owns its own grant. Denial surfaces as silent chunks.
 
 tiny.win.setTitle(t); tiny.win.setSize(w, h);
 await tiny.win.openFile();                  // path | null (native panel)
