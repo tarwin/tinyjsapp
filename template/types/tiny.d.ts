@@ -467,6 +467,16 @@ declare interface Tiny {
    *  pass { stream: true } for a live streaming body (res.body.getReader()). */
   fetch(url: string, init?: TinyFetchInit): Promise<Response>;
 
+  /** A same-app URL (tiny-media://…) that streams a remote http(s) resource
+   *  through the native layer with permissive CORS. Drop it into a media
+   *  element to get a cross-origin stream (e.g. internet radio) into Web
+   *  Audio — a MediaElementSource on a cross-origin <audio> outputs silence by
+   *  spec, but this URL is CORS-approved so the EQ/analyser graph gets real
+   *  samples. Set the element's crossOrigin to 'anonymous':
+   *    audio.crossOrigin = 'anonymous';
+   *    audio.src = tiny.proxyURL('https://example.com/stream.mp3'); */
+  proxyURL(url: string): string;
+
   log(msg: string): Promise<any>;
   quit(): Promise<any>;
   /** Desktop notification. Packaged + signed apps get native Notification

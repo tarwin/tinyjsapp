@@ -219,6 +219,19 @@ const reader = radio.body.getReader();
 for (;;) { const { value, done } = await reader.read(); if (done) break; /* feed decodeAudioData, MediaSource, … */ }
 // reader.cancel() (or closing the window) tears the upstream connection down.
 
+// tiny.proxyURL — get a cross-origin stream (internet radio) INTO Web Audio.
+// A MediaElementSource on a cross-origin <audio> outputs silence by spec;
+// proxyURL streams the remote through the native layer with permissive CORS,
+// so the element is untainted and the full EQ/analyser graph gets real samples.
+const audio = document.querySelector('audio');
+audio.crossOrigin = 'anonymous';
+audio.src = tiny.proxyURL('https://ice1.somafm.com/groovesalad-128-mp3');
+const ctx = new AudioContext();
+ctx.createMediaElementSource(audio).connect(ctx.createAnalyser()); // …→ EQ → destination
+audio.play();
+// The native layer does the HTTP (redirects, byte-range/seek), so playback
+// keeps CoreMedia's buffering/reconnect. http/https upstreams only.
+
 // system-wide hotkeys (work while other apps are focused)
 tiny.hotkey.register('boss', 'cmd+shift+k');
 tiny.hotkey.on((id) => tiny.win.show());

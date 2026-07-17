@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.24.0 <span class="date">2026-07-16</span></h2>
+      <ul>
+        <li><b><code>tiny.proxyURL(url)</code> — a cross-origin stream (internet radio) into Web Audio.</b> A <code>MediaElementSource</code> on a cross-origin <code>&lt;audio&gt;</code> outputs silence by spec, so radio can't drive an EQ or analyser. <code>proxyURL</code> returns a same-app <code>tiny-media://…</code> URL that streams the remote http(s) resource through the native layer (NSURLSession — redirects, byte-range/seek, native buffering) and injects <code>Access-Control-Allow-Origin: *</code>; with <code>&lt;audio crossorigin="anonymous"&gt;</code> the element is CORS-approved and untainted, so the full Web Audio graph gets real samples. Implemented as a <code>WKURLSchemeHandler</code> registered on every webview via a swizzle of <code>-[WKWebView initWithFrame:configuration:]</code> — no backend hop, no base64, no TCP port. Verified end-to-end: a <code>MediaElementSource</code> on a proxied SomaFM stream drove a live <code>AnalyserNode</code> with real (non-silent) waveform data. macOS only for now; the design maps to WebView2 and WebKitGTK when those backends land.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.23.0 <span class="date">2026-07-16</span></h2>
       <ul>
         <li><b><code>tiny.fetch(url, init)</code> — a fetch that runs in the backend, so no CORS.</b> The request runs in the native process, so it has no CORS, CSP, or mixed-content limits: the page can reach any origin. Same shape as <code>window.fetch</code> and resolves to a real <code>Response</code> (<code>res.json()</code> / <code>res.text()</code> / <code>res.headers</code> / <code>res.ok</code> all work); request bodies can be strings, <code>ArrayBuffer</code>/typed arrays, <code>Blob</code>, or <code>URLSearchParams</code>. Pass <code>{ stream: true }</code> for a live streaming body — the backend holds the connection open and the page pulls chunks on demand (<code>res.body.getReader()</code>) with natural backpressure, which is what an endless source like internet radio needs (a buffered fetch would never resolve); <code>reader.cancel()</code> or closing the window tears the upstream connection down. Reuses the existing request/response bridge (base64 chunks over CALL→RET), so no new wire frame and no launcher change. A page with CORS-free network reach has the app's full network reach — not a new trust boundary (every page already holds an RPC channel to a backend with full system access), but worth knowing.</li>

@@ -109,6 +109,12 @@ await tiny.app.info();   // { version: <app>, tinyjs: <built with>, runtime: <tx
 const r = await tiny.fetch(url, { method, headers, body });     // buffered
 const s = await tiny.fetch(streamUrl, { stream: true });        // s.body.getReader()
 
+// Get a cross-origin stream (internet radio) INTO Web Audio — a
+// MediaElementSource on a cross-origin <audio> is silent by spec; proxyURL
+// streams it through the native layer with permissive CORS so it's untainted.
+audio.crossOrigin = 'anonymous';
+audio.src = tiny.proxyURL('https://host/stream.mp3');  // now drives EQ/analyser
+
 tiny.win.setTitle(t); tiny.win.setSize(w, h);
 await tiny.win.openFile();                  // path | null (native panel)
 await tiny.win.openFiles();                 // paths[] | null

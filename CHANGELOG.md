@@ -18,6 +18,24 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.24.0 — 2026-07-16
+
+- **`tiny.proxyURL(url)`** — get a cross-origin stream (internet radio) into
+  Web Audio. A `MediaElementSource` on a cross-origin `<audio>` outputs silence
+  by spec, so radio can't drive an EQ or analyser. `proxyURL` returns a same-app
+  `tiny-media://…` URL that streams the remote http(s) resource through the
+  native layer (NSURLSession — redirects, byte-range/seek, native buffering)
+  and injects `Access-Control-Allow-Origin: *`; with `<audio crossorigin=
+  "anonymous">` the element is CORS-approved and untainted, so the full Web
+  Audio graph gets real samples. Implemented as a `WKURLSchemeHandler`
+  registered on every webview via a swizzle of `-[WKWebView initWith
+  Frame:configuration:]` — no backend hop, no base64, no TCP port. Verified
+  end-to-end: a `MediaElementSource` on a proxied SomaFM stream drove a live
+  `AnalyserNode` with real (non-silent) waveform data. macOS only for now; the
+  design (custom scheme + streamed upstream + injected CORS) maps to WebView2
+  (`WebResourceRequested`) and WebKitGTK (`register_uri_scheme`) when those
+  backends land.
+
 ## 0.23.0 — 2026-07-16
 
 - **`tiny.fetch(url, init)`** — a `fetch` that runs in the backend (a native

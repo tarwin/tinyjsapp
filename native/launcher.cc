@@ -3825,6 +3825,161 @@ static void install_first_mouse_hook() {
           "c@:@");
 }
 
+// --- media proxy scheme handler (tiny.proxyURL) --------------------------------
+// A page can't run a cross-origin stream (internet radio) through Web Audio: a
+// MediaElementSource on a cross-origin <audio> outputs silence by spec, and a
+// cross-origin fetch without CORS is blocked outright. This handler serves a
+// custom scheme that proxies the upstream through the native layer and injects
+// Access-Control-Allow-Origin:*, so <audio crossorigin="anonymous"
+// src="tiny-media://…"> (or a cors fetch) is CORS-approved and its samples
+// reach the EQ/analyser graph. The launcher does the HTTP itself (NSURLSession
+// — native buffering, redirects, byte-range/seek, HLS), so there's no backend
+// hop and no base64. tiny.proxyURL(remote) builds the URL; the handler is
+// registered on every webview via a swizzle of -[WKWebView init…] (below).
+#define TINY_MEDIA_SCHEME @"tiny-media"
+
+@interface TinyMediaScheme : NSObject <WKURLSchemeHandler, NSURLSessionDataDelegate>
+@end
+
+@implementation TinyMediaScheme {
+  NSURLSession *_session;
+  NSMutableSet *_live;         // id<WKURLSchemeTask> still running (page side)
+  NSMapTable *_dataToScheme;   // NSURLSessionTask* -> id<WKURLSchemeTask>
+}
+- (instancetype)init {
+  if ((self = [super init])) {
+    _live = [[NSMutableSet alloc] init];
+    _dataToScheme = [[NSMapTable strongToStrongObjectsMapTable] retain];
+    NSURLSessionConfiguration *sc =
+        [NSURLSessionConfiguration defaultSessionConfiguration];
+    sc.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    // Deliver on the main queue so start/stop and the data callbacks are all
+    // serialized there — the _live guard then needs no locks and we never
+    // touch a task WebKit has already stopped (which would raise).
+    _session = [[NSURLSession sessionWithConfiguration:sc
+                                              delegate:self
+                                         delegateQueue:[NSOperationQueue mainQueue]] retain];
+  }
+  return self;
+}
+// The live scheme task for an upstream data task, or nil if it was stopped.
+- (id<WKURLSchemeTask>)liveFor:(NSURLSessionTask *)dt {
+  id<WKURLSchemeTask> st = [_dataToScheme objectForKey:dt];
+  return (st && [_live containsObject:st]) ? st : nil;
+}
+- (void)webView:(WKWebView *)wv startURLSchemeTask:(id<WKURLSchemeTask>)task {
+  NSURLComponents *c = [NSURLComponents componentsWithURL:task.request.URL
+                                  resolvingAgainstBaseURL:NO];
+  NSString *upstream = nil;
+  for (NSURLQueryItem *qi in c.queryItems)
+    if ([qi.name isEqualToString:@"u"]) upstream = qi.value; // already decoded
+  NSURL *uu = upstream ? [NSURL URLWithString:upstream] : nil;
+  NSString *sch = uu.scheme.lowercaseString;
+  if (!uu || !([sch isEqualToString:@"http"] || [sch isEqualToString:@"https"])) {
+    [task didFailWithError:[NSError errorWithDomain:@"tinyjs" code:400
+        userInfo:@{NSLocalizedDescriptionKey:
+                   @"tiny.proxyURL: only http/https URLs can be proxied"}]];
+    return;
+  }
+  [_live addObject:task];
+  NSMutableURLRequest *up = [NSMutableURLRequest requestWithURL:uu];
+  // Forward the bits that matter for media: range (seek) + any UA the page set.
+  NSString *range = [task.request valueForHTTPHeaderField:@"Range"];
+  if (range) [up setValue:range forHTTPHeaderField:@"Range"];
+  NSString *ua = [task.request valueForHTTPHeaderField:@"User-Agent"];
+  if (ua) [up setValue:ua forHTTPHeaderField:@"User-Agent"];
+  NSURLSessionDataTask *dt = [_session dataTaskWithRequest:up];
+  [_dataToScheme setObject:task forKey:dt];
+  [dt resume];
+}
+- (void)webView:(WKWebView *)wv stopURLSchemeTask:(id<WKURLSchemeTask>)task {
+  [_live removeObject:task];
+  for (NSURLSessionTask *k in [[_dataToScheme keyEnumerator] allObjects]) {
+    if ([_dataToScheme objectForKey:k] == task) {
+      [k cancel];
+      [_dataToScheme removeObjectForKey:k];
+      break;
+    }
+  }
+}
+- (void)URLSession:(NSURLSession *)s
+          dataTask:(NSURLSessionDataTask *)dt
+didReceiveResponse:(NSURLResponse *)response
+ completionHandler:(void (^)(NSURLSessionResponseDisposition))done {
+  id<WKURLSchemeTask> st = [self liveFor:dt];
+  if (!st) { done(NSURLSessionResponseCancel); return; }
+  NSMutableDictionary *h = [NSMutableDictionary dictionary];
+  NSInteger code = 200;
+  if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+    NSHTTPURLResponse *hr = (NSHTTPURLResponse *)response;
+    code = hr.statusCode;
+    // Pass upstream headers through (Content-Type, Content-Length, Accept-
+    // Ranges, Content-Range for seek…) but drop any ACAO — we set our own.
+    for (id k in hr.allHeaderFields) {
+      if ([[[k description] lowercaseString] hasPrefix:@"access-control-"]) continue;
+      h[k] = hr.allHeaderFields[k];
+    }
+  }
+  if (!h[@"Content-Type"] && response.MIMEType) h[@"Content-Type"] = response.MIMEType;
+  h[@"Access-Control-Allow-Origin"] = @"*";
+  h[@"Access-Control-Allow-Headers"] = @"*";
+  h[@"Access-Control-Expose-Headers"] = @"*";
+  NSHTTPURLResponse *out = [[[NSHTTPURLResponse alloc]
+      initWithURL:st.request.URL statusCode:code HTTPVersion:@"HTTP/1.1"
+     headerFields:h] autorelease];
+  @try { [st didReceiveResponse:out]; }
+  @catch (NSException *e) { done(NSURLSessionResponseCancel); return; }
+  done(NSURLSessionResponseAllow);
+}
+- (void)URLSession:(NSURLSession *)s
+          dataTask:(NSURLSessionDataTask *)dt
+    didReceiveData:(NSData *)data {
+  id<WKURLSchemeTask> st = [self liveFor:dt];
+  if (!st) return;
+  @try { [st didReceiveData:data]; } @catch (NSException *e) {}
+}
+- (void)URLSession:(NSURLSession *)s
+              task:(NSURLSessionTask *)dt
+didCompleteWithError:(NSError *)err {
+  id<WKURLSchemeTask> st = [_dataToScheme objectForKey:dt];
+  [_dataToScheme removeObjectForKey:dt];
+  if (!st || ![_live containsObject:st]) return;
+  [_live removeObject:st];
+  @try {
+    if (err) [st didFailWithError:err];
+    else [st didFinish];
+  } @catch (NSException *e) {}
+}
+@end
+
+static TinyMediaScheme *g_media_handler = nil;
+typedef id (*WKInitIMP)(id, SEL, CGRect, id);
+static WKInitIMP g_orig_wk_init = nullptr;
+
+// Every WKWebView (the library's main one and our secondary windows) is built
+// with -[initWithFrame:configuration:]; register the media scheme on the config
+// here, before the original init consumes it (handlers can't be added after).
+static id tiny_wk_init(id self, SEL _cmd, CGRect frame, id config) {
+  @autoreleasepool {
+    if (config && g_media_handler) {
+      @try {
+        if (![config urlSchemeHandlerForURLScheme:TINY_MEDIA_SCHEME])
+          [config setURLSchemeHandler:g_media_handler
+                         forURLScheme:TINY_MEDIA_SCHEME];
+      } @catch (NSException *e) {}
+    }
+  }
+  return g_orig_wk_init ? g_orig_wk_init(self, _cmd, frame, config) : self;
+}
+
+// Must run BEFORE webview_create (the main webview's init happens inside it).
+static void install_media_scheme_hook() {
+  g_media_handler = [[TinyMediaScheme alloc] init];
+  g_orig_wk_init = (WKInitIMP)swizzle([WKWebView class],
+      @selector(initWithFrame:configuration:), (IMP)tiny_wk_init,
+      "@@:{CGRect={CGPoint=dd}{CGSize=dd}}@");
+}
+
 // Switch a window between titled (rounded corners) and borderless (square).
 // Borderless keeps Resizable (drag-resize edges) and the shadow; the page
 // owns every pixel and moves the window via data-tiny-drag, exactly like
@@ -5402,6 +5557,12 @@ int main(int argc, char *argv[]) {
     if (root.length)
       g_read_access = [[root stringByExpandingTildeInPath] UTF8String];
   }
+#endif
+
+#ifdef __APPLE__
+  // Must precede webview_create: it swizzles WKWebView init so the main
+  // webview's config gets the tiny-media scheme handler before it's built.
+  install_media_scheme_hook();
 #endif
 
   g_w = webview_create(1 /* debug: enables devtools */, nullptr);

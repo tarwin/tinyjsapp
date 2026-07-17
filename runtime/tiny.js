@@ -88,6 +88,17 @@
     // — required for endless sources like internet radio.
     fetch: (url, init) => tinyFetch(url, init),
 
+    // Same-app URL that streams a remote http(s) resource through the native
+    // layer with permissive CORS. Drop it into a media element to get a
+    // cross-origin stream (internet radio) into Web Audio — a MediaElementSource
+    // on a cross-origin <audio> outputs silence by spec, but this URL is
+    // CORS-approved so the EQ/analyser graph gets real samples:
+    //   audio.crossOrigin = 'anonymous';
+    //   audio.src = tiny.proxyURL('https://example.com/stream.mp3');
+    // The native layer does the HTTP (redirects, byte-range/seek), so playback
+    // keeps CoreMedia's buffering/reconnect. http/https upstreams only.
+    proxyURL: (url) => 'tiny-media://proxy/?u=' + encodeURIComponent(String(url)),
+
     log: (msg) => call('log', { msg }),
     quit: () => call('quit'),
     // opts: { id?, subtitle?, sound? }. Packaged apps get real Notification

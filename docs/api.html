@@ -224,6 +224,22 @@ reader.cancel();  <i>// (or closing the window) tears the upstream connection do
     <p class="note">A page with CORS-free network reach has the app's full network
     reach — for tinyjs that's not a new trust boundary (every page already holds an
     RPC channel to a backend with full system access), but worth knowing.</p>
+
+    <h3><code>tiny.proxyURL(url)</code> — a cross-origin stream into Web Audio</h3>
+    <p>A <code>MediaElementSource</code> on a <b>cross-origin</b> <code>&lt;audio&gt;</code>
+    (internet radio) outputs silence by spec, so it can't drive an EQ or analyser.
+    <code>tiny.proxyURL</code> returns a same-app <code>tiny-media://</code> URL that
+    streams the remote through the native layer with permissive CORS, so the element
+    is untainted and the full Web Audio graph gets real samples.</p>
+    <pre>const audio = document.querySelector('audio');
+audio.crossOrigin = 'anonymous';
+audio.src = <b>tiny.proxyURL</b>('https://ice1.somafm.com/groovesalad-128-mp3');
+const ctx = new AudioContext();
+ctx.createMediaElementSource(audio)
+   .connect(ctx.createAnalyser());   <i>// …→ your EQ → ctx.destination</i>
+audio.play();</pre>
+    <p class="note">The native layer does the HTTP (redirects, byte-range/seek), so
+    playback keeps CoreMedia's buffering and reconnect. http/https upstreams only.</p>
   </section>
 
   <section id="window">
