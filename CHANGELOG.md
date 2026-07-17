@@ -18,6 +18,18 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.25.1 — 2026-07-17
+
+- **docs:** corrected `tiny.audioTap` TCC behavior. The first `start()` **does**
+  prompt for "System Audio Recording" — even `scope:'app'`, because WKWebView
+  renders audio in a separate `com.apple.WebKit.GPU` helper, so the tap is a
+  cross-process capture (the grant then persists per app, which is why repeat
+  runs don't re-prompt). Authorization is deferred to the first `start()`
+  (declaring the manifest key does nothing at runtime), so the tap can be
+  lazy-armed. Under `tinyjs dev` the audio *owner* is the terminal, so the tap
+  delivers real PCM only if that terminal holds the grant (else silent chunks).
+  No code change — the implementation already defers to `start()`.
+
 ## 0.25.0 — 2026-07-17
 
 - **`tiny.audioTap`** — read the app's (or the system's) *rendered* audio
