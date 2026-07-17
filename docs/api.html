@@ -85,6 +85,7 @@
     <a href="#config">tinyjs.json</a>
     <a href="#backend">backend</a>
     <a href="#frontend">tiny.api</a>
+    <a href="#fetch">tiny.fetch</a>
     <a href="#window">tiny.win</a>
     <a href="#windows">windows</a>
     <a href="#dialogs">dialogs</a>
@@ -199,6 +200,30 @@ db.prepare('SELECT * FROM notes').all();  <i>// [{ id: 1, text: 'hello' }]</i></
 <i>// notify() never rejects — it resolves false if delivery failed, so</i>
 <i>// fire-and-forget is safe</i>
 await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i></pre>
+  </section>
+
+  <section id="fetch">
+    <h2>tiny.fetch <span class="tag">networking without CORS</span></h2>
+    <p>Like <code>window.fetch</code>, but the request runs in the backend (a native
+    process) — <b>no CORS, CSP, or mixed-content limits</b>, so the page can reach any
+    origin. Resolves to a real <code>Response</code>.</p>
+    <pre>const r = await <b>tiny.fetch</b>('https://api.example.com/x', {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ q: 'hi' }),
+});
+await r.json();   <i>// r.ok, r.status, r.headers, r.text(), r.body … all work</i>
+
+<i>// { stream: true } → a LIVE streaming body. The backend holds the</i>
+<i>// connection and the page pulls chunks on demand (backpressured) — the</i>
+<i>// whole point for endless sources like internet radio, where a buffered</i>
+<i>// fetch would never resolve.</i>
+const radio = await <b>tiny.fetch</b>(streamUrl, { <b>stream: true</b> });
+const reader = radio.body.getReader();
+for (;;) { const { value, done } = await reader.read(); if (done) break; <i>/* … */</i> }
+reader.cancel();  <i>// (or closing the window) tears the upstream connection down</i></pre>
+    <p class="note">A page with CORS-free network reach has the app's full network
+    reach — for tinyjs that's not a new trust boundary (every page already holds an
+    RPC channel to a backend with full system access), but worth knowing.</p>
   </section>
 
   <section id="window">

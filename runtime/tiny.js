@@ -5,11 +5,88 @@
   const call = (method, params) => window.__invoke(JSON.stringify({ method, params }));
   const handlers = {};
 
+  // tiny.fetch: like window.fetch, but the request runs in the backend (a
+  // native process) — no CORS, CSP, or mixed-content limits, so the page can
+  // reach any origin. Resolves to a real Response. Small responses arrive
+  // whole; pass { stream: true } for a live streaming body — the Response's
+  // body pulls chunks from the backend on demand (backpressured), which is
+  // what an endless source like internet radio needs (a buffered fetch of a
+  // never-ending stream would never resolve).
+  let fetchSeq = 0;
+  const u8ToB64 = (u8) => {
+    let s = '';
+    for (let i = 0; i < u8.length; i += 0x8000)
+      s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+  const b64ToU8 = (str) => {
+    const bin = atob(str);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  };
+  const headersToObject = (h) => {
+    if (!h) return undefined;
+    if (typeof Headers !== 'undefined' && h instanceof Headers) {
+      const o = {}; h.forEach((v, k) => { o[k] = v; }); return o;
+    }
+    if (Array.isArray(h)) { const o = {}; for (const [k, v] of h) o[k] = v; return o; }
+    return h;
+  };
+  const normalizeBody = async (body) => {
+    if (body == null) return {};
+    if (typeof body === 'string') return { bodyText: body };
+    if (body instanceof URLSearchParams) return { bodyText: body.toString() };
+    if (body instanceof ArrayBuffer) return { bodyB64: u8ToB64(new Uint8Array(body)) };
+    if (ArrayBuffer.isView(body)) return { bodyB64: u8ToB64(new Uint8Array(body.buffer, body.byteOffset, body.byteLength)) };
+    if (typeof Blob !== 'undefined' && body instanceof Blob) return { bodyB64: u8ToB64(new Uint8Array(await body.arrayBuffer())) };
+    return { bodyText: String(body) };
+  };
+  const tinyFetch = async (url, init = {}) => {
+    const id = 'f' + (++fetchSeq);
+    const streaming = !!init.stream;
+    const { bodyText, bodyB64 } = await normalizeBody(init.body);
+    const head = await call('fetch', {
+      url: String(url), id, stream: streaming,
+      method: init.method, headers: headersToObject(init.headers),
+      redirect: init.redirect, bodyText, bodyB64,
+    });
+    const respInit = { status: head.status, statusText: head.statusText, headers: head.headers };
+    let resp;
+    if (streaming) {
+      const stream = new ReadableStream({
+        async pull(controller) {
+          const r = await call('fetch.pull', { id });
+          if (r.done) { controller.close(); return; }
+          controller.enqueue(b64ToU8(r.bodyB64));
+        },
+        cancel() { return call('fetch.cancel', { id }); },
+      });
+      // 204/205/304 are null-body per spec — a Response body would throw.
+      const nullBody = head.status === 204 || head.status === 205 || head.status === 304;
+      resp = new Response(nullBody ? null : stream, respInit);
+    } else {
+      resp = new Response(head.bodyB64 ? b64ToU8(head.bodyB64) : null, respInit);
+    }
+    // Response.url / .redirected are read-only getters; shadow them so callers
+    // that inspect the post-redirect URL see the real value.
+    try {
+      Object.defineProperty(resp, 'url', { value: head.url, configurable: true });
+      Object.defineProperty(resp, 'redirected', { value: head.redirected, configurable: true });
+    } catch {}
+    return resp;
+  };
+
   window.tiny = {
     api: {
       call,
       on(event, fn) { (handlers[event] ||= []).push(fn); },
     },
+
+    // Backend-proxied fetch (no CORS/CSP). Same shape as window.fetch, returns
+    // a Response. Add { stream: true } for a live body (res.body.getReader())
+    // — required for endless sources like internet radio.
+    fetch: (url, init) => tinyFetch(url, init),
 
     log: (msg) => call('log', { msg }),
     quit: () => call('quit'),

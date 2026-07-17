@@ -18,6 +18,24 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.23.0 — 2026-07-16
+
+- **`tiny.fetch(url, init)`** — a `fetch` that runs in the backend (a native
+  process), so it has **no CORS, CSP, or mixed-content limits**: the page can
+  reach any origin. Same shape as `window.fetch` and resolves to a real
+  `Response` (`res.json()` / `res.text()` / `res.headers` / `res.ok` all work);
+  request bodies can be strings, `ArrayBuffer`/typed arrays, `Blob`, or
+  `URLSearchParams`. Pass `{ stream: true }` for a **live streaming body** —
+  the backend keeps the connection open and the page pulls chunks on demand
+  (`res.body.getReader()`) with natural backpressure. That's what an endless
+  source like internet radio needs, where a buffered fetch would never resolve;
+  `reader.cancel()` (or closing the window) tears the upstream connection down.
+  Transport reuses the existing request/response bridge — chunks travel base64
+  over the CALL→RET channel, so there's no new wire frame and no launcher
+  change. Note: a page with CORS-free network reach has the app's full network
+  reach — not a new trust boundary for tinyjs (every page already has an RPC
+  channel to a backend with full system access), but worth knowing.
+
 ## 0.22.6 — 2026-07-16
 
 - **`tinyjs notarize --dmg`** — rebuild the installer dmg from the *stapled*

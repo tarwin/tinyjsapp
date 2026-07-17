@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.23.0 <span class="date">2026-07-16</span></h2>
+      <ul>
+        <li><b><code>tiny.fetch(url, init)</code> — a fetch that runs in the backend, so no CORS.</b> The request runs in the native process, so it has no CORS, CSP, or mixed-content limits: the page can reach any origin. Same shape as <code>window.fetch</code> and resolves to a real <code>Response</code> (<code>res.json()</code> / <code>res.text()</code> / <code>res.headers</code> / <code>res.ok</code> all work); request bodies can be strings, <code>ArrayBuffer</code>/typed arrays, <code>Blob</code>, or <code>URLSearchParams</code>. Pass <code>{ stream: true }</code> for a live streaming body — the backend holds the connection open and the page pulls chunks on demand (<code>res.body.getReader()</code>) with natural backpressure, which is what an endless source like internet radio needs (a buffered fetch would never resolve); <code>reader.cancel()</code> or closing the window tears the upstream connection down. Reuses the existing request/response bridge (base64 chunks over CALL→RET), so no new wire frame and no launcher change. A page with CORS-free network reach has the app's full network reach — not a new trust boundary (every page already holds an RPC channel to a backend with full system access), but worth knowing.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.22.6 <span class="date">2026-07-16</span></h2>
       <ul>
         <li><b><code>tinyjs notarize --dmg</code> rebuilds the installer from the stapled .app.</b> <code>stapler</code> mutates the bundle in place after Apple's verdict, so a dmg made at <code>build --dmg</code> time holds the pre-staple .app with no ticket embedded — online Gatekeeper hides this (it fetches the ticket), but offline / first launch before network it blocks the app. <code>notarize</code> now rebuilds the dmg from the stapled bundle when <code>--dmg</code> is passed, and refreshes an existing dmg on disk automatically (that copy is guaranteed stale). Ship a dmg with <code>tinyjs build --dmg &amp;&amp; tinyjs notarize --dmg</code>.</li>

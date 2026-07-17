@@ -439,6 +439,20 @@ declare interface TinyShareOptions {
 }
 
 /** The `tiny` global available in every window's page. */
+/** Options for tiny.fetch — a superset of the common RequestInit fields, plus
+ *  `stream` to opt into a live streaming body. */
+declare interface TinyFetchInit {
+  method?: string;
+  headers?: HeadersInit;
+  body?: string | ArrayBuffer | ArrayBufferView | Blob | URLSearchParams;
+  redirect?: RequestRedirect;
+  /** Stream the response body instead of buffering it. The resolved Response's
+   *  `body` pulls chunks from the backend on demand (backpressured) — required
+   *  for endless sources like internet radio, where a buffered fetch would
+   *  never resolve. */
+  stream?: boolean;
+}
+
 declare interface Tiny {
   api: {
     /** Call a backend api method; resolves with its return value. */
@@ -446,6 +460,12 @@ declare interface Tiny {
     /** Subscribe to backend push events (app.push / broadcasts). */
     on(event: string, fn: (data: any) => void): void;
   };
+
+  /** Like window.fetch, but the request runs in the backend (a native
+   *  process) — no CORS, CSP, or mixed-content limits, so the page can reach
+   *  any origin. Resolves to a real Response. Small responses arrive whole;
+   *  pass { stream: true } for a live streaming body (res.body.getReader()). */
+  fetch(url: string, init?: TinyFetchInit): Promise<Response>;
 
   log(msg: string): Promise<any>;
   quit(): Promise<any>;

@@ -103,6 +103,12 @@ tiny.api.on('event-name', (data) => ...)    // <- app.push from backend
 tiny.log(msg); tiny.quit();
 await tiny.app.info();   // { version: <app>, tinyjs: <built with>, runtime: <txiki> }
 
+// Backend-proxied fetch — NO CORS/CSP (runs in the native process). Like
+// window.fetch, returns a real Response. { stream: true } = live streaming
+// body (res.body.getReader()); required for endless sources (internet radio).
+const r = await tiny.fetch(url, { method, headers, body });     // buffered
+const s = await tiny.fetch(streamUrl, { stream: true });        // s.body.getReader()
+
 tiny.win.setTitle(t); tiny.win.setSize(w, h);
 await tiny.win.openFile();                  // path | null (native panel)
 await tiny.win.openFiles();                 // paths[] | null

@@ -769,7 +769,69 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
 
   // Reserved methods every tinyjs exposes; user API is merged on top but
   // cannot shadow the win.* namespace.
+  // tiny.fetch — run WHATWG fetch in the backend (a native process, so no
+  // CORS/CSP/mixed-content and no browser Origin) and hand the result to the
+  // page. Small responses come back whole (base64 in the RET); with
+  // { stream: true } the body stays open and the page pulls it chunk-by-chunk
+  // (fetch.pull), so an endless source (internet radio) streams with natural
+  // backpressure and never buffers unbounded. Keyed by a page-supplied id and
+  // cancelled by fetch.cancel or when the owner window closes.
+  const fetchStreams = new Map(); // id -> { reader, win }
+  const u8ToB64 = (u8) => {
+    let s = '';
+    for (let i = 0; i < u8.length; i += 0x8000)
+      s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
+  const b64ToU8 = (str) => {
+    const bin = atob(str);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+  };
+  function cancelFetchStream(id) {
+    const s = fetchStreams.get(id);
+    if (!s) return;
+    fetchStreams.delete(id);
+    try { s.reader.cancel(); } catch {}
+  }
+  async function doFetch(p, _a, m) {
+    const init = {};
+    if (p.method) init.method = p.method;
+    if (p.headers) init.headers = p.headers;
+    if (p.redirect) init.redirect = p.redirect;
+    if (p.bodyText != null) init.body = p.bodyText;
+    else if (p.bodyB64 != null) init.body = b64ToU8(p.bodyB64);
+    const res = await globalThis.fetch(String(p.url), init);
+    const headers = {};
+    res.headers.forEach((v, k) => { headers[k] = v; });
+    const head = {
+      ok: res.ok, status: res.status, statusText: res.statusText,
+      url: res.url ?? '', redirected: !!res.redirected, headers,
+    };
+    if (!p.stream) return { ...head, bodyB64: u8ToB64(new Uint8Array(await res.arrayBuffer())) };
+    // The page pulls chunks on demand; keep the reader alive under its id.
+    fetchStreams.set(p.id, { reader: res.body.getReader(), win: m?.window || 'main' });
+    return { ...head, streaming: true };
+  }
+  async function pullFetchStream({ id }) {
+    const s = fetchStreams.get(id);
+    if (!s) return { done: true };
+    let r;
+    try {
+      r = await s.reader.read();
+    } catch (e) {
+      fetchStreams.delete(id);
+      throw e; // surfaces as an error on the page's ReadableStream
+    }
+    if (r.done) { fetchStreams.delete(id); return { done: true }; }
+    return { done: false, bodyB64: u8ToB64(r.value) };
+  }
+
   const builtins = {
+    fetch: doFetch,
+    'fetch.pull': pullFetchStream,
+    'fetch.cancel': async ({ id }) => (cancelFetchStream(id), true),
     ping: async () => 'pong',
     log: async ({ msg }) => (console.log('[web]', msg), true),
     quit: async () => (app.quit(), true),
@@ -991,6 +1053,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           if (onClipboardChange) onClipboardChange(info, app);
         } else if (line.startsWith('WINCLOSED ')) {
           const id = line.slice(10);
+          // Tear down any streaming tiny.fetch the closed window still owns.
+          for (const [sid, s] of fetchStreams) if (s.win === id) cancelFetchStream(sid);
           push('window-closed', { id });
           if (onWindowClosed) onWindowClosed(id, app);
         } else if (line.startsWith('NOTIFYCLICK ')) {

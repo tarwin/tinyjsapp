@@ -202,6 +202,23 @@ await tiny.store.set('recent', ['/tmp/a.txt']);
 const recent = await tiny.store.get('recent');      // value | null
 await tiny.store.delete('recent');  await tiny.store.all();
 
+// fetch that runs in the BACKEND — no CORS, CSP, or mixed-content limits,
+// so the page can hit any origin. Same shape as window.fetch, returns a
+// real Response (res.json()/res.text()/res.headers/res.ok all work).
+const r = await tiny.fetch('https://api.example.com/data', {
+  method: 'POST', headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ q: 'hi' }),
+});
+const data = await r.json();
+// { stream: true } gives a LIVE streaming body — the whole point for endless
+// sources like internet radio (a buffered fetch would never resolve). The
+// backend keeps the connection and the page pulls chunks on demand, with
+// natural backpressure; res.body.getReader() is the endless tap.
+const radio = await tiny.fetch('https://ice1.somafm.com/groovesalad-128-mp3', { stream: true });
+const reader = radio.body.getReader();
+for (;;) { const { value, done } = await reader.read(); if (done) break; /* feed decodeAudioData, MediaSource, … */ }
+// reader.cancel() (or closing the window) tears the upstream connection down.
+
 // system-wide hotkeys (work while other apps are focused)
 tiny.hotkey.register('boss', 'cmd+shift+k');
 tiny.hotkey.on((id) => tiny.win.show());
