@@ -136,6 +136,7 @@ tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i>
   "fileExtensions": ["md"],     <i>// "Open With" file associations</i>
   "permissions": { "microphone": "why", "camera": "why" },  <i>// getUserMedia</i>
   "audioTap": "app",            <i>// enable tiny.audioTap ("app" | "system")</i>
+  "contextMenu": false,         <i>// suppress WebKit's default right-click menu (default: true)</i>
   "chrome": { "frame": false, "vibrancy": "hud" },  <i>// frameless window</i>
   "backend": "backend/main.ts",           <i>// entry; .ts → esbuild bundle</i>
   "frontend": {                           <i>// bundler hooks (Vite etc.)</i>

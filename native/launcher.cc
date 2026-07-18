@@ -62,6 +62,8 @@
 //                         CTXBEGIN / ITEM / SEP /
 //                         CTXEND / CTXCLEAR          replace or restore the
 //                                                    right-click menu
+//                         CTXSUPPRESS <0|1>          suppress WebKit's default
+//                                                    right-click menu
 //                         HKREG <id>\t<combo> /
 //                         HKUNREG <id>               global hotkeys
 //                         AUDIOTAP <qid> <scope>\t<excludeSelf>\t<interval> /
@@ -2937,6 +2939,10 @@ static void do_winctrl(webview_t, void *arg) {
 
 static std::vector<MenuItemSpec> g_ctx_items;
 static bool g_ctx_active = false;
+// contextMenu:false in the manifest suppresses WebKit's default right-click
+// menu (Reload/Back/Inspect Element…) for app-like windows. A custom menu
+// (g_ctx_active) always wins; this only affects the otherwise-default menu.
+static bool g_ctx_suppress = false;
 
 struct CtxReq {
   std::vector<MenuItemSpec> items;
@@ -2950,10 +2956,14 @@ static WillOpenMenuIMP g_orig_willOpenMenu = nullptr;
 static void tiny_willOpenMenu(id self, SEL cmd, NSMenu *menu, NSEvent *ev) {
   if (g_orig_willOpenMenu)
     g_orig_willOpenMenu(self, cmd, menu, ev);
-  if (!g_ctx_active)
+  if (g_ctx_active) {
+    [menu removeAllItems];
+    build_menu_into(menu, g_ctx_items, @selector(ctxItemClicked:), nil);
     return;
-  [menu removeAllItems];
-  build_menu_into(menu, g_ctx_items, @selector(ctxItemClicked:), nil);
+  }
+  // Empty menu -> AppKit shows nothing, so removeAllItems suppresses it.
+  if (g_ctx_suppress)
+    [menu removeAllItems];
 }
 
 // Context menus are built lazily at right-click, so state updates and reads
@@ -2988,6 +2998,15 @@ static void install_ctx_hook() {
 #else
 static void apply_ctx(webview_t, void *arg) { delete static_cast<CtxReq *>(arg); }
 #endif
+
+struct CtxSuppressReq {
+  bool on;
+};
+static void apply_ctx_suppress(webview_t, void *arg) {
+  CtxSuppressReq *req = static_cast<CtxSuppressReq *>(arg);
+  g_ctx_suppress = req->on;
+  delete req;
+}
 
 // --- stateful menus: surgical updates + read-backs -------------------------------
 // MENUUPD <id>\t<label>\t<checked>\t<enabled> patches a live item (empty field
@@ -5270,6 +5289,9 @@ static void sock_read_loop() {
         webview_dispatch(g_w, apply_ctx, new CtxReq{take_root(), true});
       } else if (line == "CTXCLEAR") {
         webview_dispatch(g_w, apply_ctx, new CtxReq{{}, false});
+      } else if (line.rfind("CTXSUPPRESS ", 0) == 0) {
+        webview_dispatch(g_w, apply_ctx_suppress,
+                         new CtxSuppressReq{line.substr(12) == "1"});
       } else if (line.rfind("HKREG ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(6));
         if (p.size() >= 2)

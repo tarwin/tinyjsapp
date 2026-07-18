@@ -86,7 +86,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, contextMenu = true }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -1139,6 +1139,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // Chrome from tinyjs.json. Packaged apps already applied it from the plist
   // (flash-free); re-sending is idempotent. Dev applies it here.
   if (chrome && !attachPath) app.setChrome(chrome);
+
+  // contextMenu:false in the manifest suppresses WebKit's default right-click
+  // menu (Reload/Back/Inspect Element…). A custom setContextMenu() still wins.
+  if (contextMenu === false) send('CTXSUPPRESS 1');
 
   // A clipboard handler implies watching; apps needing a custom interval can
   // call app.clipboard.watch(ms) on top (idempotent).

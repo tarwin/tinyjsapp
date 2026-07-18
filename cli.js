@@ -370,6 +370,7 @@ const app = await createApp({
   activation: ${JSON.stringify(cfg.activation ?? null)},
   readAccess: ${JSON.stringify(cfg.readAccess ?? null)},
   audioTap: ${JSON.stringify(cfg.audioTap ?? null)},
+  contextMenu: ${JSON.stringify(cfg.contextMenu ?? true)},
 });
 if (appMod.init) appMod.init(app);
 `;

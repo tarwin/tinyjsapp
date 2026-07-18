@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.25.2 <span class="date">2026-07-17</span></h2>
+      <ul>
+        <li><b><code>"contextMenu": false</code> in tinyjs.json</b> suppresses WebKit's default right-click menu (Reload / Back / Forward / Inspect Element…) for an app-like feel. Off by default — the browser menu shows unless you opt out. A custom <code>tiny.menu.setContext(...)</code> still overrides, and clearing it falls back to <em>suppressed</em> (not the WebKit default) while the option is on.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.25.1 <span class="date">2026-07-17</span></h2>
       <ul>
         <li><b>docs:</b> corrected <code>tiny.audioTap</code> TCC behavior. The first <code>start()</code> <b>does</b> prompt for "System Audio Recording" — even <code>scope:'app'</code>, because WKWebView renders audio in a separate <code>com.apple.WebKit.GPU</code> helper, so the tap is a cross-process capture (the grant then persists per app, which is why repeat runs don't re-prompt). Authorization is deferred to the first <code>start()</code> (declaring the manifest key does nothing at runtime), so the tap can be lazy-armed. Under <code>tinyjs dev</code> the audio <em>owner</em> is the terminal, so the tap delivers real PCM only if that terminal holds the grant (else silent chunks). No code change — the implementation already defers to <code>start()</code>.</li>

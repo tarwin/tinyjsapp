@@ -18,6 +18,14 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.25.2 — 2026-07-17
+
+- **`"contextMenu": false`** in tinyjs.json suppresses WebKit's default
+  right-click menu (Reload / Back / Forward / Inspect Element…) for an app-like
+  feel. Off by default — the browser menu shows unless you opt out. A custom
+  `tiny.menu.setContext(...)` still overrides, and `null`/clearing it falls back
+  to *suppressed* (not the WebKit default) while the option is on.
+
 ## 0.25.1 — 2026-07-17
 
 - **docs:** corrected `tiny.audioTap` TCC behavior. The first `start()` **does**

@@ -36,6 +36,7 @@ tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        urlScheme?: "myapp", fileExtensions?: ["md"],
                        permissions?: { microphone?: "why", camera?: "why" },
                        audioTap?: "app" | "system",   // enable tiny.audioTap
+                       contextMenu?: false,           // suppress WebKit's default right-click menu (default true)
                        chrome?: { frame, trafficLights, transparent, vibrancy, squareCorners, acceptsFirstMouse },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build: "npm run build", dist: "dist",
@@ -215,6 +216,7 @@ tiny.hotkey.unregister('boss');             // backend: export onHotkey(id, app)
 // custom right-click menu (native; null restores WebKit default)
 tiny.menu.setContext([{ id, label }, { separator: true }]);
 tiny.menu.onContext((id) => ...);           // backend: export onContextMenu
+// "contextMenu": false in tinyjs.json hides WebKit's default menu entirely; setContext still overrides
 
 // theme + power events
 await tiny.theme.get();                     // { dark } | null

@@ -66,6 +66,7 @@ myapp/
   tinyjs.json            # { name, title, size, id, version, icon?, signIdentity?,
                          #   urlScheme?, fileExtensions?, chrome?, update?, notarize?,
                          #   permissions? ({ microphone: "why", camera: "why" } for getUserMedia),
+                         #   contextMenu? (false suppresses WebKit's default right-click menu),
                          #   activation? ("accessory" = menu-bar agent: no Dock, starts hidden) }
   icon.png                # 1024×1024 app icon (template ships a default)
   src/main.js             # backend: export const api = {...}; export function init(app) {}
@@ -269,6 +270,8 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames }) => {
 // custom right-click menu (native NSMenu; null restores WebKit's default)
 tiny.menu.setContext([{ id: 'copy-path', label: 'Copy Path' }, { separator: true }, { id: 'del', label: 'Delete' }]);
 tiny.menu.onContext((id) => ...);
+// to hide WebKit's default menu entirely (Reload/Back/Inspect Element…) for an
+// app-like feel, set "contextMenu": false in tinyjs.json. setContext still wins.
 
 // system theme + power events
 const { dark } = await tiny.theme.get();
