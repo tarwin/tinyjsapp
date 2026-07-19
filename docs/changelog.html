@@ -69,6 +69,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.25.3 <span class="date">2026-07-18</span></h2>
+      <ul>
+        <li><b><code>tiny.proxyURL</code> now plays live internet radio through the Web Audio / EQ graph.</b> A live (icecast/shoutcast) stream answers <code>200</code> with no <code>Content-Length</code> and no byte-range support, so WKWebView's custom-scheme media loader rejected the <code>&lt;audio&gt;</code> with error 4 (<code>SRC_NOT_SUPPORTED</code>) — the limitation noted in 0.25.0. The proxy now detects a length-less <code>audio/*</code>/<code>video/*</code> response and serves it with a synthetic large <code>Content-Length</code> (dropping the contradictory range/chunked headers), so the element plays it progressively as one long non-seekable resource and <code>MediaElementSource</code> taps it for real. Verified end-to-end on live StreamTheWorld MP3, both direct and via the redirect: error 4 → playing with live analyser data. Redirects were never the issue. Tradeoff: for a live stream <code>audio.duration</code>/<code>currentTime</code> are meaningless (the synthetic length maps to a huge timeline) — don't wire a seekbar to one. The fake length is gated to media MIME types, so ordinary <code>fetch()</code> through <code>proxyURL</code> is unaffected.</li>
+        <li><b>Friendly apology on Intel Macs instead of a cryptic hang.</b> The app launcher is a universal binary but the bundled <code>tjs</code> runtime is Apple-Silicon-only, so a distributed app used to launch on an Intel Mac and then hang on a backend that could never start. The launcher now detects this (<code>posix_spawn</code> returns <code>EBADARCH</code>) and shows a plain "This app needs an Apple Silicon Mac" apology, then exits cleanly. The <code>tinyjs</code> CLI also prints a non-fatal heads-up when run on an Intel Mac. tinyjs remains Apple-Silicon-first.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.25.2 <span class="date">2026-07-17</span></h2>
       <ul>
         <li><b><code>"contextMenu": false</code> in tinyjs.json</b> suppresses WebKit's default right-click menu (Reload / Back / Forward / Inspect Element…) for an app-like feel. Off by default — the browser menu shows unless you opt out. A custom <code>tiny.menu.setContext(...)</code> still overrides, and clearing it falls back to <em>suppressed</em> (not the WebKit default) while the option is on.</li>

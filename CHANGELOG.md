@@ -18,6 +18,31 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.25.3 — 2026-07-18
+
+- **`tiny.proxyURL` now plays live internet radio through the Web Audio / EQ
+  graph.** A live (icecast/shoutcast) stream answers `200` with no
+  `Content-Length` and no byte-range support, so WKWebView's custom-scheme media
+  loader rejected the `<audio>` with error 4 (`SRC_NOT_SUPPORTED`) — the
+  limitation noted in 0.25.0. The proxy now detects a length-less
+  `audio/*`/`video/*` response and serves it with a synthetic large
+  `Content-Length` (dropping the contradictory range/chunked headers), so the
+  element plays it progressively as one long non-seekable resource and
+  `MediaElementSource` taps it for real. Verified end-to-end on live
+  StreamTheWorld MP3, both direct and via the redirect: error 4 → playing with
+  live analyser data. Redirects were never the issue — they always worked.
+  Tradeoff: for a live stream `audio.duration`/`currentTime` are meaningless
+  (the fake length maps to a huge timeline) — don't wire a seekbar to one. The
+  synthetic length is gated to media MIME types, so ordinary `fetch()` through
+  `proxyURL` is unaffected.
+- **Friendly apology on Intel Macs instead of a cryptic hang.** The app launcher
+  is a universal binary but the bundled `tjs` runtime is Apple-Silicon-only, so
+  a distributed app used to launch on an Intel Mac and then hang on a backend
+  that could never start. The launcher now detects this (`posix_spawn` returns
+  `EBADARCH`) and shows a plain "This app needs an Apple Silicon Mac" apology,
+  then exits cleanly. The `tinyjs` CLI also prints a non-fatal heads-up when run
+  on an Intel Mac. tinyjs remains Apple-Silicon-first.
+
 ## 0.25.2 — 2026-07-17
 
 - **`"contextMenu": false`** in tinyjs.json suppresses WebKit's default

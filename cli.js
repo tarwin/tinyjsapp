@@ -878,6 +878,22 @@ async function cmdVersion() {
   console.log('tinyjs ' + v + ' (txiki.js ' + tjs.version + ')');
 }
 
+// Apple-Silicon-first: the bundled tjs runtime is arm64, so an app built or run
+// on an Intel Mac won't launch on Apple Silicon (and vice-versa). Heads-up for
+// devs — non-fatal, since local dev with the x86_64 build still works. Apple
+// Silicon CPUs report as "Apple M…"; Intel Macs report "Intel(R) …".
+function warnIfIntelMac() {
+  const model = tjs.system?.cpus?.[0]?.model || '';
+  // Only warn on a positively-identified non-Apple CPU; if detection returns
+  // nothing, stay quiet rather than false-alarm an Apple Silicon user.
+  if (!model || /^Apple /.test(model)) return;
+  console.log('tinyjs: heads-up — tinyjs targets Apple Silicon (M1 and later).');
+  console.log('        This looks like an Intel Mac; apps you build here will');
+  console.log('        not launch on Apple Silicon Macs, and some features are');
+  console.log('        untested. Continuing anyway.\n');
+}
+if (['new', 'dev', 'build', 'publish', 'notarize'].includes(cmd)) warnIfIntelMac();
+
 switch (cmd) {
   case 'new': await cmdNew(); break;
   case 'dev': await cmdDev(); break;

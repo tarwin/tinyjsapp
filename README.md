@@ -231,11 +231,11 @@ const ctx = new AudioContext();
 ctx.createMediaElementSource(audio).connect(ctx.createAnalyser()); // …→ EQ → destination
 audio.play();
 // The native layer does the HTTP (following redirects), http/https only.
-// NOTE: driving <audio> this way needs a stream whose server honors HTTP Range
-// (returns 206) — CoreMedia loads media over the proxy via byte-range requests.
-// SomaFM and most CDN-backed streams qualify. A non-seekable live stream that
-// answers 200 (no Content-Length/Accept-Ranges) can't be played through the
-// proxy element — fall back to the raw URL for plain (non-EQ) playback there.
+// Live internet radio works too: a non-seekable stream that answers 200 with no
+// Content-Length (icecast/shoutcast) is served to the element with a synthetic
+// large length so CoreMedia plays it progressively and the analyser sees real
+// samples. Tradeoff: audio.duration/currentTime are meaningless for such a live
+// stream (huge fake timeline) — don't wire a seekbar to one.
 
 // system-wide hotkeys (work while other apps are focused)
 tiny.hotkey.register('boss', 'cmd+shift+k');

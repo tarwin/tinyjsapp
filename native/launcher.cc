@@ -3939,17 +3939,43 @@ didReceiveResponse:(NSURLResponse *)response
   if (!st) { done(NSURLSessionResponseCancel); return; }
   NSMutableDictionary *h = [NSMutableDictionary dictionary];
   NSInteger code = 200;
+  // A live stream (icecast/shoutcast internet radio) sends its 200 with no
+  // Content-Length and no byte-range support. WKWebView's custom-scheme media
+  // loader then refuses the <audio> with error 4 (SRC_NOT_SUPPORTED) even
+  // though the bytes are valid MP3/AAC and stream fine to fetch(). Advertise a
+  // large fake Content-Length and hide range/chunked framing so the media
+  // engine treats it as one long non-seekable resource and plays it
+  // progressively — which lets MediaElementSource tap it for the EQ/analyser
+  // graph. A finite file keeps its real Content-Length and stays seekable.
+  //
+  // Gated on an audio/video MIME so it only touches media: proxyURL also fronts
+  // ordinary CORS fetches, and a fake length on a length-less JSON/text stream
+  // would make fetch() error on completion (fewer bytes than promised).
+  NSString *mime = response.MIMEType.lowercaseString;
+  BOOL isMedia = [mime hasPrefix:@"audio/"] || [mime hasPrefix:@"video/"];
+  BOOL endless = isMedia &&
+                 (response.expectedContentLength == NSURLResponseUnknownLength);
   if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
     NSHTTPURLResponse *hr = (NSHTTPURLResponse *)response;
     code = hr.statusCode;
     // Pass upstream headers through (Content-Type, Content-Length, Accept-
     // Ranges, Content-Range for seek…) but drop any ACAO — we set our own.
+    // For an endless stream also drop the length/range/chunked headers so they
+    // don't contradict the synthetic Content-Length we add below.
     for (id k in hr.allHeaderFields) {
-      if ([[[k description] lowercaseString] hasPrefix:@"access-control-"]) continue;
+      NSString *lk = [[k description] lowercaseString];
+      if ([lk hasPrefix:@"access-control-"]) continue;
+      if (endless && ([lk isEqualToString:@"transfer-encoding"] ||
+                      [lk isEqualToString:@"accept-ranges"] ||
+                      [lk isEqualToString:@"content-length"] ||
+                      [lk isEqualToString:@"content-range"])) continue;
       h[k] = hr.allHeaderFields[k];
     }
   }
   if (!h[@"Content-Type"] && response.MIMEType) h[@"Content-Type"] = response.MIMEType;
+  // ~1 TiB — longer than any listening session; the element just streams until
+  // we stop feeding it. Only for a successful 200 (redirects/errors untouched).
+  if (endless && code == 200) h[@"Content-Length"] = @"1099511627776";
   h[@"Access-Control-Allow-Origin"] = @"*";
   h[@"Access-Control-Allow-Headers"] = @"*";
   h[@"Access-Control-Expose-Headers"] = @"*";
@@ -5631,6 +5657,27 @@ static void sock_read_loop() {
 // activates this process instead of launching another copy.
 
 #ifdef __APPLE__
+// The launcher is a universal binary, so it starts up even on an Intel Mac —
+// but the bundled `tjs` backend is arm64-only, so the app would otherwise hang
+// with a cryptic "backend never connected". Detected at spawn time (posix_spawn
+// returns EBADARCH), we show a plain apology and quit instead. Kept generic:
+// it fires whenever `tjs` has no slice for the CPU we're running on.
+static void show_arch_unsupported_alert() {
+  @autoreleasepool {
+    [NSApplication sharedApplication];
+    [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [NSApp activateIgnoringOtherApps:YES];
+    NSAlert *a = [[[NSAlert alloc] init] autorelease];
+    a.alertStyle = NSAlertStyleCritical;
+    a.messageText = @"This app needs an Apple Silicon Mac";
+    a.informativeText =
+        @"Sorry — tinyjs apps currently run only on Apple Silicon (M1 and "
+        @"later). This Mac has an Intel processor, so the app can’t start.";
+    [a addButtonWithTitle:@"OK"];
+    [a runModal];
+  }
+}
+
 // Deep links + file opens: NSApplication routes kAEGetURL / kAEOpenDocuments
 // to the app delegate's application:openURLs: / application:openFiles: —
 // checked dynamically at event time, so adding the methods to the webview
@@ -5776,10 +5823,19 @@ static bool bundle_mode_setup(std::string &target, std::string &title,
       std::string([bp UTF8String]) + "/Contents/Resources/app/entry.js";
   const char *sargv[] = {tjs.c_str(), "run", entry.c_str(), nullptr};
   pid_t pid;
-  if (posix_spawn(&pid, tjs.c_str(), nullptr, nullptr,
-                  const_cast<char *const *>(sargv), environ) != 0) {
+  // posix_spawn returns the error as its result (not via errno). On an Intel
+  // Mac the arm64-only tjs has no runnable slice -> EBADARCH: apologise and
+  // quit cleanly rather than leaving the app to hang on a backend that will
+  // never attach.
+  int rc = posix_spawn(&pid, tjs.c_str(), nullptr, nullptr,
+                       const_cast<char *const *>(sargv), environ);
+  if (rc != 0) {
+    if (rc == EBADARCH) {
+      show_arch_unsupported_alert();
+      std::exit(1);
+    }
     std::fprintf(stderr, "launcher: cannot spawn backend: %s\n",
-                 std::strerror(errno));
+                 std::strerror(rc));
     return false;
   }
   return true;
