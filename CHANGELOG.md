@@ -18,6 +18,25 @@ https://tinyjs.app/changelog.
   pipeline change so the default `macos-14` build never depends on the newer
   SDK. Proven working end-to-end locally (real generation, ~250ms).
 
+## 0.26.0 — 2026-07-20
+
+- **Custom User-Agent.** `createApp({ userAgent })` / `"userAgent"` in
+  tinyjs.json overrides the webview's User-Agent string (packaged apps read
+  the `TinyjsUserAgent` Info.plist key the build writes; dev passes it via
+  `TINYJS_UA`). WKWebView's default UA omits the trailing `Version/x Safari/x`,
+  so UA-sniffing sites reject it as an unknown browser — mainly useful when
+  pointing a `devUrl` at a real hosted site. Caveat: a UA alone often isn't
+  enough. Many SaaS apps (Slack, etc.) also feature-detect at boot and refuse
+  embedded browsers, and an embedded WKWebView genuinely lacks some of what
+  they require (e.g. Web Push) — so this gets you recognized as a browser, not
+  necessarily *in*.
+- **`TINYJS_INJECT` (footgun, dev-only).** An env var that injects arbitrary
+  JS into every page at document-start on any origin, for shimming a
+  third-party site wrapped via `devUrl`. Deliberately undocumented in the
+  public API with no packaged-app equivalent — it runs your code inside
+  someone else's origin with full page privileges. A debugging tool, not for
+  shipping.
+
 ## 0.25.3 — 2026-07-18
 
 - **`tiny.proxyURL` now plays live internet radio through the Web Audio / EQ

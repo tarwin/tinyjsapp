@@ -86,7 +86,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, contextMenu = true }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, contextMenu = true, userAgent = null }) {
   const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
 
   async function exists(p) {
@@ -154,6 +154,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     const spawnEnv = { ...tjs.env };
     if (activation === 'accessory') spawnEnv.TINYJS_ACTIVATION = 'accessory';
     if (readAccess) spawnEnv.TINYJS_READ_ACCESS = readAccess === true ? tjs.homeDir : String(readAccess);
+    // Custom User-Agent: WKWebView's default UA lacks the "Version/x Safari/x"
+    // suffix, so UA-sniffing sites reject it. Packaged apps use the
+    // TinyjsUserAgent plist key instead (this env only applies to the dev spawn).
+    if (userAgent) spawnEnv.TINYJS_UA = String(userAgent);
     const spawnOpts = { stderr: 'inherit', env: spawnEnv };
     proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], spawnOpts);
 

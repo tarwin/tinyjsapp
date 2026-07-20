@@ -91,7 +91,11 @@ starves rAF + timers), so a hidden window can't drive a visible one — do
 continuous work in the visible window or the (un-throttled) backend. (2)
 `file://` media (`<audio>`/`<img>`) only loads assets under the frontend
 dir by default; widen with `createApp({ readAccess: true | '/path' })` or
-`"readAccess"` in tinyjs.json — else `MEDIA_ERR_SRC_NOT_SUPPORTED`.
+`"readAccess"` in tinyjs.json — else `MEDIA_ERR_SRC_NOT_SUPPORTED`. (3) the
+default UA lacks `Version/x Safari/x`, so UA-sniffing sites reject it — set
+`createApp({ userAgent: '…' })` / `"userAgent"` in tinyjs.json (handy for
+wrapping a hosted site via `devUrl`, though many SaaS apps also feature-detect
+and refuse embedded webviews regardless).
 
 ## Frontend
 

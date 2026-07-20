@@ -69,6 +69,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.26.0 <span class="date">2026-07-20</span></h2>
+      <ul>
+        <li><b>Custom User-Agent.</b> <code>createApp({ userAgent })</code> or <code>"userAgent"</code> in tinyjs.json overrides the webview's User-Agent string (packaged apps read the <code>TinyjsUserAgent</code> Info.plist key the build writes; dev passes it via <code>TINYJS_UA</code>). WKWebView's default UA omits the trailing <code>Version/x Safari/x</code>, so UA-sniffing sites reject it as an unknown browser — mainly useful when pointing a <code>devUrl</code> at a real hosted site. Caveat: a UA alone often isn't enough. Many SaaS apps (Slack, etc.) also feature-detect at boot and refuse embedded browsers, and an embedded WKWebView genuinely lacks some of what they require (e.g. Web Push) — so this gets you recognized as a browser, not necessarily <em>in</em>.</li>
+        <li><b><code>TINYJS_INJECT</code> (footgun, dev-only).</b> An env var that injects arbitrary JS into every page at document-start on any origin, for shimming a third-party site wrapped via <code>devUrl</code>. Deliberately undocumented in the public API with no packaged-app equivalent — it runs your code inside someone else's origin with full page privileges. A debugging tool, not for shipping.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.25.3 <span class="date">2026-07-18</span></h2>
       <ul>
         <li><b><code>tiny.proxyURL</code> now plays live internet radio through the Web Audio / EQ graph.</b> A live (icecast/shoutcast) stream answers <code>200</code> with no <code>Content-Length</code> and no byte-range support, so WKWebView's custom-scheme media loader rejected the <code>&lt;audio&gt;</code> with error 4 (<code>SRC_NOT_SUPPORTED</code>) — the limitation noted in 0.25.0. The proxy now detects a length-less <code>audio/*</code>/<code>video/*</code> response and serves it with a synthetic large <code>Content-Length</code> (dropping the contradictory range/chunked headers), so the element plays it progressively as one long non-seekable resource and <code>MediaElementSource</code> taps it for real. Verified end-to-end on live StreamTheWorld MP3, both direct and via the redirect: error 4 → playing with live analyser data. Redirects were never the issue. Tradeoff: for a live stream <code>audio.duration</code>/<code>currentTime</code> are meaningless (the synthetic length maps to a huge timeline) — don't wire a seekbar to one. The fake length is gated to media MIME types, so ordinary <code>fetch()</code> through <code>proxyURL</code> is unaffected.</li>

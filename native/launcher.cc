@@ -324,6 +324,7 @@ static std::string g_chrome_vibrancy; // empty = none
 // widens WebKit's default (the page's own folder) so <audio>/<img>/fetch can
 // reach files elsewhere. Empty = default (page dir only).
 static std::string g_read_access;
+static std::string g_user_agent; // custom UA (devUrl-wrapping sniffer-sensitive sites)
 // Lines produced before the backend is connected (bundle mode: Apple Events
 // and page calls can arrive before the spawned backend attaches). Flushed by
 // sock_set_connected().
@@ -4575,6 +4576,19 @@ static void attach_tiny_bridge(WKUserContentController *ucc,
          injectionTime:WKUserScriptInjectionTimeAtDocumentStart
       forMainFrameOnly:YES] autorelease];
   [ucc addUserScript:client];
+  // Optional user-supplied document-start glue (dev: TINYJS_INJECT env holds
+  // inline JS). Useful when wrapping a third-party site via devUrl and you need
+  // to shim capabilities/behaviour before the page boots.
+  {
+    const char *inj = getenv("TINYJS_INJECT");
+    if (inj && *inj) {
+      WKUserScript *glue = [[[WKUserScript alloc]
+            initWithSource:[NSString stringWithUTF8String:inj]
+             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+          forMainFrameOnly:YES] autorelease];
+      [ucc addUserScript:glue];
+    }
+  }
   // main window: handler ownership parked here (never removed)
   if (winid != "main")
     g_windows[winid].handler = h;
@@ -4656,6 +4670,8 @@ static void do_winopen(webview_t w, void *arg) {
         [[WKWebView alloc] initWithFrame:win.contentView.bounds
                            configuration:cfg];
     wv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    if (!g_user_agent.empty())
+      wv.customUserAgent = ns(g_user_agent);
     [win.contentView addSubview:wv];
 
     if (req->page.rfind("http://", 0) == 0 ||
@@ -5920,6 +5936,17 @@ int main(int argc, char *argv[]) {
     if (root.length)
       g_read_access = [[root stringByExpandingTildeInPath] UTF8String];
   }
+  // Custom User-Agent: dev via TINYJS_UA env, packaged via the TinyjsUserAgent
+  // plist key. WKWebView's default UA omits the "Version/x Safari/x" suffix, so
+  // UA-sniffing sites (Slack, etc.) reject it — a real Safari UA gets through.
+  {
+    const char *ua = getenv("TINYJS_UA");
+    NSString *s = ua ? [NSString stringWithUTF8String:ua] : nil;
+    if (!s)
+      s = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"TinyjsUserAgent"];
+    if (s.length)
+      g_user_agent = [s UTF8String];
+  }
 #endif
 
 #ifdef __APPLE__
@@ -5971,8 +5998,11 @@ int main(int argc, char *argv[]) {
   {
     WKWebView *mwv = (WKWebView *)webview_get_native_handle(
         g_w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
-    if (mwv)
+    if (mwv) {
       attach_tiny_bridge(mwv.configuration.userContentController, "main");
+      if (!g_user_agent.empty())
+        mwv.customUserAgent = ns(g_user_agent);
+    }
   }
 #endif
 

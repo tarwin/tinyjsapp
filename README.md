@@ -917,6 +917,24 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
   `"readAccess"` in tinyjs.json (`true` / a path). Then `file://` assets
   anywhere under that root load directly — no base64 → Blob round-trip.
   (It's opt-in because it widens what the page can read from disk.)
+- **Custom User-Agent.** WKWebView's default UA omits the trailing
+  `Version/x Safari/x`, so UA-sniffing sites see an unrecognized browser.
+  Override it with `createApp({ userAgent: '…' })` or `"userAgent"` in
+  tinyjs.json (packaged apps read it from the `TinyjsUserAgent` plist key the
+  build writes; in dev it rides in on `TINYJS_UA`). Useful when pointing a
+  `devUrl` at a real hosted site. Note that a UA alone often isn't enough:
+  many SaaS apps (Slack, etc.) *also* feature-detect at boot and deliberately
+  refuse embedded/non-blessed browsers — an embedded WKWebView genuinely lacks
+  some of what they require (e.g. Web Push), so spoofing the UA gets you
+  recognized as a browser but not necessarily *in*.
+- **`TINYJS_INJECT` (footgun).** Setting this env var injects arbitrary JS
+  into **every** page at document-start (before the page boots), on any
+  origin. It exists for wrapping/shimming a third-party site loaded via
+  `devUrl`. It is intentionally undocumented in the public API and has **no
+  packaged-app equivalent** — it runs your code inside someone else's origin
+  with full page privileges, so treat it as a debugging/experimentation tool,
+  not something to ship. Easy to foot-gun yourself (or a site's users) with;
+  reach for it only when you know exactly why.
 
 ### On-device AI (`tiny.app.ai`)
 

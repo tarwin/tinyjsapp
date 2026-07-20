@@ -369,6 +369,7 @@ const app = await createApp({
   update: ${JSON.stringify(cfg.update ?? null)},
   activation: ${JSON.stringify(cfg.activation ?? null)},
   readAccess: ${JSON.stringify(cfg.readAccess ?? null)},
+  userAgent: ${JSON.stringify(cfg.userAgent ?? null)},
   audioTap: ${JSON.stringify(cfg.audioTap ?? null)},
   contextMenu: ${JSON.stringify(cfg.contextMenu ?? true)},
 });
@@ -652,6 +653,13 @@ async function cmdBuild() {
     const ra = cfg.readAccess === true ? '~' : String(cfg.readAccess);
     extraKeys += `
   <key>TinyjsReadAccess</key>    <string>${ra}</string>`;
+  }
+  if (cfg.userAgent) {
+    // Custom User-Agent for the webview (see createApp userAgent). Lets a
+    // devUrl-wrapped site see a real browser UA instead of WKWebView's default.
+    const ua = String(cfg.userAgent).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    extraKeys += `
+  <key>TinyjsUserAgent</key>     <string>${ua}</string>`;
   }
   if (cfg.activation === 'accessory') {
     // Menu-bar agent: LSUIElement starts the process with no Dock icon at the
