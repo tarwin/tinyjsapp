@@ -2493,6 +2493,23 @@ static void do_dragout(webview_t, void *arg) {
     if (FAILED(OleInitialize(nullptr)))
       return;
     release_webview_capture(); // see do_dragwin — WebView2 owns the capture
+    // A DoDragDrop that never returns wedges drag&drop SYSTEM-WIDE (it holds
+    // the OLE drag state until the process dies). Two guards: never start
+    // once the button is already up, and a watchdog that pokes this thread's
+    // queue so the OLE loop (which only re-evaluates on input messages)
+    // always gets a chance to see the released button and exit.
+    if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
+      OleUninitialize();
+      return;
+    }
+    DWORD drag_tid = GetCurrentThreadId();
+    std::atomic<bool> drag_done{false};
+    std::thread watchdog([drag_tid, &drag_done]() {
+      while (!drag_done.load()) {
+        PostThreadMessageW(drag_tid, WM_MOUSEMOVE, 0, 0);
+        Sleep(100);
+      }
+    });
     std::vector<PIDLIST_ABSOLUTE> pidls;
     for (const auto &p : paths) {
       PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(widen(p).c_str());
@@ -2518,6 +2535,8 @@ static void do_dragout(webview_t, void *arg) {
     }
     for (auto pidl : pidls)
       ILFree(pidl);
+    drag_done.store(true);
+    watchdog.join();
     OleUninitialize();
   }).detach();
 }
