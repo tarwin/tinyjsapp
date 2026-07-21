@@ -651,7 +651,9 @@ async function cmdDev() {
     const entryPath = IS_WIN
       ? (tjs.cwd + '\\' + B.replace(/\//g, '\\') + '\\entry.js')
       : tjs.cwd + '/' + B + '/entry.js';
-    const devEnv = { ...tjs.env, TINYJS_LAUNCHER: TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : 'launcher') };
+    // An explicit TINYJS_LAUNCHER in the environment wins (matches the
+    // bridge's own precedence) — useful for testing a different build.
+    const devEnv = { ...tjs.env, TINYJS_LAUNCHER: tjs.env.TINYJS_LAUNCHER || (TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : 'launcher')) };
     // Windows: the launcher shows the project icon in the titlebar/taskbar.
     const iconSrc = cfg.icon || 'icon.png';
     if (IS_WIN && (await exists(iconSrc))) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;

@@ -47,27 +47,31 @@ names refer to the protocol table in the README; Windows handlers live in
 
 ## Still open
 
-- [ ] **Toast notifications + actions** (`NOTIFY` actions,
-      `NOTIFYACTION`) — currently a tray balloon without buttons/reply.
-      Proper WinRT toasts need an AppUserModelID + Start-Menu shortcut for
-      unpackaged apps and COM activation for click routing. Sizeable.
-- [ ] **App icon + version resources in built exes** — `dist/<name>.exe`
-      ships the default icon. Generate an .ico from icon.png and embed via
-      `UpdateResource` (RT_GROUP_ICON/RT_ICON) at build time.
-- [ ] **Deep links / file associations / single instance** — registry
-      (`HKCU\Software\Classes`) written at install/first run; single
-      instance via named mutex + argv forwarding to the running pipe
-      (`OPENURL`/`OPENFILES` lines already exist in the bridge).
+- [ ] **audioTap** — in progress (WASAPI loopback for scope:'system';
+      scope:'app' stays unsupported — per-process capture needs the Win10
+      2004+ process-loopback path).
 - [ ] **authenticate** — Windows Hello (`UserConsentVerifier`, WinRT);
       returns false today.
-- [ ] **audioTap** — WASAPI loopback (scope:'system'); per-process capture
-      needs the Win10 2004+ process-loopback path. Sizeable.
-- [ ] **Custom context-menu suppression fallback** — on WebView2 runtimes
-      older than `ICoreWebView2_11`, `contextMenu: false` is a no-op; could
-      fall back to `AreDefaultContextMenusEnabled`.
-- [ ] **Windows CI GUI smoke** — the release job smoke-tests the build
-      pipeline; running the actual window (`TINYJS_HTML=test/smoke.html`) on
-      a runner would cover the launcher too.
+- [ ] **Chromeless visual polish** — `frame:false`/`squareCorners` work
+      (thin native resize border kept); a `WM_NCCALCSIZE` edge-to-edge look
+      would need custom hit-testing under the WebView2 child. Evaluate after
+      user feedback.
+- [x] ~~Toast notifications + actions~~ — real WinRT toasts with buttons +
+      reply field, AppUserModelID + auto Start-Menu shortcut, balloon
+      fallback (`destructive` styling has no ToastGeneric equivalent).
+- [x] ~~App icon~~ — runtime window/taskbar icon from icon.png; embedded
+      into launcher.exe (`--embed-icon`). `dist/<name>.exe` cannot be
+      resource-edited (UpdateResource destroys the appended txiki bundle);
+      it gets a GUI PE subsystem patch instead (no console flash, no
+      REPL-on-console quirk).
+- [x] ~~Deep links / file associations / single instance~~ — HKCU registry
+      written on first run of a built app; `launcher-win.exe --open` is the
+      registered handler forwarding over `\\.\pipe\tinyjs-app-<id>` (compiled
+      txiki apps reject argv); second launches activate the running instance.
+- [x] ~~Context-menu suppression fallback~~ (`AreDefaultContextMenusEnabled`
+      on runtimes without `ContextMenuRequested`).
+- [x] ~~Windows CI GUI smoke~~ — the release job now runs the smoke page in
+      a real window on the runner.
 
 ## Not planned / no OS equivalent
 

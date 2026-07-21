@@ -47,6 +47,9 @@
 #include <sapi.h>
 #include <wincrypt.h>
 #include <gdiplus.h>
+#include <mmdeviceapi.h>  // WASAPI loopback capture (tiny.audioTap)
+#include <audioclient.h>
+#include <mmreg.h>        // WAVEFORMATEXTENSIBLE
 
 // WinRT toast notifications — raw ABI. These headers only declare the C++ ABI
 // interfaces (ABI::Windows::…) and the RuntimeClass_… strings; the combase
@@ -65,7 +68,9 @@
 #include <windows.data.xml.dom.h>
 #include <windows.ui.notifications.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -1476,8 +1481,27 @@ static void do_chrome(webview_t, void *arg) {
   delete req;
 }
 
+// The WebView2 child (a separate process) holds the mouse capture from the
+// page's mousedown; a plain ReleaseCapture() only affects OUR thread's queue,
+// so the window-move loop / OLE drag never receives the mouse. Attaching our
+// input queue to the capture-owning thread makes ReleaseCapture reach it.
+static void release_webview_capture() {
+  POINT pt;
+  GetCursorPos(&pt);
+  HWND under = WindowFromPoint(pt);
+  DWORD other = under ? GetWindowThreadProcessId(under, nullptr) : 0;
+  DWORD cur = GetCurrentThreadId();
+  if (other && other != cur) {
+    AttachThreadInput(cur, other, TRUE);
+    ReleaseCapture();
+    AttachThreadInput(cur, other, FALSE);
+  } else {
+    ReleaseCapture();
+  }
+}
+
 static void do_dragwin(webview_t, void *) {
-  ReleaseCapture();
+  release_webview_capture();
   SendMessageW(g_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
 }
 
@@ -2437,9 +2461,14 @@ struct DropSource : public IDropSource {
     *ppv = nullptr;
     return E_NOINTERFACE;
   }
-  HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL esc, DWORD keys) override {
-    if (esc) return DRAGDROP_S_CANCEL;
-    if (!(keys & MK_LBUTTON)) return DRAGDROP_S_DROP;
+  HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL esc, DWORD) override {
+    // The drag runs on a fresh thread whose queue never saw the mousedown, so
+    // OLE's grfKeyState reads the button as already released and would end
+    // the drag instantly. Track the PHYSICAL state instead.
+    if (esc || (GetAsyncKeyState(VK_ESCAPE) & 0x8000))
+      return DRAGDROP_S_CANCEL;
+    if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000))
+      return DRAGDROP_S_DROP;
     return S_OK;
   }
   HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override {
@@ -2463,6 +2492,7 @@ static void do_dragout(webview_t, void *arg) {
   std::thread([paths]() {
     if (FAILED(OleInitialize(nullptr)))
       return;
+    release_webview_capture(); // see do_dragwin — WebView2 owns the capture
     std::vector<PIDLIST_ABSOLUTE> pidls;
     for (const auto &p : paths) {
       PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(widen(p).c_str());
@@ -3373,6 +3403,227 @@ static void do_bounce(webview_t, void *arg) {
   delete critical;
 }
 
+// ============================ tiny.audioTap ================================
+// Read the whole system's *rendered* audio output as PCM chunks, for VU meters
+// / visualizers — including audio that never touches Web Audio. On macOS this
+// uses Core Audio process taps (see native/launcher.cc); Windows has no
+// per-process render tap in a MinGW-linkable form, so this implements the
+// 'system' scope only, via WASAPI loopback capture off the default render
+// endpoint. Loopback hears the whole mix, so `excludeSelf` cannot be honoured
+// (there is no way to subtract our own render) and is ignored. scope 'app'
+// answers 'unsupported'.
+//
+// A dedicated thread (its own MTA CoInitialize) opens IAudioClient in shared
+// loopback mode, polls IAudioCaptureClient every ~10ms, converts the mix format
+// (usually float32) to interleaved Int16, and every `interval` ms base64-encodes
+// the accumulated PCM and pipes it out as `AUDIOTAP <b64>\t<sr>\t<ch>\t<frames>\t<t>`.
+// To match the macOS tap's steady cadence, an interval that saw no packets
+// (nothing playing) still emits a silent chunk sized to the interval, so chunks
+// always arrive on schedule. Only one tap runs at a time; a new start (or STOP)
+// stops the old one first. Raw COM throughout, matching the SAPI/WinRT sections;
+// the GUIDs libuuid may lack are defined locally below.
+
+struct AudioTapReq { std::string qid; std::string scope; bool excludeSelf; int interval; };
+
+static const CLSID kCLSID_MMDeviceEnumerator =
+    {0xBCDE0395, 0xE52F, 0x467C, {0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E}};
+static const IID kIID_IMMDeviceEnumerator =
+    {0xA95664D2, 0x9614, 0x4F35, {0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6}};
+static const IID kIID_IAudioClient =
+    {0x1CB9AD4C, 0xDBFA, 0x4C32, {0xB1, 0x78, 0xC2, 0xF5, 0x68, 0xA7, 0x03, 0xB2}};
+static const IID kIID_IAudioCaptureClient =
+    {0xC8ADBD64, 0xE71E, 0x48A0, {0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17}};
+// WAVE_FORMAT_EXTENSIBLE subformats (mmreg.h's are DEFINE_GUIDEX, not always
+// linkable under MinGW libuuid, so define our own for comparison).
+static const GUID kSUBTYPE_IEEE_FLOAT =
+    {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+static const GUID kSUBTYPE_PCM =
+    {0x00000001, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
+
+static std::string tap_base64(const uint8_t *data, size_t len) {
+  static const char t[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string out;
+  out.reserve(((len + 2) / 3) * 4);
+  size_t i = 0;
+  for (; i + 2 < len; i += 3) {
+    uint32_t n = ((uint32_t)data[i] << 16) | ((uint32_t)data[i + 1] << 8) | data[i + 2];
+    out += t[(n >> 18) & 63]; out += t[(n >> 12) & 63];
+    out += t[(n >> 6) & 63];  out += t[n & 63];
+  }
+  if (i < len) {
+    uint32_t n = (uint32_t)data[i] << 16;
+    if (i + 1 < len) n |= (uint32_t)data[i + 1] << 8;
+    out += t[(n >> 18) & 63];
+    out += t[(n >> 12) & 63];
+    out += (i + 1 < len) ? t[(n >> 6) & 63] : '=';
+    out += '=';
+  }
+  return out;
+}
+
+static std::atomic<bool> g_tap_running{false};
+static std::thread g_tap_thread;
+
+// Stop the running capture thread (idempotent). Must NOT be called from the
+// capture thread itself.
+static void tiny_audiotap_stop() {
+  g_tap_running = false;
+  if (g_tap_thread.joinable())
+    g_tap_thread.join();
+}
+
+// The capture thread. Owns all COM objects; replies GOT once capturing (or on
+// failure), then loops emitting chunks until g_tap_running clears.
+static void tiny_audiotap_thread(AudioTapReq req) {
+  int interval = req.interval < 20 ? 20 : (req.interval > 500 ? 500 : req.interval);
+  bool com = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+
+  IMMDeviceEnumerator *en = nullptr;
+  IMMDevice *dev = nullptr;
+  IAudioClient *ac = nullptr;
+  IAudioCaptureClient *cap = nullptr;
+  WAVEFORMATEX *mix = nullptr;
+  auto fail = [&](const char *msg) {
+    if (cap) cap->Release();
+    if (ac) ac->Release();
+    if (dev) dev->Release();
+    if (en) en->Release();
+    if (mix) CoTaskMemFree(mix);
+    if (com) CoUninitialize();
+    g_tap_running = false;
+    got(req.qid, std::string("{\"ok\":false,\"code\":\"failed\",\"message\":\"") +
+                     msg + "\"}");
+  };
+
+  if (FAILED(CoCreateInstance(kCLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL,
+                              kIID_IMMDeviceEnumerator, (void **)&en)))
+    return fail("MMDeviceEnumerator unavailable");
+  if (FAILED(en->GetDefaultAudioEndpoint(eRender, eConsole, &dev)))
+    return fail("no default render device");
+  if (FAILED(dev->Activate(kIID_IAudioClient, CLSCTX_ALL, nullptr, (void **)&ac)))
+    return fail("IAudioClient activation failed");
+  if (FAILED(ac->GetMixFormat(&mix)) || !mix)
+    return fail("GetMixFormat failed");
+  if (FAILED(ac->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
+                            10000000 /*1s*/, 0, mix, nullptr)))
+    return fail("IAudioClient Initialize (loopback) failed");
+  if (FAILED(ac->GetService(kIID_IAudioCaptureClient, (void **)&cap)))
+    return fail("IAudioCaptureClient unavailable");
+  if (FAILED(ac->Start()))
+    return fail("IAudioClient Start failed");
+
+  // Decode the mix format once. Shared-mode mix is almost always float32, but
+  // handle 16/24/32-bit PCM too.
+  int channels = mix->nChannels > 0 ? mix->nChannels : 2;
+  int sampleRate = mix->nSamplesPerSec > 0 ? (int)mix->nSamplesPerSec : 48000;
+  int bits = mix->wBitsPerSample;
+  int bytesPerSample = bits / 8;
+  bool isFloat = false;
+  WORD tag = mix->wFormatTag;
+  if (tag == WAVE_FORMAT_EXTENSIBLE &&
+      mix->cbSize >= sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) {
+    const WAVEFORMATEXTENSIBLE *ext = (const WAVEFORMATEXTENSIBLE *)mix;
+    if (IsEqualGUID(ext->SubFormat, kSUBTYPE_IEEE_FLOAT)) isFloat = true;
+    else if (IsEqualGUID(ext->SubFormat, kSUBTYPE_PCM)) isFloat = false;
+  } else if (tag == WAVE_FORMAT_IEEE_FLOAT) {
+    isFloat = true;
+  }
+
+  got(req.qid, "{\"ok\":true,\"sampleRate\":" + std::to_string(sampleRate) +
+                   ",\"channels\":" + std::to_string(channels) + "}");
+
+  std::vector<int16_t> acc; // interleaved Int16 accumulated since last emit
+  ULONGLONG lastEmit = GetTickCount64();
+
+  auto append_samples = [&](const BYTE *pdata, UINT32 frames, bool silent) {
+    size_t n = (size_t)frames * channels;
+    size_t base = acc.size();
+    acc.resize(base + n);
+    if (silent || !pdata) {
+      std::fill(acc.begin() + base, acc.end(), (int16_t)0);
+      return;
+    }
+    for (UINT32 f = 0; f < frames; f++) {
+      for (int c = 0; c < channels; c++) {
+        const BYTE *s = pdata + ((size_t)f * channels + c) * bytesPerSample;
+        int16_t v = 0;
+        if (isFloat && bytesPerSample == 4) {
+          float fv; memcpy(&fv, s, 4);
+          if (fv > 1.0f) fv = 1.0f; else if (fv < -1.0f) fv = -1.0f;
+          v = (int16_t)lrintf(fv * 32767.0f);
+        } else if (!isFloat && bytesPerSample == 2) {
+          memcpy(&v, s, 2);
+        } else if (!isFloat && bytesPerSample == 4) {
+          int32_t iv; memcpy(&iv, s, 4);
+          v = (int16_t)(iv >> 16);
+        } else if (!isFloat && bytesPerSample == 3) {
+          int32_t iv = (s[0] << 8) | (s[1] << 16) | (s[2] << 24);
+          v = (int16_t)(iv >> 16);
+        }
+        acc[base + (size_t)f * channels + c] = v;
+      }
+    }
+  };
+
+  while (g_tap_running) {
+    // Drain all queued loopback packets into the accumulator.
+    UINT32 pkt = 0;
+    while (SUCCEEDED(cap->GetNextPacketSize(&pkt)) && pkt > 0) {
+      BYTE *pdata = nullptr; UINT32 frames = 0; DWORD flags = 0;
+      if (FAILED(cap->GetBuffer(&pdata, &frames, &flags, nullptr, nullptr)))
+        break;
+      append_samples(pdata, frames, (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
+      cap->ReleaseBuffer(frames);
+    }
+
+    ULONGLONG now = GetTickCount64();
+    if (now - lastEmit >= (ULONGLONG)interval) {
+      std::vector<int16_t> chunk;
+      chunk.swap(acc);
+      if (chunk.empty()) {
+        // Nothing played this interval — emit silence so chunks stay on cadence.
+        int frames = (int)((ULONGLONG)sampleRate * interval / 1000);
+        chunk.assign((size_t)frames * channels, 0);
+      }
+      int frames = (int)(chunk.size() / channels);
+      std::string b64 = tap_base64((const uint8_t *)chunk.data(),
+                                   chunk.size() * sizeof(int16_t));
+      char meta[96];
+      snprintf(meta, sizeof(meta), "\t%d\t%d\t%d\t%llu", sampleRate, channels,
+               frames, (unsigned long long)now);
+      pipe_write_line("AUDIOTAP " + b64 + meta);
+      lastEmit = now;
+    }
+    Sleep(10);
+  }
+
+  ac->Stop();
+  cap->Release();
+  ac->Release();
+  dev->Release();
+  en->Release();
+  CoTaskMemFree(mix);
+  if (com) CoUninitialize();
+}
+
+// Handle an AUDIOTAP start request (from the pipe read loop). Answers GOT.
+static void tiny_audiotap_start(AudioTapReq req) {
+  if (req.scope == "app") {
+    got(req.qid, "{\"ok\":false,\"code\":\"unsupported\",\"message\":\"per-app tap "
+                 "is not supported on windows; use scope 'system'\"}");
+    return;
+  }
+  if (req.scope != "system") {
+    got(req.qid, "{\"ok\":false,\"code\":\"unsupported\",\"message\":\"unknown "
+                 "audioTap scope\"}");
+    return;
+  }
+  tiny_audiotap_stop();          // only one tap at a time; stop any prior one
+  g_tap_running = true;
+  g_tap_thread = std::thread(tiny_audiotap_thread, std::move(req));
+}
+
 // ---------------------------------------------------------------------------
 // pipe read loop (background thread; UI work hops via webview_dispatch)
 
@@ -3785,11 +4036,18 @@ static void pipe_read_loop() {
         else
           got(qid, "{\"ok\":false,\"error\":\"not built in\"}");
       } else if (line.rfind("AUDIOTAP STOP", 0) == 0) {
-        // nothing to stop
+        tiny_audiotap_stop();
       } else if (line.rfind("AUDIOTAP ", 0) == 0) {
-        got(qid_of(line, 9),
-            "{\"ok\":false,\"code\":\"unsupported\","
-            "\"message\":\"audioTap is not supported on windows\"}");
+        // AUDIOTAP <qid> <scope>\t<excludeSelf01>\t<intervalMs>
+        std::string rest = line.substr(9);
+        size_t sp = rest.find(' ');
+        std::string qid = sp == std::string::npos ? rest : rest.substr(0, sp);
+        std::vector<std::string> p =
+            split_tabs(sp == std::string::npos ? "" : rest.substr(sp + 1));
+        tiny_audiotap_start(AudioTapReq{
+            qid, p.size() > 0 ? p[0] : "system",
+            p.size() > 1 && p[1] == "1",
+            p.size() > 2 ? atoi(p[2].c_str()) : 80});
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_eval, new std::string("window.print()"));
       } else if (line == "RELOAD") {
