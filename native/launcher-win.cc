@@ -67,6 +67,7 @@
 #include <activation.h>
 #include <windows.data.xml.dom.h>
 #include <windows.ui.notifications.h>
+#include <windows.security.credentials.ui.h> // Windows Hello (AUTH)
 
 #include <algorithm>
 #include <atomic>
@@ -558,6 +559,7 @@ struct NotifReq {
 namespace WF = ABI::Windows::Foundation;
 namespace WUN = ABI::Windows::UI::Notifications;
 namespace WDX = ABI::Windows::Data::Xml::Dom;
+namespace WSCU = ABI::Windows::Security::Credentials::UI; // Windows Hello (AUTH)
 
 static const IID kIID_IActivationFactory =
     {0x00000035, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
@@ -588,6 +590,17 @@ struct IMapStringInspectable : IInspectable {
 static const PROPERTYKEY kPKEY_AppUserModel_ID = {
     {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}},
     5};
+
+// Windows Hello (AUTH). MinGW libuuid lacks these WinRT GUIDs; the values match
+// the DEFINE_GUID lines in windows.security.credentials.ui.h (the statics IID
+// plus the pinterface GUIDs of the two IAsyncOperationCompletedHandler<>
+// specializations we hand-roll).
+static const IID kIID_IUserConsentVerifierStatics =
+    {0xaf4f3f91, 0x564c, 0x4ddc, {0xb8, 0xb5, 0x97, 0x34, 0x47, 0x62, 0x7c, 0x65}};
+static const IID kIID_IAsyncOpCompleted_UCVAvailability =
+    {0x28988174, 0xace2, 0x5c15, {0xa0, 0xdf, 0x58, 0x0a, 0x26, 0xd9, 0x42, 0x94}};
+static const IID kIID_IAsyncOpCompleted_UCVResult =
+    {0x0cffc6c9, 0x4c2b, 0x5cd4, {0xb3, 0x8c, 0x7b, 0x8d, 0xf3, 0xff, 0x5a, 0xfb}};
 
 typedef HRESULT(WINAPI *RoInitialize_t)(int);
 typedef HRESULT(WINAPI *RoGetActivationFactory_t)(HSTRING, REFIID, void **);
@@ -2219,6 +2232,221 @@ static void do_pdf(webview_t, void *arg) {
 }
 
 // ---------------------------------------------------------------------------
+// AUTH — Windows Hello via Windows.Security.Credentials.UI.UserConsentVerifier.
+//
+// Mirrors the macOS LAContext flow (resolve true when the user verifies with
+// fingerprint/face/PIN, false on cancel/denial/unavailable, and NEVER hang the
+// promise on any failure). Two chained WinRT async ops: CheckAvailabilityAsync
+// (short-circuit to false unless Available), then RequestVerificationAsync whose
+// UserConsentVerificationResult is Verified(0) → true, else false. combase is
+// loaded dynamically like the toast path; the completion handlers arrive on a
+// thread-pool thread, so reply plumbing goes through the thread-safe got().
+
+// Refcounted call context shared by the two completion handlers and the
+// synchronous error paths. reply() fires got() exactly once, ever.
+struct AuthCall {
+  std::atomic<int> refs{1};
+  std::string qid;
+  std::atomic<bool> replied{false};
+  void AddRefC() { refs.fetch_add(1); }
+  void ReleaseC() {
+    if (refs.fetch_sub(1) == 1)
+      delete this;
+  }
+  void reply(bool ok) {
+    bool expected = false;
+    if (replied.compare_exchange_strong(expected, true))
+      got(qid, ok ? "{\"ok\":true}" : "{\"ok\":false}");
+  }
+};
+
+// Carried across the UI-thread hop that starts RequestVerificationAsync (that
+// call shows system UI, so it runs on the UI thread like the rest of AUTH).
+struct AuthVerifyStart {
+  AuthCall *call;
+  WSCU::IUserConsentVerifierStatics *statics; // owns one ref
+  std::wstring reason;
+};
+
+static void do_auth_verify(webview_t, void *arg); // fwd
+
+// RequestVerificationAsync completion: Verified(0) → true, anything else false.
+// Hand-rolled IAsyncOperationCompletedHandler<UserConsentVerificationResult>
+// answering only IUnknown + its exact pinterface IID.
+struct AuthResultHandler
+    : WF::IAsyncOperationCompletedHandler<WSCU::UserConsentVerificationResult> {
+  ULONG refs = 1;
+  AuthCall *call = nullptr;
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    if (refs > 1)
+      return --refs;
+    if (call)
+      call->ReleaseC();
+    delete this;
+    return 0;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv)
+      return E_POINTER;
+    if (riid == IID_IUnknown || riid == kIID_IAsyncOpCompleted_UCVResult) {
+      *ppv = static_cast<WF::IAsyncOperationCompletedHandler<
+          WSCU::UserConsentVerificationResult> *>(this);
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  HRESULT STDMETHODCALLTYPE
+  Invoke(WF::IAsyncOperation<WSCU::UserConsentVerificationResult> *op,
+         AsyncStatus status) override {
+    WSCU::UserConsentVerificationResult r =
+        WSCU::UserConsentVerificationResult_Canceled;
+    bool ok = op && status == Completed && SUCCEEDED(op->GetResults(&r)) &&
+              r == WSCU::UserConsentVerificationResult_Verified;
+    call->reply(ok);
+    return S_OK;
+  }
+};
+
+// CheckAvailabilityAsync completion: unless Available, reply false; otherwise
+// hop to the UI thread to start the actual verification prompt.
+struct AuthAvailHandler
+    : WF::IAsyncOperationCompletedHandler<WSCU::UserConsentVerifierAvailability> {
+  ULONG refs = 1;
+  AuthCall *call = nullptr;
+  WSCU::IUserConsentVerifierStatics *statics = nullptr; // owns one ref
+  std::wstring reason;
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    if (refs > 1)
+      return --refs;
+    if (statics)
+      statics->Release();
+    if (call)
+      call->ReleaseC();
+    delete this;
+    return 0;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv)
+      return E_POINTER;
+    if (riid == IID_IUnknown || riid == kIID_IAsyncOpCompleted_UCVAvailability) {
+      *ppv = static_cast<WF::IAsyncOperationCompletedHandler<
+          WSCU::UserConsentVerifierAvailability> *>(this);
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  HRESULT STDMETHODCALLTYPE
+  Invoke(WF::IAsyncOperation<WSCU::UserConsentVerifierAvailability> *op,
+         AsyncStatus status) override {
+    WSCU::UserConsentVerifierAvailability avail =
+        WSCU::UserConsentVerifierAvailability_DeviceNotPresent;
+    if (!op || status != Completed || FAILED(op->GetResults(&avail)) ||
+        avail != WSCU::UserConsentVerifierAvailability_Available) {
+      call->reply(false);
+      return S_OK;
+    }
+    // Available: start the prompt on the UI thread. Hand ownership of one ref
+    // each on call + statics to the dispatched AuthVerifyStart.
+    AuthVerifyStart *vs = new AuthVerifyStart{call, statics, reason};
+    call->AddRefC();
+    statics->AddRef();
+    webview_dispatch(g_w, do_auth_verify, vs);
+    return S_OK;
+  }
+};
+
+// UI thread: kick off RequestVerificationAsync and wire up AuthResultHandler.
+static void do_auth_verify(webview_t, void *arg) {
+  AuthVerifyStart *vs = static_cast<AuthVerifyStart *>(arg);
+  WF::IAsyncOperation<WSCU::UserConsentVerificationResult> *op = nullptr;
+  HRESULT hr;
+  {
+    HStr msg(vs->reason.empty() ? L"authenticate" : vs->reason);
+    hr = vs->statics->RequestVerificationAsync(msg.h, &op);
+  }
+  if (FAILED(hr) || !op) {
+    vs->call->reply(false);
+  } else {
+    AuthResultHandler *h = new AuthResultHandler();
+    h->call = vs->call;
+    vs->call->AddRefC();
+    if (FAILED(op->put_Completed(h))) {
+      // put_Completed failed: the handler never fires, so reply now.
+      vs->call->reply(false);
+    }
+    h->Release();
+    op->Release();
+  }
+  vs->statics->Release();
+  vs->call->ReleaseC();
+  delete vs;
+}
+
+struct AuthReq {
+  std::string qid, reason;
+};
+
+// UI thread: get the statics, start CheckAvailabilityAsync. Any failure at this
+// stage replies false immediately (exactly once, via AuthCall::reply).
+static void do_auth(webview_t, void *arg) {
+  AuthReq *req = static_cast<AuthReq *>(arg);
+  AuthCall *call = new AuthCall();
+  call->qid = req->qid;
+  std::wstring reason = widen(req->reason);
+  delete req;
+
+  if (!load_combase()) {
+    call->reply(false);
+    call->ReleaseC();
+    return;
+  }
+  HRESULT hr = p_RoInitialize(RO_INIT_SINGLETHREADED);
+  if (hr != S_OK && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
+    call->reply(false);
+    call->ReleaseC();
+    return;
+  }
+
+  WSCU::IUserConsentVerifierStatics *statics = nullptr;
+  {
+    HStr cls(RuntimeClass_Windows_Security_Credentials_UI_UserConsentVerifier);
+    if (FAILED(p_RoGetActivationFactory(cls.h, kIID_IUserConsentVerifierStatics,
+                                        (void **)&statics)) ||
+        !statics) {
+      call->reply(false);
+      call->ReleaseC();
+      return;
+    }
+  }
+
+  WF::IAsyncOperation<WSCU::UserConsentVerifierAvailability> *op = nullptr;
+  hr = statics->CheckAvailabilityAsync(&op);
+  if (FAILED(hr) || !op) {
+    statics->Release();
+    call->reply(false);
+    call->ReleaseC();
+    return;
+  }
+
+  AuthAvailHandler *h = new AuthAvailHandler();
+  h->call = call;   // transfers the original ref
+  h->statics = statics; // transfers the statics ref
+  h->reason = reason;
+  if (FAILED(op->put_Completed(h))) {
+    // Handler will never fire; reply now. h->Release() drops call + statics.
+    call->reply(false);
+  }
+  op->Release();
+  h->Release();
+}
+
+// ---------------------------------------------------------------------------
 // text-to-speech (SAPI)
 
 #ifndef SPCAT_VOICES
@@ -3474,6 +3702,22 @@ static void send_theme() {
 static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
                                      LPARAM lp) {
   switch (msg) {
+  case WM_NCCALCSIZE:
+    // Frameless polish: WS_CAPTION removal leaves a top frame sliver; extend
+    // the client to the true top while keeping left/right/bottom resize
+    // borders (top-edge resize is traded away — the standard frameless
+    // compromise, since the WebView2 child owns all client hit-testing).
+    if (wp && (g_frameless || g_square)) {
+      RECT *rc = &((NCCALCSIZE_PARAMS *)lp)->rgrc[0];
+      LONG top = rc->top;
+      LRESULT r = CallWindowProcW(g_orig_wndproc, hwnd, msg, wp, lp);
+      rc->top = IsZoomed(hwnd)
+                    ? top + GetSystemMetrics(SM_CYFRAME) +
+                          GetSystemMetrics(SM_CXPADDEDBORDER)
+                    : top;
+      return r;
+    }
+    break;
   case WM_CLOSE:
     if (g_hide_on_close) {
       ShowWindow(hwnd, SW_HIDE);
@@ -4235,7 +4479,14 @@ static void pipe_read_loop() {
             req->paths.push_back(wire_unescape(p[i]));
         webview_dispatch(g_w, do_dragout, req);
       } else if (line.rfind("AUTH ", 0) == 0) {
-        got(qid_of(line, 5), "{\"ok\":false,\"error\":\"unsupported on windows\"}");
+        // AUTH <qid> <wire-escaped-reason>. A missing reason must still reply
+        // (never hang the promise), so treat it as empty rather than dropping.
+        size_t sp = line.find(' ', 5);
+        std::string qid =
+            sp == std::string::npos ? line.substr(5) : line.substr(5, sp - 5);
+        std::string reason =
+            sp == std::string::npos ? "" : wire_unescape(line.substr(sp + 1));
+        webview_dispatch(g_w, do_auth, new AuthReq{qid, reason});
       } else if (line.rfind("OSA ", 0) == 0 || line.rfind("OCR ", 0) == 0) {
         got_unsupported(qid_of(line, 4));
       } else if (line.rfind("RECORD ", 0) == 0) {
