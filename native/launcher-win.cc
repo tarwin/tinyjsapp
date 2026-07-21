@@ -21,8 +21,10 @@
 // clipboard/battery/idle/frontmost/item/traypos/windows), CLIPWRITE/CLIPWATCH,
 // HKREG/HKUNREG (RegisterHotKey), KEYSTROKE (SendInput; cmd ≡ ctrl), SHELL
 // (open/reveal/trash), SECRET (Credential Manager), POWER
-// (SetThreadExecutionState), SOUND (PlaySound/MessageBeep), NOTIFY (tray
-// balloon), BOUNCE (FlashWindowEx), CTX* (custom right-click menu via
+// (SetThreadExecutionState), SOUND (PlaySound/MessageBeep), NOTIFY (WinRT
+// toast with action buttons / reply fields, falling back to a tray balloon on
+// old Windows or any WinRT failure), BOUNCE (FlashWindowEx), CTX* (custom
+// right-click menu via
 // WebView2 ContextMenuRequested), SYS theme/sleep/wake events, DRAGWIN.
 //
 // macOS-only ops (vibrancy, dock, spaces, Quick Look, OCR, AppleScript, …)
@@ -45,6 +47,23 @@
 #include <sapi.h>
 #include <wincrypt.h>
 #include <gdiplus.h>
+
+// WinRT toast notifications — raw ABI. These headers only declare the C++ ABI
+// interfaces (ABI::Windows::…) and the RuntimeClass_… strings; the combase
+// entry points they reference (RoInitialize/RoGetActivationFactory/Windows*
+// String) are loaded dynamically at runtime (see the notify section) so the
+// binary links nothing new. Any WinRT GUIDs libuuid lacks are defined locally.
+//
+// MinGW's windows.foundation.h defines both IReference<BYTE> and
+// IReference<boolean> — identical types (both `unsigned char`), so the second
+// is a redefinition that won't compile. Pre-defining the boolean variant's
+// interface guard suppresses it; we never reference IReference<boolean>.
+#define ____FIReference_1_boolean_INTERFACE_DEFINED__
+#include <roapi.h>
+#include <winstring.h>
+#include <activation.h>
+#include <windows.data.xml.dom.h>
+#include <windows.ui.notifications.h>
 
 #include <atomic>
 #include <cstdio>
@@ -213,6 +232,22 @@ static std::string wire_unescape(const std::string &s) {
     } else {
       out += s[i];
     }
+  }
+  return out;
+}
+
+// Reverse of wire_unescape / the bridge's esc(): make text safe to carry in a
+// tab-separated wire field (the bridge unescapes it on the way in). Used for
+// notification reply text.
+static std::string wire_escape(const std::string &s) {
+  std::string out;
+  out.reserve(s.size());
+  for (char c : s) {
+    if (c == '\\') out += "\\\\";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\t') out += "\\t";
+    else if (c == '\r') out += "\\r";
+    else out += c;
   }
   return out;
 }
@@ -500,16 +535,524 @@ static void tray_popup(HMENU menu, const char *event_prefix) {
   }
 }
 
-// NOTIFY — a balloon on the tray icon (created invisible-ish on demand when
-// the app has no tray). Windows' toast API needs an AppUserModelID +
-// registration; the balloon path works for unpackaged dev apps.
+// NOTIFY — a real WinRT toast (action buttons + reply fields), falling back to
+// a tray balloon on old Windows / any WinRT failure. The wire carries
+// <id>\t<title>\t<body>\t<subtitle>\t<sound01>[\t<actions-json>] where
+// actions-json = [{id, title, reply?, placeholder?, destructive?}].
 struct NotifReq {
-  std::string id, title, body, subtitle;
+  std::string id, title, body, subtitle, actions_json;
   bool sound = false;
 };
 
-static void do_notify(webview_t, void *arg) {
-  NotifReq *req = static_cast<NotifReq *>(arg);
+// --- WinRT toast plumbing ---------------------------------------------------
+// combase is loaded dynamically so nothing new must link (see the include note
+// at the top). The ABI interface types come from the WinRT headers; every
+// GUID libuuid lacks is defined locally, matching the SAPI pattern above.
+namespace WF = ABI::Windows::Foundation;
+namespace WUN = ABI::Windows::UI::Notifications;
+namespace WDX = ABI::Windows::Data::Xml::Dom;
+
+static const IID kIID_IActivationFactory =
+    {0x00000035, 0x0000, 0x0000, {0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}};
+static const IID kIID_IXmlDocument =
+    {0xf7f3a506, 0x1e87, 0x42d6, {0xbc, 0xfb, 0xb8, 0xc8, 0x09, 0xfa, 0x54, 0x94}};
+static const IID kIID_IXmlDocumentIO =
+    {0x6cd0e74e, 0xee65, 0x4489, {0x9e, 0xbf, 0xca, 0x43, 0xe8, 0x7b, 0xa6, 0x37}};
+static const IID kIID_IToastNotificationFactory =
+    {0x04124b20, 0x82c6, 0x4229, {0xb1, 0x09, 0xfd, 0x9e, 0xd4, 0x66, 0x2b, 0x53}};
+static const IID kIID_IToastNotificationManagerStatics =
+    {0x50ac103f, 0xd235, 0x4598, {0xbb, 0xef, 0x98, 0xfe, 0x4d, 0x1a, 0x3a, 0xd4}};
+static const IID kIID_IToastActivatedEventArgs =
+    {0xe3bf92f3, 0xc197, 0x436f, {0x82, 0x65, 0x06, 0x25, 0x82, 0x4f, 0x8d, 0xac}};
+static const IID kIID_IToastActivatedEventArgs2 =
+    {0xab7da512, 0xcc61, 0x568e, {0x81, 0xbe, 0x30, 0x4a, 0xc3, 0x10, 0x38, 0xfa}};
+static const IID kIID_IPropertyValue =
+    {0x4bd682dd, 0x7554, 0x40e9, {0x9a, 0x9b, 0x82, 0x65, 0x4e, 0xde, 0x7e, 0x62}};
+static const IID kIID_ITypedEventHandler_Toast =
+    {0xab54de2d, 0x97d9, 0x5528, {0xb6, 0xad, 0x10, 0x5a, 0xfe, 0x15, 0x65, 0x30}};
+// IMap<HSTRING, IInspectable*> — the ValueSet returned by get_UserInput. Not
+// pre-instantiated in MinGW's headers, so a minimal vtable is hand-declared.
+static const IID kIID_IMap_String_Object =
+    {0x1b0d3570, 0x0877, 0x5ec2, {0x8a, 0x2c, 0x3b, 0x95, 0x39, 0x50, 0x6a, 0xca}};
+struct IMapStringInspectable : IInspectable {
+  virtual HRESULT STDMETHODCALLTYPE Lookup(HSTRING key, IInspectable **value) = 0;
+};
+// AppUserModelID property (fmtid + pid 5) stamped onto the Start-Menu shortcut.
+static const PROPERTYKEY kPKEY_AppUserModel_ID = {
+    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}},
+    5};
+
+typedef HRESULT(WINAPI *RoInitialize_t)(int);
+typedef HRESULT(WINAPI *RoGetActivationFactory_t)(HSTRING, REFIID, void **);
+typedef HRESULT(WINAPI *WindowsCreateString_t)(PCWSTR, UINT32, HSTRING *);
+typedef HRESULT(WINAPI *WindowsDeleteString_t)(HSTRING);
+typedef PCWSTR(WINAPI *WindowsGetStringRawBuffer_t)(HSTRING, UINT32 *);
+static RoInitialize_t p_RoInitialize = nullptr;
+static RoGetActivationFactory_t p_RoGetActivationFactory = nullptr;
+static WindowsCreateString_t p_WindowsCreateString = nullptr;
+static WindowsDeleteString_t p_WindowsDeleteString = nullptr;
+static WindowsGetStringRawBuffer_t p_WindowsGetStringRawBuffer = nullptr;
+
+static bool load_combase() {
+  static int state = -1; // -1 untried, 0 failed, 1 ok
+  if (state >= 0)
+    return state == 1;
+  state = 0;
+  HMODULE m = LoadLibraryW(L"combase.dll");
+  if (!m)
+    return false;
+  p_RoInitialize = (RoInitialize_t)GetProcAddress(m, "RoInitialize");
+  p_RoGetActivationFactory =
+      (RoGetActivationFactory_t)GetProcAddress(m, "RoGetActivationFactory");
+  p_WindowsCreateString =
+      (WindowsCreateString_t)GetProcAddress(m, "WindowsCreateString");
+  p_WindowsDeleteString =
+      (WindowsDeleteString_t)GetProcAddress(m, "WindowsDeleteString");
+  p_WindowsGetStringRawBuffer = (WindowsGetStringRawBuffer_t)GetProcAddress(
+      m, "WindowsGetStringRawBuffer");
+  state = (p_RoInitialize && p_RoGetActivationFactory && p_WindowsCreateString &&
+           p_WindowsDeleteString && p_WindowsGetStringRawBuffer)
+              ? 1
+              : 0;
+  return state == 1;
+}
+
+// RAII HSTRING from a wide string.
+struct HStr {
+  HSTRING h = nullptr;
+  HStr(const std::wstring &s) {
+    p_WindowsCreateString(s.c_str(), (UINT32)s.size(), &h);
+  }
+  ~HStr() {
+    if (h)
+      p_WindowsDeleteString(h);
+  }
+};
+
+static std::string hstring_to_utf8(HSTRING h) {
+  if (!h)
+    return "";
+  UINT32 len = 0;
+  PCWSTR buf = p_WindowsGetStringRawBuffer(h, &len);
+  if (!buf || !len)
+    return "";
+  return narrow(std::wstring(buf, len));
+}
+
+static std::string xml_escape(const std::string &s) {
+  std::string o;
+  o.reserve(s.size());
+  for (char c : s) {
+    switch (c) {
+    case '&': o += "&amp;"; break;
+    case '<': o += "&lt;"; break;
+    case '>': o += "&gt;"; break;
+    case '"': o += "&quot;"; break;
+    case '\'': o += "&apos;"; break;
+    default: o += c;
+    }
+  }
+  return o;
+}
+
+// Minimal, bounds-safe extractors over an actions-json object slice.
+static bool json_str_field(const std::string &obj, const std::string &key,
+                           std::string &out) {
+  std::string needle = "\"" + key + "\"";
+  size_t k = obj.find(needle);
+  if (k == std::string::npos)
+    return false;
+  size_t i = obj.find(':', k + needle.size());
+  if (i == std::string::npos)
+    return false;
+  i++;
+  while (i < obj.size() && (obj[i] == ' ' || obj[i] == '\t'))
+    i++;
+  if (i >= obj.size() || obj[i] != '"')
+    return false;
+  i++;
+  std::string v;
+  while (i < obj.size() && obj[i] != '"') {
+    if (obj[i] == '\\' && i + 1 < obj.size()) {
+      char c = obj[++i];
+      v += c == 'n' ? '\n' : c == 't' ? '\t' : c == 'r' ? '\r' : c;
+    } else {
+      v += obj[i];
+    }
+    i++;
+  }
+  out = v;
+  return true;
+}
+
+static bool json_bool_field(const std::string &obj, const std::string &key) {
+  std::string needle = "\"" + key + "\"";
+  size_t k = obj.find(needle);
+  if (k == std::string::npos)
+    return false;
+  size_t i = obj.find(':', k + needle.size());
+  if (i == std::string::npos)
+    return false;
+  i++;
+  while (i < obj.size() && (obj[i] == ' ' || obj[i] == '\t'))
+    i++;
+  return obj.compare(i, 4, "true") == 0;
+}
+
+// Split a JSON array of objects into top-level `{…}` object slices.
+static std::vector<std::string> json_objects(const std::string &arr) {
+  std::vector<std::string> out;
+  int depth = 0;
+  bool in_str = false;
+  size_t start = 0;
+  for (size_t i = 0; i < arr.size(); i++) {
+    char c = arr[i];
+    if (in_str) {
+      if (c == '\\')
+        i++;
+      else if (c == '"')
+        in_str = false;
+      continue;
+    }
+    if (c == '"')
+      in_str = true;
+    else if (c == '{') {
+      if (depth == 0)
+        start = i;
+      depth++;
+    } else if (c == '}') {
+      depth--;
+      if (depth == 0)
+        out.push_back(arr.substr(start, i - start + 1));
+    }
+  }
+  return out;
+}
+
+static std::string build_toast_xml(const NotifReq &req) {
+  std::string xml = "<toast><visual><binding template=\"ToastGeneric\">";
+  xml += "<text>" + xml_escape(req.title) + "</text>";
+  if (!req.body.empty())
+    xml += "<text>" + xml_escape(req.body) + "</text>";
+  if (!req.subtitle.empty())
+    xml += "<text>" + xml_escape(req.subtitle) + "</text>";
+  xml += "</binding></visual>";
+
+  std::string inputs, buttons;
+  bool have_reply_input = false;
+  if (!req.actions_json.empty()) {
+    for (const std::string &obj : json_objects(req.actions_json)) {
+      std::string aid, title, ph;
+      if (!json_str_field(obj, "id", aid))
+        continue;
+      if (!json_str_field(obj, "title", title))
+        title = aid;
+      bool reply = json_bool_field(obj, "reply");
+      std::string args = "action:" + aid;
+      if (reply) {
+        if (!have_reply_input) {
+          json_str_field(obj, "placeholder", ph);
+          inputs += "<input id=\"reply\" type=\"text\" placeHolderContent=\"" +
+                    xml_escape(ph) + "\"/>";
+          have_reply_input = true;
+        }
+        buttons += "<action content=\"" + xml_escape(title) +
+                   "\" arguments=\"" + xml_escape(args) +
+                   "\" hint-inputId=\"reply\"/>";
+      } else {
+        buttons += "<action content=\"" + xml_escape(title) +
+                   "\" arguments=\"" + xml_escape(args) + "\"/>";
+      }
+    }
+  }
+  if (!inputs.empty() || !buttons.empty())
+    xml += "<actions>" + inputs + buttons + "</actions>";
+  if (!req.sound)
+    xml += "<audio silent=\"true\"/>";
+  xml += "</toast>";
+  return xml;
+}
+
+// A toast's Activated callback: body clicks report NOTIFYCLICK, buttons/reply
+// report NOTIFYACTION. Hand-rolled ITypedEventHandler<ToastNotification*,
+// IInspectable*> answering only IUnknown + its exact IID.
+struct ToastActivatedHandler
+    : WF::ITypedEventHandler<WUN::ToastNotification *, IInspectable *> {
+  ULONG refs = 1;
+  std::string notif_id;
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    if (refs > 1)
+      return --refs;
+    delete this;
+    return 0;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv)
+      return E_POINTER;
+    if (riid == IID_IUnknown || riid == kIID_ITypedEventHandler_Toast) {
+      *ppv = static_cast<
+          WF::ITypedEventHandler<WUN::ToastNotification *, IInspectable *> *>(
+          this);
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  HRESULT STDMETHODCALLTYPE Invoke(WUN::IToastNotification *,
+                                   IInspectable *args) override {
+    std::string arguments;
+    WUN::IToastActivatedEventArgs *a1 = nullptr;
+    if (args &&
+        SUCCEEDED(args->QueryInterface(kIID_IToastActivatedEventArgs,
+                                       (void **)&a1)) &&
+        a1) {
+      HSTRING h = nullptr;
+      if (SUCCEEDED(a1->get_Arguments(&h))) {
+        arguments = hstring_to_utf8(h);
+        if (h)
+          p_WindowsDeleteString(h);
+      }
+      a1->Release();
+    }
+    if (arguments.rfind("action:", 0) != 0) {
+      // Body click (no per-button arguments).
+      pipe_write_line("NOTIFYCLICK " + notif_id);
+      return S_OK;
+    }
+    std::string action = arguments.substr(7);
+    // Reply text lives in UserInput["reply"] (empty for a plain button).
+    std::string reply;
+    WUN::IToastActivatedEventArgs2 *a2 = nullptr;
+    if (args &&
+        SUCCEEDED(args->QueryInterface(kIID_IToastActivatedEventArgs2,
+                                       (void **)&a2)) &&
+        a2) {
+      IInspectable *setInsp = nullptr;
+      if (SUCCEEDED(a2->get_UserInput(
+              (ABI::Windows::Foundation::Collections::IPropertySet **)
+                  &setInsp)) &&
+          setInsp) {
+        IMapStringInspectable *map = nullptr;
+        if (SUCCEEDED(setInsp->QueryInterface(kIID_IMap_String_Object,
+                                              (void **)&map)) &&
+            map) {
+          HStr key(L"reply");
+          IInspectable *val = nullptr;
+          if (SUCCEEDED(map->Lookup(key.h, &val)) && val) {
+            WF::IPropertyValue *pv = nullptr;
+            if (SUCCEEDED(val->QueryInterface(kIID_IPropertyValue,
+                                              (void **)&pv)) &&
+                pv) {
+              HSTRING h = nullptr;
+              if (SUCCEEDED(pv->GetString(&h))) {
+                reply = hstring_to_utf8(h);
+                if (h)
+                  p_WindowsDeleteString(h);
+              }
+              pv->Release();
+            }
+            val->Release();
+          }
+          map->Release();
+        }
+        setInsp->Release();
+      }
+      a2->Release();
+    }
+    pipe_write_line("NOTIFYACTION " + notif_id + "\t" + action + "\t" +
+                    wire_escape(reply));
+    return S_OK;
+  }
+};
+
+// Live toasts are kept referenced so their Activated handler stays registered
+// (releasing the notification would tear the handler down before the user
+// interacts). Capped so a chatty app can't grow the list without bound.
+static std::vector<WUN::IToastNotification *> g_live_toasts;
+
+// Unpackaged apps need an explicit AppUserModelID plus a Start-Menu shortcut
+// carrying it, or CreateToastNotifier fails. Done once, lazily, on first toast.
+static std::wstring g_aumid;
+
+static void create_start_menu_shortcut(const std::wstring &aumid,
+                                       const std::wstring &name) {
+  wchar_t appdata[MAX_PATH];
+  if (FAILED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, appdata)))
+    return;
+  std::wstring dir =
+      std::wstring(appdata) + L"\\Microsoft\\Windows\\Start Menu\\Programs";
+  std::wstring lnk = dir + L"\\" + name + L".lnk";
+  if (GetFileAttributesW(lnk.c_str()) != INVALID_FILE_ATTRIBUTES)
+    return; // already stamped
+  wchar_t exe[MAX_PATH];
+  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  IShellLinkW *link = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_IShellLinkW, (void **)&link)) ||
+      !link)
+    return;
+  link->SetPath(exe);
+  IPropertyStore *store = nullptr;
+  if (SUCCEEDED(link->QueryInterface(IID_IPropertyStore, (void **)&store)) &&
+      store) {
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    pv.vt = VT_LPWSTR;
+    pv.pwszVal = (LPWSTR)CoTaskMemAlloc((aumid.size() + 1) * sizeof(wchar_t));
+    if (pv.pwszVal) {
+      wcscpy(pv.pwszVal, aumid.c_str());
+      store->SetValue(kPKEY_AppUserModel_ID, pv);
+      store->Commit();
+    }
+    PropVariantClear(&pv);
+    store->Release();
+  }
+  IPersistFile *pf = nullptr;
+  if (SUCCEEDED(link->QueryInterface(IID_IPersistFile, (void **)&pf)) && pf) {
+    SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
+    pf->Save(lnk.c_str(), TRUE);
+    pf->Release();
+  }
+  link->Release();
+}
+
+static bool ensure_toast_identity() {
+  if (!g_aumid.empty())
+    return true;
+  std::string safe;
+  for (char c : g_app_name)
+    if (isalnum((unsigned char)c) || c == '.' || c == '-' || c == '_')
+      safe += c;
+  if (safe.empty())
+    safe = "app";
+  std::wstring name = widen(safe);
+  g_aumid = L"tinyjs." + name;
+  SetCurrentProcessExplicitAppUserModelID(g_aumid.c_str());
+  create_start_menu_shortcut(g_aumid, name);
+  return true;
+}
+
+// Try to show a real WinRT toast. Returns false (leaving nothing shown) on any
+// failure so do_notify can fall back to the tray balloon.
+static bool do_notify_toast(const NotifReq &req) {
+  if (!load_combase())
+    return false;
+  HRESULT hr = p_RoInitialize(RO_INIT_SINGLETHREADED);
+  // The UI thread is already an STA (CoInitialize'd by OLE/webview); a redundant
+  // RoInitialize returns S_FALSE, and a mode mismatch RPC_E_CHANGED_MODE — both
+  // are fine, the apartment is usable either way.
+  if (hr != S_OK && hr != S_FALSE && hr != RPC_E_CHANGED_MODE)
+    return false;
+  ensure_toast_identity();
+
+  std::wstring xml = widen(build_toast_xml(req));
+
+  // XmlDocument via its activation factory → LoadXml.
+  IActivationFactory *xmlFactory = nullptr;
+  {
+    HStr cls(RuntimeClass_Windows_Data_Xml_Dom_XmlDocument);
+    if (FAILED(p_RoGetActivationFactory(cls.h, kIID_IActivationFactory,
+                                        (void **)&xmlFactory)) ||
+        !xmlFactory)
+      return false;
+  }
+  IInspectable *xmlInsp = nullptr;
+  hr = xmlFactory->ActivateInstance(&xmlInsp);
+  xmlFactory->Release();
+  if (FAILED(hr) || !xmlInsp)
+    return false;
+  WDX::IXmlDocumentIO *xmlIO = nullptr;
+  if (FAILED(xmlInsp->QueryInterface(kIID_IXmlDocumentIO, (void **)&xmlIO)) ||
+      !xmlIO) {
+    xmlInsp->Release();
+    return false;
+  }
+  {
+    HStr hxml(xml);
+    hr = xmlIO->LoadXml(hxml.h);
+  }
+  if (FAILED(hr)) {
+    xmlIO->Release();
+    xmlInsp->Release();
+    return false;
+  }
+  WDX::IXmlDocument *xmlDoc = nullptr;
+  hr = xmlIO->QueryInterface(kIID_IXmlDocument, (void **)&xmlDoc);
+  xmlIO->Release();
+  if (FAILED(hr) || !xmlDoc) {
+    xmlInsp->Release();
+    return false;
+  }
+
+  // ToastNotification via its factory.
+  WUN::IToastNotificationFactory *toastFactory = nullptr;
+  {
+    HStr cls(RuntimeClass_Windows_UI_Notifications_ToastNotification);
+    hr = p_RoGetActivationFactory(cls.h, kIID_IToastNotificationFactory,
+                                  (void **)&toastFactory);
+  }
+  if (FAILED(hr) || !toastFactory) {
+    xmlDoc->Release();
+    xmlInsp->Release();
+    return false;
+  }
+  WUN::IToastNotification *toast = nullptr;
+  hr = toastFactory->CreateToastNotification(xmlDoc, &toast);
+  toastFactory->Release();
+  xmlDoc->Release();
+  xmlInsp->Release();
+  if (FAILED(hr) || !toast)
+    return false;
+
+  ToastActivatedHandler *handler = new ToastActivatedHandler();
+  handler->notif_id = req.id;
+  EventRegistrationToken tok = {};
+  toast->add_Activated(handler, &tok);
+  handler->Release();
+
+  // Notifier via the manager statics, keyed by our AUMID.
+  WUN::IToastNotificationManagerStatics *statics = nullptr;
+  {
+    HStr cls(RuntimeClass_Windows_UI_Notifications_ToastNotificationManager);
+    hr = p_RoGetActivationFactory(cls.h, kIID_IToastNotificationManagerStatics,
+                                  (void **)&statics);
+  }
+  if (FAILED(hr) || !statics) {
+    toast->Release();
+    return false;
+  }
+  WUN::IToastNotifier *notifier = nullptr;
+  {
+    HStr aumid(g_aumid);
+    hr = statics->CreateToastNotifierWithId(aumid.h, &notifier);
+  }
+  statics->Release();
+  if (FAILED(hr) || !notifier) {
+    toast->Release();
+    return false;
+  }
+  hr = notifier->Show(toast);
+  notifier->Release();
+  if (FAILED(hr)) {
+    toast->Release();
+    return false;
+  }
+  // Keep the toast (and thus its handler) alive; cap the retained set.
+  g_live_toasts.push_back(toast);
+  while (g_live_toasts.size() > 32) {
+    g_live_toasts.front()->Release();
+    g_live_toasts.erase(g_live_toasts.begin());
+  }
+  g_last_notif_id = req.id;
+  return true;
+}
+
+// Fallback: a balloon on the tray icon (created on demand when the app has no
+// tray). Clicks come back as NOTIFYCLICK via NIN_BALLOONUSERCLICK; the balloon
+// has no action buttons.
+static void do_notify_balloon(const NotifReq &req) {
   if (!g_tray_added) {
     tray_ensure_icon_struct();
     g_nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
@@ -519,16 +1062,22 @@ static void do_notify(webview_t, void *arg) {
     Shell_NotifyIconW(NIM_ADD, &g_nid);
     g_tray_added = true;
   }
-  g_last_notif_id = req->id;
+  g_last_notif_id = req.id;
   tray_ensure_icon_struct();
   g_nid.uFlags = NIF_INFO;
-  std::string body = req->body;
-  if (!req->subtitle.empty())
-    body = req->subtitle + "\n" + body;
-  wcsncpy(g_nid.szInfoTitle, widen(req->title).c_str(), 63);
+  std::string body = req.body;
+  if (!req.subtitle.empty())
+    body = req.subtitle + "\n" + body;
+  wcsncpy(g_nid.szInfoTitle, widen(req.title).c_str(), 63);
   wcsncpy(g_nid.szInfo, widen(body).c_str(), 255);
-  g_nid.dwInfoFlags = NIIF_INFO | (req->sound ? 0 : NIIF_NOSOUND);
+  g_nid.dwInfoFlags = NIIF_INFO | (req.sound ? 0 : NIIF_NOSOUND);
   Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
+static void do_notify(webview_t, void *arg) {
+  NotifReq *req = static_cast<NotifReq *>(arg);
+  if (!do_notify_toast(*req))
+    do_notify_balloon(*req);
   delete req;
 }
 
@@ -3079,6 +3628,7 @@ static void pipe_read_loop() {
         req->body = p.size() > 2 ? p[2] : "";
         req->subtitle = p.size() > 3 ? p[3] : "";
         req->sound = p.size() > 4 && p[4] == "1";
+        req->actions_json = p.size() > 5 ? wire_unescape(p[5]) : "";
         webview_dispatch(g_w, do_notify, req);
       } else if (line.rfind("CHROME", 0) == 0 &&
                  (line[6] == ' ' || line[6] == '@')) {

@@ -57,6 +57,14 @@ jobs:
           if (-not (Test-Path dist\ci-check.exe)) { throw 'missing dist\ci-check.exe' }
           if (-not (Test-Path dist\launcher.exe)) { throw 'missing dist\launcher.exe' }
           Write-Host 'windows build pipeline OK'
+          # GUI smoke: runners have a desktop session + WebView2 runtime, so
+          # the self-driving smoke page can exercise the real launcher.
+          $env:TINYJS_HTML = "$extract\test\smoke.html"
+          $out = & "$extract\tinyjs.cmd" dev 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch 'SMOKE RESULTS') { throw 'GUI smoke produced no results' }
+          if ($out -match 'FAIL') { throw 'GUI smoke has failures' }
+          Write-Host 'windows GUI smoke OK'
 
       - uses: actions/upload-artifact@v4
         with:
