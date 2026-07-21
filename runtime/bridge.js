@@ -27,6 +27,9 @@ const IS_WIN = tjs.env.OS === 'Windows_NT';
 // arrive with backslashes).
 const dirOf = (p) => String(p).replace(/[\\/][^\\/]*$/, '');
 const isAbs = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p);
+// Windows has no HOME env var; macOS-ish app code (tjs.env.HOME + '/…') dies
+// at import without it. Point it at the profile so such apps degrade instead.
+if (IS_WIN && !tjs.env.HOME) tjs.env.HOME = tjs.homeDir;
 
 function dbg(dir, line) {
   if (DEBUG) console.log(dir, line.length > 160 ? line.slice(0, 160) + '…' : line);
