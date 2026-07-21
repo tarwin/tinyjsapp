@@ -135,6 +135,8 @@ static bool g_asleep = false;
 #define WM_TINY_TRAY (WM_APP + 2)
 #define TIMER_CLIPWATCH 0x7101
 
+static void drag_dbg(const std::string &msg); // drag&drop diagnostics (below)
+
 // multi-window plumbing (defined in the multi-window section below)
 struct TinyWin;
 static std::map<std::string, TinyWin *> g_windows;
@@ -2393,6 +2395,8 @@ struct DropTarget : public IDropTarget {
   HRESULT STDMETHODCALLTYPE DragEnter(IDataObject *d, DWORD, POINTL,
                                       DWORD *effect) override {
     m_files = has_files(d);
+    drag_dbg(std::string("DropTarget::DragEnter, files=") +
+             (m_files ? "yes" : "no"));
     *effect = m_files ? DROPEFFECT_COPY : DROPEFFECT_NONE;
     return S_OK;
   }
@@ -2429,16 +2433,102 @@ struct DropTarget : public IDropTarget {
   bool m_files = false;
 };
 
-static void install_drop_target() {
-  ICoreWebView2Controller4 *c4 = nullptr;
-  if (g_ctrl &&
-      SUCCEEDED(g_ctrl->QueryInterface(IID_ICoreWebView2Controller4,
-                                       (void **)&c4)) &&
-      c4) {
-    c4->put_AllowExternalDrop(FALSE);
-    c4->Release();
+// Dropped-file paths, the official WebView2 way: the child process owns the
+// OLE drop (its target rejects when AllowExternalDrop is off and never lets
+// the walk reach the host hwnd), so instead the page forwards the dropped
+// File objects via chrome.webview.postMessageWithAdditionalObjects and the
+// host reads each ICoreWebView2File's real path.
+static const char *DROP_FORWARD_JS =
+    "window.addEventListener('dragover', (e) => e.preventDefault());"
+    "window.addEventListener('drop', (e) => {"
+    "  e.preventDefault();"
+    "  if (e.dataTransfer && e.dataTransfer.files.length && window.chrome"
+    "      && window.chrome.webview"
+    "      && window.chrome.webview.postMessageWithAdditionalObjects)"
+    "    window.chrome.webview.postMessageWithAdditionalObjects("
+    "        'tinyjs-drop', e.dataTransfer.files);"
+    "});";
+
+struct DropMsgHandler : public ICoreWebView2WebMessageReceivedEventHandler {
+  ULONG refs = 1;
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    if (refs > 1) return --refs;
+    delete this;
+    return 0;
   }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == IID_IUnknown ||
+        riid == IID_ICoreWebView2WebMessageReceivedEventHandler) {
+      *ppv = this;
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *,
+         ICoreWebView2WebMessageReceivedEventArgs *args) override {
+    LPWSTR s = nullptr;
+    if (FAILED(args->TryGetWebMessageAsString(&s)) || !s)
+      return S_OK;
+    bool ours = wcscmp(s, L"tinyjs-drop") == 0;
+    CoTaskMemFree(s);
+    if (!ours)
+      return S_OK;
+    ICoreWebView2WebMessageReceivedEventArgs2 *a2 = nullptr;
+    if (FAILED(args->QueryInterface(IID_ICoreWebView2WebMessageReceivedEventArgs2,
+                                    (void **)&a2)) || !a2) {
+      drag_dbg("drop-in: Args2 unavailable (runtime too old)");
+      return S_OK;
+    }
+    ICoreWebView2ObjectCollectionView *objs = nullptr;
+    std::string json = "[";
+    bool any = false;
+    if (SUCCEEDED(a2->get_AdditionalObjects(&objs)) && objs) {
+      UINT count = 0;
+      objs->get_Count(&count);
+      for (UINT i = 0; i < count; i++) {
+        IUnknown *u = nullptr;
+        if (SUCCEEDED(objs->GetValueAtIndex(i, &u)) && u) {
+          ICoreWebView2File *file = nullptr;
+          if (SUCCEEDED(u->QueryInterface(IID_ICoreWebView2File,
+                                          (void **)&file)) && file) {
+            LPWSTR path = nullptr;
+            if (SUCCEEDED(file->get_Path(&path)) && path) {
+              if (any) json += ",";
+              any = true;
+              json += json_escape(narrow(path));
+              CoTaskMemFree(path);
+            }
+            file->Release();
+          }
+          u->Release();
+        }
+      }
+      objs->Release();
+    }
+    json += "]";
+    a2->Release();
+    drag_dbg("drop-in: " + json);
+    if (any)
+      pipe_write_line("DROP " + json);
+    return S_OK;
+  }
+};
+
+static void install_drop_target() {
+  // Keep WebView2's default drop handling ON (the page prevents navigation
+  // and forwards the files); the host-side OLE target stays as a harmless
+  // fallback for regions without a webview.
   RegisterDragDrop(g_hwnd, new DropTarget());
+  if (g_wv2) {
+    EventRegistrationToken tok;
+    g_wv2->add_WebMessageReceived(new DropMsgHandler(), &tok);
+  }
+  webview_init(g_w, DROP_FORWARD_JS);
 }
 
 // Minimal IDataObject serving one CF_HDROP — Explorer and the desktop accept
