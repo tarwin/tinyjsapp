@@ -1905,28 +1905,42 @@ struct DragOutReq {
 
 static void do_dragout(webview_t, void *arg) {
   DragOutReq *req = static_cast<DragOutReq *>(arg);
-  std::vector<PIDLIST_ABSOLUTE> pidls;
-  for (const auto &p : req->paths) {
-    PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(widen(p).c_str());
-    if (pidl)
-      pidls.push_back(pidl);
-  }
-  if (!pidls.empty()) {
-    IDataObject *data = nullptr;
-    if (SUCCEEDED(SHCreateDataObject(nullptr, (UINT)pidls.size(),
-                                     (PCIDLIST_ABSOLUTE_ARRAY)pidls.data(),
-                                     nullptr, IID_PPV_ARGS(&data))) &&
-        data) {
-      DropSource *src = new DropSource();
-      DWORD effect = 0;
-      DoDragDrop(data, src, DROPEFFECT_COPY | DROPEFFECT_LINK, &effect);
-      src->Release();
-      data->Release();
-    }
-  }
-  for (auto pidl : pidls)
-    ILFree(pidl);
+  // DoDragDrop cannot run on the webview UI thread: the WebView2 child (a
+  // separate process) holds the mouse capture from the page's mousedown, and
+  // the OLE drag loop would deadlock against it. A dedicated STA thread with
+  // its own message pump works — the standard WebView2 drag-out recipe.
+  std::vector<std::string> paths = req->paths;
   delete req;
+  std::thread([paths]() {
+    if (FAILED(OleInitialize(nullptr)))
+      return;
+    std::vector<PIDLIST_ABSOLUTE> pidls;
+    for (const auto &p : paths) {
+      PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(widen(p).c_str());
+      if (pidl)
+        pidls.push_back(pidl);
+    }
+    if (!pidls.empty()) {
+      IDataObject *data = nullptr;
+      if (SUCCEEDED(SHCreateDataObject(nullptr, (UINT)pidls.size(),
+                                       (PCIDLIST_ABSOLUTE_ARRAY)pidls.data(),
+                                       nullptr, IID_PPV_ARGS(&data))) &&
+          data) {
+        DropSource *src = new DropSource();
+        DWORD effect = 0;
+        HRESULT hr = DoDragDrop(data, src,
+                                DROPEFFECT_COPY | DROPEFFECT_LINK, &effect);
+        if (GetEnvironmentVariableA("TINYJS_LAUNCHER_DEBUG", nullptr, 0))
+          std::fprintf(stderr, "launcher: DoDragDrop hr=0x%lx effect=%lu\n",
+                       (unsigned long)hr, (unsigned long)effect);
+        src->Release();
+        data->Release();
+      }
+    }
+    for (auto pidl : pidls)
+      ILFree(pidl);
+    OleUninitialize();
+  }).detach();
 }
 
 // ---------------------------------------------------------------------------
@@ -2274,6 +2288,8 @@ struct CtxHandler : public ICoreWebView2ContextMenuRequestedEventHandler {
   }
 };
 
+static bool g_ctx_intercept = false; // ContextMenuRequested available?
+
 static void install_ctx_handler() {
   if (!g_wv2)
     return;
@@ -2283,6 +2299,19 @@ static void install_ctx_handler() {
     EventRegistrationToken tok;
     wv11->add_ContextMenuRequested(new CtxHandler(), &tok);
     wv11->Release();
+    g_ctx_intercept = true;
+  }
+}
+
+// Runtimes older than ICoreWebView2_11 can't intercept the menu, but the
+// settings toggle still suppresses the default one for contextMenu:false.
+static void apply_ctx_suppress_fallback(bool suppress) {
+  if (g_ctx_intercept || !g_wv2)
+    return;
+  ICoreWebView2Settings *settings = nullptr;
+  if (SUCCEEDED(g_wv2->get_Settings(&settings)) && settings) {
+    settings->put_AreDefaultContextMenusEnabled(suppress ? FALSE : TRUE);
+    settings->Release();
   }
 }
 
@@ -3018,6 +3047,9 @@ static void pipe_read_loop() {
         webview_dispatch(g_w, apply_ctx, new CtxReq{{}, false});
       } else if (line.rfind("CTXSUPPRESS ", 0) == 0) {
         g_ctx_suppress = line.substr(12) == "1";
+        webview_dispatch(g_w, [](webview_t, void *arg) {
+          apply_ctx_suppress_fallback(arg != nullptr);
+        }, g_ctx_suppress ? (void *)1 : nullptr);
       } else if (line.rfind("HKREG ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(6));
         if (p.size() >= 2)
@@ -3223,6 +3255,102 @@ static void pipe_read_loop() {
 }
 
 // ---------------------------------------------------------------------------
+// icon embedding — `launcher-win.exe --embed-icon <exe> <png>` is the build
+// step that stamps dist exes with the app icon (the launcher already links
+// GDI+, so the CLI shells out to it instead of needing windres).
+
+#pragma pack(push, 2)
+struct GrpIconDirEntry {
+  BYTE w, h, colors, reserved;
+  WORD planes, bpp;
+  DWORD bytes;
+  WORD id;
+};
+struct GrpIconDir {
+  WORD reserved, type, count;
+};
+#pragma pack(pop)
+
+// Encode one icon frame as a png blob at the given square size.
+static std::vector<BYTE> icon_frame_png(Gdiplus::Bitmap *src, int size) {
+  std::vector<BYTE> out;
+  Gdiplus::Bitmap frame(size, size, PixelFormat32bppARGB);
+  Gdiplus::Graphics g(&frame);
+  g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+  g.DrawImage(src, 0, 0, size, size);
+  IStream *stream = nullptr;
+  if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)))
+    return out;
+  if (frame.Save(stream, &g_png_clsid, nullptr) == Gdiplus::Ok) {
+    HGLOBAL mem = nullptr;
+    GetHGlobalFromStream(stream, &mem);
+    SIZE_T len = GlobalSize(mem);
+    BYTE *p = (BYTE *)GlobalLock(mem);
+    out.assign(p, p + len);
+    GlobalUnlock(mem);
+  }
+  stream->Release();
+  return out;
+}
+
+static int embed_icon(const std::string &exe, const std::string &png) {
+  if (!ensure_gdiplus() || !png_encoder_clsid())
+    return 1;
+  Gdiplus::Bitmap *src = Gdiplus::Bitmap::FromFile(widen(png).c_str());
+  if (!src || src->GetLastStatus() != Gdiplus::Ok) {
+    std::fprintf(stderr, "embed-icon: cannot read %s\n", png.c_str());
+    delete src;
+    return 1;
+  }
+  // PNG-compressed icon frames are valid from Vista on for every size.
+  const int sizes[] = {16, 24, 32, 48, 64, 128, 256};
+  std::vector<std::vector<BYTE>> frames;
+  for (int s : sizes)
+    frames.push_back(icon_frame_png(src, s));
+  delete src;
+
+  HANDLE upd = BeginUpdateResourceW(widen(exe).c_str(), FALSE);
+  if (!upd) {
+    std::fprintf(stderr, "embed-icon: cannot open %s for update\n", exe.c_str());
+    return 1;
+  }
+  std::vector<BYTE> group(sizeof(GrpIconDir) +
+                          frames.size() * sizeof(GrpIconDirEntry));
+  GrpIconDir *dir = (GrpIconDir *)group.data();
+  dir->reserved = 0;
+  dir->type = 1;
+  dir->count = (WORD)frames.size();
+  bool ok = true;
+  for (size_t i = 0; i < frames.size(); i++) {
+    GrpIconDirEntry *e =
+        (GrpIconDirEntry *)(group.data() + sizeof(GrpIconDir) +
+                            i * sizeof(GrpIconDirEntry));
+    int s = sizes[i];
+    e->w = (BYTE)(s == 256 ? 0 : s);
+    e->h = (BYTE)(s == 256 ? 0 : s);
+    e->colors = 0;
+    e->reserved = 0;
+    e->planes = 1;
+    e->bpp = 32;
+    e->bytes = (DWORD)frames[i].size();
+    e->id = (WORD)(i + 1);
+    ok = ok && UpdateResourceW(upd, MAKEINTRESOURCEW(3) /* RT_ICON */,
+                               MAKEINTRESOURCEW(i + 1),
+                               MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                               frames[i].data(), (DWORD)frames[i].size());
+  }
+  ok = ok && UpdateResourceW(upd, MAKEINTRESOURCEW(14) /* RT_GROUP_ICON */,
+                             MAKEINTRESOURCEW(1),
+                             MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                             group.data(), (DWORD)group.size());
+  if (!EndUpdateResourceW(upd, !ok) || !ok) {
+    std::fprintf(stderr, "embed-icon: resource update failed\n");
+    return 1;
+  }
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
 // main
 
 static void on_invoke(const char *id, const char *req, void *) {
@@ -3233,12 +3361,70 @@ static void on_invoke(const char *id, const char *req, void *) {
   pipe_write_line(std::string("CALL ") + id + " " + req);
 }
 
+// `launcher-win.exe --open <pipe> <app-exe> [arg]` — the registered handler
+// for URL schemes and file associations. Compiled txiki apps reject argv, so
+// deep links can't go through the app exe: this mode forwards the argument
+// over the app's single-instance pipe instead, starting the app first if it
+// isn't running. Also gives double-launches single-instance behavior.
+static int open_mode(int argc, char **argv) {
+  std::string pipe = argv[2];
+  std::string exe = argv[3];
+  std::string arg = argc > 4 ? argv[4] : "";
+  std::string json;
+  bool is_url = arg.find("://", 0) != std::string::npos &&
+                GetFileAttributesW(widen(arg).c_str()) == INVALID_FILE_ATTRIBUTES;
+  if (arg.empty())
+    json = "{\"activate\":true}";
+  else if (is_url)
+    json = "{\"url\":" + json_escape(arg) + "}";
+  else
+    json = "{\"paths\":[" + json_escape(arg) + "]}";
+  json += "\n";
+
+  auto try_send = [&]() -> bool {
+    HANDLE h = CreateFileW(widen(pipe).c_str(), GENERIC_WRITE, 0, nullptr,
+                           OPEN_EXISTING, 0, nullptr);
+    if (h == INVALID_HANDLE_VALUE)
+      return false;
+    DWORD n = 0;
+    WriteFile(h, json.data(), (DWORD)json.size(), &n, nullptr);
+    CloseHandle(h);
+    return true;
+  };
+  if (try_send())
+    return 0;
+  // Not running: start the app (no argv — txiki compiled binaries reject
+  // any), then deliver once its instance pipe is up.
+  std::wstring cmd = L"\"" + widen(exe) + L"\"";
+  std::wstring dir = widen(exe.substr(0, exe.find_last_of("\\/")));
+  STARTUPINFOW si = {sizeof(si)};
+  PROCESS_INFORMATION pi = {};
+  std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+  buf.push_back(0);
+  if (!CreateProcessW(nullptr, buf.data(), nullptr, nullptr, FALSE,
+                      CREATE_NEW_PROCESS_GROUP, nullptr, dir.c_str(), &si,
+                      &pi))
+    return 1;
+  CloseHandle(pi.hThread);
+  CloseHandle(pi.hProcess);
+  for (int i = 0; i < 100; i++) { // up to ~15s for a cold start
+    Sleep(150);
+    if (try_send())
+      return 0;
+  }
+  return 1;
+}
+
 static int run(int argc, char **argv) {
+  if (argc == 4 && strcmp(argv[1], "--embed-icon") == 0)
+    return embed_icon(argv[2], argv[3]);
+  if (argc >= 4 && strcmp(argv[1], "--open") == 0)
+    return open_mode(argc, argv);
   if (argc < 3) {
     std::fprintf(stderr,
                  "usage: %s <html-file-or-url> <pipe-name> [title] [WxH] "
-                 "[version]\n",
-                 argv[0]);
+                 "[version]\n       %s --embed-icon <exe> <png>\n",
+                 argv[0], argv[0]);
     return 1;
   }
   g_target = argv[1];
@@ -3339,6 +3525,20 @@ static int run(int argc, char **argv) {
 
   webview_set_title(g_w, title.c_str());
   webview_set_size(g_w, width, height, WEBVIEW_HINT_NONE);
+
+  // Window/taskbar icon from a png (dev: the project's icon.png via
+  // TINYJS_ICON; built apps: dist/icon.png set by the bridge).
+  {
+    char icon[MAX_PATH];
+    DWORD n = GetEnvironmentVariableA("TINYJS_ICON", icon, sizeof(icon));
+    if (n > 0 && n < sizeof(icon)) {
+      HICON h = icon_from_png(icon);
+      if (h) {
+        SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)h);
+        SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)h);
+      }
+    }
+  }
 
   {
     std::string url = g_target_is_url ? g_target : to_file_url(g_target);

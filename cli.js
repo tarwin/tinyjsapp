@@ -431,6 +431,8 @@ const app = await createApp({
   userAgent: ${JSON.stringify(cfg.userAgent ?? null)},
   audioTap: ${JSON.stringify(cfg.audioTap ?? null)},
   contextMenu: ${JSON.stringify(cfg.contextMenu ?? true)},
+  urlScheme: ${JSON.stringify(cfg.urlScheme ?? null)},
+  fileExtensions: ${JSON.stringify(cfg.fileExtensions ?? null)},
 });
 if (appMod.init) appMod.init(app);
 `;
@@ -649,11 +651,15 @@ async function cmdDev() {
     const entryPath = IS_WIN
       ? (tjs.cwd + '\\' + B.replace(/\//g, '\\') + '\\entry.js')
       : tjs.cwd + '/' + B + '/entry.js';
+    const devEnv = { ...tjs.env, TINYJS_LAUNCHER: TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : 'launcher') };
+    // Windows: the launcher shows the project icon in the titlebar/taskbar.
+    const iconSrc = cfg.icon || 'icon.png';
+    if (IS_WIN && (await exists(iconSrc))) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
     child = tjs.spawn([tjs.exePath, 'run', entryPath], {
       stdin: 'inherit',
       stdout: 'inherit',
       stderr: 'inherit',
-      env: { ...tjs.env, TINYJS_LAUNCHER: TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : 'launcher') },
+      env: devEnv,
     });
     const st = await child.wait();
     if (!restarting) {
@@ -700,8 +706,37 @@ async function cmdBuild() {
     if (!(await exists('dist/' + cfg.name + '.exe')) && (await exists('dist/' + cfg.name))) {
       await tjs.rename('dist/' + cfg.name, 'dist/' + cfg.name + '.exe');
     }
+    // The tjs runtime is a console app; double-clicking a console exe flashes
+    // a terminal behind the window (and an attached console makes txiki treat
+    // stdin as interactive). Flip the PE subsystem to GUI in the header —
+    // stdout still works when a parent provides handles (tinyjs dev pipes).
+    {
+      const exePath = 'dist/' + cfg.name + '.exe';
+      const exe = await tjs.readFile(exePath);
+      const dv = new DataView(exe.buffer, exe.byteOffset, exe.byteLength);
+      const peOff = dv.getUint32(0x3c, true);
+      if (dv.getUint32(peOff, true) === 0x00004550 /* "PE\0\0" */) {
+        const subsystemOff = peOff + 24 + 68; // OptionalHeader + Subsystem
+        if (dv.getUint16(subsystemOff, true) === 3 /* console */) {
+          dv.setUint16(subsystemOff, 2 /* GUI */, true);
+          await tjs.writeFile(exePath, exe);
+        }
+      }
+    }
     await copyFile(TOOL_DIR + 'native/launcher-win.exe', 'dist/launcher.exe');
     await copyTree('.build/app/frontend', 'dist/frontend');
+    // Icon: ship it for the runtime titlebar/taskbar (the bridge passes it to
+    // the launcher), and stamp launcher.exe (a clean PE) so windows get it.
+    // dist/<name>.exe must NOT be resource-edited — txiki appends the app
+    // bundle after the PE image and UpdateResource destroys it (the Windows
+    // twin of the macOS "compiled binaries can't be codesigned" limitation).
+    const winIcon = cfg.icon || 'icon.png';
+    if (await exists(winIcon)) {
+      console.log('==> embedding icon');
+      await copyFile(winIcon, 'dist/icon.png');
+      await tryRun([TOOL_DIR + 'native/launcher-win.exe', '--embed-icon',
+                    tjs.cwd + '/dist/launcher.exe', tjs.cwd + '/' + winIcon]);
+    }
     console.log('==> done');
     console.log(`run it:  .\\dist\\${cfg.name}.exe`);
     return;

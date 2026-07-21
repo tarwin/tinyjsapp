@@ -101,7 +101,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, contextMenu = true, userAgent = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -178,6 +178,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // suffix, so UA-sniffing sites reject it. Packaged apps use the
     // TinyjsUserAgent plist key instead (this env only applies to the dev spawn).
     if (userAgent) spawnEnv.TINYJS_UA = String(userAgent);
+    // Windows built apps: dist/icon.png (shipped by the build) becomes the
+    // window/taskbar icon; dev passes TINYJS_ICON from the CLI instead.
+    if (IS_WIN && !spawnEnv.TINYJS_ICON && (await exists(exeDir + 'icon.png'))) {
+      spawnEnv.TINYJS_ICON = exeDir + 'icon.png';
+    }
     const spawnOpts = { stderr: 'inherit', env: spawnEnv };
     proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], spawnOpts);
 
@@ -1194,6 +1199,85 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // A clipboard handler implies watching; apps needing a custom interval can
   // call app.clipboard.watch(ms) on top (idempotent).
   if (onClipboardChange) app.clipboard.watch();
+
+  // --- Windows: single instance + deep links / file associations -----------
+  // Built apps only (macOS gets all of this from LaunchServices + the plist).
+  // The app listens on \\.\pipe\tinyjs-app-<id>; `launcher-win.exe --open`
+  // (the registered protocol/extension handler) forwards URLs and file paths
+  // over it, starting the app first when needed. A second direct launch of
+  // the exe detects the pipe, activates the running instance, and exits.
+  if (IS_WIN && bundlePath()) {
+    const instPipe = '\\\\.\\pipe\\tinyjs-app-' + (id || 'tinyjs-app');
+    let haveInstancePipe = false;
+    try {
+      const conn = await tjs.connect('pipe', instPipe);
+      const { writable } = await conn.opened;
+      const w = writable.getWriter();
+      await w.write(enc.encode('{"activate":true}\n'));
+      tjs.exit(0); // another instance owns the app — hand over
+    } catch {}
+    try {
+      const srv = await tjs.listen('pipe', instPipe);
+      const srvInfo = await srv.opened;
+      haveInstancePipe = true;
+      (async () => {
+        const acceptReader = srvInfo.readable.getReader();
+        for (;;) {
+          const { value: sock, done } = await acceptReader.read();
+          if (done) break;
+          (async () => {
+            const { readable: r } = await sock.opened;
+            const rd = r.getReader();
+            let buf = '';
+            for (;;) {
+              const { value, done: d } = await rd.read();
+              if (d) break;
+              buf += dec.decode(value, { stream: true });
+            }
+            for (const line of buf.split('\n')) {
+              if (!line.trim()) continue;
+              let msg = null;
+              try { msg = JSON.parse(line); } catch { continue; }
+              app.show();
+              if (msg.url) {
+                push('open-url', { url: msg.url });
+                if (onOpenUrl) onOpenUrl(msg.url, app);
+              } else if (msg.paths?.length) {
+                push('open-files', { paths: msg.paths });
+                if (onOpenFiles) onOpenFiles(msg.paths, app);
+              }
+            }
+          })().catch(() => {});
+        }
+      })();
+    } catch {}
+
+    // Registration (idempotent HKCU writes; no admin). The handler command
+    // is the launcher's --open mode pointing at this exe + instance pipe.
+    if (haveInstancePipe && (urlScheme || fileExtensions?.length)) {
+      const launcherExe = exeDir + 'launcher.exe';
+      const openCmd = '"' + launcherExe + '" --open ' + instPipe + ' "' + tjs.exePath + '" "%1"';
+      const reg = (args) => tjs.spawn(['reg', 'add', ...args, '/f'],
+        { stdout: 'ignore', stderr: 'ignore' }).wait().catch(() => {});
+      const CLS = 'HKCU\\Software\\Classes\\';
+      for (const scheme of urlScheme ? [].concat(urlScheme) : []) {
+        await reg([CLS + scheme, '/ve', '/d', 'URL:' + title]);
+        await reg([CLS + scheme, '/v', 'URL Protocol', '/d', '']);
+        await reg([CLS + scheme + '\\DefaultIcon', '/ve', '/d', tjs.exePath + ',0']);
+        await reg([CLS + scheme + '\\shell\\open\\command', '/ve', '/d', openCmd]);
+      }
+      if (fileExtensions?.length) {
+        const progid = 'tinyjs.' + (id || 'tinyjs-app');
+        await reg([CLS + progid, '/ve', '/d', title]);
+        await reg([CLS + progid + '\\DefaultIcon', '/ve', '/d', tjs.exePath + ',0']);
+        await reg([CLS + progid + '\\shell\\open\\command', '/ve', '/d', openCmd]);
+        for (const ext of fileExtensions) {
+          await reg([CLS + '.' + String(ext).replace(/^\./, '') + '\\OpenWithProgIds',
+                     '/v', progid, '/d', '']);
+        }
+      }
+    }
+  }
 
   // Background update checks ("update": { "auto": "launch" | "daily" }).
   // Packaged apps only — dev processes have no bundle to update, and their
