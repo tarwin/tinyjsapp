@@ -2441,6 +2441,74 @@ static void install_drop_target() {
   RegisterDragDrop(g_hwnd, new DropTarget());
 }
 
+// Minimal IDataObject serving one CF_HDROP — Explorer and the desktop accept
+// this where SHCreateDataObject's idlist-flavored object was refused.
+struct HDropDataObject : public IDataObject {
+  ULONG refs = 1;
+  HGLOBAL hdrop; // owned
+  HDropDataObject(HGLOBAL h) : hdrop(h) {}
+  ~HDropDataObject() { GlobalFree(hdrop); }
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    if (refs > 1) return --refs;
+    delete this;
+    return 0;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == IID_IUnknown || riid == IID_IDataObject) {
+      *ppv = this;
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  static bool is_hdrop(FORMATETC *f) {
+    return f && f->cfFormat == CF_HDROP && (f->tymed & TYMED_HGLOBAL) &&
+           f->dwAspect == DVASPECT_CONTENT;
+  }
+  HRESULT STDMETHODCALLTYPE GetData(FORMATETC *f, STGMEDIUM *m) override {
+    if (!is_hdrop(f)) return DV_E_FORMATETC;
+    SIZE_T len = GlobalSize(hdrop);
+    HGLOBAL copy = GlobalAlloc(GMEM_MOVEABLE, len);
+    if (!copy) return E_OUTOFMEMORY;
+    memcpy(GlobalLock(copy), GlobalLock(hdrop), len);
+    GlobalUnlock(copy);
+    GlobalUnlock(hdrop);
+    m->tymed = TYMED_HGLOBAL;
+    m->hGlobal = copy;
+    m->pUnkForRelease = nullptr;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE QueryGetData(FORMATETC *f) override {
+    return is_hdrop(f) ? S_OK : DV_E_FORMATETC;
+  }
+  HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD dir,
+                                          IEnumFORMATETC **out) override {
+    if (dir != DATADIR_GET) return E_NOTIMPL;
+    FORMATETC fmt = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
+    return SHCreateStdEnumFmtEtc(1, &fmt, out);
+  }
+  HRESULT STDMETHODCALLTYPE GetDataHere(FORMATETC *, STGMEDIUM *) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(FORMATETC *, FORMATETC *o) override {
+    if (o) o->ptd = nullptr;
+    return E_NOTIMPL;
+  }
+  HRESULT STDMETHODCALLTYPE SetData(FORMATETC *, STGMEDIUM *, BOOL) override { return E_NOTIMPL; }
+  HRESULT STDMETHODCALLTYPE DAdvise(FORMATETC *, DWORD, IAdviseSink *, DWORD *) override { return OLE_E_ADVISENOTSUPPORTED; }
+  HRESULT STDMETHODCALLTYPE DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+  HRESULT STDMETHODCALLTYPE EnumDAdvise(IEnumSTATDATA **) override { return OLE_E_ADVISENOTSUPPORTED; }
+};
+
+// Drag diagnostics (TINYJS_LAUNCHER_DEBUG=1) — greppable as "dragdbg".
+static void drag_dbg(const std::string &msg) {
+  if (!GetEnvironmentVariableA("TINYJS_LAUNCHER_DEBUG", nullptr, 0))
+    return;
+  std::fprintf(stderr, "dragdbg: %s\n", msg.c_str());
+  std::fflush(stderr);
+}
+
 // OUT: startDrag({ files }) — a shell IDataObject over the paths plus a
 // minimal IDropSource, so files land in Explorer/apps as real copies.
 struct DropSource : public IDropSource {
@@ -2461,17 +2529,37 @@ struct DropSource : public IDropSource {
     *ppv = nullptr;
     return E_NOINTERFACE;
   }
+  int calls = 0;
   HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL esc, DWORD) override {
     // The drag runs on a fresh thread whose queue never saw the mousedown, so
     // OLE's grfKeyState reads the button as already released and would end
     // the drag instantly. Track the PHYSICAL state instead.
-    if (esc || (GetAsyncKeyState(VK_ESCAPE) & 0x8000))
+    if (++calls == 1)
+      drag_dbg("QueryContinueDrag: first call (loop is alive)");
+    if (esc || (GetAsyncKeyState(VK_ESCAPE) & 0x8000)) {
+      drag_dbg("QueryContinueDrag: CANCEL (esc)");
       return DRAGDROP_S_CANCEL;
-    if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000))
+    }
+    if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
+      drag_dbg("QueryContinueDrag: DROP (button released) after " +
+               std::to_string(calls) + " polls");
       return DRAGDROP_S_DROP;
+    }
     return S_OK;
   }
-  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD) override {
+  DWORD last_effect = 0xFFFFFFFF;
+  HRESULT STDMETHODCALLTYPE GiveFeedback(DWORD effect) override {
+    if (effect != last_effect) {
+      last_effect = effect;
+      POINT pt;
+      GetCursorPos(&pt);
+      HWND under = WindowFromPoint(pt);
+      char cls[64] = "?";
+      if (under)
+        GetClassNameA(under, cls, sizeof(cls));
+      drag_dbg("GiveFeedback: effect=" + std::to_string(effect) +
+               " over class '" + cls + "'");
+    }
     return DRAGDROP_S_USEDEFAULTCURSORS;
   }
 };
@@ -2492,13 +2580,27 @@ static void do_dragout(webview_t, void *arg) {
   std::thread([paths]() {
     if (FAILED(OleInitialize(nullptr)))
       return;
-    release_webview_capture(); // see do_dragwin — WebView2 owns the capture
+    drag_dbg("thread start, button=" +
+             std::string((GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? "down" : "UP"));
+    // Attach to the mouse-owning thread for the WHOLE drag: this thread has
+    // no window receiving input, so without the attachment OLE's target
+    // tracking sees no real mouse moves — the effect froze at the start
+    // position and drops always landed as DROPEFFECT_NONE.
+    POINT start_pt;
+    GetCursorPos(&start_pt);
+    HWND under0 = WindowFromPoint(start_pt);
+    DWORD mouse_tid = under0 ? GetWindowThreadProcessId(under0, nullptr) : 0;
+    bool attached = mouse_tid && mouse_tid != GetCurrentThreadId() &&
+                    AttachThreadInput(GetCurrentThreadId(), mouse_tid, TRUE);
+    drag_dbg(std::string("input attach: ") + (attached ? "ok" : "no"));
+    ReleaseCapture();
     // A DoDragDrop that never returns wedges drag&drop SYSTEM-WIDE (it holds
     // the OLE drag state until the process dies). Two guards: never start
     // once the button is already up, and a watchdog that pokes this thread's
     // queue so the OLE loop (which only re-evaluates on input messages)
     // always gets a chance to see the released button and exit.
     if (!(GetAsyncKeyState(VK_LBUTTON) & 0x8000)) {
+      drag_dbg("ABORT: button already up before DoDragDrop");
       OleUninitialize();
       return;
     }
@@ -2510,33 +2612,43 @@ static void do_dragout(webview_t, void *arg) {
         Sleep(100);
       }
     });
-    std::vector<PIDLIST_ABSOLUTE> pidls;
+    // Pack the paths as one CF_HDROP block (same layout as the clipboard).
+    std::wstring list;
     for (const auto &p : paths) {
-      PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(widen(p).c_str());
-      if (pidl)
-        pidls.push_back(pidl);
+      std::wstring w = widen(p);
+      list += w;
+      list.push_back(0);
     }
-    if (!pidls.empty()) {
-      IDataObject *data = nullptr;
-      if (SUCCEEDED(SHCreateDataObject(nullptr, (UINT)pidls.size(),
-                                       (PCIDLIST_ABSOLUTE_ARRAY)pidls.data(),
-                                       nullptr, IID_PPV_ARGS(&data))) &&
-          data) {
+    list.push_back(0);
+    size_t bytes = sizeof(DROPFILES) + list.size() * sizeof(wchar_t);
+    HGLOBAL hglobal = GlobalAlloc(GMEM_MOVEABLE, bytes);
+    if (hglobal) {
+      DROPFILES *df = (DROPFILES *)GlobalLock(hglobal);
+      memset(df, 0, sizeof(DROPFILES));
+      df->pFiles = sizeof(DROPFILES);
+      df->fWide = TRUE;
+      memcpy((char *)df + sizeof(DROPFILES), list.data(),
+             list.size() * sizeof(wchar_t));
+      GlobalUnlock(hglobal);
+      IDataObject *data = new HDropDataObject(hglobal); // owns hglobal
+      {
         DropSource *src = new DropSource();
         DWORD effect = 0;
+        drag_dbg("DoDragDrop: entering (" + std::to_string(paths.size()) + " file(s))");
         HRESULT hr = DoDragDrop(data, src,
                                 DROPEFFECT_COPY | DROPEFFECT_LINK, &effect);
-        if (GetEnvironmentVariableA("TINYJS_LAUNCHER_DEBUG", nullptr, 0))
-          std::fprintf(stderr, "launcher: DoDragDrop hr=0x%lx effect=%lu\n",
-                       (unsigned long)hr, (unsigned long)effect);
+        char hrbuf[64];
+        std::snprintf(hrbuf, sizeof(hrbuf), "DoDragDrop: returned hr=0x%lx effect=%lu",
+                      (unsigned long)hr, (unsigned long)effect);
+        drag_dbg(hrbuf);
         src->Release();
         data->Release();
       }
     }
-    for (auto pidl : pidls)
-      ILFree(pidl);
     drag_done.store(true);
     watchdog.join();
+    if (attached)
+      AttachThreadInput(GetCurrentThreadId(), mouse_tid, FALSE);
     OleUninitialize();
   }).detach();
 }
