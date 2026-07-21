@@ -6,6 +6,37 @@ https://tinyjs.app/changelog.
 
 ## Unreleased
 
+- **Windows installer + prebuilt binaries.** `irm https://tinyjs.app/install.ps1 | iex`
+  installs a prebuilt `tinyjs-windows-x86_64.zip` (built by the release
+  workflow's new `windows-latest` job, checksummed alongside the macOS
+  tarballs) into `%LOCALAPPDATA%\tinyjs` and adds it to the user PATH — no
+  git, no compiler. `tinyjs update` re-runs the installer on Windows too.
+  Dev nicety: `tinyjs dev` from a source checkout rebuilds
+  `launcher-win.exe` automatically when `native/launcher-win.cc` or
+  `runtime/tiny.js` changed.
+
+- **Windows support (beta).** tinyjs apps now run on Windows: a new native
+  launcher (`native/launcher-win.cc`, WebView2 via the same vendored webview
+  library) speaks the identical wire protocol over a named pipe, and the CLI,
+  bridge, and build work cross-platform. From a source checkout:
+  `powershell -ExecutionPolicy Bypass -File setup.ps1` (downloads the Windows
+  txiki.js runtime + WebView2 SDK header, compiles the launcher — needs
+  MinGW-w64, e.g. `winget install BrechtSanders.WinLibs.POSIX.UCRT` — and adds
+  the checkout to your user PATH so `tinyjs` works from any new terminal;
+  `-SkipPath` opts out). Working: the full page↔backend bridge (calls,
+  events, tiny.fetch), dev mode with hot reload, Vite `devUrl` frontends,
+  `tinyjs build` (portable `dist/` folder with `<name>.exe`), native file/save/
+  folder dialogs, alert/confirm/prompt, menu bar + tray (+ balloon
+  notifications), custom context menus, clipboard (text/html/files/image read),
+  global hotkeys, keystroke synthesis (`cmd` maps to Ctrl), shell
+  open/reveal/trash, secrets (Credential Manager), power.preventSleep, theme +
+  sleep/wake events, window ops (chrome/fullscreen/ontop/click-through/…).
+  Not (yet) ported: multi-window, drag-out/drop-in with real paths,
+  notifications with actions, printToPDF, audioTap, and the macOS-specific
+  APIs (Quick Look, OCR, AppleScript, Touch ID, vibrancy, Dock, Spaces…),
+  which reject or report `'unsupported'` cleanly so cross-platform app code
+  can feature-detect.
+
 - **`tiny.app.ai`** (on-device LLM) — landed behind an opt-in build, not yet
   in the released tarballs. `ai.generate(prompt, { instructions })` runs
   Apple's FoundationModels locally (offline, no API key, private);

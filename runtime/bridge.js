@@ -21,6 +21,12 @@ import { bundlePath, checkForUpdate, installUpdate, relaunch } from './update.js
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const DEBUG = !!tjs.env.TINYJS_DEBUG;
+// txiki has no tjs.platform; OS=Windows_NT is always set by Windows itself.
+const IS_WIN = tjs.env.OS === 'Windows_NT';
+// Strip the file name off a path, tolerating both separators (Windows paths
+// arrive with backslashes).
+const dirOf = (p) => String(p).replace(/[\\/][^\\/]*$/, '');
+const isAbs = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p);
 
 function dbg(dir, line) {
   if (DEBUG) console.log(dir, line.length > 160 ? line.slice(0, 160) + '…' : line);
@@ -48,10 +54,19 @@ const DIALOG_OPS = {
   'win.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
 };
 
-// Tiny persistent JSON store in ~/Library/Application Support/<app id>/.
+// Per-app data root: ~/Library/Application Support/<id> (macOS) or
+// %APPDATA%\<id> (Windows).
+function appDataDir(appId) {
+  const id = appId || 'tinyjs-app';
+  return IS_WIN
+    ? (tjs.env.APPDATA || tjs.homeDir + '/AppData/Roaming') + '/' + id
+    : tjs.homeDir + '/Library/Application Support/' + id;
+}
+
+// Tiny persistent JSON store in the per-app data dir.
 // Flat string keys, JSON values, atomic writes.
 function makeStore(appId) {
-  const dir = tjs.homeDir + '/Library/Application Support/' + (appId || 'tinyjs-app');
+  const dir = appDataDir(appId);
   const path = dir + '/store.json';
   let data = null;
   async function load() {
@@ -87,7 +102,7 @@ function makeStore(appId) {
 }
 
 export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, contextMenu = true, userAgent = null }) {
-  const exeDir = tjs.exePath.replace(/\/[^/]*$/, '/');
+  const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
     try {
@@ -117,15 +132,20 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     ({ readable, writable } = await conn.opened);
   } else {
     // Launcher: explicit option > env override > next to the executable.
+    const launcherName = IS_WIN ? 'launcher.exe' : 'launcher';
     let launcher = launcherPath || tjs.env.TINYJS_LAUNCHER;
-    if (!launcher && (await exists(exeDir + 'launcher'))) launcher = exeDir + 'launcher';
+    if (!launcher && (await exists(exeDir + launcherName))) launcher = exeDir + launcherName;
     if (!launcher || !(await exists(launcher))) {
-      throw new Error('tinyjs launcher binary not found (looked at: ' + (launcher || exeDir + 'launcher') + ')');
+      throw new Error('tinyjs launcher binary not found (looked at: ' + (launcher || exeDir + launcherName) + ')');
     }
 
-    // Private rendezvous dir: socket + materialized frontend.
+    // Private rendezvous dir for the materialized frontend. The transport is a
+    // Unix domain socket inside it — or, on Windows, a named pipe whose name
+    // is derived from the (random) dir name; both are per-user namespaces.
     const workDir = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-XXXXXX');
-    const sockPath = workDir + '/app.sock';
+    const sockPath = IS_WIN
+      ? '\\\\.\\pipe\\' + workDir.slice(dirOf(workDir).length + 1)
+      : workDir + '/app.sock';
 
     // Page source, in precedence order:
     //  - TINYJS_HTML env override (self-contained test pages): materialized
@@ -162,7 +182,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], spawnOpts);
 
     cleanup = async () => {
-      await tjs.remove(sockPath).catch(() => {});
+      if (!IS_WIN) await tjs.remove(sockPath).catch(() => {}); // pipes aren't files
       await tjs.remove(workDir, { recursive: true }).catch(() => tjs.remove(workDir).catch(() => {}));
     };
 
@@ -185,7 +205,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // the dev-server origin when htmlPath is a URL (devUrl mode).
   const isUrl = (s) => /^https?:\/\//i.test(String(s ?? ''));
   const frontendDir = htmlPath
-    ? (isUrl(htmlPath) ? htmlPath.replace(/\/+$/, '') : htmlPath.replace(/\/[^/]*$/, ''))
+    ? (isUrl(htmlPath) ? htmlPath.replace(/\/+$/, '') : dirOf(htmlPath))
     : null;
 
   // Read-backs: <OP> <qid> <rest> → launcher answers GOT <qid> <json>.
@@ -228,7 +248,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // bundle for UNUserNotificationCenter, so it falls back to osascript
   // (banner appears under "Script Editor").
   async function notify({ title, body, subtitle, id: nid, sound, actions } = {}) {
-    if (attachPath) {
+    // Windows: the launcher shows a tray balloon in every mode (no bundle
+    // requirement), so the osascript fallback below stays macOS-only.
+    if (attachPath || IS_WIN) {
       // actions: [{ id, title, reply?, placeholder?, destructive? }] — buttons
       // (or a reply field) on the banner; taps come back as 'notification-action'.
       const acts = actions?.length ? esc(JSON.stringify(actions)) : '';
@@ -253,7 +275,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
 
   function send(line) {
     dbg('>>', line);
-    writer.write(enc.encode(line + '\n')).catch((e) => console.log('tinyjs send error:', e));
+    // EPIPE is normal during shutdown (the launcher closes the socket the
+    // moment the window goes away) — only unexpected errors are worth noise.
+    writer.write(enc.encode(line + '\n')).catch((e) => {
+      if (!/EPIPE|ECONNRESET/.test(String(e))) console.log('tinyjs send error:', e);
+    });
   }
 
   function push(event, data) {
@@ -342,7 +368,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     tray: {
       set(spec = {}) {
         let icon = spec.icon ?? '';
-        if (icon && !icon.startsWith('/') && !icon.startsWith('sf:')) icon = tjs.cwd + '/' + icon;
+        if (icon && !isAbs(icon) && !icon.startsWith('sf:')) icon = tjs.cwd + '/' + icon;
         send('TRAYBEGIN ' + [one(spec.title), one(icon),
                              spec.template === false ? '0' : '1',
                              one(spec.tooltip),
@@ -649,16 +675,27 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Standard per-app directories (data/cache/logs are per app id, not
     // auto-created — tjs.makeDir(..., { recursive: true }) first write).
     // Prefer these over hardcoding ~/Library paths.
-    paths: {
-      home: tjs.homeDir,
-      data: tjs.homeDir + '/Library/Application Support/' + (id || 'tinyjs-app'),
-      cache: tjs.homeDir + '/Library/Caches/' + (id || 'tinyjs-app'),
-      logs: tjs.homeDir + '/Library/Logs/' + (id || 'tinyjs-app'),
-      temp: tjs.tmpDir,
-      downloads: tjs.homeDir + '/Downloads',
-      desktop: tjs.homeDir + '/Desktop',
-      documents: tjs.homeDir + '/Documents',
-    },
+    paths: IS_WIN
+      ? {
+          home: tjs.homeDir,
+          data: appDataDir(id),
+          cache: (tjs.env.LOCALAPPDATA || tjs.homeDir + '/AppData/Local') + '/' + (id || 'tinyjs-app') + '/Cache',
+          logs: (tjs.env.LOCALAPPDATA || tjs.homeDir + '/AppData/Local') + '/' + (id || 'tinyjs-app') + '/Logs',
+          temp: tjs.tmpDir,
+          downloads: tjs.homeDir + '/Downloads',
+          desktop: tjs.homeDir + '/Desktop',
+          documents: tjs.homeDir + '/Documents',
+        }
+      : {
+          home: tjs.homeDir,
+          data: tjs.homeDir + '/Library/Application Support/' + (id || 'tinyjs-app'),
+          cache: tjs.homeDir + '/Library/Caches/' + (id || 'tinyjs-app'),
+          logs: tjs.homeDir + '/Library/Logs/' + (id || 'tinyjs-app'),
+          temp: tjs.tmpDir,
+          downloads: tjs.homeDir + '/Downloads',
+          desktop: tjs.homeDir + '/Desktop',
+          documents: tjs.homeDir + '/Documents',
+        },
     // Raw launcher read-back (debug/test surface; the page twin is the
     // 'debug.get' builtin).
     debug: (what) => query(String(what)),
@@ -689,7 +726,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // jump from center.
     openWindow(id, { page, title, size, chrome, x, y } = {}) {
       let p = String(page ?? 'index.html');
-      if (!isUrl(p) && !p.startsWith('/')) {
+      if (!isUrl(p) && !isAbs(p)) {
         if (!frontendDir) throw new Error('win.open needs an absolute page path or URL here');
         p = frontendDir + '/' + p;
       }

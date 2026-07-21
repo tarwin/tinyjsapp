@@ -1,7 +1,8 @@
 # tinyjs
 
-Tiny desktop apps for macOS: a [txiki.js](https://txikijs.org/) backend + a
-native [webview](https://github.com/webview/webview) window.
+Tiny desktop apps for macOS — and, in beta, Windows: a
+[txiki.js](https://txikijs.org/) backend + a native
+[webview](https://github.com/webview/webview) window.
 
 - **~6 MB shipped**, two real files — no Electron, no Node, no bundled Chromium
 - **No HTTP server, no ports** — the page and the backend talk over a Unix
@@ -32,6 +33,31 @@ git clone https://github.com/tarwin/tinyjsapp && cd tinyjsapp
 ./setup.sh    # downloads the txiki.js runtime, compiles the launcher
 ln -s "$(pwd)/tinyjs" /usr/local/bin/tinyjs
 ```
+
+**Windows (beta):**
+
+```powershell
+irm https://tinyjs.app/install.ps1 | iex
+```
+
+Installs prebuilt binaries to `%LOCALAPPDATA%\tinyjs` (override with
+`TINYJS_HOME`; pin with `TINYJS_VERSION`) and adds it to your user PATH —
+open a new terminal afterwards. Needs only the WebView2 runtime
+(preinstalled on Windows 11). `tinyjs update` re-runs the installer.
+(Requires a release that ships Windows assets — the first one after Windows
+support merged; the installer says so plainly against older releases.)
+
+To develop tinyjs itself from source (needs MinGW-w64:
+`winget install BrechtSanders.WinLibs.POSIX.UCRT`):
+
+```powershell
+git clone https://github.com/tarwin/tinyjsapp; cd tinyjsapp
+powershell -ExecutionPolicy Bypass -File setup.ps1
+# adds the checkout to your user PATH (-SkipPath to opt out); after that,
+# `tinyjs dev` auto-rebuilds the launcher whenever the native sources change
+```
+
+See **Portability** below for what's supported on Windows.
 
 Full API reference: [tinyjs.app/api](https://tinyjs.app/api) · release
 history: [tinyjs.app/changelog](https://tinyjs.app/changelog).
@@ -841,27 +867,35 @@ promise — the shim in `tiny.js` is ~10 lines.
 ## Developing tinyjs itself
 
 ```
-bin/tjs               txiki.js runtime (fetched by setup.sh, not committed)
+bin/tjs               txiki.js runtime (fetched by setup.sh, not committed;
+                      bin/tjs.exe on Windows via setup.ps1)
 native/launcher.cc    the window process (Objective-C++; webview headers vendored)
+native/launcher-win.cc  the Windows window process (WebView2 via the same
+                      vendored webview; named pipe instead of a Unix socket)
 native/make-icon.jxa  default template icon generator (osascript -l JavaScript)
 runtime/bridge.js     backend bridge library (socket, protocol, win.* methods)
 runtime/update.js     app auto-update (manifest check, verify, bundle swap)
 template/             what `tinyjs new` copies
 skill/SKILL.md        tinyjs reference for coding agents (copied into new
-                      projects at .claude/skills/tinyjs/)
-cli.js + tinyjs       the CLI
+                      projects at .claude/skills/tinyjs/ and, for other
+                      agents, .agents/skills/tinyjs/)
+cli.js + tinyjs       the CLI (tinyjs.cmd is the Windows wrapper)
 test/smoke.html       self-driving test page
 docs/                 tinyjs.app site (GitHub Pages): landing page + installer
                       (docs/install is what `curl tinyjs.app/install` fetches)
                       + changelog.html (tinyjs.app/changelog)
 CHANGELOG.md          release history (canonical; the site page mirrors it)
 setup.sh              from-source bootstrap (fetch tjs, compile natives)
+setup.ps1             the same for Windows (also fetches the WebView2 header)
+TODO-windows.md       remaining Windows-port work, ordered (tick items off
+                      as they land)
 .github/workflows/    release automation: tag vX.Y.Z → universal binaries →
                       per-arch tarballs + checksums → GitHub release
 ```
 
 After editing the natives, re-run `./setup.sh` (or the `c++`/`cc` lines
-inside it). To cut a release: update `CHANGELOG.md` and `docs/changelog.html`
+inside it); on Windows, re-run `setup.ps1` (it regenerates `tiny_client.h`
+and recompiles `launcher-win.exe`). To cut a release: update `CHANGELOG.md` and `docs/changelog.html`
 (served at tinyjs.app/changelog — retitle the "upcoming" section with the
 date), then `git tag vX.Y.Z && git push --tags`.
 
@@ -964,10 +998,31 @@ on the newer SDK.
 
 ### Portability
 
-Currently macOS-only (launcher dialogs use AppKit; releases bundle
-arm64/x86_64 tjs). The design ports: webview supports WebView2/WebKitGTK,
-txiki ships Windows/Linux binaries, and the socket becomes a named pipe on
-Windows (`\\.\pipe\…`, which `tjs.listen('pipe', …)`/libuv already abstracts).
+macOS is the primary platform. **Windows support is in beta**: a second
+native launcher (`native/launcher-win.cc`, WebView2 through the same vendored
+webview library) speaks the identical wire protocol, with the Unix socket
+swapped for a named pipe (`\\.\pipe\…` — `tjs.listen('pipe', …)`/libuv
+abstracts both). Bootstrap with `setup.ps1`, use `tinyjs.cmd` as the CLI.
+
+Works on Windows: the full page↔backend bridge (api calls, push events,
+`tiny.fetch`), dev mode with hot reload and backend restart, Vite `devUrl`
+frontends, `tinyjs build` (a portable `dist/` folder: `<name>.exe` +
+`launcher.exe` + `frontend/`), file/folder/save dialogs, alert/confirm/prompt,
+menu bar, tray (+ balloon notifications), custom context menus, clipboard
+(text/html/files, image read), global hotkeys, `keystroke` (`cmd` maps to
+Ctrl), `shell.open/reveal/trash`, `secrets` (Credential Manager),
+`power.preventSleep`, theme + sleep/wake events, and the window ops
+(chrome/fullscreen/ontop/click-through/level/…).
+
+Not yet ported: multi-window (`win.open`), drag-out / drop-in with real
+paths, notification actions, `printToPDF`, `audioTap`, launch-at-login, and
+the macOS-specific APIs (Quick Look, OCR, AppleScript, Touch ID, vibrancy,
+Dock, Spaces, say/voices, screen capture/recording, Spotlight) — all reject
+or report `'unsupported'` cleanly, so cross-platform code can feature-detect.
+`tinyjs publish`/auto-update and the curl installer are also macOS-only for
+now. The full burn-down list, ordered and with implementation notes, lives in
+[TODO-windows.md](TODO-windows.md). Linux remains unported (WebKitGTK would
+be the route).
 
 ## Credits
 

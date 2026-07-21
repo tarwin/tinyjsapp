@@ -1,14 +1,58 @@
 ---
 name: tinyjs
-description: Build and modify tinyjs desktop apps — tiny macOS apps with a txiki.js JavaScript backend and a native WebKit window. Use when working in a project with a tinyjs.json, or when the user mentions tinyjs, tiny.api, or tinyjs dev/build.
+description: Build and modify tinyjs desktop apps — tiny macOS (and beta Windows) apps with a txiki.js JavaScript backend and a native webview window. Use when working in a project with a tinyjs.json, or when the user mentions tinyjs, tiny.api, or tinyjs dev/build.
 ---
 
 # Building tinyjs apps
 
-tinyjs (https://tinyjs.app, repo tarwin/tinyjsapp) makes ~6 MB macOS desktop
-apps: a **txiki.js backend** (full system access: files, sockets, processes,
-FFI) + a **native WebKit window**. They talk JSON-RPC over a private Unix
-socket — no HTTP server, no ports.
+tinyjs (https://tinyjs.app, repo tarwin/tinyjsapp) makes ~6 MB desktop apps:
+a **txiki.js backend** (full system access: files, sockets, processes, FFI)
++ a **native webview window** — WKWebView/WebKit on macOS, WebView2 on
+Windows (beta support). They talk JSON-RPC over a private Unix socket (macOS)
+or named pipe (Windows) — no HTTP server, no ports.
+
+## Platforms
+
+macOS is the primary platform; Windows support is in beta. The same project
+runs on both — same tinyjs.json, same `tiny.*` api, same commands.
+
+| | macOS | Windows |
+|---|---|---|
+| toolchain to develop tinyjs ITSELF | Xcode CLT (`./setup.sh`) | MinGW-w64 g++ (`winget install BrechtSanders.WinLibs.POSIX.UCRT`) + WebView2 runtime (preinstalled on Win 11); run `setup.ps1`, use `tinyjs.cmd` |
+| app users need | macOS 14+ (Apple Silicon) | Windows 10/11 with the WebView2 runtime |
+| `tinyjs build` output | `dist/<Name>.app` (codesigned) + bare `dist/<name>` | portable `dist/` folder: `<name>.exe` + `launcher.exe` + `frontend/` |
+| `publish` / `notarize` / auto-update | yes | not yet (build + zip by hand) |
+
+Works on BOTH platforms: the whole bridge (api calls, push events,
+`tiny.fetch`), dev/hot-reload, Vite `devUrl`, file/folder/save dialogs,
+alert/confirm/prompt, menu bar (+ `menu.update`/`get`), tray + `notify`
+(Windows: balloon, no action buttons), custom context menus + `contextMenu:
+false`, clipboard (image WRITE is macOS-only for now), global hotkeys,
+`keystroke`/`paste` (`cmd` maps to Ctrl on Windows), `shell.open/reveal/
+trash`, `secrets` (Keychain / Credential Manager), `power.preventSleep`,
+`theme` + sleep/wake events, `store`, `screens`/`mousePosition`/`paths`/
+`battery`/`idleTime`/`frontmostApp`, window ops (hide/show/center/minimize/
+fullscreen/ontop/resizable/pos/level/clickThrough/hideOnClose/zoom,
+`data-tiny-drag` regions, `chrome.frame`/`squareCorners`), `dock.bounce`
+(taskbar flash), sqlite.
+
+macOS-only (on Windows these reject or answer `'unsupported'`/null — always
+feature-detect): multi-window (`win.open`), `win.onDrop` real paths +
+`startDrag({ files })` (drag in/out), notification actions, `printToPDF`,
+`audioTap`, `proxyURL` media proxy, `launchAtLogin`, deep links / file
+associations, `permissions.*` TCC flow (Windows answers 'granted'),
+`quickLook`, `captureScreen`/`recorder`, `pickColor`, `ocr`, `thumbnail`,
+`authenticate`, `applescript`, `nowPlaying`/media keys, `say`/`voices`,
+`selectedText`/`otherWindows`/`moveWindow`, `share`, `haptic`,
+`dock.setBadge`/`dockIcon`, `setAllSpaces`, vibrancy/transparent chrome,
+`wifi`, `spotlight`, `tiny.app.ai`. (Windows plans:
+tarwin/tinyjsapp TODO-windows.md.)
+
+Cross-platform app pattern: gate features, don't fork code —
+`if ((await tiny.app.permissions.check('accessibility')) !== 'unsupported')`,
+`try { await tiny.win.printToPDF(p) } catch { /* fallback */ }`. Backend
+paths: use `app.paths` (per-OS correct) instead of hardcoding `~/Library` or
+`%APPDATA%`; join with '/' (works everywhere in tjs).
 
 ## Commands
 

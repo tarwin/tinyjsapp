@@ -11,7 +11,18 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-const TOOL_DIR = new URL('.', import.meta.url).pathname;
+// txiki has no tjs.platform; OS=Windows_NT is always set by Windows itself.
+const IS_WIN = tjs.env.OS === 'Windows_NT';
+
+// URL.pathname renders C:\Users\me as /C:/Users/me (percent-encoded) — decode
+// and drop the leading slash so the result is a usable Windows path.
+function pathFromUrl(u) {
+  let p = decodeURIComponent(u.pathname);
+  if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1);
+  return p;
+}
+
+const TOOL_DIR = pathFromUrl(new URL('.', import.meta.url));
 // Invoked as: tjs run cli.js <cmd> [args...]
 const [cmd, ...args] = tjs.args.slice(3);
 
@@ -37,6 +48,43 @@ async function copyTree(src, dest) {
     const d = dest + '/' + e.name;
     if (e.isDirectory) await copyTree(s, d);
     else await tjs.writeFile(d, await tjs.readFile(s));
+  }
+}
+
+// Portable rm -rf (replaces shelling out, which Windows has no equivalent for).
+async function rmTree(p) {
+  try {
+    await tjs.remove(p, { recursive: true });
+    return;
+  } catch {}
+  try {
+    const st = await tjs.stat(p);
+    if (st.isDirectory) {
+      const iter = await tjs.readDir(p);
+      for await (const e of iter) await rmTree(p + '/' + e.name);
+    }
+    await tjs.remove(p);
+  } catch {}
+}
+
+async function copyFile(src, dest) {
+  await tjs.writeFile(dest, await tjs.readFile(src));
+}
+
+// Run a shell command line: sh -c on POSIX, cmd /c on Windows (also the only
+// way to reach npm/npx there — they are .cmd shims CreateProcess won't exec).
+const shellArgv = (cmdline) => IS_WIN ? ['cmd', '/c', cmdline] : ['sh', '-c', cmdline];
+// npm/npx-style argv: pass through on POSIX, hop through cmd /c on Windows.
+const nodeToolArgv = (argv) => IS_WIN ? ['cmd', '/c', ...argv] : argv;
+
+// Give coding agents working in a scaffolded project the tinyjs reference
+// skill — in .claude/skills/ (Claude Code) and .agents/skills/ (the
+// tool-agnostic location other agents read).
+async function writeAgentSkill(dir) {
+  const skill = await tjs.readFile(TOOL_DIR + 'skill/SKILL.md');
+  for (const base of ['/.claude/skills/tinyjs', '/.agents/skills/tinyjs']) {
+    await tjs.makeDir(dir + base, { recursive: true });
+    await tjs.writeFile(dir + base + '/SKILL.md', skill);
   }
 }
 
@@ -160,7 +208,8 @@ async function maybeNotifyUpdate() {
 async function cmdUpdate() {
   const current = await toolVersion();
   if (current === 'dev') {
-    fail('running from a source checkout — update with `git pull` (+ ./setup.sh) instead');
+    fail('running from a source checkout — update with `git pull` (+ ' +
+         (IS_WIN ? 'setup.ps1' : './setup.sh') + ') instead');
   }
   const latest = await withTimeout(fetchLatestVersion(), 10000);
   if (!latest) fail('could not reach GitHub to check the latest release');
@@ -173,9 +222,14 @@ async function cmdUpdate() {
     tjs.exit(0);
   }
   console.log(`==> updating ${current} → ${latest}`);
-  // The installer re-resolves "latest", verifies checksums, and swaps
-  // ~/.tinyjs (or $TINYJS_HOME) in place.
-  await run(['sh', '-c', 'curl -fsSL https://tinyjs.app/install | sh']);
+  // The installer re-resolves "latest", verifies checksums, and swaps the
+  // install dir (~/.tinyjs / %LOCALAPPDATA%\tinyjs, or $TINYJS_HOME) in place.
+  if (IS_WIN) {
+    await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+               '-Command', 'irm https://tinyjs.app/install.ps1 | iex']);
+  } else {
+    await run(['sh', '-c', 'curl -fsSL https://tinyjs.app/install | sh']);
+  }
   tjs.exit(0);
 }
 
@@ -195,6 +249,9 @@ async function confirmTty(prompt) {
 }
 
 async function cmdUninstall() {
+  if (IS_WIN) {
+    fail('there is no Windows installer yet — delete the checkout and remove it from your user PATH (Settings > Environment Variables; setup.ps1 added it)');
+  }
   const version = await toolVersion();
   if (version === 'dev') {
     fail('running from a source checkout — nothing to uninstall (just delete the repo)');
@@ -277,7 +334,7 @@ async function resolveBackendEntry(cfg) {
 // css/js/images just work): dev points at src/frontend directly; build
 // copies it into .build/app/frontend.
 async function generateBuild(cfg, dev = false) {
-  await run(['rm', '-rf', '.build']);
+  await rmTree('.build');
   const B = '.build/app';
   await tjs.makeDir(B, { recursive: true });
 
@@ -293,10 +350,10 @@ async function generateBuild(cfg, dev = false) {
   let entryName = backendEntry.split('/').pop();
   if (backendEntry.endsWith('.ts')) {
     console.log('==> bundling backend (esbuild)');
-    await run(['npx', '--yes', 'esbuild', backendEntry, '--bundle', '--format=esm',
+    await run(nodeToolArgv(['npx', '--yes', 'esbuild', backendEntry, '--bundle', '--format=esm',
                '--platform=neutral', '--main-fields=module,main',
                '--external:tjs:*', '--log-level=warning',
-               '--outfile=' + B + '/src/main.js']);
+               '--outfile=' + B + '/src/main.js']));
     entryName = 'main.js';
   } else {
     // Copy the backend dir (minus a nested frontend/, for src/ layouts).
@@ -318,7 +375,7 @@ async function generateBuild(cfg, dev = false) {
   let frontendSrc = fe.dir ?? 'src/frontend';
   if (!dev && fe.build) {
     console.log('==> frontend build: ' + fe.build);
-    await run(['sh', '-c', fe.build]);
+    await run(shellArgv(fe.build));
     frontendSrc = fe.dist ?? 'dist';
   }
   if (!devUrl && !(await exists(frontendSrc + '/index.html'))) {
@@ -335,8 +392,10 @@ async function generateBuild(cfg, dev = false) {
     : dev
     ? `const FRONTEND = ${JSON.stringify(tjs.cwd + '/' + frontendSrc)};`
     : `let FRONTEND;
-try { FRONTEND = decodeURIComponent(new URL('./frontend', import.meta.url).pathname); }
-catch { FRONTEND = tjs.exePath.replace(/\\/[^/]*$/, '') + '/frontend'; }`;
+try {
+  FRONTEND = decodeURIComponent(new URL('./frontend', import.meta.url).pathname);
+  if (/^\\/[A-Za-z]:\\//.test(FRONTEND)) FRONTEND = FRONTEND.slice(1); // windows /C:/…
+} catch { FRONTEND = tjs.exePath.replace(/[\\\\/][^\\\\/]*$/, '') + '/frontend'; }`;
 
   let entry = `import { createApp } from './bridge.js';
 import * as appMod from './src/${entryName}';
@@ -407,7 +466,7 @@ tjs.exit(0);
 // Vite's own templates stay current upstream — we never fork them.
 async function scaffoldViteTemplate(dir, name, template) {
   console.log('==> npm create vite (' + template + ')');
-  await run(['npm', 'create', 'vite@latest', dir, '--yes', '--', '--template', template]);
+  await run(nodeToolArgv(['npm', 'create', 'vite@latest', dir, '--yes', '--', '--template', template]));
   const ts = template.endsWith('-ts');
   const backendEntry = 'backend/main.' + (ts ? 'ts' : 'js');
 
@@ -474,9 +533,7 @@ export function init(app${ts ? ': TinyApp' : ''}) {
   await tjs.writeFile(pkgPath, enc.encode(JSON.stringify(pkg, null, 2) + '\n'));
 
   await tjs.writeFile(dir + '/icon.png', await tjs.readFile(TOOL_DIR + 'template/icon.png'));
-  await tjs.makeDir(dir + '/.claude/skills/tinyjs', { recursive: true });
-  await tjs.writeFile(dir + '/.claude/skills/tinyjs/SKILL.md',
-    await tjs.readFile(TOOL_DIR + 'skill/SKILL.md'));
+  await writeAgentSkill(dir);
 
   console.log(`created ${dir}/ (${template} + tinyjs)
   cd ${dir}
@@ -504,10 +561,7 @@ async function cmdNew() {
   const cfg = dec.decode(await tjs.readFile(cfgPath)).replaceAll('__NAME__', name);
   await tjs.writeFile(cfgPath, enc.encode(cfg));
 
-  // Give coding agents working in the project a tinyjs reference skill.
-  await tjs.makeDir(dir + '/.claude/skills/tinyjs', { recursive: true });
-  await tjs.writeFile(dir + '/.claude/skills/tinyjs/SKILL.md',
-    await tjs.readFile(TOOL_DIR + 'skill/SKILL.md'));
+  await writeAgentSkill(dir);
 
   console.log(`created ${dir}/
   cd ${dir}
@@ -515,9 +569,33 @@ async function cmdNew() {
   tinyjs build    # package it`);
 }
 
+// Dev-checkout convenience (Windows): if the native launcher sources (or the
+// injected client, which is compiled into it) are newer than the built
+// launcher-win.exe, rebuild via setup.ps1 before starting — so hacking on
+// tinyjs itself never runs a stale binary. Installed copies (VERSION file
+// present) never rebuild.
+async function ensureWinLauncherFresh() {
+  if (!IS_WIN || (await toolVersion()) !== 'dev') return;
+  const exe = TOOL_DIR + 'native/launcher-win.exe';
+  const mtime = async (p) => {
+    try { return (await tjs.stat(p)).mtim.getTime(); } catch { return null; }
+  };
+  const built = await mtime(exe);
+  let stale = built === null;
+  for (const src of ['native/launcher-win.cc', 'runtime/tiny.js']) {
+    const m = await mtime(TOOL_DIR + src);
+    if (m !== null && (built === null || m > built)) stale = true;
+  }
+  if (!stale) return;
+  console.log('==> launcher sources changed — rebuilding (setup.ps1)');
+  await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+             '-File', TOOL_DIR + 'setup.ps1', '-SkipPath'], { cwd: TOOL_DIR });
+}
+
 async function cmdDev() {
   const cfg = await loadConfig();
   maybeNotifyUpdate(); // fire-and-forget; prints if a newer release exists
+  await ensureWinLauncherFresh();
 
   // Frontend dev server (vite etc.): spawn it, wait until it responds, and
   // point the window at it. HMR replaces tinyjs' own frontend watcher; the
@@ -527,7 +605,7 @@ async function cmdDev() {
   if (fe.devUrl) {
     if (fe.dev) {
       console.log('==> starting frontend dev server: ' + fe.dev);
-      devServer = tjs.spawn(['sh', '-c', fe.dev], { stdout: 'inherit', stderr: 'inherit' });
+      devServer = tjs.spawn(shellArgv(fe.dev), { stdout: 'inherit', stderr: 'inherit' });
     }
     // Probe both spellings: 'localhost' may be ::1-only (modern node) which
     // txiki's fetch can't reach even when the server is up.
@@ -565,11 +643,17 @@ async function cmdDev() {
   while (true) {
     const B = await generateBuild(cfg, true);
     restarting = false;
-    child = tjs.spawn([tjs.exePath, 'run', B + '/entry.js'], {
+    // Absolute entry path with uniform native separators: txiki's Windows
+    // relative-import resolution breaks on a relative main module and on
+    // mixed / and \ in its path.
+    const entryPath = IS_WIN
+      ? (tjs.cwd + '\\' + B.replace(/\//g, '\\') + '\\entry.js')
+      : tjs.cwd + '/' + B + '/entry.js';
+    child = tjs.spawn([tjs.exePath, 'run', entryPath], {
       stdin: 'inherit',
       stdout: 'inherit',
       stderr: 'inherit',
-      env: { ...tjs.env, TINYJS_LAUNCHER: TOOL_DIR + 'native/launcher' },
+      env: { ...tjs.env, TINYJS_LAUNCHER: TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : 'launcher') },
     });
     const st = await child.wait();
     if (!restarting) {
@@ -603,11 +687,26 @@ async function cmdBuild() {
   const cwd = tjs.cwd;
 
   console.log('==> compiling backend');
-  await run(['rm', '-rf', 'dist']);
+  await rmTree('dist');
   await tjs.makeDir('dist');
   // `tjs app compile` runs from the parent of the app/ dir and bundles the
   // whole module graph into a standalone executable.
   await run([tjs.exePath, 'app', 'compile', cwd + '/dist/' + cfg.name], { cwd: cwd + '/.build' });
+
+  if (IS_WIN) {
+    // Windows build: a portable dist/ folder — <name>.exe (compiled backend),
+    // launcher.exe next to it (the bridge finds it there), and frontend/.
+    // No bundle/codesign step; zip the folder to distribute.
+    if (!(await exists('dist/' + cfg.name + '.exe')) && (await exists('dist/' + cfg.name))) {
+      await tjs.rename('dist/' + cfg.name, 'dist/' + cfg.name + '.exe');
+    }
+    await copyFile(TOOL_DIR + 'native/launcher-win.exe', 'dist/launcher.exe');
+    await copyTree('.build/app/frontend', 'dist/frontend');
+    console.log('==> done');
+    console.log(`run it:  .\\dist\\${cfg.name}.exe`);
+    return;
+  }
+
   await run(['cp', TOOL_DIR + 'native/launcher', 'dist/launcher']);
   // The bare binary resolves its frontend next to the executable.
   await run(['cp', '-R', '.build/app/frontend', 'dist/frontend']);
@@ -792,6 +891,7 @@ async function cmdBuild() {
 // Needs a real Developer ID signature plus a notarytool keychain profile
 // (create one: xcrun notarytool store-credentials <name> --apple-id … --team-id …).
 async function cmdNotarize() {
+  if (IS_WIN) fail('notarization is a macOS step — nothing to do on Windows');
   const cfg = await loadConfig();
   const APP = 'dist/' + cfg.title + '.app';
   if (!(await exists(APP))) fail(`${APP} not found — run \`tinyjs build\` first`);
@@ -842,6 +942,9 @@ async function cmdNotarize() {
 // Build, zip the .app, and emit the auto-update manifest next to it.
 // Upload dist/publish/* to the directory tinyjs.json "update".url points at.
 async function cmdPublish() {
+  if (IS_WIN) {
+    fail('publish (zip + auto-update manifest) is not supported on Windows yet — `tinyjs build` and zip dist/ by hand');
+  }
   const cfg = await loadConfig();
   const version = cfg.version;
   if (!version) fail('tinyjs.json needs a "version" to publish (e.g. "1.0.0")');
@@ -891,6 +994,7 @@ async function cmdVersion() {
 // devs — non-fatal, since local dev with the x86_64 build still works. Apple
 // Silicon CPUs report as "Apple M…"; Intel Macs report "Intel(R) …".
 function warnIfIntelMac() {
+  if (IS_WIN) return;
   const model = tjs.system?.cpus?.[0]?.model || '';
   // Only warn on a positively-identified non-Apple CPU; if detection returns
   // nothing, stay quiet rather than false-alarm an Apple Silicon user.

@@ -11,8 +11,61 @@ env:
   TJS_VERSION: v26.6.0
 
 jobs:
+  # Windows binaries: built here, shipped by the release job below so one
+  # checksums.txt covers every asset.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install MinGW-w64
+        run: choco install mingw -y --no-progress
+
+      - name: Build (setup.ps1 — fetch tjs.exe + WebView2 header, compile launcher)
+        run: powershell -ExecutionPolicy Bypass -File setup.ps1 -SkipPath
+
+      - name: Stamp version
+        run: echo "${env:GITHUB_REF_NAME}" | Out-File -Encoding ascii -NoNewline VERSION
+
+      - name: Assemble zip
+        run: |
+          $stage = "stage"
+          New-Item -ItemType Directory -Force "$stage\bin", "$stage\native" | Out-Null
+          Copy-Item bin\tjs.exe "$stage\bin\"
+          Copy-Item native\launcher-win.exe "$stage\native\"
+          Copy-Item -Recurse runtime, template, test, skill "$stage\"
+          Copy-Item cli.js, tinyjs.cmd, VERSION, README.md, LICENSE "$stage\"
+          New-Item -ItemType Directory -Force out | Out-Null
+          # Zip the CONTENTS (no wrapper dir): install.ps1 extracts straight
+          # into the install dir.
+          Compress-Archive -Path "$stage\*" -DestinationPath out\tinyjs-windows-x86_64.zip
+
+      - name: Smoke test (build pipeline; no GUI on a runner)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $extract = Join-Path $env:TEMP 'tinyjs-ci'
+          Expand-Archive out\tinyjs-windows-x86_64.zip $extract
+          & "$extract\tinyjs.cmd" version
+          $work = Join-Path $env:TEMP 'tinyjs-ci-work'
+          New-Item -ItemType Directory -Force $work | Out-Null
+          Set-Location $work
+          & "$extract\tinyjs.cmd" new ci-check
+          if ($LASTEXITCODE -ne 0) { throw 'new failed' }
+          Set-Location ci-check
+          & "$extract\tinyjs.cmd" build
+          if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+          if (-not (Test-Path dist\ci-check.exe)) { throw 'missing dist\ci-check.exe' }
+          if (-not (Test-Path dist\launcher.exe)) { throw 'missing dist\launcher.exe' }
+          Write-Host 'windows build pipeline OK'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: out/tinyjs-windows-x86_64.zip
+
   release:
     runs-on: macos-14
+    needs: windows
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +99,15 @@ jobs:
 
             tar -czf "out/tinyjs-macos-$ARCH.tar.gz" -C "/tmp/stage-$ARCH" tinyjs
           done
-          (cd out && shasum -a 256 *.tar.gz > checksums.txt && cat checksums.txt)
+
+      - name: Fetch Windows zip
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-zip
+          path: out
+
+      - name: Checksums (all assets)
+        run: (cd out && shasum -a 256 *.tar.gz *.zip > checksums.txt && cat checksums.txt)
 
       - name: Smoke test (native arch)
         run: |
@@ -64,6 +125,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" out/*.tar.gz out/checksums.txt \
+          gh release create "${GITHUB_REF_NAME}" out/*.tar.gz out/*.zip out/checksums.txt \
             --title "tinyjs ${GITHUB_REF_NAME}" \
             --generate-notes

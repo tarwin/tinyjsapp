@@ -1,6 +1,8 @@
-# vendored/built artifacts — fetched or compiled by setup.sh
+# vendored/built artifacts — fetched or compiled by setup.sh / setup.ps1
 bin/
 native/launcher
+native/launcher-win.exe
+native/include/WebView2.h
 native/shim
 
 # build products
