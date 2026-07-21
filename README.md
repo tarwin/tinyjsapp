@@ -1007,20 +1007,28 @@ abstracts both). Bootstrap with `setup.ps1`, use `tinyjs.cmd` as the CLI.
 Works on Windows: the full page↔backend bridge (api calls, push events,
 `tiny.fetch`), dev mode with hot reload and backend restart, Vite `devUrl`
 frontends, `tinyjs build` (a portable `dist/` folder: `<name>.exe` +
-`launcher.exe` + `frontend/`), file/folder/save dialogs, alert/confirm/prompt,
-menu bar, tray (+ balloon notifications), custom context menus, clipboard
-(text/html/files, image read), global hotkeys, `keystroke` (`cmd` maps to
-Ctrl), `shell.open/reveal/trash`, `secrets` (Credential Manager),
-`power.preventSleep`, theme + sleep/wake events, and the window ops
-(chrome/fullscreen/ontop/click-through/level/…).
+`launcher.exe` + `frontend/`), **multi-window** (`win.open` — each window
+gets its own WebView2 + bridge), **drag & drop with real paths both ways**
+(`win.onDrop` in, `startDrag({ files })` out), file/folder/save dialogs,
+alert/confirm/prompt, menu bar with working `key:` accelerators
+(Ctrl+<key>), tray (+ balloon notifications), custom context menus,
+clipboard (text/html/files/image, both directions), global hotkeys,
+`keystroke` (`cmd` maps to Ctrl), `shell.open/reveal/trash`, `secrets`
+(Credential Manager), `power.preventSleep`, theme + sleep/wake events,
+`printToPDF`, `captureScreen`, `thumbnail`, `say`/`voices` (SAPI),
+`launchAtLogin` (built apps; HKCU Run), `tinyjs publish` + **app
+auto-update** (file-by-file swap — Windows can't replace a whole running
+folder — then relaunch), chrome `transparent` + vibrancy→mica/acrylic
+backdrops (Win11), and the window ops
+(fullscreen/ontop/click-through/level/…).
 
-Not yet ported: multi-window (`win.open`), drag-out / drop-in with real
-paths, notification actions, `printToPDF`, `audioTap`, launch-at-login, and
-the macOS-specific APIs (Quick Look, OCR, AppleScript, Touch ID, vibrancy,
-Dock, Spaces, say/voices, screen capture/recording, Spotlight) — all reject
-or report `'unsupported'` cleanly, so cross-platform code can feature-detect.
-`tinyjs publish`/auto-update and the curl installer are also macOS-only for
-now. The full burn-down list, ordered and with implementation notes, lives in
+Not yet ported: notification action buttons (balloons only — real toasts
+need an AppUserModelID story), exe icons in built apps, deep links / file
+associations / single instance, `authenticate` (Windows Hello), `audioTap`
+— plus the genuinely macOS-only APIs (Quick Look, OCR, AppleScript,
+Spotlight, Now Playing, Dock badges, Spaces), which all reject or report
+`'unsupported'` cleanly so cross-platform code can feature-detect. The
+burn-down list with implementation notes lives in
 [TODO-windows.md](TODO-windows.md). Linux remains unported (WebKitGTK would
 be the route).
 

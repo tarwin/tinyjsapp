@@ -71,7 +71,7 @@ Write-Host "==> compiling launcher ($gxx)"
 & $gxx -std=c++17 -O2 -static -Inative/include -Inative `
     -o native/launcher-win.exe native/launcher-win.cc -mwindows `
     -lole32 -loleaut32 -lshell32 -lshlwapi -luser32 -ladvapi32 -lversion `
-    -lgdi32 -lgdiplus -lcomdlg32 -lwinmm -ldwmapi -luuid
+    -lgdi32 -lgdiplus -lcomdlg32 -lwinmm -ldwmapi -luuid -lcrypt32
 if ($LASTEXITCODE -ne 0) { throw "launcher compile failed ($LASTEXITCODE)" }
 
 # --- put `tinyjs` on the PATH (per-user; the mac installer's symlink step) ---

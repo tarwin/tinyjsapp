@@ -941,10 +941,13 @@ async function cmdNotarize() {
 
 // Build, zip the .app, and emit the auto-update manifest next to it.
 // Upload dist/publish/* to the directory tinyjs.json "update".url points at.
+// WebCrypto sha256 of a file (no shasum/CertUtil spawn; same on both OSes).
+async function sha256File(path) {
+  const hash = await crypto.subtle.digest('SHA-256', await tjs.readFile(path));
+  return Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function cmdPublish() {
-  if (IS_WIN) {
-    fail('publish (zip + auto-update manifest) is not supported on Windows yet — `tinyjs build` and zip dist/ by hand');
-  }
   const cfg = await loadConfig();
   const version = cfg.version;
   if (!version) fail('tinyjs.json needs a "version" to publish (e.g. "1.0.0")');
@@ -952,11 +955,23 @@ async function cmdPublish() {
 
   const zipName = cfg.name + '-' + version + '.zip';
   const PUB = 'dist/publish';
-  await run(['rm', '-rf', PUB]);
-  await tjs.makeDir(PUB, { recursive: true });
+  await rmTree(PUB);
   console.log('==> zipping ' + zipName);
-  await run(['ditto', '-c', '-k', '--keepParent', 'dist/' + cfg.title + '.app', PUB + '/' + zipName]);
-  const sha = (await runCapture(['shasum', '-a', '256', PUB + '/' + zipName])).trim().split(/\s+/)[0];
+  if (IS_WIN) {
+    // Stage dist/ under a named folder so the zip's one top-level entry is
+    // the app folder (what update.js swaps in); bsdtar (Windows 10+) writes
+    // zip when told -a with a .zip name.
+    const stage = '.build/publish-stage';
+    await rmTree(stage);
+    await tjs.makeDir(stage + '/' + cfg.name, { recursive: true });
+    await copyTree('dist', stage + '/' + cfg.name);
+    await tjs.makeDir(PUB, { recursive: true });
+    await run(['tar', '-a', '-cf', PUB + '/' + zipName, '-C', stage, cfg.name]);
+  } else {
+    await tjs.makeDir(PUB, { recursive: true });
+    await run(['ditto', '-c', '-k', '--keepParent', 'dist/' + cfg.title + '.app', PUB + '/' + zipName]);
+  }
+  const sha = await sha256File(PUB + '/' + zipName);
 
   // Zips live next to the manifest, so derive the download url from update.url.
   const base = cfg.update?.url ? cfg.update.url.replace(/\/[^/]*$/, '') : null;

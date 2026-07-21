@@ -23,6 +23,7 @@
 // Developer ID for anything security-sensitive).
 
 const dec = new TextDecoder();
+const IS_WIN = tjs.env.OS === 'Windows_NT';
 
 function assertSafeUrl(u, what) {
   const s = String(u ?? '');
@@ -73,17 +74,46 @@ async function teamIdentifier(bundle) {
   return m && m[1] !== 'not set' ? m[1].trim() : null;
 }
 
+// WebCrypto everywhere — no shasum spawn, identical on macOS and Windows.
 async function sha256(path) {
-  const { ok, out } = await runCapture(['shasum', '-a', '256', path]);
-  return ok ? out.trim().split(/\s+/)[0] : null;
+  try {
+    const data = await tjs.readFile(path);
+    const hash = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hash))
+      .map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
 }
 
-// …/MyApp.app/Contents/MacOS/tjs -> …/MyApp.app, or null when not bundled.
+async function exists(p) {
+  try { await tjs.stat(p); return true; } catch { return false; }
+}
+
+// macOS: …/MyApp.app/Contents/MacOS/tjs -> …/MyApp.app. Windows: a built app
+// is a portable folder — <name>.exe with launcher.exe + frontend/ beside it —
+// so that folder is the "bundle". null when not packaged (dev / bare CLI).
+let winBundle; // memoized (involves stat calls)
 export function bundlePath() {
   const exe = tjs.exePath;
-  const i = exe.indexOf('.app/Contents/MacOS/');
-  return i < 0 ? null : exe.slice(0, i + 4);
+  if (!IS_WIN) {
+    const i = exe.indexOf('.app/Contents/MacOS/');
+    return i < 0 ? null : exe.slice(0, i + 4);
+  }
+  return winBundle ?? null; // resolved async by winBundleInit below
 }
+
+// Windows bundle detection needs async stats; run once at import.
+async function winBundleInit() {
+  if (!IS_WIN) return;
+  const dir = tjs.exePath.replace(/[\\/][^\\/]*$/, '');
+  const base = tjs.exePath.slice(dir.length + 1).toLowerCase();
+  if (base !== 'tjs.exe' &&
+      (await exists(dir + '/launcher.exe')) && (await exists(dir + '/frontend'))) {
+    winBundle = dir;
+  }
+}
+await winBundleInit();
 
 export async function checkForUpdate({ url, version }) {
   if (!url) throw new Error('no update url configured (tinyjs.json "update": { "url": … })');
@@ -126,6 +156,9 @@ export async function installUpdate({ url, version, manifest }) {
   const data = new Uint8Array(await res.arrayBuffer());
 
   const tmp = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-update-XXXXXX');
+  const rmrf = (p) => IS_WIN
+    ? tjs.remove(p, { recursive: true }).then(() => true, () => false)
+    : runOk(['rm', '-rf', p]);
   try {
     const zipPath = tmp + '/update.zip';
     await tjs.writeFile(zipPath, data);
@@ -135,50 +168,118 @@ export async function installUpdate({ url, version, manifest }) {
       throw new Error('checksum mismatch — refusing to install');
     }
 
-    if (!(await runOk(['ditto', '-x', '-k', zipPath, tmp + '/x']))) {
-      throw new Error('could not extract the update zip');
-    }
+    // Extract: ditto on macOS; bsdtar (ships with Windows 10+) reads zips.
+    await tjs.makeDir(tmp + '/x', { recursive: true }).catch(() => {});
+    const extractOk = IS_WIN
+      ? await runOk(['tar', '-xf', zipPath, '-C', tmp + '/x'])
+      : await runOk(['ditto', '-x', '-k', zipPath, tmp + '/x']);
+    if (!extractOk) throw new Error('could not extract the update zip');
+
+    // The zip holds one top-level entry: MyApp.app (macOS) or a folder with
+    // the exe + launcher.exe + frontend/ (Windows).
     let newApp = null;
     const iter = await tjs.readDir(tmp + '/x');
     for await (const e of iter) {
-      if (e.name.endsWith('.app')) { newApp = tmp + '/x/' + e.name; break; }
-    }
-    if (!newApp) throw new Error('update zip does not contain an .app bundle');
-
-    // Integrity check: the bundle's own seal must verify (ad-hoc or real
-    // identity alike). A tampered or truncated download fails here.
-    if (!(await runOk(['codesign', '--verify', '--strict', '--deep', newApp]))) {
-      throw new Error('code signature verification failed on the update');
-    }
-    // Identity pinning: when the running app is signed with a real identity,
-    // the update must come from the same Apple Team.
-    const currentTeam = await teamIdentifier(bundle);
-    if (currentTeam) {
-      const newTeam = await teamIdentifier(newApp);
-      if (newTeam !== currentTeam) {
-        throw new Error('update is signed by a different team (' +
-                        (newTeam ?? 'ad-hoc') + ' ≠ ' + currentTeam + ') — refusing to install');
+      if (IS_WIN ? e.isDirectory : e.name.endsWith('.app')) {
+        newApp = tmp + '/x/' + e.name;
+        break;
       }
+    }
+    if (!newApp) throw new Error('update zip does not contain an app ' + (IS_WIN ? 'folder' : 'bundle'));
+
+    if (!IS_WIN) {
+      // Integrity check: the bundle's own seal must verify (ad-hoc or real
+      // identity alike). A tampered or truncated download fails here.
+      if (!(await runOk(['codesign', '--verify', '--strict', '--deep', newApp]))) {
+        throw new Error('code signature verification failed on the update');
+      }
+      // Identity pinning: when the running app is signed with a real identity,
+      // the update must come from the same Apple Team.
+      const currentTeam = await teamIdentifier(bundle);
+      if (currentTeam) {
+        const newTeam = await teamIdentifier(newApp);
+        if (newTeam !== currentTeam) {
+          throw new Error('update is signed by a different team (' +
+                          (newTeam ?? 'ad-hoc') + ' ≠ ' + currentTeam + ') — refusing to install');
+        }
+      }
+    }
+    // (Windows has no codesign equivalent here; the https + sha256 manifest
+    // is the trust anchor.)
+
+    if (IS_WIN) {
+      // Windows cannot rename a directory that contains a running exe, but a
+      // running exe FILE can be renamed. So the update is an in-place
+      // file-by-file shuffle: locked files (the exes) are renamed aside to
+      // *.update-old (cleaned up on the next update, once unlocked) and the
+      // new files dropped in.
+      await winSwapDir(newApp, bundle);
+      return bundle;
     }
 
     // Swap with rollback. Renaming a running .app is fine on macOS: open
     // files keep working via their inodes until the process exits.
     const backup = bundle + '.update-backup';
-    await runOk(['rm', '-rf', backup]);
-    if (!(await runOk(['mv', bundle, backup]))) {
+    await rmrf(backup);
+    try {
+      await tjs.rename(bundle, backup);
+    } catch {
       throw new Error('cannot move the current app (insufficient permissions?)');
     }
-    if (!(await runOk(['mv', newApp, bundle]))) {
-      await runOk(['mv', backup, bundle]);
+    try {
+      await tjs.rename(newApp, bundle);
+    } catch {
+      await tjs.rename(backup, bundle).catch(() => {});
       throw new Error('failed to move the new app into place');
     }
-    await runOk(['rm', '-rf', backup]);
+    await rmrf(backup);
     return bundle;
   } finally {
-    runOk(['rm', '-rf', tmp]);
+    rmrf(tmp);
+  }
+}
+
+// Windows in-place update: recursively move src's files over dst. Existing
+// files are deleted, or — when locked (running exes) — renamed aside as
+// .update-old. Cross-volume renames fall back to a copy.
+async function winSwapDir(src, dst) {
+  await tjs.makeDir(dst, { recursive: true }).catch(() => {});
+  // Sweep leftovers from the previous update first (unlocked by now).
+  const sweep = await tjs.readDir(dst);
+  for await (const e of sweep) {
+    if (e.name.endsWith('.update-old')) await tjs.remove(dst + '/' + e.name).catch(() => {});
+  }
+  const iter = await tjs.readDir(src);
+  for await (const e of iter) {
+    const s = src + '/' + e.name;
+    const d = dst + '/' + e.name;
+    if (e.isDirectory) {
+      await winSwapDir(s, d);
+      continue;
+    }
+    if (await exists(d)) {
+      try {
+        await tjs.remove(d);
+      } catch {
+        try { await tjs.rename(d, d + '.update-old'); }
+        catch { throw new Error('cannot replace ' + d + ' (file in use?)'); }
+      }
+    }
+    try {
+      await tjs.rename(s, d);
+    } catch {
+      await tjs.writeFile(d, await tjs.readFile(s)); // cross-volume fallback
+    }
   }
 }
 
 export function relaunch(bundle) {
+  if (IS_WIN) {
+    // The new folder keeps the same exe name as the running app.
+    const exeName = tjs.exePath.replace(/^.*[\\/]/, '');
+    tjs.spawn([bundle + '\\' + exeName],
+              { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+    return;
+  }
   tjs.spawn(['open', '-n', bundle], { stdout: 'ignore', stderr: 'ignore' });
 }

@@ -508,9 +508,15 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // returns the resulting status: 'requires-approval' means macOS wants
     // the user to allow it in System Settings > General > Login Items.
     launchAtLogin: {
-      async get() { return (await ask('LOGIN', 'get'))?.status ?? 'unsupported'; },
+      // Windows: the launcher needs the app's exe path for the HKCU Run key
+      // (a dev run's tjs.exe is refused there — built apps only).
+      async get() {
+        const rest = 'get' + (IS_WIN ? '\t' + esc(tjs.exePath) : '');
+        return (await ask('LOGIN', rest))?.status ?? 'unsupported';
+      },
       async set(enabled) {
-        const r = await ask('LOGIN', 'set ' + (enabled ? 1 : 0));
+        const rest = 'set ' + (enabled ? 1 : 0) + (IS_WIN ? '\t' + esc(tjs.exePath) : '');
+        const r = await ask('LOGIN', rest);
         if (r?.ok === false && r?.error) throw new Error(r.error);
         return r?.status ?? 'unsupported';
       },

@@ -6,6 +6,22 @@ https://tinyjs.app/changelog.
 
 ## Unreleased
 
+- **Windows: second wave — near feature parity.** Multi-window (`win.open`
+  — each window hosts its own WebView2 with the full bridge; `<winid>:<seq>`
+  call routing like macOS), drag & drop with real paths both directions
+  (`IDropTarget` in, `DoDragDrop`/`CF_HDROP` out), `printToPDF`,
+  `captureScreen` (no permission dance), `thumbnail` (shell image factory),
+  `say`/`voices` (SAPI), clipboard image write (`CF_DIB`), menu `key:`
+  accelerators (Ctrl+<key> via WebView2 AcceleratorKeyPressed),
+  `launchAtLogin` for built apps (HKCU Run), chrome `transparent` +
+  vibrancy→mica/acrylic backdrops (Win11 22H2+), accessory apps drop the
+  taskbar button, and `tinyjs publish` + app auto-update: manifest sha256 via
+  WebCrypto (no shasum spawn on either OS), bsdtar zip, and an in-place
+  file-by-file swap on install (Windows can't rename a folder holding a
+  running exe; locked exes park as `*.update-old`, swept next update) —
+  verified end-to-end with a real 1.0.0→1.0.1 self-update. Launchers now
+  chdir out of the app folder so updates never block on a cwd handle.
+
 - **Windows installer + prebuilt binaries.** `irm https://tinyjs.app/install.ps1 | iex`
   installs a prebuilt `tinyjs-windows-x86_64.zip` (built by the release
   workflow's new `windows-latest` job, checksummed alongside the macOS

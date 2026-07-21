@@ -21,32 +21,36 @@ runs on both — same tinyjs.json, same `tiny.*` api, same commands.
 | toolchain to develop tinyjs ITSELF | Xcode CLT (`./setup.sh`) | MinGW-w64 g++ (`winget install BrechtSanders.WinLibs.POSIX.UCRT`) + WebView2 runtime (preinstalled on Win 11); run `setup.ps1`, use `tinyjs.cmd` |
 | app users need | macOS 14+ (Apple Silicon) | Windows 10/11 with the WebView2 runtime |
 | `tinyjs build` output | `dist/<Name>.app` (codesigned) + bare `dist/<name>` | portable `dist/` folder: `<name>.exe` + `launcher.exe` + `frontend/` |
-| `publish` / `notarize` / auto-update | yes | not yet (build + zip by hand) |
+| `publish` / auto-update | yes | yes (update swaps files in place, then relaunches) |
+| `notarize` | yes | n/a (no codesigning; https+sha256 is the update trust anchor) |
 
 Works on BOTH platforms: the whole bridge (api calls, push events,
-`tiny.fetch`), dev/hot-reload, Vite `devUrl`, file/folder/save dialogs,
-alert/confirm/prompt, menu bar (+ `menu.update`/`get`), tray + `notify`
-(Windows: balloon, no action buttons), custom context menus + `contextMenu:
-false`, clipboard (image WRITE is macOS-only for now), global hotkeys,
-`keystroke`/`paste` (`cmd` maps to Ctrl on Windows), `shell.open/reveal/
-trash`, `secrets` (Keychain / Credential Manager), `power.preventSleep`,
-`theme` + sleep/wake events, `store`, `screens`/`mousePosition`/`paths`/
-`battery`/`idleTime`/`frontmostApp`, window ops (hide/show/center/minimize/
-fullscreen/ontop/resizable/pos/level/clickThrough/hideOnClose/zoom,
-`data-tiny-drag` regions, `chrome.frame`/`squareCorners`), `dock.bounce`
-(taskbar flash), sqlite.
+`tiny.fetch`), dev/hot-reload, Vite `devUrl`, multi-window (`win.open` —
+per-window bridge on both), drag & drop with real paths BOTH ways
+(`win.onDrop`, `startDrag({ files })`), file/folder/save dialogs,
+alert/confirm/prompt, menu bar (+ `menu.update`/`get`, `key:` accelerators —
+cmd on mac, Ctrl on win), tray + `notify` (Windows: balloon, no action
+buttons), custom context menus + `contextMenu: false`, clipboard (text/html/
+files/image, read + write), global hotkeys, `keystroke`/`paste` (`cmd` maps
+to Ctrl on Windows), `shell.open/reveal/trash`, `secrets` (Keychain /
+Credential Manager), `power.preventSleep`, `theme` + sleep/wake events,
+`store`, `screens`/`mousePosition`/`paths`/`battery`/`idleTime`/
+`frontmostApp`, `printToPDF`, `captureScreen` (no permission needed on win),
+`thumbnail`, `say`/`voices`/`stopSpeaking`, `launchAtLogin` (built apps
+only on win), auto-update (`update.check/install`), window ops (hide/show/
+center/minimize/fullscreen/ontop/resizable/pos/level/clickThrough/
+hideOnClose/zoom, `data-tiny-drag` regions, `chrome.frame`/`squareCorners`;
+win maps `transparent` to a clear WebView2 background and vibrancy names to
+mica/acrylic backdrops on Win11), `dock.bounce` (taskbar flash), sqlite.
 
 macOS-only (on Windows these reject or answer `'unsupported'`/null — always
-feature-detect): multi-window (`win.open`), `win.onDrop` real paths +
-`startDrag({ files })` (drag in/out), notification actions, `printToPDF`,
-`audioTap`, `proxyURL` media proxy, `launchAtLogin`, deep links / file
-associations, `permissions.*` TCC flow (Windows answers 'granted'),
-`quickLook`, `captureScreen`/`recorder`, `pickColor`, `ocr`, `thumbnail`,
-`authenticate`, `applescript`, `nowPlaying`/media keys, `say`/`voices`,
+feature-detect): notification action buttons, `audioTap`, `proxyURL` media
+proxy, deep links / file associations / single instance, `permissions.*`
+TCC flow (Windows answers 'granted'), `quickLook`, `recorder`, `pickColor`,
+`ocr`, `authenticate`, `applescript`, `nowPlaying`/media keys,
 `selectedText`/`otherWindows`/`moveWindow`, `share`, `haptic`,
-`dock.setBadge`/`dockIcon`, `setAllSpaces`, vibrancy/transparent chrome,
-`wifi`, `spotlight`, `tiny.app.ai`. (Windows plans:
-tarwin/tinyjsapp TODO-windows.md.)
+`dock.setBadge`/`dockIcon`, `setAllSpaces`, `wifi`, `spotlight`,
+`tiny.app.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
 Cross-platform app pattern: gate features, don't fork code —
 `if ((await tiny.app.permissions.check('accessibility')) !== 'unsupported')`,
