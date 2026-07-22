@@ -178,7 +178,11 @@ tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i>
     <code>setPosition</code>, <code>setAlwaysOnTop</code>,
     <code>setResizable</code>, <code>setHideOnClose</code>,
     <code>setDockVisible</code>, <code>print()</code>, <code>tray.set/remove</code>,
-    <code>store.*</code>, <code>hotkey.*</code>, <code>update.check/install</code>.</p>
+    <code>store.*</code>, <code>hotkey.*</code>, <code>update.check/install</code> —
+    plus <code>spawnHidden(args, opts)</code>: <code>tjs.spawn</code> that never
+    flashes a console window on Windows (console tools spawned from a built
+    app otherwise each pop a terminal; identical to <code>tjs.spawn</code> on
+    macOS).</p>
     <p>SQLite ships in the runtime:</p>
     <pre><b>import</b> { Database } <b>from</b> 'tjs:sqlite';
 const db = new Database(dir + '/notes.db');

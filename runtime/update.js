@@ -91,8 +91,9 @@ async function exists(p) {
 }
 
 // macOS: …/MyApp.app/Contents/MacOS/tjs -> …/MyApp.app. Windows: a built app
-// is a portable folder — <name>.exe with launcher.exe + frontend/ beside it —
-// so that folder is the "bundle". null when not packaged (dev / bare CLI).
+// is a portable folder — <name>.exe with launcher.exe beside it (the frontend
+// rides inside the exe) — so that folder is the "bundle". null when not
+// packaged (dev / bare CLI).
 let winBundle; // memoized (involves stat calls)
 export function bundlePath() {
   const exe = tjs.exePath;
@@ -108,8 +109,7 @@ async function winBundleInit() {
   if (!IS_WIN) return;
   const dir = tjs.exePath.replace(/[\\/][^\\/]*$/, '');
   const base = tjs.exePath.slice(dir.length + 1).toLowerCase();
-  if (base !== 'tjs.exe' &&
-      (await exists(dir + '/launcher.exe')) && (await exists(dir + '/frontend'))) {
+  if (base !== 'tjs.exe' && (await exists(dir + '/launcher.exe'))) {
     winBundle = dir;
   }
 }
@@ -134,6 +134,7 @@ export async function checkForUpdate({ url, version }) {
       manifest.url = manifest.win.url;
       manifest.sha256 = manifest.win.sha256;
       if (manifest.win.version) latest = manifest.win.version;
+      if (manifest.win.notes) manifest.notes = manifest.win.notes;
     } else {
       return { available: false, current: version, latest,
                notes: manifest?.notes ?? null, manifest };
@@ -183,15 +184,18 @@ export async function installUpdate({ url, version, manifest }) {
       throw new Error('checksum mismatch — refusing to install');
     }
 
-    // Extract: ditto on macOS; bsdtar (ships with Windows 10+) reads zips.
+    // Extract: ditto on macOS; bsdtar (ships with Windows 10+) reads zips —
+    // via `launcher --run` so the console tool doesn't flash a terminal
+    // (the updating app is a GUI-subsystem exe).
     await tjs.makeDir(tmp + '/x', { recursive: true }).catch(() => {});
+    const winTar = (b => b ? [b + '/launcher.exe', '--run'] : [])(bundlePath());
     const extractOk = IS_WIN
-      ? await runOk(['tar', '-xf', zipPath, '-C', tmp + '/x'])
+      ? await runOk([...winTar, 'tar', '-xf', zipPath, '-C', tmp + '/x'])
       : await runOk(['ditto', '-x', '-k', zipPath, tmp + '/x']);
     if (!extractOk) throw new Error('could not extract the update zip');
 
     // The zip holds one top-level entry: MyApp.app (macOS) or a folder with
-    // the exe + launcher.exe + frontend/ (Windows).
+    // the exe + launcher.exe (Windows).
     let newApp = null;
     const iter = await tjs.readDir(tmp + '/x');
     for await (const e of iter) {

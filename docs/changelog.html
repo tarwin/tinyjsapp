@@ -69,6 +69,16 @@
   <section>
 
     <div class="rel">
+      <h2>0.28.2 <span class="date">2026-07-22</span></h2>
+      <ul>
+        <li><b>Windows: console tools no longer flash terminal windows.</b> txiki's <code>tjs.spawn</code> can't pass <code>CREATE_NO_WINDOW</code>, so every console child (<code>tasklist</code>, <code>tar</code>, <code>reg</code>, …) spawned from a GUI-subsystem app popped a visible console. New <code>launcher-win.exe --run</code> mode runs any console tool hidden with stdio and exit code passed through; the bridge and updater route their own spawns through it, and apps get <code>app.spawnHidden(args, opts)</code> — plain <code>tjs.spawn</code> on macOS, hidden on Windows.</li>
+        <li><b>Windows: built exes carry the app icon.</b> <code>tinyjs build</code> stamps the icon into a clean copy of the runtime <i>before</i> <code>app compile</code> appends the TPK bundle, so <code>dist/&lt;name&gt;.exe</code> shows the real icon in Explorer, the taskbar, and registry <code>DefaultIcon</code> entries.</li>
+        <li><b>Windows: dist is just two files.</b> The frontend and icon already ride inside the compiled exe (extracted to tmp at launch), so the build stops shipping the redundant <code>dist/frontend/</code> and <code>dist/icon.png</code> — a built app is <code>&lt;name&gt;.exe</code> + <code>launcher.exe</code>, nothing else. Older dists keep working.</li>
+        <li><b>Per-platform release notes.</b> A <code>win.notes</code> field in the update manifest overrides the top-level <code>notes</code> on Windows.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.28.1 <span class="date">2026-07-22</span></h2>
       <ul>
         <li><b>Per-platform update manifests.</b> <code>url</code>/<code>sha256</code> stay the macOS zip; a <code>win: { url, sha256 }</code> block carries the Windows build. Windows apps overlay it on check and report "no update" when a release ships no Windows zip — never a mac download. <code>tinyjs publish</code> on Windows names the zip <code>&lt;name&gt;-&lt;version&gt;-win.zip</code> and emits the <code>win</code> block; publishing both platforms merges the two manifests (mac owns the top-level fields).</li>

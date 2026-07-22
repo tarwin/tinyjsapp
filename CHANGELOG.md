@@ -4,6 +4,34 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.28.2 — 2026-07-22
+
+The Windows polish release: no stray terminal windows, a real exe icon, and
+a two-file dist.
+
+- **Windows: console tools no longer flash terminal windows.** txiki's
+  `tjs.spawn` can't pass `CREATE_NO_WINDOW`, so every console child
+  (`tasklist`, `tar`, `reg`, …) spawned from a GUI-subsystem app popped a
+  visible console. New `launcher-win.exe --run <cmd…>` mode runs any console
+  tool hidden with stdio and exit code passed through; the bridge routes its
+  own `reg add` calls (deep-link registration) and the updater's zip extract
+  through it, and apps get `app.spawnHidden(args, opts)` — plain `tjs.spawn`
+  on macOS, hidden on Windows.
+- **Windows: built exes carry the app icon.** `tinyjs build` now stamps the
+  icon into a clean copy of the runtime *before* `app compile` appends the
+  TPK bundle (the output itself can't be resource-edited), so
+  `dist/<name>.exe` shows the real icon in Explorer, the taskbar, and
+  registry `DefaultIcon` entries.
+- **Windows: dist is just two files.** The frontend and icon already ride
+  inside the compiled exe's TPK bundle (extracted to tmp at launch), so the
+  build stops shipping the redundant `dist/frontend/` and `dist/icon.png` —
+  a built app is `<name>.exe` + `launcher.exe`, nothing else. Bundle
+  detection (updates, single-instance, deep links) no longer requires a
+  `frontend/` folder next to the exe; older dists keep working.
+- **Per-platform release notes.** A `win.notes` field in the update manifest
+  overrides the top-level `notes` on Windows, for releases where the two
+  platforms ship different things.
+
 ## 0.28.1 — 2026-07-22
 
 - **Per-platform update manifests.** `url`/`sha256` remain the macOS zip;

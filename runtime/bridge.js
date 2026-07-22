@@ -148,6 +148,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   let pagePath = null;
   let ownsPage = false; // true when the bridge materialized the page file
   let cleanup = async () => {};
+  // Windows: argv transform that routes a console command through
+  // `launcher --run` (CREATE_NO_WINDOW) so no terminal window flashes when a
+  // GUI-subsystem app shells out — tjs.spawn has no flag for this. Identity
+  // everywhere else; assigned once the launcher path is known.
+  let hiddenArgv = (args) => args;
 
   if (attachPath) {
     const conn = await tjs.connect('pipe', attachPath);
@@ -160,6 +165,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     if (!launcher || !(await exists(launcher))) {
       throw new Error('tinyjs launcher binary not found (looked at: ' + (launcher || exeDir + launcherName) + ')');
     }
+    if (IS_WIN) hiddenArgv = (args) => [launcher, '--run', ...args];
 
     // Private rendezvous dir for the materialized frontend. The transport is a
     // Unix domain socket inside it — or, on Windows, a named pipe whose name
@@ -207,10 +213,14 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // suffix, so UA-sniffing sites reject it. Packaged apps use the
     // TinyjsUserAgent plist key instead (this env only applies to the dev spawn).
     if (userAgent) spawnEnv.TINYJS_UA = String(userAgent);
-    // Windows built apps: dist/icon.png (shipped by the build) becomes the
-    // window/taskbar icon; dev passes TINYJS_ICON from the CLI instead.
-    if (IS_WIN && !spawnEnv.TINYJS_ICON && (await exists(exeDir + 'icon.png'))) {
-      spawnEnv.TINYJS_ICON = exeDir + 'icon.png';
+    // Windows built apps: the icon rides inside the compiled exe (app root of
+    // the TPK extraction, next to the frontend/ the page loads from); a
+    // dist/icon.png next to the exe still wins for older builds. Dev passes
+    // TINYJS_ICON from the CLI instead.
+    if (IS_WIN && !spawnEnv.TINYJS_ICON) {
+      const tpkIcon = pagePath ? dirOf(dirOf(pagePath)) + '/icon.png' : null;
+      if (await exists(exeDir + 'icon.png')) spawnEnv.TINYJS_ICON = exeDir + 'icon.png';
+      else if (tpkIcon && (await exists(tpkIcon))) spawnEnv.TINYJS_ICON = tpkIcon;
     }
     // Windows: Chromium gives every file:// URL an opaque origin, which
     // TAINTS local media in the WebAudio graph — createMediaElementSource
@@ -346,6 +356,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
 
   const app = {
     push,
+    // tjs.spawn, minus the console window on Windows: console tools spawned
+    // from a GUI-subsystem app each pop a terminal, so this routes through
+    // `launcher --run` (CREATE_NO_WINDOW). Elsewhere it's plain tjs.spawn.
+    spawnHidden(args, opts) { return tjs.spawn(hiddenArgv(args), opts); },
     setTitle(t) { send('TITLE ' + String(t).replace(/\n/g, ' ')); },
     setSize(w, h) { send(`SIZE ${w | 0} ${h | 0}`); },
     // Not JS eval(): sends script to the app's own page via webview_eval,
@@ -1310,7 +1324,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     if (haveInstancePipe && (urlScheme || fileExtensions?.length)) {
       const launcherExe = exeDir + 'launcher.exe';
       const openCmd = '"' + launcherExe + '" --open ' + instPipe + ' "' + tjs.exePath + '" "%1"';
-      const reg = (args) => tjs.spawn(['reg', 'add', ...args, '/f'],
+      const reg = (args) => tjs.spawn(hiddenArgv(['reg', 'add', ...args, '/f']),
         { stdout: 'ignore', stderr: 'ignore' }).wait().catch(() => {});
       const CLS = 'HKCU\\Software\\Classes\\';
       for (const scheme of urlScheme ? [].concat(urlScheme) : []) {

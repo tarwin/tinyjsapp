@@ -5018,9 +5018,60 @@ static int open_mode(int argc, char **argv) {
   return 1;
 }
 
+// `launcher-win.exe --run <exe> [args...]` — run a console tool with no
+// console window. tjs.spawn can't pass CREATE_NO_WINDOW, so a GUI-subsystem
+// app spawning tasklist/tar/reg pops a terminal per call; routing through
+// this mode (a GUI exe itself) suppresses it. Std handles are inherited, so
+// piped stdout/stderr and the exit code flow through unchanged.
+static std::wstring quote_arg(const std::wstring &a) {
+  if (!a.empty() && a.find_first_of(L" \t\"") == std::wstring::npos)
+    return a;
+  std::wstring out = L"\"";
+  size_t bs = 0;
+  for (wchar_t c : a) {
+    if (c == L'\\') { bs++; out += c; continue; }
+    if (c == L'"') { out.append(bs + 1, L'\\'); out += c; bs = 0; continue; }
+    bs = 0; out += c;
+  }
+  out.append(bs, L'\\');
+  out += L'"';
+  return out;
+}
+
+static int run_hidden() {
+  int wargc = 0;
+  LPWSTR *wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+  if (!wargv || wargc < 3)
+    return 127;
+  std::wstring cmd;
+  for (int i = 2; i < wargc; i++) {
+    if (i > 2) cmd += L' ';
+    cmd += quote_arg(wargv[i]);
+  }
+  STARTUPINFOW si = {sizeof(si)};
+  si.dwFlags = STARTF_USESTDHANDLES;
+  si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  PROCESS_INFORMATION pi = {};
+  std::vector<wchar_t> buf(cmd.begin(), cmd.end());
+  buf.push_back(0);
+  if (!CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE,
+                      CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+    return 127;
+  CloseHandle(pi.hThread);
+  WaitForSingleObject(pi.hProcess, INFINITE);
+  DWORD code = 1;
+  GetExitCodeProcess(pi.hProcess, &code);
+  CloseHandle(pi.hProcess);
+  return (int)code;
+}
+
 static int run(int argc, char **argv) {
   if (argc == 4 && strcmp(argv[1], "--embed-icon") == 0)
     return embed_icon(argv[2], argv[3]);
+  if (argc >= 3 && strcmp(argv[1], "--run") == 0)
+    return run_hidden();
   if (argc >= 4 && strcmp(argv[1], "--open") == 0)
     return open_mode(argc, argv);
   if (argc < 3) {

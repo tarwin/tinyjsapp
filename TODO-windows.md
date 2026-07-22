@@ -66,11 +66,14 @@ names refer to the protocol table in the README; Windows handlers live in
 - [x] ~~Toast notifications + actions~~ — real WinRT toasts with buttons +
       reply field, AppUserModelID + auto Start-Menu shortcut, balloon
       fallback (`destructive` styling has no ToastGeneric equivalent).
-- [x] ~~App icon~~ — runtime window/taskbar icon from icon.png; embedded
-      into launcher.exe (`--embed-icon`). `dist/<name>.exe` cannot be
-      resource-edited (UpdateResource destroys the appended txiki bundle);
-      it gets a GUI PE subsystem patch instead (no console flash, no
-      REPL-on-console quirk).
+- [x] ~~App icon~~ — runtime window/taskbar icon from icon.png (carried
+      inside the TPK); embedded into launcher.exe (`--embed-icon`) AND into
+      `dist/<name>.exe` — the output can't be resource-edited (UpdateResource
+      destroys the appended txiki bundle), so the build stamps a clean copy
+      of the runtime BEFORE `app compile` templates it. The exe also gets a
+      GUI PE subsystem patch (no console flash, no REPL-on-console quirk),
+      and `launcher --run` spawns console tools with CREATE_NO_WINDOW so
+      tasklist/tar/reg never flash terminals.
 - [x] ~~Deep links / file associations / single instance~~ — HKCU registry
       written on first run of a built app; `launcher-win.exe --open` is the
       registered handler forwarding over `\\.\pipe\tinyjs-app-<id>` (compiled

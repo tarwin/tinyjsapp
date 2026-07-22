@@ -699,12 +699,32 @@ async function cmdBuild() {
   await tjs.makeDir('dist');
   // `tjs app compile` runs from the parent of the app/ dir and bundles the
   // whole module graph into a standalone executable.
-  await run([tjs.exePath, 'app', 'compile', cwd + '/dist/' + cfg.name], { cwd: cwd + '/.build' });
+  let compiler = tjs.exePath;
+  if (IS_WIN) {
+    const winIcon = cfg.icon || 'icon.png';
+    if (await exists(winIcon)) {
+      console.log('==> embedding icon');
+      // The icon rides inside the exe, twice: at the TPK app root (the bridge
+      // hands it to the launcher for the window/taskbar) and as a PE resource
+      // (Explorer, shortcuts, DefaultIcon registry entries). `app compile`
+      // templates the RUNNING exe and the appended bundle rules out resource-
+      // editing the output — so stamp a clean copy of the runtime first and
+      // compile with that.
+      await copyFile(winIcon, '.build/app/icon.png');
+      compiler = cwd + '/.build/tjs-icon.exe';
+      await copyFile(tjs.exePath, compiler);
+      await tryRun([TOOL_DIR + 'native/launcher-win.exe', '--embed-icon',
+                    compiler, cwd + '/' + winIcon]);
+    }
+  }
+  await run([compiler, 'app', 'compile', cwd + '/dist/' + cfg.name], { cwd: cwd + '/.build' });
+  if (compiler !== tjs.exePath) await tjs.remove(compiler).catch(() => {});
 
   if (IS_WIN) {
-    // Windows build: a portable dist/ folder — <name>.exe (compiled backend),
-    // launcher.exe next to it (the bridge finds it there), and frontend/.
-    // No bundle/codesign step; zip the folder to distribute.
+    // Windows build: a portable dist/ folder — just <name>.exe (compiled
+    // backend; the frontend and icon ride inside its TPK bundle and extract
+    // to tmp at launch) and launcher.exe next to it (the bridge finds it
+    // there). No bundle/codesign step; zip the folder to distribute.
     if (!(await exists('dist/' + cfg.name + '.exe')) && (await exists('dist/' + cfg.name))) {
       await tjs.rename('dist/' + cfg.name, 'dist/' + cfg.name + '.exe');
     }
@@ -726,16 +746,10 @@ async function cmdBuild() {
       }
     }
     await copyFile(TOOL_DIR + 'native/launcher-win.exe', 'dist/launcher.exe');
-    await copyTree('.build/app/frontend', 'dist/frontend');
-    // Icon: ship it for the runtime titlebar/taskbar (the bridge passes it to
-    // the launcher), and stamp launcher.exe (a clean PE) so windows get it.
-    // dist/<name>.exe must NOT be resource-edited — txiki appends the app
-    // bundle after the PE image and UpdateResource destroys it (the Windows
-    // twin of the macOS "compiled binaries can't be codesigned" limitation).
+    // Stamp launcher.exe (a clean PE) too, so its process/window class gets
+    // the app icon.
     const winIcon = cfg.icon || 'icon.png';
     if (await exists(winIcon)) {
-      console.log('==> embedding icon');
-      await copyFile(winIcon, 'dist/icon.png');
       await tryRun([TOOL_DIR + 'native/launcher-win.exe', '--embed-icon',
                     tjs.cwd + '/dist/launcher.exe', tjs.cwd + '/' + winIcon]);
     }
