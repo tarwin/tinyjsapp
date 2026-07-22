@@ -47,15 +47,22 @@ names refer to the protocol table in the README; Windows handlers live in
 
 ## Still open
 
-- [ ] **audioTap** — in progress (WASAPI loopback for scope:'system';
-      scope:'app' stays unsupported — per-process capture needs the Win10
-      2004+ process-loopback path).
-- [ ] **authenticate** — Windows Hello (`UserConsentVerifier`, WinRT);
-      returns false today.
-- [ ] **Chromeless visual polish** — `frame:false`/`squareCorners` work
-      (thin native resize border kept); a `WM_NCCALCSIZE` edge-to-edge look
-      would need custom hit-testing under the WebView2 child. Evaluate after
-      user feedback.
+- [ ] **scope:'app' audioTap** — system loopback shipped; per-process
+      capture needs the Win10 2004+ process-loopback path.
+- [ ] **Examples: Windows builds for shelf installs** — publish per-app
+      Windows zips (+ `winUrl` in catalog.json) and a zip install path in
+      shelf so it's a real store on Windows, not just a filtered list.
+- [x] ~~audioTap (system)~~ — WASAPI loopback, verified with a live tone.
+- [x] ~~authenticate~~ — Windows Hello via WinRT UserConsentVerifier
+      (clean false where Hello hardware is absent).
+- [x] ~~Chromeless polish~~ — frameless windows extend to the true top edge
+      (WM_NCCALCSIZE); top-edge resize traded away, sides/bottom kept.
+- [x] ~~Release + installer verified end-to-end from the LIVE site~~ —
+      v0.27.0/v0.27.1 CI green; `irm tinyjs.app/install.ps1 | iex` field
+      bugs fixed (PS 5.1 -UseBasicParsing; checksums served as octet-stream
+      → byte[] decode); installed copy scaffolds/smokes/builds.
+- [x] ~~Local media un-taint~~ — --allow-file-access-from-files via a
+      vendored-loader patch (v0.27.1): WebAudio hears local files.
 - [x] ~~Toast notifications + actions~~ — real WinRT toasts with buttons +
       reply field, AppUserModelID + auto Start-Menu shortcut, balloon
       fallback (`destructive` styling has no ToastGeneric equivalent).
