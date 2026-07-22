@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tinyjs — changelog</title>
-<meta name="description" content="Release history for tinyjs — tiny macOS desktop apps in JavaScript.">
+<meta name="description" content="Release history for tinyjs — tiny macOS and Windows desktop apps in JavaScript.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='%2314161b'/%3E%3Cpath d='M22 24l12 8-12 8z' fill='%2385b3ea'/%3E%3Crect x='36' y='38' width='10' height='4' fill='%2385b3ea'/%3E%3C/svg%3E">
 <style>
   :root {
@@ -67,6 +67,53 @@
   </header>
 
   <section>
+
+    <div class="rel">
+      <h2>0.28.1 <span class="date">2026-07-22</span></h2>
+      <ul>
+        <li><b>Per-platform update manifests.</b> <code>url</code>/<code>sha256</code> stay the macOS zip; a <code>win: { url, sha256 }</code> block carries the Windows build. Windows apps overlay it on check and report "no update" when a release ships no Windows zip — never a mac download. <code>tinyjs publish</code> on Windows names the zip <code>&lt;name&gt;-&lt;version&gt;-win.zip</code> and emits the <code>win</code> block; publishing both platforms merges the two manifests (mac owns the top-level fields).</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <h2>0.28.0 <span class="date">2026-07-22</span></h2>
+      <ul>
+        <li><b>The whole example fleet now runs on Windows.</b> This release is everything a one-by-one sweep of all 25 apps shook out of the framework.</li>
+        <li><b><code>tiny.fileURL(path)</code></b> — one correct <code>file://</code> builder for both OSes (drive letters, backslashes, UNC hosts, percent-encoding). A hand-rolled <code>'file://' + path</code> was the single most common porting bug; stop writing it.</li>
+        <li><b>Windows: UNC media plays untainted.</b> <code>file://server/share</code> URLs (Parallels shared folders, network drives) are host-bearing and therefore cross-origin to Chromium — a WebResourceRequested interceptor now serves them with CORS headers and full Range/206 support, so seeking and WebAudio analysis work like local files.</li>
+        <li><b>Windows: secondary windows reached parity with main.</b> Every <code>win.open</code> webview now gets the identical wiring — context menus, the UNC interceptor, drag-and-drop forwarding, menu accelerators — and Chromium's autoplay gesture-gate is off, so satellite windows (a visualizer analysing a silent twin stream) start without ever being clicked.</li>
+        <li><b>Windows: transparency, the full story.</b> Transparent windows composite correctly in every combination we could construct: WebGL content in secondaries (<code>WS_EX_NOREDIRECTIONBITMAP</code> at creation), <code>setChrome</code> transparency applied at any time, and transparent <em>main</em> windows — declare those in tinyjs.json <code>"chrome"</code>; a Windows window can host transparency or a Win32 menu bar, never both.</li>
+        <li><b>Windows: <code>emoji:</code> tray icons</b> — the asset-free twin of macOS <code>sf:</code> symbols. <code>tray.set({ icon: 'emoji:🍵' })</code> renders the glyph as a monochrome silhouette that follows the taskbar theme; branch per-OS and neither platform ships an icon file.</li>
+        <li><b>Windows: <code>audioTap</code> scope <code>'app'</code> rides the system loopback</b> rather than rejecting — honest degradation until true per-process capture lands.</li>
+        <li><b>Store hardening (both OSes).</b> <code>store.set</code> bursts are serialized and renames retry — Defender/indexers transiently lock fresh files on Windows, which surfaced as EPERM under load.</li>
+        <li><b>Bridge survives <code>window.chrome</code> shadowing.</b> A page declaring its own <code>chrome</code> no longer severs the RPC channel (the post hook is stashed at document-start). Related rule now in the skill: never declare a top-level <code>chrome</code> identifier — on WebView2 a <code>const chrome</code> is a parse-time SyntaxError that kills the entire script.</li>
+        <li>Plus: window moves no longer steal focus (<code>SWP_NOACTIVATE</code>), new windows clamp onto the virtual screen (stale saved positions can't open apps in the void), and <code>win.open</code> position/size honor DPI scaling everywhere.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <h2>0.27.2 <span class="date">2026-07-21</span></h2>
+      <ul>
+        <li><b>Windows: logical coordinates everywhere + WebGPU.</b> The launcher is per-monitor-DPI-aware, so Win32 hands it <em>physical</em> pixels — but the tinyjs coordinate contract is logical CSS-pixel units (macOS points). On scaled displays secondary windows opened at half size and app-driven window drags ran at half the cursor speed. Every wire coordinate now converts at the boundary: <code>setPosition</code>, <code>win.open</code> size/position, <code>SIZE</code>, <code>getState</code>, <code>mousePosition</code>, <code>screens</code>, <code>tray.position</code>. Also: WebView2 now gets <code>--ignore-gpu-blocklist --enable-unsafe-webgpu</code>, so <code>navigator.gpu</code> yields a real adapter even on virtualized GPUs — WebGPU parity with the macOS launcher.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <h2>0.27.1 <span class="date">2026-07-21</span></h2>
+      <ul>
+        <li><b>Windows: local media now drives WebAudio.</b> Chromium gives every <code>file://</code> URL an opaque origin, so <code>createMediaElementSource</code> on a local track was CORS-tainted and output pure zeros — record players, EQs, and visualizers ran silent while the element "played". The bridge now passes <code>--allow-file-access-from-files</code> to WebView2 (via a small patch to the vendored webview loader, which ignored <code>WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS</code>), making <code>file://</code> same-origin like WKWebView treats page-dir files on macOS. Verified end-to-end with platter: art + audio both work.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
+      <h2>0.27.0 <span class="date">2026-07-21</span></h2>
+      <ul>
+        <li><b>Windows: second wave — near feature parity.</b> Multi-window (<code>win.open</code> — each window hosts its own WebView2 with the full bridge; <code>&lt;winid&gt;:&lt;seq&gt;</code> call routing like macOS), drag &amp; drop with real paths both directions (<code>IDropTarget</code> in, <code>DoDragDrop</code>/<code>CF_HDROP</code> out), <code>printToPDF</code>, <code>captureScreen</code> (no permission dance), <code>thumbnail</code> (shell image factory), <code>say</code>/<code>voices</code> (SAPI), clipboard image write (<code>CF_DIB</code>), menu <code>key:</code> accelerators (Ctrl+&lt;key&gt; via WebView2 AcceleratorKeyPressed), <code>launchAtLogin</code> for built apps (HKCU Run), chrome <code>transparent</code> + vibrancy→mica/acrylic backdrops (Win11 22H2+), accessory apps drop the taskbar button, and <code>tinyjs publish</code> + app auto-update: manifest sha256 via WebCrypto (no shasum spawn on either OS), bsdtar zip, and an in-place file-by-file swap on install (Windows can't rename a folder holding a running exe; locked exes park as <code>*.update-old</code>, swept next update) — verified end-to-end with a real 1.0.0→1.0.1 self-update. Launchers now chdir out of the app folder so updates never block on a cwd handle.</li>
+        <li><b>Windows installer + prebuilt binaries.</b> <code>irm https://tinyjs.app/install.ps1 | iex</code> installs a prebuilt <code>tinyjs-windows-x86_64.zip</code> (built by the release workflow's new <code>windows-latest</code> job, checksummed alongside the macOS tarballs) into <code>%LOCALAPPDATA%\tinyjs</code> and adds it to the user PATH — no git, no compiler. <code>tinyjs update</code> re-runs the installer on Windows too. Dev nicety: <code>tinyjs dev</code> from a source checkout rebuilds <code>launcher-win.exe</code> automatically when <code>native/launcher-win.cc</code> or <code>runtime/tiny.js</code> changed.</li>
+        <li><b>Windows support (beta).</b> tinyjs apps now run on Windows: a new native launcher (<code>native/launcher-win.cc</code>, WebView2 via the same vendored webview library) speaks the identical wire protocol over a named pipe, and the CLI, bridge, and build work cross-platform. Working: the full page↔backend bridge (calls, events, <code>tiny.fetch</code>), dev mode with hot reload, Vite <code>devUrl</code> frontends, <code>tinyjs build</code> (portable <code>dist/</code> folder with <code>&lt;name&gt;.exe</code>), native file/save/folder dialogs, alert/confirm/prompt, menu bar + tray (+ balloon notifications), custom context menus, clipboard (text/html/files/image read), global hotkeys, keystroke synthesis (<code>cmd</code> maps to Ctrl), shell open/reveal/trash, secrets (Credential Manager), <code>power.preventSleep</code>, theme + sleep/wake events, window ops (chrome/fullscreen/ontop/click-through/…). The macOS-specific APIs (Quick Look, OCR, AppleScript, Touch ID, vibrancy, Dock, Spaces…) reject or report <code>'unsupported'</code> cleanly so cross-platform app code can feature-detect.</li>
+        <li><b><code>tiny.app.ai</code></b> (on-device LLM) — landed behind an opt-in build, not yet in the released tarballs. <code>ai.generate(prompt, { instructions })</code> runs Apple's FoundationModels locally (offline, no API key, private); <code>ai.availability()</code> → <code>'available' | 'unavailable' | 'unsupported'</code>. Implemented as a small Swift shim linked into the launcher with <code>TINYJS_AI=1 ./setup.sh</code> (needs the macOS 26 SDK); the binary keeps the macOS 14 floor and weak-links FoundationModels, so stock builds and older systems just report <code>'unsupported'</code>. Shipping it in the release tarballs needs the CI runner bumped to a macOS 26 image — held for a deliberate pipeline change. Proven working end-to-end locally (real generation, ~250ms).</li>
+      </ul>
+    </div>
 
     <div class="rel">
       <h2>0.26.0 <span class="date">2026-07-20</span></h2>
