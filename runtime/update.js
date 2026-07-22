@@ -123,15 +123,17 @@ export async function checkForUpdate({ url, version }) {
   // A redirect must not downgrade the transport.
   if (res.url) assertSafeUrl(res.url, 'update url (after redirect)');
   const manifest = await res.json();
-  const latest = manifest?.version ?? null;
+  let latest = manifest?.version ?? null;
   // Per-platform downloads: `url`/`sha256` are the macOS zip (the original,
-  // pre-Windows fields); a `win: { url, sha256 }` block carries the Windows
-  // zip. On Windows, overlay it — and if a release has no Windows build,
-  // report "no update" rather than ever pulling a mac zip.
+  // pre-Windows fields); a `win: { url, sha256, version? }` block carries
+  // the Windows zip. On Windows, overlay it — its own version wins when the
+  // two platforms ship different builds — and if a release has no Windows
+  // build, report "no update" rather than ever pulling a mac zip.
   if (IS_WIN) {
     if (manifest?.win?.url && manifest.win.sha256) {
       manifest.url = manifest.win.url;
       manifest.sha256 = manifest.win.sha256;
+      if (manifest.win.version) latest = manifest.win.version;
     } else {
       return { available: false, current: version, latest,
                notes: manifest?.notes ?? null, manifest };
