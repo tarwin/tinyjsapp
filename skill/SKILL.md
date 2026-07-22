@@ -41,7 +41,11 @@ only on win), auto-update (`update.check/install`), window ops (hide/show/
 center/minimize/fullscreen/ontop/resizable/pos/level/clickThrough/
 hideOnClose/zoom, `data-tiny-drag` regions, `chrome.frame`/`squareCorners`;
 win maps `transparent` to a clear WebView2 background and vibrancy names to
-mica/acrylic backdrops on Win11), `dock.bounce` (taskbar flash), sqlite.
+mica/acrylic backdrops on Win11 — BUT a transparent MAIN window on Windows
+must be declared in tinyjs.json `"chrome"` (or `win.open` options for
+secondaries), not just via a late `setChrome`; transparency and a Win32
+menu bar are mutually exclusive there), `dock.bounce` (taskbar flash),
+sqlite.
 
 macOS-only (on Windows these reject or answer `'unsupported'`/null — always
 feature-detect): notification action buttons, `audioTap`, `proxyURL` media

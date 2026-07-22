@@ -195,6 +195,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // dev / the TinyjsReadAccess plist key in packaged apps).
     const spawnEnv = { ...tjs.env };
     if (activation === 'accessory') spawnEnv.TINYJS_ACTIVATION = 'accessory';
+    // Windows: a transparent main window must drop its GDI redirection
+    // bitmap AT CREATION (stale white shows through a late-cleared webview
+    // otherwise) — but a window without one can't draw a Win32 menu bar
+    // (GDI), so the launcher only does it when the manifest asks for
+    // transparency. Declare it in tinyjs.json "chrome" — a setChrome from
+    // page JS alone is too late for the main window on Windows.
+    if (IS_WIN && chrome?.transparent) spawnEnv.TINYJS_TRANSPARENT = '1';
     if (readAccess) spawnEnv.TINYJS_READ_ACCESS = readAccess === true ? tjs.homeDir : String(readAccess);
     // Custom User-Agent: WKWebView's default UA lacks the "Version/x Safari/x"
     // suffix, so UA-sniffing sites reject it. Packaged apps use the

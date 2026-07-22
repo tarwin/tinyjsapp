@@ -663,17 +663,22 @@ private:
       });
       RegisterClassExW(&wc);
 
-      // tinyjs patch: no GDI redirection bitmap — with one, the stale white
-      // surface shows through a webview whose DefaultBackgroundColor is
-      // cleared after creation (setChrome({transparent}) any time after
-      // boot), and DirectComposition content composites opaque. Nothing
-      // GDI-paints this window; opaque pages paint their own background.
+      // tinyjs patch: transparent apps (TINYJS_TRANSPARENT=1, set by the
+      // bridge from the manifest's chrome.transparent) drop the GDI
+      // redirection bitmap — with one, the stale white surface shows through
+      // the cleared webview and DirectComposition content composites opaque.
+      // It must stay for everyone else: a window without a redirection
+      // bitmap cannot draw a Win32 menu bar (GDI paints it there).
 #ifndef WS_EX_NOREDIRECTIONBITMAP
 #define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
 #endif
-      CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, L"webview", L"",
-                      WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0,
-                      nullptr, nullptr, hInstance, this);
+      DWORD tinyjs_ex =
+          GetEnvironmentVariableA("TINYJS_TRANSPARENT", nullptr, 0)
+              ? WS_EX_NOREDIRECTIONBITMAP
+              : 0;
+      CreateWindowExW(tinyjs_ex, L"webview", L"", WS_OVERLAPPEDWINDOW,
+                      CW_USEDEFAULT, CW_USEDEFAULT, 0, 0, nullptr, nullptr,
+                      hInstance, this);
       if (!m_window) {
         throw exception{WEBVIEW_ERROR_INVALID_STATE, "Window is null"};
       }
@@ -723,11 +728,17 @@ private:
       return 0;
     });
     RegisterClassExW(&widget_wc);
-    // tinyjs patch: the widget child also drops its redirection bitmap (see
-    // the top-level window above).
-    CreateWindowExW(WS_EX_CONTROLPARENT | WS_EX_NOREDIRECTIONBITMAP,
-                    L"webview_widget", nullptr, WS_CHILD, 0, 0, 0, 0, m_window,
-                    nullptr, hInstance, this);
+    // tinyjs patch: the widget child mirrors the top-level (see above).
+#ifndef WS_EX_NOREDIRECTIONBITMAP
+#define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
+#endif
+    DWORD tinyjs_widget_ex =
+        GetEnvironmentVariableA("TINYJS_TRANSPARENT", nullptr, 0)
+            ? WS_EX_NOREDIRECTIONBITMAP
+            : 0;
+    CreateWindowExW(WS_EX_CONTROLPARENT | tinyjs_widget_ex, L"webview_widget",
+                    nullptr, WS_CHILD, 0, 0, 0, 0, m_window, nullptr,
+                    hInstance, this);
     if (!m_widget) {
       throw exception{WEBVIEW_ERROR_INVALID_STATE, "Widget window is null"};
     }
