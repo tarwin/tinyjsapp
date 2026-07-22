@@ -43,7 +43,10 @@ try {
         }
 
         Write-Host '==> verifying checksum'
-        $sums = (Invoke-WebRequest "$base/checksums.txt" -UseBasicParsing).Content
+        # GitHub serves this as octet-stream: PS 5.1 then returns Content as
+        # a byte[] — decode it, or line matching silently fails.
+        $raw = (Invoke-WebRequest "$base/checksums.txt" -UseBasicParsing).Content
+        $sums = if ($raw -is [byte[]]) { [Text.Encoding]::UTF8.GetString($raw) } else { [string]$raw }
         $line = $sums -split "`n" | Where-Object { $_ -match [regex]::Escape($Asset) } | Select-Object -First 1
         if (-not $line) { throw "checksums.txt has no entry for $Asset" }
         $expected = ($line -split '\s+')[0].Trim()
