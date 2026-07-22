@@ -459,6 +459,10 @@ tinyjs.json automatically.
   channel with full system access, so a filename must never become markup.
 - Keep frontend asset references relative (they resolve against the page's
   directory); no external fetches at runtime unless intended.
+- Never declare a top-level `chrome` identifier in frontend code.
+  `window.chrome` is a non-configurable browser global on WebView2, so a
+  top-level `const`/`let chrome` is a PARSE-time SyntaxError that kills the
+  entire script (and a `function chrome()` silently shadows it).
 - Verify changes with the smoke pattern: run
   `TINYJS_HTML=<tinyjs-install>/test/smoke.html tinyjs dev` — expect a
   `[web] SMOKE RESULTS {...}` line with no FAIL entries and a clean exit.
