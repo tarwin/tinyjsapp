@@ -4,6 +4,48 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.28.0 — 2026-07-22
+
+The whole example fleet now runs on Windows — this release is everything a
+one-by-one sweep of all 25 apps shook out of the framework.
+
+- **`tiny.fileURL(path)`** — one correct `file://` builder for both OSes
+  (drive letters, backslashes, UNC hosts, percent-encoding). Hand-rolled
+  `'file://' + path` was the single most common porting bug; stop writing it.
+- **Windows: UNC media plays untainted.** `file://server/share` URLs
+  (Parallels shared folders, network drives) are host-bearing and therefore
+  cross-origin to Chromium — a WebResourceRequested interceptor now serves
+  them with CORS headers and full Range/206 support, so seeking and WebAudio
+  analysis work like local files.
+- **Windows: secondary windows reached parity with main.** Every
+  `win.open` webview now gets the identical wiring: context menus, the UNC
+  interceptor, drag-and-drop forwarding, menu accelerators — and Chromium's
+  autoplay gesture-gate is off, so satellite windows (visualizers analysing
+  a silent twin stream) start without ever being clicked.
+- **Windows: transparency, the full story.** Transparent windows composite
+  correctly in every combination we could construct: WebGL content in
+  secondaries (`WS_EX_NOREDIRECTIONBITMAP` at creation), `setChrome`
+  transparency applied at any time, and transparent MAIN windows — declare
+  those in tinyjs.json `"chrome"`; a Windows window can host transparency
+  or a Win32 menu bar, never both.
+- **Windows: `emoji:` tray icons** — the asset-free twin of macOS `sf:`
+  symbols. `tray.set({ icon: 'emoji:🍵' })` renders the glyph as a
+  monochrome silhouette that follows the taskbar theme; branch per-OS and
+  neither platform ships an icon file.
+- **Windows: `audioTap` scope `'app'` rides the system loopback** rather
+  than rejecting — honest degradation until true per-process capture lands.
+- **Store hardening (both OSes):** `store.set` bursts are serialized and
+  renames retry — Defender/indexers transiently lock fresh files on
+  Windows, which surfaced as EPERM under load.
+- **Bridge survives `window.chrome` shadowing.** A page declaring its own
+  `chrome` no longer severs the RPC channel (the post hook is stashed at
+  document-start). Related rule now in the skill: never declare a top-level
+  `chrome` identifier — on WebView2 a `const chrome` is a parse-time
+  SyntaxError that kills the entire script.
+- Plus: window moves no longer steal focus (`SWP_NOACTIVATE`), new windows
+  clamp onto the virtual screen (stale saved positions can't open apps in
+  the void), and `win.open` position/size honor DPI scaling everywhere.
+
 ## 0.27.2 — 2026-07-21
 
 - **Windows: logical coordinates everywhere + WebGPU.** The launcher is
