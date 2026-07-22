@@ -1414,8 +1414,10 @@ static void do_winop(webview_t, void *arg) {
     int x = 0, y = 0;
     std::sscanf(op.c_str() + 4, "%d %d", &x, &y);
     double s = window_scale(hwnd); // wire is logical; SetWindowPos physical
+    // SWP_NOACTIVATE: lockstep group-drags reposition N windows per frame —
+    // without it every move steals activation and the drag crawls.
     SetWindowPos(hwnd, nullptr, (int)lround(x * s), (int)lround(y * s), 0, 0,
-                 SWP_NOSIZE | SWP_NOZORDER);
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
   } else if (starts("hideonclose ") && main) {
     g_hide_on_close = op.substr(12) == "1";
   } else if (starts("dock ") && main) {
@@ -3657,10 +3659,26 @@ static void do_winopen(webview_t, void *arg) {
   double sc = window_scale(g_hwnd); // logical wire units -> physical pixels
   RECT rc = {0, 0, (LONG)lround(wr->width * sc), (LONG)lround(wr->height * sc)};
   AdjustWindowRect(&rc, style, FALSE);
+  int px = wr->hasPos ? (int)lround(wr->x * sc) : CW_USEDEFAULT;
+  int py = wr->hasPos ? (int)lround(wr->y * sc) : CW_USEDEFAULT;
+  if (wr->hasPos) {
+    // AppKit-style constraint: never open a window fully off-screen (stale
+    // saved positions — e.g. pre-DPI-fix physical coords — otherwise land
+    // in the void). Keep at least a grabbable sliver on the virtual screen.
+    int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    int w = rc.right - rc.left, h = rc.bottom - rc.top;
+    const int margin = 60;
+    if (px + w < vx + margin) px = vx + margin - w;
+    if (px > vx + vw - margin) px = vx + vw - margin;
+    if (py < vy) py = vy;
+    if (py > vy + vh - margin) py = vy + vh - margin;
+  }
   HWND hwnd = CreateWindowExW(
       0, L"TinyjsSecondary", widen(wr->title.empty() ? wr->id : wr->title).c_str(),
-      style, wr->hasPos ? (int)lround(wr->x * sc) : CW_USEDEFAULT,
-      wr->hasPos ? (int)lround(wr->y * sc) : CW_USEDEFAULT, rc.right - rc.left,
+      style, px, py, rc.right - rc.left,
       rc.bottom - rc.top, nullptr, nullptr, GetModuleHandleW(nullptr),
       nullptr);
   if (!hwnd) {
