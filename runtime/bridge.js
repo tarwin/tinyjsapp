@@ -89,7 +89,18 @@ function makeStore(appId) {
       // the same rename source.
       const tmp = path + '.' + (tmpSeq = (tmpSeq + 1) % 1e6) + '.tmp';
       await tjs.writeFile(tmp, enc.encode(JSON.stringify(data, null, 2) + '\n'));
-      await tjs.rename(tmp, path);
+      // Windows: a freshly-written target can be transiently locked by
+      // Defender / the indexer, failing the rename with EPERM even with a
+      // single writer — retry briefly before giving up.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await tjs.rename(tmp, path);
+          break;
+        } catch (e) {
+          if (attempt >= 5) throw e;
+          await new Promise((r) => setTimeout(r, 25 * (attempt + 1)));
+        }
+      }
       return true;
     } catch (e) {
       console.log('tinyjs store write failed:', e?.message ?? String(e));
