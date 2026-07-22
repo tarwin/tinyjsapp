@@ -186,6 +186,20 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     if (IS_WIN && !spawnEnv.TINYJS_ICON && (await exists(exeDir + 'icon.png'))) {
       spawnEnv.TINYJS_ICON = exeDir + 'icon.png';
     }
+    // Windows: Chromium gives every file:// URL an opaque origin, which
+    // TAINTS local media in the WebAudio graph — createMediaElementSource
+    // on a local track outputs pure zeros (macOS WKWebView doesn't taint
+    // page-dir files). The WebView2 loader honors this env var; the flag
+    // makes file:// same-origin so local media drives analysers/EQs like it
+    // does on macOS. Tradeoff: file:// pages can then read other local
+    // files — acceptable here because the page already holds an RPC channel
+    // to a backend with full filesystem access.
+    if (IS_WIN) {
+      const flag = '--allow-file-access-from-files';
+      const extra = spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
+      if (!extra) spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = flag;
+      else if (!extra.includes(flag)) spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = extra + ' ' + flag;
+    }
     const spawnOpts = { stderr: 'inherit', env: spawnEnv };
     proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], spawnOpts);
 

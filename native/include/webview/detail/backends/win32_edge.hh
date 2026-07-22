@@ -83,6 +83,64 @@
 namespace webview {
 namespace detail {
 
+// tinyjs patch: honor WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS like Microsoft's
+// WebView2Loader.dll does — the built-in loader ignores it, and tinyjs needs
+// --allow-file-access-from-files so local media isn't CORS-tainted in the
+// WebAudio graph (parity with WKWebView on macOS).
+class tinyjs_env_options : public ICoreWebView2EnvironmentOptions {
+public:
+  std::wstring args;
+  ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+  ULONG STDMETHODCALLTYPE Release() override { return 1; } // static lifetime
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == IID_IUnknown || riid == IID_ICoreWebView2EnvironmentOptions) {
+      *ppv = this;
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  static LPWSTR dup(const wchar_t *s) {
+    size_t n = (wcslen(s) + 1) * sizeof(wchar_t);
+    LPWSTR out = (LPWSTR)CoTaskMemAlloc(n);
+    if (out) memcpy(out, s, n);
+    return out;
+  }
+  HRESULT STDMETHODCALLTYPE get_AdditionalBrowserArguments(LPWSTR *v) override {
+    *v = dup(args.c_str());
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE put_AdditionalBrowserArguments(LPCWSTR) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE get_Language(LPWSTR *v) override {
+    *v = nullptr;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE put_Language(LPCWSTR) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE get_TargetCompatibleBrowserVersion(LPWSTR *v) override {
+    *v = dup(L"89.0.774.44"); // oldest SDK floor; the runtime is always newer
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE put_TargetCompatibleBrowserVersion(LPCWSTR) override { return S_OK; }
+  HRESULT STDMETHODCALLTYPE get_AllowSingleSignOnUsingOSPrimaryAccount(BOOL *v) override {
+    *v = FALSE;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE put_AllowSingleSignOnUsingOSPrimaryAccount(BOOL) override { return S_OK; }
+};
+
+inline ICoreWebView2EnvironmentOptions *tinyjs_environment_options() {
+  static tinyjs_env_options opts;
+  wchar_t buf[2048];
+  DWORD n = GetEnvironmentVariableW(L"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                                    buf, 2048);
+  if (n == 0 || n >= 2048)
+    return nullptr; // unset: keep stock behavior (options = null)
+  opts.args = buf;
+  return &opts;
+}
+// end tinyjs patch
+
 using msg_cb_t = std::function<void(const std::string)>;
 
 class webview2_com_handler
@@ -755,8 +813,10 @@ private:
         });
 
     m_com_handler->set_attempt_handler([&] {
+      // tinyjs patch: pass WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS through
       return m_webview2_loader.create_environment_with_options(
-          nullptr, userDataFolder, nullptr, m_com_handler);
+          nullptr, userDataFolder, tinyjs_environment_options(),
+          m_com_handler);
     });
     m_com_handler->try_create_environment();
 

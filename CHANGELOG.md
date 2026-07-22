@@ -4,6 +4,17 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.27.1 — 2026-07-21
+
+- **Windows: local media now drives WebAudio.** Chromium gives every
+  `file://` URL an opaque origin, so `createMediaElementSource` on a local
+  track was CORS-tainted and output pure zeros — record players, EQs, and
+  visualizers ran silent while the element "played". The bridge now passes
+  `--allow-file-access-from-files` to WebView2 (via a small patch to the
+  vendored webview loader, which ignored `WEBVIEW2_ADDITIONAL_BROWSER_
+  ARGUMENTS`), making `file://` same-origin like WKWebView treats page-dir
+  files on macOS. Verified end-to-end with platter: art + audio both work.
+
 ## 0.27.0 — 2026-07-21
 
 - **Windows: second wave — near feature parity.** Multi-window (`win.open`
