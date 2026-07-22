@@ -2900,22 +2900,26 @@ struct UncHandler : public ICoreWebView2WebResourceRequestedEventHandler {
   }
 };
 
-static void install_unc_handler() {
-  if (!g_wv2)
+// Register the UNC interceptor on ANY webview (main + every secondary —
+// a satellite window playing a network-share track needs it just as much).
+static void install_unc_for(ICoreWebView2 *wv) {
+  if (!wv)
     return;
   ICoreWebView2_2 *wv22 = nullptr;
-  if (FAILED(g_wv2->QueryInterface(IID_ICoreWebView2_2, (void **)&wv22)) ||
+  if (FAILED(wv->QueryInterface(IID_ICoreWebView2_2, (void **)&wv22)) ||
       !wv22)
     return;
   UncHandler *h = new UncHandler();
   wv22->get_Environment(&h->env);
   wv22->Release();
-  g_wv2->AddWebResourceRequestedFilter(
-      L"file://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+  wv->AddWebResourceRequestedFilter(L"file://*",
+                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
   EventRegistrationToken tok;
-  g_wv2->add_WebResourceRequested(h, &tok);
+  wv->add_WebResourceRequested(h, &tok);
   h->Release();
 }
+
+static void install_unc_handler() { install_unc_for(g_wv2); }
 
 static void install_drop_target() {
   // Keep WebView2's default drop handling ON (the page prevents navigation
@@ -3738,6 +3742,18 @@ struct SecCtrlHandler
         wv11->add_ContextMenuRequested(new CtxHandler(), &ctok);
         wv11->Release();
       }
+      // …and the rest of the per-webview wiring main gets: UNC media
+      // untainting (satellite viz analysing network-share tracks), drop-in
+      // file forwarding, and Ctrl+key menu accelerators.
+      install_unc_for(tw->wv);
+      tw->wv->AddScriptToExecuteOnDocumentCreated(widen(DROP_FORWARD_JS).c_str(),
+                                                  nullptr);
+      DropMsgHandler *dh = new DropMsgHandler();
+      EventRegistrationToken dtok;
+      tw->wv->add_WebMessageReceived(dh, &dtok);
+      dh->Release();
+      EventRegistrationToken atok;
+      ctrl->add_AcceleratorKeyPressed(new AccelHandler(), &atok);
       tw->wv->Navigate(widen(tw->url).c_str());
       for (auto &js : tw->pending_js)
         tw->wv->ExecuteScript(widen(js).c_str(), nullptr);
