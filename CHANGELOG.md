@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.27.0 — 2026-07-21
 
 - **Windows: second wave — near feature parity.** Multi-window (`win.open`
   — each window hosts its own WebView2 with the full bridge; `<winid>:<seq>`
