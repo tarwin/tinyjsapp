@@ -103,10 +103,16 @@
     // versions break on Windows (file://C:/… makes the drive the URL host).
     // Use for <audio>/<img>/<video> src of backend-provided paths.
     fileURL: (p) => {
-      p = String(p).replace(/\\/g, '/');
-      if (!p.startsWith('/')) p = '/' + p; // C:/… needs the third slash
-      return 'file://' + p.split('/').map(encodeURIComponent).join('/')
+      p = String(p);
+      // Backslashes are separators ONLY in Windows-shaped paths (drive
+      // letter or \\server UNC) — Unix filenames may legally contain them.
+      if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\')) p = p.replace(/\\/g, '/');
+      const unc = p.startsWith('//'); // \\server\share — network/Parallels mounts
+      if (!unc && !p.startsWith('/')) p = '/' + p; // C:/… needs the third slash
+      const enc = p.split('/').map(encodeURIComponent).join('/')
         .replace(/%3A/gi, ':'); // keep the drive colon
+      // UNC: the server becomes the URL host (file://server/share/…)
+      return (unc ? 'file:' : 'file://') + enc;
     },
 
     log: (msg) => call('log', { msg }),

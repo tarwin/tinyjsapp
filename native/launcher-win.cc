@@ -2768,6 +2768,96 @@ struct DropMsgHandler : public ICoreWebView2WebMessageReceivedEventHandler {
   }
 };
 
+// UNC media un-tainting: file://server/share/… has a HOST, so it's a
+// different origin from the page's plain file:// and WebAudio taints it
+// (network shares / Parallels mounts played silently through media-element
+// graphs). Serve those requests ourselves with Access-Control-Allow-Origin.
+struct UncHandler : public ICoreWebView2WebResourceRequestedEventHandler {
+  ULONG refs = 1;
+  ICoreWebView2Environment *env = nullptr;
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    if (refs > 1) return --refs;
+    if (env) env->Release();
+    delete this;
+    return 0;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv) return E_POINTER;
+    if (riid == IID_IUnknown ||
+        riid == IID_ICoreWebView2WebResourceRequestedEventHandler) {
+      *ppv = this;
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  static std::string url_decode(const std::string &s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); i++) {
+      if (s[i] == '%' && i + 2 < s.size()) {
+        out += (char)strtol(s.substr(i + 1, 2).c_str(), nullptr, 16);
+        i += 2;
+      } else {
+        out += s[i];
+      }
+    }
+    return out;
+  }
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *,
+         ICoreWebView2WebResourceRequestedEventArgs *args) override {
+    ICoreWebView2WebResourceRequest *req = nullptr;
+    if (FAILED(args->get_Request(&req)) || !req)
+      return S_OK;
+    LPWSTR uri = nullptr;
+    req->get_Uri(&uri);
+    std::string u = uri ? narrow(uri) : "";
+    if (uri) CoTaskMemFree(uri);
+    req->Release();
+    // only file URLs WITH a host (UNC); plain file:/// keeps default handling
+    if (u.rfind("file://", 0) != 0 || u.size() < 8 || u[7] == '/')
+      return S_OK;
+    std::string rest = url_decode(u.substr(7)); // server/share/path
+    for (auto &c : rest)
+      if (c == '/') c = '\\';
+    std::string path = "\\\\" + rest;
+    IStream *stream = nullptr;
+    if (FAILED(SHCreateStreamOnFileEx(widen(path).c_str(),
+                                      STGM_READ | STGM_SHARE_DENY_NONE,
+                                      FILE_ATTRIBUTE_NORMAL, FALSE, nullptr,
+                                      &stream)) || !stream)
+      return S_OK; // fall through to default (will 404 like before)
+    ICoreWebView2WebResourceResponse *resp = nullptr;
+    if (env && SUCCEEDED(env->CreateWebResourceResponse(
+                   stream, 200, L"OK",
+                   L"Access-Control-Allow-Origin: *", &resp)) && resp) {
+      args->put_Response(resp);
+      resp->Release();
+    }
+    stream->Release();
+    return S_OK;
+  }
+};
+
+static void install_unc_handler() {
+  if (!g_wv2)
+    return;
+  ICoreWebView2_2 *wv22 = nullptr;
+  if (FAILED(g_wv2->QueryInterface(IID_ICoreWebView2_2, (void **)&wv22)) ||
+      !wv22)
+    return;
+  UncHandler *h = new UncHandler();
+  wv22->get_Environment(&h->env);
+  wv22->Release();
+  g_wv2->AddWebResourceRequestedFilter(
+      L"file://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+  EventRegistrationToken tok;
+  g_wv2->add_WebResourceRequested(h, &tok);
+  h->Release();
+}
+
 static void install_drop_target() {
   // Keep WebView2's default drop handling ON (the page prevents navigation
   // and forwards the files); the host-side OLE target stays as a harmless
@@ -4854,6 +4944,7 @@ static int run(int argc, char **argv) {
   install_ctx_handler();
   install_drop_target();
   install_accel_handler();
+  install_unc_handler();
 
   // Custom User-Agent (TINYJS_UA env; see createApp userAgent).
   {
