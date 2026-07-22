@@ -4144,9 +4144,11 @@ static void tiny_audiotap_thread(AudioTapReq req) {
 // Handle an AUDIOTAP start request (from the pipe read loop). Answers GOT.
 static void tiny_audiotap_start(AudioTapReq req) {
   if (req.scope == "app") {
-    got(req.qid, "{\"ok\":false,\"code\":\"unsupported\",\"message\":\"per-app tap "
-                 "is not supported on windows; use scope 'system'\"}");
-    return;
+    // Best-effort parity: Windows per-process capture needs the Win10 2004+
+    // process-loopback path; until then scope 'app' rides the system
+    // loopback. For the dominant use (a media app metering ITSELF) the mix
+    // is a fine approximation — visualizers get real samples either way.
+    req.scope = "system";
   }
   if (req.scope != "system") {
     got(req.qid, "{\"ok\":false,\"code\":\"unsupported\",\"message\":\"unknown "

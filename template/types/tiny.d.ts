@@ -477,6 +477,12 @@ declare interface Tiny {
    *    audio.src = tiny.proxyURL('https://example.com/stream.mp3'); */
   proxyURL(url: string): string;
 
+  /** A correct file:// URL for a disk path on BOTH platforms — use for
+   *  <audio>/<img>/<video> src of backend-provided paths. Hand-rolled
+   *  'file://' + path breaks on Windows (the drive letter becomes the URL
+   *  host). */
+  fileURL(path: string): string;
+
   log(msg: string): Promise<any>;
   quit(): Promise<any>;
   /** Desktop notification. Packaged + signed apps get native Notification

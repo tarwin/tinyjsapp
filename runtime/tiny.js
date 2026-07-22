@@ -99,6 +99,16 @@
     // keeps CoreMedia's buffering/reconnect. http/https upstreams only.
     proxyURL: (url) => 'tiny-media://proxy/?u=' + encodeURIComponent(String(url)),
 
+    // A correct file:// URL for a disk path on BOTH platforms — hand-rolled
+    // versions break on Windows (file://C:/… makes the drive the URL host).
+    // Use for <audio>/<img>/<video> src of backend-provided paths.
+    fileURL: (p) => {
+      p = String(p).replace(/\\/g, '/');
+      if (!p.startsWith('/')) p = '/' + p; // C:/… needs the third slash
+      return 'file://' + p.split('/').map(encodeURIComponent).join('/')
+        .replace(/%3A/gi, ':'); // keep the drive colon
+    },
+
     log: (msg) => call('log', { msg }),
     quit: () => call('quit'),
     // opts: { id?, subtitle?, sound? }. Packaged apps get real Notification

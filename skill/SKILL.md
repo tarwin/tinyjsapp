@@ -155,6 +155,9 @@ await tiny.api.call('method', { params })   // -> backend api.<method>
 tiny.api.on('event-name', (data) => ...)    // <- app.push from backend
 
 tiny.log(msg); tiny.quit();
+// file:// URL for a disk path — ALWAYS use this (never 'file://' + path,
+// which breaks on Windows: the drive letter becomes the URL host)
+audio.src = tiny.fileURL(backendProvidedPath);
 await tiny.app.info();   // { version: <app>, tinyjs: <built with>, runtime: <txiki> }
 
 // Backend-proxied fetch — NO CORS/CSP (runs in the native process). Like
