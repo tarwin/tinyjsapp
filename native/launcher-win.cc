@@ -3709,16 +3709,22 @@ struct SecCtrlHandler
     RECT rc;
     GetClientRect(tw->hwnd, &rc);
     ctrl->put_Bounds(rc);
-    if (transparent || tw->transparent) {
+    {
       // The chrome 'transparent' flag: without this only the MAIN window
       // honored it and secondary pet/overlay windows painted white.
       ICoreWebView2Controller2 *c2 = nullptr;
-      if (SUCCEEDED(ctrl->QueryInterface(IID_ICoreWebView2Controller2,
-                                         (void **)&c2)) && c2) {
+      HRESULT qi = ctrl->QueryInterface(IID_ICoreWebView2Controller2,
+                                        (void **)&c2);
+      HRESULT hr = E_ABORT;
+      if ((transparent || tw->transparent) && SUCCEEDED(qi) && c2) {
         COREWEBVIEW2_COLOR clear = {0, 0, 0, 0};
-        c2->put_DefaultBackgroundColor(clear);
-        c2->Release();
+        hr = c2->put_DefaultBackgroundColor(clear);
       }
+      drag_dbg("secwin '" + winid + "' transparent=" +
+               std::to_string(transparent || tw->transparent) +
+               " qi=" + std::to_string((long)qi) +
+               " setbg=" + std::to_string((long)hr));
+      if (c2) c2->Release();
     }
     if (tw->wv) {
       tw->wv->AddScriptToExecuteOnDocumentCreated(
@@ -3852,8 +3858,16 @@ static void do_winopen(webview_t, void *arg) {
     if (py < vy) py = vy;
     if (py > vy + vh - margin) py = vy + vh - margin;
   }
+  // Transparent windows: no GDI redirection bitmap, or alpha content that
+  // renders via DirectComposition (WebGL swapchains) composites OPAQUE —
+  // 2D-canvas pages looked fine while three.js pigeons sat on white.
+#ifndef WS_EX_NOREDIRECTIONBITMAP
+#define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
+#endif
+  DWORD exStyle = (wr->transparent == "1") ? WS_EX_NOREDIRECTIONBITMAP : 0;
   HWND hwnd = CreateWindowExW(
-      0, L"TinyjsSecondary", widen(wr->title.empty() ? wr->id : wr->title).c_str(),
+      exStyle, L"TinyjsSecondary",
+      widen(wr->title.empty() ? wr->id : wr->title).c_str(),
       style, px, py, rc.right - rc.left,
       rc.bottom - rc.top, nullptr, nullptr, GetModuleHandleW(nullptr),
       nullptr);
