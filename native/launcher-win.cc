@@ -2815,28 +2815,87 @@ struct UncHandler : public ICoreWebView2WebResourceRequestedEventHandler {
     req->get_Uri(&uri);
     std::string u = uri ? narrow(uri) : "";
     if (uri) CoTaskMemFree(uri);
-    req->Release();
     // only file URLs WITH a host (UNC); plain file:/// keeps default handling
-    if (u.rfind("file://", 0) != 0 || u.size() < 8 || u[7] == '/')
+    if (u.rfind("file://", 0) != 0 || u.size() < 8 || u[7] == '/') {
+      req->Release();
       return S_OK;
+    }
+    // Range header: media elements seek — without 206 support a seek stalls
+    // the element (the viz twin jumps to the live elapsed position at once).
+    std::string range;
+    ICoreWebView2HttpRequestHeaders *hdrs = nullptr;
+    if (SUCCEEDED(req->get_Headers(&hdrs)) && hdrs) {
+      LPWSTR rv = nullptr;
+      if (SUCCEEDED(hdrs->GetHeader(L"Range", &rv)) && rv) {
+        range = narrow(rv);
+        CoTaskMemFree(rv);
+      }
+      hdrs->Release();
+    }
+    req->Release();
     std::string rest = url_decode(u.substr(7)); // server/share/path
     for (auto &c : rest)
       if (c == '/') c = '\\';
     std::string path = "\\\\" + rest;
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (!GetFileAttributesExW(widen(path).c_str(), GetFileExInfoStandard, &fad))
+      return S_OK;
+    long long size = ((long long)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
     IStream *stream = nullptr;
     if (FAILED(SHCreateStreamOnFileEx(widen(path).c_str(),
                                       STGM_READ | STGM_SHARE_DENY_NONE,
                                       FILE_ATTRIBUTE_NORMAL, FALSE, nullptr,
                                       &stream)) || !stream)
       return S_OK; // fall through to default (will 404 like before)
+    long long start = 0, end = size - 1;
+    bool partial = false;
+    if (range.rfind("bytes=", 0) == 0) {
+      partial = true;
+      start = atoll(range.c_str() + 6);
+      size_t dash = range.find('-', 6);
+      if (dash != std::string::npos && dash + 1 < range.size())
+        end = atoll(range.c_str() + dash + 1);
+      if (start < 0 || start >= size) { start = 0; partial = false; }
+      if (end >= size || end < start) end = size - 1;
+    }
+    std::wstring headers = L"Access-Control-Allow-Origin: *\n"
+                           L"Accept-Ranges: bytes\n"
+                           L"Content-Length: " +
+                           std::to_wstring(end - start + 1);
+    IStream *body = stream;
+    if (partial) {
+      LARGE_INTEGER li;
+      li.QuadPart = start;
+      stream->Seek(li, STREAM_SEEK_SET, nullptr);
+      if (end < size - 1) {
+        // bounded range: hand Chromium exactly the slice it asked for
+        HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)(end - start + 1));
+        if (mem) {
+          void *p = GlobalLock(mem);
+          ULONG got = 0;
+          stream->Read(p, (ULONG)(end - start + 1), &got);
+          GlobalUnlock(mem);
+          IStream *slice = nullptr;
+          if (SUCCEEDED(CreateStreamOnHGlobal(mem, TRUE, &slice)) && slice) {
+            stream->Release();
+            body = slice;
+          } else {
+            GlobalFree(mem);
+          }
+        }
+      }
+      headers += L"\nContent-Range: bytes " + std::to_wstring(start) + L"-" +
+                 std::to_wstring(end) + L"/" + std::to_wstring(size);
+    }
     ICoreWebView2WebResourceResponse *resp = nullptr;
     if (env && SUCCEEDED(env->CreateWebResourceResponse(
-                   stream, 200, L"OK",
-                   L"Access-Control-Allow-Origin: *", &resp)) && resp) {
+                   body, partial ? 206 : 200,
+                   partial ? L"Partial Content" : L"OK", headers.c_str(),
+                   &resp)) && resp) {
       args->put_Response(resp);
       resp->Release();
     }
-    stream->Release();
+    body->Release();
     return S_OK;
   }
 };
