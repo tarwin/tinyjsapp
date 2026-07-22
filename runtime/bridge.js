@@ -82,7 +82,7 @@ function makeStore(appId) {
   // write failure (bad path, full disk, permissions) resolves false instead
   // of rejecting — an un-awaited store.set() must never crash the backend.
   let tmpSeq = 0;
-  async function save() {
+  async function doSave() {
     try {
       await tjs.makeDir(dir, { recursive: true }).catch(() => {});
       // Unique tmp per write so concurrent (un-awaited) set()s don't race on
@@ -95,6 +95,14 @@ function makeStore(appId) {
       console.log('tinyjs store write failed:', e?.message ?? String(e));
       return false;
     }
+  }
+  // One save in flight at a time: overlapping renames onto the same target
+  // throw EPERM on Windows (seen when a burst of windows all set() at boot).
+  // Each caller still gets the result of a save that includes its write.
+  let saveChain = Promise.resolve(true);
+  function save() {
+    saveChain = saveChain.then(doSave, doSave);
+    return saveChain;
   }
   return {
     async get(key) { return (await load())[key] ?? null; },
