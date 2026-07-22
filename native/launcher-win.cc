@@ -2683,15 +2683,18 @@ struct DropTarget : public IDropTarget {
 // File objects via chrome.webview.postMessageWithAdditionalObjects and the
 // host reads each ICoreWebView2File's real path.
 static const char *DROP_FORWARD_JS =
+    "(() => {"
+    // capture at document-start (window.chrome is shadowable by page code)
+    "const wv = window.chrome && window.chrome.webview;"
+    "const postObjs = wv && wv.postMessageWithAdditionalObjects"
+    "  && wv.postMessageWithAdditionalObjects.bind(wv);"
     "window.addEventListener('dragover', (e) => e.preventDefault());"
     "window.addEventListener('drop', (e) => {"
     "  e.preventDefault();"
-    "  if (e.dataTransfer && e.dataTransfer.files.length && window.chrome"
-    "      && window.chrome.webview"
-    "      && window.chrome.webview.postMessageWithAdditionalObjects)"
-    "    window.chrome.webview.postMessageWithAdditionalObjects("
-    "        'tinyjs-drop', e.dataTransfer.files);"
-    "});";
+    "  if (postObjs && e.dataTransfer && e.dataTransfer.files.length)"
+    "    postObjs('tinyjs-drop', e.dataTransfer.files);"
+    "});"
+    "})();";
 
 struct DropMsgHandler : public ICoreWebView2WebMessageReceivedEventHandler {
   ULONG refs = 1;
@@ -3464,10 +3467,13 @@ static std::string sec_shim_js(const std::string &winid) {
   return "(() => {"
          "if (window.__tinyShim) return; window.__tinyShim = true;"
          "window.__TINY_WIN = '" + winid + "';"
+         // capture at document-start: page code can shadow window.chrome
+         // (e.g. a global `function chrome(){}`) and a lazy read would break
+         "const post = window.chrome.webview.postMessage.bind(window.chrome.webview);"
          "let seq = 0; const pending = {};"
          "window.__invoke = (payload) => new Promise((res, rej) => {"
          "  const s = ++seq; pending[s] = { res, rej };"
-         "  window.chrome.webview.postMessage(String(s) + ':' + String(payload));"
+         "  post(String(s) + ':' + String(payload));"
          "});"
          "window.__tinyResolve = (s, ok, jsonText) => {"
          "  const p = pending[s]; if (!p) return; delete pending[s];"

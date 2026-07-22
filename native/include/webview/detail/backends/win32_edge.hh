@@ -852,8 +852,15 @@ private:
       return error_info{WEBVIEW_ERROR_UNSPECIFIED,
                         "put_IsStatusBarEnabled failed"};
     }
+    // tinyjs patch: capture postMessage in a document-start script — a
+    // page-level `function chrome() {}` overwrites window.chrome (seen in
+    // the wild), and the bind template re-evaluates its post expression on
+    // EVERY call, so a lazy chrome.webview read breaks all binds afterwards.
+    add_user_script("window.__tinyjsPost = "
+                    "window.chrome.webview.postMessage.bind("
+                    "window.chrome.webview);");
     add_init_script("function(message) {\n\
-  return window.chrome.webview.postMessage(message);\n\
+  return window.__tinyjsPost(message);\n\
 }");
     resize_webview();
     m_controller->put_IsVisible(TRUE);
