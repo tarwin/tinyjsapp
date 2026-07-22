@@ -34,13 +34,16 @@ try {
         Write-Host "==> downloading tinyjs $Version (windows-x86_64)"
         $zip = Join-Path $tmp $Asset
         try {
-            Invoke-WebRequest "$base/$Asset" -OutFile $zip
+            # -UseBasicParsing everywhere: without it PS 5.1 parses responses
+            # via the IE engine, which prompts on first use and dies in
+            # non-interactive shells.
+            Invoke-WebRequest "$base/$Asset" -OutFile $zip -UseBasicParsing
         } catch {
             throw "no Windows build in release $Version (it may predate Windows support) - $_"
         }
 
         Write-Host '==> verifying checksum'
-        $sums = (Invoke-WebRequest "$base/checksums.txt").Content
+        $sums = (Invoke-WebRequest "$base/checksums.txt" -UseBasicParsing).Content
         $line = $sums -split "`n" | Where-Object { $_ -match [regex]::Escape($Asset) } | Select-Object -First 1
         if (-not $line) { throw "checksums.txt has no entry for $Asset" }
         $expected = ($line -split '\s+')[0].Trim()
