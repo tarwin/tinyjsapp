@@ -3670,6 +3670,15 @@ struct SecCtrlHandler
       EventRegistrationToken tok;
       tw->wv->add_WebMessageReceived(mh, &tok);
       mh->Release();
+      // Custom context menus + contextMenu:false must work in EVERY window,
+      // not just main (the ctx state is global, matching macOS).
+      ICoreWebView2_11 *wv11 = nullptr;
+      if (SUCCEEDED(tw->wv->QueryInterface(IID_ICoreWebView2_11,
+                                           (void **)&wv11)) && wv11) {
+        EventRegistrationToken ctok;
+        wv11->add_ContextMenuRequested(new CtxHandler(), &ctok);
+        wv11->Release();
+      }
       tw->wv->Navigate(widen(tw->url).c_str());
       for (auto &js : tw->pending_js)
         tw->wv->ExecuteScript(widen(js).c_str(), nullptr);
