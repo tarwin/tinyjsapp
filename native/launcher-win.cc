@@ -1443,6 +1443,7 @@ struct ChromeReq {
 };
 
 static ICoreWebView2Controller *ctrl_for_win(const std::string &id);
+static void set_win_transparent_flag(const std::string &id, bool on);
 
 static void do_chrome(webview_t, void *arg) {
   ChromeReq *req = static_cast<ChromeReq *>(arg);
@@ -1475,16 +1476,27 @@ static void do_chrome(webview_t, void *arg) {
   if (!req->transparent.empty()) {
     // Page background becomes see-through where the page itself is
     // transparent (pair with a DWM backdrop or a frameless window).
+    // Secondary controllers are created async: a setChrome right after
+    // win.open can land before the controller exists, so record the wish on
+    // the TinyWin — SecCtrlHandler applies tw->transparent on creation.
+    if (!main)
+      set_win_transparent_flag(req->win, req->transparent == "1");
     ICoreWebView2Controller *ctrl = ctrl_for_win(req->win);
     ICoreWebView2Controller2 *c2 = nullptr;
+    HRESULT setbg = E_FAIL;
     if (ctrl &&
         SUCCEEDED(ctrl->QueryInterface(IID_ICoreWebView2Controller2,
                                        (void **)&c2)) &&
         c2) {
       COREWEBVIEW2_COLOR clear = {0, 0, 0, 0}, opaque = {255, 255, 255, 255};
-      c2->put_DefaultBackgroundColor(req->transparent == "1" ? clear : opaque);
+      setbg =
+          c2->put_DefaultBackgroundColor(req->transparent == "1" ? clear
+                                                                 : opaque);
       c2->Release();
     }
+    drag_dbg("chrome '" + req->win + "' transparent=" + req->transparent +
+             " ctrl=" + (ctrl ? "1" : "0") +
+             " setbg=" + std::to_string((long)setbg));
   }
   if (!req->vibrancy.empty()) {
     // macOS vibrancy materials map to Windows 11 system backdrops: 'none'
@@ -3589,6 +3601,12 @@ static ICoreWebView2Controller *ctrl_for_win(const std::string &id) {
   return tw ? tw->ctrl : nullptr;
 }
 
+static void set_win_transparent_flag(const std::string &id, bool on) {
+  TinyWin *tw = win_for_id(id);
+  if (tw)
+    tw->transparent = on;
+}
+
 static void secwin_eval(const std::string &id, const std::string &js) {
   TinyWin *tw = win_for_id(id);
   if (!tw)
@@ -3858,13 +3876,15 @@ static void do_winopen(webview_t, void *arg) {
     if (py < vy) py = vy;
     if (py > vy + vh - margin) py = vy + vh - margin;
   }
-  // Transparent windows: no GDI redirection bitmap, or alpha content that
-  // renders via DirectComposition (WebGL swapchains) composites OPAQUE —
-  // 2D-canvas pages looked fine while three.js pigeons sat on white.
+  // Always drop the GDI redirection bitmap: with one, alpha content that
+  // renders via DirectComposition (WebGL swapchains) composites OPAQUE, and
+  // a setChrome({transparent}) AFTER creation leaves the stale white GDI
+  // surface showing behind the cleared webview (macOS apps set chrome late).
+  // We never GDI-paint secondaries, so opaque pages lose nothing.
 #ifndef WS_EX_NOREDIRECTIONBITMAP
 #define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
 #endif
-  DWORD exStyle = (wr->transparent == "1") ? WS_EX_NOREDIRECTIONBITMAP : 0;
+  DWORD exStyle = WS_EX_NOREDIRECTIONBITMAP;
   HWND hwnd = CreateWindowExW(
       exStyle, L"TinyjsSecondary",
       widen(wr->title.empty() ? wr->id : wr->title).c_str(),
