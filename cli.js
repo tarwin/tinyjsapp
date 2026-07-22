@@ -990,7 +990,9 @@ async function cmdPublish() {
   if (!version) fail('tinyjs.json needs a "version" to publish (e.g. "1.0.0")');
   await cmdBuild();
 
-  const zipName = cfg.name + '-' + version + '.zip';
+  // Windows zips are suffixed -win; the manifest carries them in a "win"
+  // block alongside the macOS url/sha256, so one manifest serves both OSes.
+  const zipName = cfg.name + '-' + version + (IS_WIN ? '-win' : '') + '.zip';
   const PUB = 'dist/publish';
   await rmTree(PUB);
   console.log('==> zipping ' + zipName);
@@ -1012,7 +1014,12 @@ async function cmdPublish() {
 
   // Zips live next to the manifest, so derive the download url from update.url.
   const base = cfg.update?.url ? cfg.update.url.replace(/\/[^/]*$/, '') : null;
-  const manifest = { version, url: (base ?? 'https://YOUR-HOST/updates') + '/' + zipName, sha256: sha };
+  const zipUrl = (base ?? 'https://YOUR-HOST/updates') + '/' + zipName;
+  const manifest = IS_WIN
+    ? { version, win: { url: zipUrl, sha256: sha } }
+    : { version, url: zipUrl, sha256: sha };
+  // Publishing both platforms? Merge this manifest's fields into your hosted
+  // one — mac owns url/sha256, Windows owns the win block; they coexist.
   // Release notes for the in-app update prompt: --notes "text" or
   // --notes-file CHANGES.md (fed to update.check() as `notes`).
   const ni = args.findIndex((a) => a === '--notes' || a === '--notes-file');

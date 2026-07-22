@@ -4,6 +4,15 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.28.1 — 2026-07-22
+
+- **Per-platform update manifests.** `url`/`sha256` remain the macOS zip;
+  a `win: { url, sha256 }` block carries the Windows build. Windows apps
+  overlay it on check and report "no update" when a release has no Windows
+  zip — never a mac download. `tinyjs publish` on Windows names the zip
+  `<name>-<version>-win.zip` and emits the `win` block; publishing both
+  platforms means merging the two manifests (mac owns the top-level fields).
+
 ## 0.28.0 — 2026-07-22
 
 The whole example fleet now runs on Windows — this release is everything a
