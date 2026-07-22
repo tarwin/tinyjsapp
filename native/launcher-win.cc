@@ -3400,6 +3400,7 @@ struct TinyWin {
   HWND hwnd = nullptr;
   ICoreWebView2Controller *ctrl = nullptr;
   ICoreWebView2 *wv = nullptr;
+  bool transparent = false;            // clear WebView2 background on create
   std::string url;                     // navigated once the controller exists
   std::vector<std::string> pending_js; // eval'd once the controller exists
 };
@@ -3545,6 +3546,17 @@ struct SecCtrlHandler
     RECT rc;
     GetClientRect(tw->hwnd, &rc);
     ctrl->put_Bounds(rc);
+    if (tw->transparent) {
+      // The chrome 'transparent' flag: without this only the MAIN window
+      // honored it and secondary pet/overlay windows painted white.
+      ICoreWebView2Controller2 *c2 = nullptr;
+      if (SUCCEEDED(ctrl->QueryInterface(IID_ICoreWebView2Controller2,
+                                         (void **)&c2)) && c2) {
+        COREWEBVIEW2_COLOR clear = {0, 0, 0, 0};
+        c2->put_DefaultBackgroundColor(clear);
+        c2->Release();
+      }
+    }
     if (tw->wv) {
       tw->wv->AddScriptToExecuteOnDocumentCreated(
           widen(sec_shim_js(winid)).c_str(), nullptr);
@@ -3627,7 +3639,8 @@ static void do_winopen(webview_t, void *arg) {
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.lpszClassName = L"TinyjsSecondary";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hbrBackground = nullptr; // no erase — a brush paints white behind
+                                // transparent webviews
     RegisterClassW(&wc);
     registered = true;
   }
@@ -3654,6 +3667,7 @@ static void do_winopen(webview_t, void *arg) {
   }
   TinyWin *tw = new TinyWin();
   tw->hwnd = hwnd;
+  tw->transparent = wr->transparent == "1";
   bool is_url = wr->page.rfind("http://", 0) == 0 ||
                 wr->page.rfind("https://", 0) == 0;
   tw->url = is_url ? wr->page : to_file_url(wr->page);
