@@ -195,10 +195,14 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // files — acceptable here because the page already holds an RPC channel
     // to a backend with full filesystem access.
     if (IS_WIN) {
-      const flag = '--allow-file-access-from-files';
-      const extra = spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS;
-      if (!extra) spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = flag;
-      else if (!extra.includes(flag)) spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = extra + ' ' + flag;
+      // --ignore-gpu-blocklist: WebGPU parity with the macOS launcher (which
+      // force-enables the WebKit feature flag) — without it, virtualized or
+      // older GPUs answer requestAdapter() with null.
+      const flags = ['--allow-file-access-from-files', '--ignore-gpu-blocklist',
+                     '--enable-unsafe-webgpu'];
+      let extra = spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS || '';
+      for (const f of flags) if (!extra.includes(f)) extra = (extra ? extra + ' ' : '') + f;
+      spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = extra;
     }
     const spawnOpts = { stderr: 'inherit', env: spawnEnv };
     proc = tjs.spawn([launcher, pagePath, sockPath, title, size, version], spawnOpts);

@@ -4,6 +4,19 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.27.2 — 2026-07-21
+
+- **Windows: logical coordinates everywhere + WebGPU.** The launcher is
+  per-monitor-DPI-aware, so Win32 hands it PHYSICAL pixels — but the tinyjs
+  coordinate contract is logical CSS-pixel units (macOS points). On scaled
+  displays secondary windows opened at half size and app-driven window
+  drags ran at half the cursor speed (amp). Every wire coordinate now
+  converts at the boundary: setPosition, win.open size/position, SIZE,
+  getState, mousePosition, screens, tray.position. Also: WebView2 now gets
+  `--ignore-gpu-blocklist --enable-unsafe-webgpu`, so `navigator.gpu`
+  yields a real adapter even on virtualized GPUs — WebGPU parity with the
+  macOS launcher, which force-enables the WebKit feature flag.
+
 ## 0.27.1 — 2026-07-21
 
 - **Windows: local media now drives WebAudio.** Chromium gives every

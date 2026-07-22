@@ -137,6 +137,7 @@ static bool g_asleep = false;
 #define TIMER_CLIPWATCH 0x7101
 
 static void drag_dbg(const std::string &msg); // drag&drop diagnostics (below)
+static double window_scale(HWND hwnd);        // DPI: logical<->physical (below)
 
 // multi-window plumbing (defined in the multi-window section below)
 struct TinyWin;
@@ -1412,7 +1413,9 @@ static void do_winop(webview_t, void *arg) {
   } else if (starts("pos ")) {
     int x = 0, y = 0;
     std::sscanf(op.c_str() + 4, "%d %d", &x, &y);
-    SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    double s = window_scale(hwnd); // wire is logical; SetWindowPos physical
+    SetWindowPos(hwnd, nullptr, (int)lround(x * s), (int)lround(y * s), 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER);
   } else if (starts("hideonclose ") && main) {
     g_hide_on_close = op.substr(12) == "1";
   } else if (starts("dock ") && main) {
@@ -1522,6 +1525,19 @@ static void do_dragwin(webview_t, void *) {
 
 // ---------------------------------------------------------------------------
 // clipboard
+
+// tinyjs's coordinate contract is LOGICAL (CSS-pixel / macOS-point) units:
+// the process is per-monitor-DPI-aware, so every Win32 coordinate is
+// physical and must be converted at the wire boundary — otherwise windows
+// open at half size and app-driven drags run at half speed on scaled
+// displays.
+static double window_scale(HWND hwnd) {
+  typedef UINT(WINAPI * GetDpiForWindowT)(HWND);
+  static GetDpiForWindowT fn = (GetDpiForWindowT)GetProcAddress(
+      GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
+  UINT dpi = fn ? fn(hwnd ? hwnd : g_hwnd) : 0;
+  return dpi ? dpi / 96.0 : 1.0;
+}
 
 static double monitor_scale(HMONITOR mon) {
   typedef HRESULT(WINAPI * GetDpiForMonitorT)(HMONITOR, int, UINT *, UINT *);
@@ -3095,6 +3111,8 @@ static std::string win_state_json(HWND hwnd) {
   HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
   MONITORINFO mi = {sizeof(mi)};
   GetMonitorInfoW(mon, &mi);
+  double sc = window_scale(hwnd);
+  auto L = [sc](LONG v) { return (long)lround(v / sc); }; // physical -> logical
   LONG style = GetWindowLongW(hwnd, GWL_STYLE);
   LONG ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
   bool frameless = main ? (g_frameless || g_square) : !(style & WS_CAPTION);
@@ -3108,7 +3126,7 @@ static std::string win_state_json(HWND hwnd) {
       "\"chrome\":{\"frame\":%s,\"trafficLights\":%s,\"transparent\":false,"
       "\"vibrancy\":null,\"squareCorners\":%s,\"acceptsFirstMouse\":true},"
       "\"screen\":{\"width\":%ld,\"height\":%ld,\"scale\":%.2f}}",
-      r.left, r.top, r.right - r.left, r.bottom - r.top,
+      L(r.left), L(r.top), L(r.right - r.left), L(r.bottom - r.top),
       (main && g_fullscreen) ? "true" : "false",
       IsIconic(hwnd) ? "true" : "false",
       IsWindowVisible(hwnd) ? "true" : "false",
@@ -3119,8 +3137,8 @@ static std::string win_state_json(HWND hwnd) {
       main ? g_level.c_str() : "normal",
       frameless ? "false" : "true", frameless ? "false" : "true",
       (main && g_square) ? "true" : "false",
-      mi.rcMonitor.right - mi.rcMonitor.left,
-      mi.rcMonitor.bottom - mi.rcMonitor.top, monitor_scale(mon));
+      L(mi.rcMonitor.right - mi.rcMonitor.left),
+      L(mi.rcMonitor.bottom - mi.rcMonitor.top), monitor_scale(mon));
   return buf;
 }
 
@@ -3138,6 +3156,8 @@ static std::string screens_json() {
     MONITORINFOEXW mi;
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(mons[i], (MONITORINFO *)&mi);
+    double ms = monitor_scale(mons[i]);
+    auto L = [ms](LONG v) { return (long)lround(v / ms); };
     char buf[512];
     std::snprintf(
         buf, sizeof(buf),
@@ -3145,11 +3165,11 @@ static std::string screens_json() {
         "\"x\":%ld,\"y\":%ld,\"width\":%ld,\"height\":%ld,"
         "\"visible\":{\"x\":%ld,\"y\":%ld,\"width\":%ld,\"height\":%ld},"
         "\"scale\":%.2f,\"primary\":%s}",
-        i, json_escape(narrow(mi.szDevice)).c_str(), mi.rcMonitor.left,
-        mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
-        mi.rcMonitor.bottom - mi.rcMonitor.top, mi.rcWork.left, mi.rcWork.top,
-        mi.rcWork.right - mi.rcWork.left, mi.rcWork.bottom - mi.rcWork.top,
-        monitor_scale(mons[i]),
+        i, json_escape(narrow(mi.szDevice)).c_str(), L(mi.rcMonitor.left),
+        L(mi.rcMonitor.top), L(mi.rcMonitor.right - mi.rcMonitor.left),
+        L(mi.rcMonitor.bottom - mi.rcMonitor.top), L(mi.rcWork.left),
+        L(mi.rcWork.top), L(mi.rcWork.right - mi.rcWork.left),
+        L(mi.rcWork.bottom - mi.rcWork.top), ms,
         (mi.dwFlags & MONITORINFOF_PRIMARY) ? "true" : "false");
     if (i)
       json += ",";
@@ -3188,15 +3208,19 @@ static void do_get(webview_t, void *arg) {
     HMONITOR mon = MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST);
     MONITORINFO mi = {sizeof(mi)};
     GetMonitorInfoW(mon, &mi);
+    double ms = monitor_scale(mon), ws = window_scale(target);
     char buf[384];
     std::snprintf(
         buf, sizeof(buf),
         "{\"x\":%ld,\"y\":%ld,\"window\":{\"x\":%ld,\"y\":%ld,\"inside\":%s},"
         "\"screen\":{\"x\":%ld,\"y\":%ld,\"width\":%ld,\"height\":%ld,"
         "\"scale\":%.2f}}",
-        p.x, p.y, c.x, c.y, inside ? "true" : "false", mi.rcMonitor.left,
-        mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
-        mi.rcMonitor.bottom - mi.rcMonitor.top, monitor_scale(mon));
+        (long)lround(p.x / ms), (long)lround(p.y / ms),
+        (long)lround(c.x / ws), (long)lround(c.y / ws),
+        inside ? "true" : "false", (long)lround(mi.rcMonitor.left / ms),
+        (long)lround(mi.rcMonitor.top / ms),
+        (long)lround((mi.rcMonitor.right - mi.rcMonitor.left) / ms),
+        (long)lround((mi.rcMonitor.bottom - mi.rcMonitor.top) / ms), ms);
     json = buf;
   } else if (what == "screens") {
     json = screens_json();
@@ -3255,10 +3279,14 @@ static void do_get(webview_t, void *arg) {
       nii.uID = 1;
       RECT r;
       if (SUCCEEDED(Shell_NotifyIconGetRect(&nii, &r))) {
+        POINT tp = {r.left, r.top};
+        double ms = monitor_scale(MonitorFromPoint(tp, MONITOR_DEFAULTTONEAREST));
         char buf[128];
         std::snprintf(buf, sizeof(buf),
                       "{\"x\":%ld,\"y\":%ld,\"width\":%ld,\"height\":%ld}",
-                      r.left, r.top, r.right - r.left, r.bottom - r.top);
+                      (long)lround(r.left / ms), (long)lround(r.top / ms),
+                      (long)lround((r.right - r.left) / ms),
+                      (long)lround((r.bottom - r.top) / ms));
         json = buf;
       }
     }
@@ -3607,12 +3635,13 @@ static void do_winopen(webview_t, void *arg) {
   DWORD style = frameless ? (WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX |
                              WS_MAXIMIZEBOX | WS_SYSMENU)
                           : WS_OVERLAPPEDWINDOW;
-  RECT rc = {0, 0, wr->width, wr->height};
+  double sc = window_scale(g_hwnd); // logical wire units -> physical pixels
+  RECT rc = {0, 0, (LONG)lround(wr->width * sc), (LONG)lround(wr->height * sc)};
   AdjustWindowRect(&rc, style, FALSE);
   HWND hwnd = CreateWindowExW(
       0, L"TinyjsSecondary", widen(wr->title.empty() ? wr->id : wr->title).c_str(),
-      style, wr->hasPos ? wr->x : CW_USEDEFAULT,
-      wr->hasPos ? wr->y : CW_USEDEFAULT, rc.right - rc.left,
+      style, wr->hasPos ? (int)lround(wr->x * sc) : CW_USEDEFAULT,
+      wr->hasPos ? (int)lround(wr->y * sc) : CW_USEDEFAULT, rc.right - rc.left,
       rc.bottom - rc.top, nullptr, nullptr, GetModuleHandleW(nullptr),
       nullptr);
   if (!hwnd) {
@@ -3822,7 +3851,9 @@ static void do_size(webview_t w, void *arg) {
   } else {
     HWND h = hwnd_for_win(s->win);
     if (h) {
-      RECT rc = {0, 0, s->width, s->height};
+      double sc = window_scale(h);
+      RECT rc = {0, 0, (LONG)lround(s->width * sc),
+                 (LONG)lround(s->height * sc)};
       AdjustWindowRect(&rc, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE);
       SetWindowPos(h, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
                    SWP_NOMOVE | SWP_NOZORDER);
