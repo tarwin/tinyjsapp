@@ -663,8 +663,17 @@ private:
       });
       RegisterClassExW(&wc);
 
-      CreateWindowW(L"webview", L"", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
-                    CW_USEDEFAULT, 0, 0, nullptr, nullptr, hInstance, this);
+      // tinyjs patch: no GDI redirection bitmap — with one, the stale white
+      // surface shows through a webview whose DefaultBackgroundColor is
+      // cleared after creation (setChrome({transparent}) any time after
+      // boot), and DirectComposition content composites opaque. Nothing
+      // GDI-paints this window; opaque pages paint their own background.
+#ifndef WS_EX_NOREDIRECTIONBITMAP
+#define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
+#endif
+      CreateWindowExW(WS_EX_NOREDIRECTIONBITMAP, L"webview", L"",
+                      WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 0, 0,
+                      nullptr, nullptr, hInstance, this);
       if (!m_window) {
         throw exception{WEBVIEW_ERROR_INVALID_STATE, "Window is null"};
       }
@@ -714,8 +723,11 @@ private:
       return 0;
     });
     RegisterClassExW(&widget_wc);
-    CreateWindowExW(WS_EX_CONTROLPARENT, L"webview_widget", nullptr, WS_CHILD,
-                    0, 0, 0, 0, m_window, nullptr, hInstance, this);
+    // tinyjs patch: the widget child also drops its redirection bitmap (see
+    // the top-level window above).
+    CreateWindowExW(WS_EX_CONTROLPARENT | WS_EX_NOREDIRECTIONBITMAP,
+                    L"webview_widget", nullptr, WS_CHILD, 0, 0, 0, 0, m_window,
+                    nullptr, hInstance, this);
     if (!m_widget) {
       throw exception{WEBVIEW_ERROR_INVALID_STATE, "Widget window is null"};
     }
