@@ -69,6 +69,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.28.3 <span class="date">2026-07-22</span></h2>
+      <ul>
+        <li><b>Windows: taskbar pins finally work.</b> The visible window belongs to <code>launcher.exe</code> (the WebView2 host), so pinning it pinned a binary that can't start on its own — the pin was dead on next launch. Every tinyjs window now carries <code>System.AppUserModel</code> relaunch properties (command/name/icon pointing at the app exe, plus a stable per-app AppUserModelID), so pins and Start-Menu launches start the actual app. The toast-notification Start-Menu shortcut targets the app exe too.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.28.2 <span class="date">2026-07-22</span></h2>
       <ul>
         <li><b>Windows: console tools no longer flash terminal windows.</b> txiki's <code>tjs.spawn</code> can't pass <code>CREATE_NO_WINDOW</code>, so every console child (<code>tasklist</code>, <code>tar</code>, <code>reg</code>, …) spawned from a GUI-subsystem app popped a visible console. New <code>launcher-win.exe --run</code> mode runs any console tool hidden with stdio and exit code passed through; the bridge and updater route their own spawns through it, and apps get <code>app.spawnHidden(args, opts)</code> — plain <code>tjs.spawn</code> on macOS, hidden on Windows.</li>

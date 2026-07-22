@@ -632,6 +632,74 @@ struct IMapStringInspectable : IInspectable {
 static const PROPERTYKEY kPKEY_AppUserModel_ID = {
     {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}},
     5};
+// Taskbar relaunch properties (same fmtid, pids 2/3/4). Pinning a window pins
+// the window's PROCESS by default — that's launcher.exe, which can't start on
+// its own (it needs the page + pipe argv from the app exe). These per-window
+// values redirect the pin (and its later launches) to the app exe instead.
+static const PROPERTYKEY kPKEY_AppUserModel_RelaunchCommand = {
+    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}},
+    2};
+static const PROPERTYKEY kPKEY_AppUserModel_RelaunchIconResource = {
+    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}},
+    3};
+static const PROPERTYKEY kPKEY_AppUserModel_RelaunchDisplayNameResource = {
+    {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}},
+    4};
+
+// The app's own exe, handed over by the bridge for BUILT apps (dev spawns set
+// nothing — there's no exe worth pinning). Cached on first use.
+static const std::wstring &app_exe_env() {
+  static std::wstring exe = [] {
+    wchar_t buf[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"TINYJS_APP_EXE", buf, MAX_PATH);
+    return (n > 0 && n < MAX_PATH) ? std::wstring(buf) : std::wstring();
+  }();
+  return exe;
+}
+
+// AppUserModelID shared by windows, toasts, and the Start-Menu shortcut.
+static std::wstring tinyjs_aumid() {
+  std::string safe;
+  for (char c : g_app_name)
+    if (isalnum((unsigned char)c) || c == '.' || c == '-' || c == '_')
+      safe += c;
+  if (safe.empty())
+    safe = "app";
+  return L"tinyjs." + widen(safe);
+}
+
+// Stamp a top-level window so taskbar pins relaunch the app exe (with its
+// name and icon) rather than trying to start a bare launcher.exe.
+static void apply_relaunch_props(HWND hwnd) {
+  const std::wstring &exe = app_exe_env();
+  if (exe.empty() || !hwnd)
+    return;
+  typedef HRESULT(WINAPI *GetStoreFn)(HWND, REFIID, void **);
+  static GetStoreFn get_store = (GetStoreFn)GetProcAddress(
+      LoadLibraryW(L"shell32.dll"), "SHGetPropertyStoreForWindow");
+  if (!get_store)
+    return;
+  IPropertyStore *store = nullptr;
+  if (FAILED(get_store(hwnd, IID_IPropertyStore, (void **)&store)) || !store)
+    return;
+  auto set_str = [&](const PROPERTYKEY &key, const std::wstring &val) {
+    PROPVARIANT pv;
+    PropVariantInit(&pv);
+    pv.vt = VT_LPWSTR;
+    pv.pwszVal = (LPWSTR)CoTaskMemAlloc((val.size() + 1) * sizeof(wchar_t));
+    if (!pv.pwszVal)
+      return;
+    wcscpy(pv.pwszVal, val.c_str());
+    store->SetValue(key, pv);
+    PropVariantClear(&pv);
+  };
+  set_str(kPKEY_AppUserModel_ID, tinyjs_aumid());
+  set_str(kPKEY_AppUserModel_RelaunchCommand, L"\"" + exe + L"\"");
+  set_str(kPKEY_AppUserModel_RelaunchDisplayNameResource, widen(g_app_name));
+  set_str(kPKEY_AppUserModel_RelaunchIconResource, exe + L",0");
+  store->Commit();
+  store->Release();
+}
 
 // Windows Hello (AUTH). MinGW libuuid lacks these WinRT GUIDs; the values match
 // the DEFINE_GUID lines in windows.security.credentials.ui.h (the statics IID
@@ -948,14 +1016,17 @@ static void create_start_menu_shortcut(const std::wstring &aumid,
   std::wstring lnk = dir + L"\\" + name + L".lnk";
   if (GetFileAttributesW(lnk.c_str()) != INVALID_FILE_ATTRIBUTES)
     return; // already stamped
-  wchar_t exe[MAX_PATH];
-  GetModuleFileNameW(nullptr, exe, MAX_PATH);
+  // Point the shortcut at the APP exe when the bridge handed us one (a bare
+  // launcher.exe can't start by itself); dev/legacy spawns fall back to us.
+  wchar_t self[MAX_PATH];
+  GetModuleFileNameW(nullptr, self, MAX_PATH);
+  std::wstring exe = app_exe_env().empty() ? std::wstring(self) : app_exe_env();
   IShellLinkW *link = nullptr;
   if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
                               IID_IShellLinkW, (void **)&link)) ||
       !link)
     return;
-  link->SetPath(exe);
+  link->SetPath(exe.c_str());
   IPropertyStore *store = nullptr;
   if (SUCCEEDED(link->QueryInterface(IID_IPropertyStore, (void **)&store)) &&
       store) {
@@ -983,16 +1054,9 @@ static void create_start_menu_shortcut(const std::wstring &aumid,
 static bool ensure_toast_identity() {
   if (!g_aumid.empty())
     return true;
-  std::string safe;
-  for (char c : g_app_name)
-    if (isalnum((unsigned char)c) || c == '.' || c == '-' || c == '_')
-      safe += c;
-  if (safe.empty())
-    safe = "app";
-  std::wstring name = widen(safe);
-  g_aumid = L"tinyjs." + name;
+  g_aumid = tinyjs_aumid();
   SetCurrentProcessExplicitAppUserModelID(g_aumid.c_str());
-  create_start_menu_shortcut(g_aumid, name);
+  create_start_menu_shortcut(g_aumid, g_aumid.substr(7) /* strip "tinyjs." */);
   return true;
 }
 
@@ -3936,6 +4000,7 @@ static void do_winopen(webview_t, void *arg) {
     delete wr;
     return;
   }
+  apply_relaunch_props(hwnd);
   if (wr->square == "1") {
     DWORD pref = 1; // DWMWCP_DONOTROUND
     DwmSetWindowAttribute(hwnd, 33, &pref, sizeof(pref));
@@ -5135,6 +5200,7 @@ static int run(int argc, char **argv) {
                                            WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
   g_orig_wndproc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC,
                                               (LONG_PTR)tiny_wndproc);
+  apply_relaunch_props(g_hwnd);
 
   // Page RPC + injected client library (document-start, every navigation).
   webview_bind(g_w, "__invoke", on_invoke, nullptr);

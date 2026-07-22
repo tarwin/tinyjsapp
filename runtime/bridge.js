@@ -213,6 +213,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // suffix, so UA-sniffing sites reject it. Packaged apps use the
     // TinyjsUserAgent plist key instead (this env only applies to the dev spawn).
     if (userAgent) spawnEnv.TINYJS_UA = String(userAgent);
+    // Windows built apps: hand the launcher our exe so taskbar pins and the
+    // Start-Menu shortcut relaunch the APP — the visible window belongs to
+    // launcher.exe, which can't start on its own, so a default pin would be
+    // dead on next launch. Dev spawns set nothing (nothing worth pinning).
+    if (IS_WIN && bundlePath()) spawnEnv.TINYJS_APP_EXE = tjs.exePath;
     // Windows built apps: the icon rides inside the compiled exe (app root of
     // the TPK extraction, next to the frontend/ the page loads from); a
     // dist/icon.png next to the exe still wins for older builds. Dev passes

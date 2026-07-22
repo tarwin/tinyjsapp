@@ -4,6 +4,16 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.28.3 — 2026-07-22
+
+- **Windows: taskbar pins finally work.** The visible window belongs to
+  `launcher.exe` (the WebView2 host), so pinning it pinned a binary that
+  can't start on its own — the pin was dead on next launch. Every tinyjs
+  window now carries `System.AppUserModel` relaunch properties
+  (command/name/icon pointing at the app exe, plus a stable per-app
+  AppUserModelID), so pins and Start-Menu launches start the actual app.
+  The toast-notification Start-Menu shortcut targets the app exe too.
+
 ## 0.28.2 — 2026-07-22
 
 The Windows polish release: no stray terminal windows, a real exe icon, and
