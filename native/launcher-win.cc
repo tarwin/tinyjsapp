@@ -3679,6 +3679,8 @@ struct SecCtrlHandler
     : public ICoreWebView2CreateCoreWebView2ControllerCompletedHandler {
   ULONG refs = 1;
   std::string winid;
+  bool transparent = false; // carried here: the tw lookup can race a
+                            // close/reopen storm and must not decide this
   ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
   ULONG STDMETHODCALLTYPE Release() override {
     if (refs > 1) return --refs;
@@ -3707,7 +3709,7 @@ struct SecCtrlHandler
     RECT rc;
     GetClientRect(tw->hwnd, &rc);
     ctrl->put_Bounds(rc);
-    if (tw->transparent) {
+    if (transparent || tw->transparent) {
       // The chrome 'transparent' flag: without this only the MAIN window
       // honored it and secondary pet/overlay windows painted white.
       ICoreWebView2Controller2 *c2 = nullptr;
@@ -3880,6 +3882,7 @@ static void do_winopen(webview_t, void *arg) {
     if (SUCCEEDED(wv22->get_Environment(&env)) && env) {
       SecCtrlHandler *ch = new SecCtrlHandler();
       ch->winid = wr->id;
+      ch->transparent = tw->transparent;
       env->CreateCoreWebView2Controller(hwnd, ch);
       ch->Release();
       env->Release();
