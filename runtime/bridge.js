@@ -217,8 +217,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       // --ignore-gpu-blocklist: WebGPU parity with the macOS launcher (which
       // force-enables the WebKit feature flag) — without it, virtualized or
       // older GPUs answer requestAdapter() with null.
+      // autoplay: WKWebView never gates playback on a gesture, Chromium does
+      // — and satellite windows (visualizers analysing a silent twin stream)
+      // may never receive a click at all.
       const flags = ['--allow-file-access-from-files', '--ignore-gpu-blocklist',
-                     '--enable-unsafe-webgpu'];
+                     '--enable-unsafe-webgpu',
+                     '--autoplay-policy=no-user-gesture-required'];
       let extra = spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS || '';
       for (const f of flags) if (!extra.includes(f)) extra = (extra ? extra + ' ' : '') + f;
       spawnEnv.WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = extra;
