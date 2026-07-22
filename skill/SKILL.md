@@ -246,7 +246,8 @@ tiny.win.onDrop((paths) => ...);            // files dropped on the window: real
 
 // tray / menu-bar apps
 tiny.tray.set({ title, icon, tooltip, menu: [{ id, label }, { separator: true }] });
-// icon: png path OR 'sf:<name>' (SF Symbol, e.g. 'sf:cup.and.saucer.fill' — no assets)
+// icon: png path OR 'sf:<name>' (SF Symbol, macOS) OR 'emoji:<glyph>' (Windows —
+// drawn as a mono tray silhouette); branch per-OS for asset-free icons on both
 // primaryAction: true → left click fires onClick, menu opens on right-click
 tiny.tray.on((id) => ...); tiny.tray.onClick(fn); tiny.tray.remove();
 tiny.app.setDockVisible(false);             // menu-bar-only app

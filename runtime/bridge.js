@@ -407,8 +407,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     setHideOnClose(v) { send('WINOP hideonclose ' + (v ? 1 : 0)); },
     // spec: { title?, icon?, template?, tooltip?, primaryAction?,
     //         menu?: [{ id, label, key? } | { separator: true }] }
-    // icon is a png path (absolute or project-relative) or 'sf:<name>' for an
-    // SF Symbol (e.g. 'sf:cup.and.saucer.fill' — no shipped assets needed);
+    // icon is a png path (absolute or project-relative), 'sf:<name>' for an
+    // SF Symbol (e.g. 'sf:cup.and.saucer.fill' — no shipped assets needed;
+    // macOS only), or 'emoji:<glyph>' for a glyph drawn as a monochrome
+    // tray silhouette (Windows only) — branch per-OS for asset-free icons;
     // template: false keeps its colors instead of adapting to the menu bar
     // (default true). Menu clicks arrive as a 'tray' page event and via the
     // onTray option; with no menu, icon clicks arrive as 'trayclick'.
@@ -417,7 +419,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     tray: {
       set(spec = {}) {
         let icon = spec.icon ?? '';
-        if (icon && !isAbs(icon) && !icon.startsWith('sf:')) icon = tjs.cwd + '/' + icon;
+        if (icon && !isAbs(icon) && !icon.startsWith('sf:') && !icon.startsWith('emoji:')) icon = tjs.cwd + '/' + icon;
         send('TRAYBEGIN ' + [one(spec.title), one(icon),
                              spec.template === false ? '0' : '1',
                              one(spec.tooltip),

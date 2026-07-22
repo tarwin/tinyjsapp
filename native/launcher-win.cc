@@ -315,6 +315,45 @@ static HICON icon_from_png(const std::string &path) {
   return icon;
 }
 
+static bool taskbar_is_light() {
+  DWORD v = 0, sz = sizeof(v);
+  if (RegGetValueW(HKEY_CURRENT_USER,
+                   L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\"
+                   L"Personalize",
+                   L"SystemUsesLightTheme", RRF_RT_REG_DWORD, nullptr, &v,
+                   &sz) == ERROR_SUCCESS)
+    return v == 1;
+  return false; // the taskbar has defaulted to dark since Win10
+}
+
+// 'emoji:<glyph>' icons — the asset-free analogue of macOS 'sf:' symbols.
+// GDI/GDI+ have no color-emoji path, so the glyph renders as its monochrome
+// fallback outline — a silhouette, which is exactly how template icons look
+// in the macOS menu bar. White on a dark taskbar, black on a light one.
+static HICON icon_from_emoji(const std::string &utf8) {
+  if (!ensure_gdiplus())
+    return nullptr;
+  const int SZ = 32;
+  Gdiplus::Bitmap bmp(SZ, SZ, PixelFormat32bppARGB);
+  Gdiplus::Graphics gfx(&bmp);
+  gfx.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+  Gdiplus::FontFamily fam(L"Segoe UI Emoji");
+  Gdiplus::Font font(&fam, 22, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+  if (font.GetLastStatus() != Gdiplus::Ok)
+    return nullptr;
+  Gdiplus::Color col = taskbar_is_light() ? Gdiplus::Color(255, 0, 0, 0)
+                                          : Gdiplus::Color(255, 255, 255, 255);
+  Gdiplus::SolidBrush brush(col);
+  Gdiplus::RectF rect(0, 0, SZ, SZ);
+  Gdiplus::StringFormat fmt;
+  fmt.SetAlignment(Gdiplus::StringAlignmentCenter);
+  fmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+  gfx.DrawString(widen(utf8).c_str(), -1, &font, rect, &fmt, &brush);
+  HICON icon = nullptr;
+  bmp.GetHICON(&icon);
+  return icon;
+}
+
 // Save an HBITMAP as a png in the temp dir; returns the path ('' on failure)
 // and fills width/height. Used by captureScreen, thumbnail, clipboard read.
 static std::string hbitmap_to_temp_png(HBITMAP hbm, UINT *w_out, UINT *h_out);
@@ -506,7 +545,9 @@ static void apply_tray(webview_t, void *arg) {
   g_tray_primary = spec->primary;
 
   HICON icon = nullptr;
-  if (!spec->icon.empty() && spec->icon.rfind("sf:", 0) != 0)
+  if (spec->icon.rfind("emoji:", 0) == 0)
+    icon = icon_from_emoji(spec->icon.substr(6));
+  else if (!spec->icon.empty() && spec->icon.rfind("sf:", 0) != 0)
     icon = icon_from_png(spec->icon);
   if (!icon)
     icon = LoadIcon(nullptr, IDI_APPLICATION);
