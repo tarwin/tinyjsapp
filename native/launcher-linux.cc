@@ -675,7 +675,14 @@ static void do_winop(const std::string& winid, const std::string& op) {
   else if (op.rfind("level ", 0) == 0) set_level(winid, op.substr(6));
   else if (op.rfind("pos ", 0) == 0) {
     int x = 0, y = 0;
-    if (sscanf(op.c_str() + 4, "%d %d", &x, &y) == 2) gtk_window_move(win, x, y);
+    if (sscanf(op.c_str() + 4, "%d %d", &x, &y) == 2) {
+      // Move in the same space getWinState reports (see win_state_json):
+      // gdk_window_move places the toplevel's origin, which is what
+      // gdk_window_get_origin reads back, so read -> move -> read is stable.
+      GdkWindow* gwin = gtk_widget_get_window(GTK_WIDGET(win));
+      if (gwin) gdk_window_move(gwin, x, y);
+      else gtk_window_move(win, x, y);   // not realized yet
+    }
   }
   else if (op == "hideonclose 1") { if (main_win) g_hide_on_close = true; }
   else if (op == "hideonclose 0") { if (main_win) g_hide_on_close = false; }
@@ -1272,6 +1279,17 @@ static std::string win_state_json(const std::string& winid) {
 
   int x = 0, y = 0, w = 0, h = 0;
   gtk_window_get_position(win, &x, &y);
+  // gtk_window_get_position() and gtk_window_move() disagree about which
+  // origin they mean once a window is undecorated: on X11 the read came back
+  // one frame-height above the value a move had just consumed, so an app that
+  // read its own position and moved by a delta — which is what dragging is —
+  // marched its window up the screen, 37px per grab under mutter. Ask GDK for
+  // the toplevel's real root-space origin instead; it pairs exactly with the
+  // gdk_window_move() the pos op uses.
+  {
+    GdkWindow* gwin = gtk_widget_get_window(GTK_WIDGET(win));
+    if (gwin) gdk_window_get_origin(gwin, &x, &y);
+  }
   gtk_window_get_size(win, &w, &h);
   if (main_win) h -= menubar_height();
   GdkWindowState st = g_winstate.count(win) ? g_winstate[win] : (GdkWindowState)0;
