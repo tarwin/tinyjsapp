@@ -89,6 +89,20 @@ sudo apt install gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0
 WebKit hints at this itself, logging "WebKit wasn't able to find a WebVTT
 encoder … unless gst-plugins-bad is installed" on startup.
 
+**Routing an `<audio>`/`<video>` element through Web Audio?** On Linux,
+WebKitGTK plays such an element *twice* — once straight to the speakers and
+once through your `createMediaElementSource` graph — and the two copies phase
+into a stuttering mess (macOS/Windows WebKit mute the direct output; WebKitGTK
+doesn't). The graph taps the signal before the element's own volume, so mute
+the element and carry volume with a `GainNode`:
+
+```js
+const src = ctx.createMediaElementSource(el);
+src.connect(gain); gain.connect(ctx.destination);
+gain.gain.value = volume;
+if (tiny.system.isLinux()) el.volume = 0;   // silence the leaked direct copy
+```
+
 See **Portability** below for what's supported on Windows and Linux.
 
 Full API reference: [tinyjs.app/api](https://tinyjs.app/api) · release

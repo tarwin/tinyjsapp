@@ -67,16 +67,24 @@ version was generated into a scratch file during the port but not committed).
   put `~/.local/node/bin` first on PATH. With it, all 26 examples build.
   Do NOT commit the `package-lock.json` churn an install here produces: npm
   drops the darwin/win32 optional binaries, which would break mac/win builds.
-- **WebKit's default audio sink degrades — forced to pipewiresink.** Out of
-  the box WebKitGTK's autoaudiosink picks pulsesink (PipeWire's PulseAudio
-  compat layer), which on this box played a few seconds then went crunchy →
-  silent → briefly back, repeating. Hard to catch: PipeWire reported zero
-  xruns, the AudioContext clock never drifted, and the in-graph analyser was
-  clean throughout — the same file was perfect through plain gst-launch and in
-  Firefox. The launcher now sets GST_PLUGIN_FEATURE_RANK=pipewiresink:MAX when
-  PipeWire is running (skipped if the user set that env var), which fixed it.
-  If audio still misbehaves on a PulseAudio-only box, this override won't apply
-  (no pipewire-0 socket) and pulsesink is used as before.
+- **WebKitGTK plays a graph-routed `<audio>` element TWICE.** When an app pipes
+  a media element through Web Audio (`createMediaElementSource`, e.g. for an EQ),
+  WebKitGTK does NOT mute the element's own output the way macOS/Windows WebKit
+  do — it plays the element straight to the speakers (an `S16LE` GStreamer
+  stream) AND through the graph (an `F32LE` Web Audio stream). Two copies of the
+  same track a few ms apart phase into a stuttering mess. The graph taps the
+  signal pre-volume, so the fix is to sit the captured element at `volume = 0`
+  on Linux and carry volume with a gain node — the leaked copy goes silent (its
+  PipeWire stream suspends) and the graph still plays. `amp` does this now, gated
+  on `tiny.system.isLinux()`; any app using `createMediaElementSource` needs the
+  same. Verified with pw-top: two output streams → one, and the graph node went
+  from ~1000 xruns to 0.
+  NOTE: an earlier theory blamed the pulsesink vs pipewiresink choice and forced
+  `GST_PLUGIN_FEATURE_RANK=pipewiresink:MAX`. That was wrong and is reverted —
+  pulsesink (WebKit's rank-266 default) plays both the plain-element and the
+  graph paths at 0 xruns, while forcing pipewiresink actually *xruns the Web
+  Audio graph path* (~644). The real bug was always the double-routing above,
+  not the sink.
 - **Media codecs are incomplete out of the box** — `gstreamer1.0-plugins-bad`,
   `-ugly` and `libav` are not installed, so WebKit plays MP3/Ogg/Opus/WAV/FLAC
   but reports `""` for AAC/M4A and `isTypeSupported: false` for every MSE type.
