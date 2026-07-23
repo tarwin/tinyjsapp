@@ -1073,8 +1073,13 @@ menus + suppression, hot reload, `tiny.fetch`/`proxyURL` streaming,
 `battery`, `idleTime` (GNOME), `pickColor` (portal), `thumbnail` (images
 only), `captureScreen` (X11 sessions only), `keystroke` + global hotkeys
 (X11/XWayland via XTest/XGrabKey — not pure Wayland), `playSound`/`beep`,
-`say`/`voices` (via speech-dispatcher's `spd-say` when installed), and
-`dock.bounce` (a taskbar urgency hint). A built app registers its own
+`say`/`voices` (via speech-dispatcher's `spd-say` when installed),
+`dock.bounce` (a taskbar urgency hint), `nowPlaying` + media keys (a real
+MPRIS player — shows in the GNOME/KDE media widget and lock screen, and
+Play/Pause/Next/Previous/Seek route back via `onMediaKey`), and `audioTap`
+(system scope — the default sink's monitor via `parec`/`pw-cat`; like
+Windows, `scope:'app'` is approximated by the system mix). A built app
+registers its own
 `.desktop` entry on first run — app-menu listing, icon, deep links
 (`urlScheme`), file associations (`fileExtensions`), and single-instance —
 with no separate install step. `tinyjs publish` emits
@@ -1083,9 +1088,9 @@ with no separate install step. `tinyjs publish` emits
 ones; auto-update works (swap + relaunch).
 
 Not (yet) supported on Linux (reject or report `'unsupported'` so apps can
-feature-detect): `audioTap`, `recorder`, `ocr`, `quickLook`, `applescript`,
-`haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`, `nowPlaying` +
-media keys (MPRIS planned), `share`, `wifi`, `spotlight` (returns an empty
+feature-detect): `recorder`, `ocr`, `quickLook`, `applescript`,
+`haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`, `share`, `wifi`,
+`spotlight` (returns an empty
 array), `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
 `authenticate`, `tiny.app.ai` — plus `setAllSpaces`, which maps onto sticky
 windows rather than true per-Space follow. The burn-down list with

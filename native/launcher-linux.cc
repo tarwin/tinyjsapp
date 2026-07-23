@@ -14,6 +14,7 @@
 #include <gdk/gdk.h>
 #include <gio/gio.h>
 #include <gio/gunixfdlist.h>
+#include <glib-unix.h>
 #include <libsoup/soup.h>
 
 #ifdef GDK_WINDOWING_X11
@@ -1834,6 +1835,357 @@ static void install_system_observers() {
   }
 }
 
+// --- Now Playing: MPRIS (org.mpris.MediaPlayer2) -----------------------------
+
+// crude scalar-field extraction from the compact JSON the bridge sends
+static std::string json_find_str(const std::string& j, const std::string& key) {
+  std::string needle = "\"" + key + "\":";
+  size_t k = j.find(needle);
+  if (k == std::string::npos) return "";
+  size_t q1 = j.find('"', k + needle.size());
+  size_t colon_end = k + needle.size();
+  // only accept a string value (skip if the value is a number/bool)
+  size_t first_non_ws = j.find_first_not_of(" \t", colon_end);
+  if (first_non_ws == std::string::npos || j[first_non_ws] != '"') return "";
+  std::string val;
+  for (size_t i = q1 + 1; i < j.size(); i++) {
+    if (j[i] == '\\' && i + 1 < j.size()) { val += j[++i]; continue; }
+    if (j[i] == '"') break;
+    val += j[i];
+  }
+  return val;
+}
+
+static double json_find_num(const std::string& j, const std::string& key, double dflt) {
+  std::string needle = "\"" + key + "\":";
+  size_t k = j.find(needle);
+  if (k == std::string::npos) return dflt;
+  return atof(j.c_str() + k + needle.size());
+}
+
+static bool json_find_bool(const std::string& j, const std::string& key, bool dflt) {
+  std::string needle = "\"" + key + "\":";
+  size_t k = j.find(needle);
+  if (k == std::string::npos) return dflt;
+  return j.compare(k + needle.size(), 4, "true") == 0;
+}
+
+struct NowPlaying {
+  std::string title, artist, album;
+  double duration = 0, elapsed = 0;
+  bool playing = false;
+};
+static NowPlaying g_np;
+static guint g_mpris_owner = 0;
+static guint g_mpris_reg_root = 0, g_mpris_reg_player = 0;
+
+static const char* MPRIS_XML =
+  "<node>"
+  " <interface name='org.mpris.MediaPlayer2'>"
+  "  <method name='Raise'/><method name='Quit'/>"
+  "  <property name='CanQuit' type='b' access='read'/>"
+  "  <property name='CanRaise' type='b' access='read'/>"
+  "  <property name='HasTrackList' type='b' access='read'/>"
+  "  <property name='Identity' type='s' access='read'/>"
+  "  <property name='SupportedUriSchemes' type='as' access='read'/>"
+  "  <property name='SupportedMimeTypes' type='as' access='read'/>"
+  " </interface>"
+  " <interface name='org.mpris.MediaPlayer2.Player'>"
+  "  <method name='Next'/><method name='Previous'/><method name='Pause'/>"
+  "  <method name='PlayPause'/><method name='Stop'/><method name='Play'/>"
+  "  <method name='Seek'><arg name='Offset' type='x' direction='in'/></method>"
+  "  <method name='SetPosition'>"
+  "   <arg name='TrackId' type='o' direction='in'/>"
+  "   <arg name='Position' type='x' direction='in'/></method>"
+  "  <method name='OpenUri'><arg name='Uri' type='s' direction='in'/></method>"
+  "  <property name='PlaybackStatus' type='s' access='read'/>"
+  "  <property name='Rate' type='d' access='readwrite'/>"
+  "  <property name='Metadata' type='a{sv}' access='read'/>"
+  "  <property name='Volume' type='d' access='readwrite'/>"
+  "  <property name='Position' type='x' access='read'/>"
+  "  <property name='MinimumRate' type='d' access='read'/>"
+  "  <property name='MaximumRate' type='d' access='read'/>"
+  "  <property name='CanGoNext' type='b' access='read'/>"
+  "  <property name='CanGoPrevious' type='b' access='read'/>"
+  "  <property name='CanPlay' type='b' access='read'/>"
+  "  <property name='CanPause' type='b' access='read'/>"
+  "  <property name='CanSeek' type='b' access='read'/>"
+  "  <property name='CanControl' type='b' access='read'/>"
+  " </interface>"
+  "</node>";
+
+static GVariant* mpris_metadata() {
+  GVariantBuilder b;
+  g_variant_builder_init(&b, G_VARIANT_TYPE("a{sv}"));
+  g_variant_builder_add(&b, "{sv}", "mpris:trackid",
+      g_variant_new_object_path("/org/tinyjs/track/0"));
+  if (!g_np.title.empty()) {
+    g_variant_builder_add(&b, "{sv}", "xesam:title",
+        g_variant_new_string(g_np.title.c_str()));
+  }
+  if (!g_np.artist.empty()) {
+    GVariantBuilder artists;
+    g_variant_builder_init(&artists, G_VARIANT_TYPE("as"));
+    g_variant_builder_add(&artists, "s", g_np.artist.c_str());
+    g_variant_builder_add(&b, "{sv}", "xesam:artist", g_variant_builder_end(&artists));
+  }
+  if (!g_np.album.empty()) {
+    g_variant_builder_add(&b, "{sv}", "xesam:album",
+        g_variant_new_string(g_np.album.c_str()));
+  }
+  if (g_np.duration > 0) {
+    g_variant_builder_add(&b, "{sv}", "mpris:length",
+        g_variant_new_int64((gint64)(g_np.duration * 1e6)));
+  }
+  return g_variant_builder_end(&b);
+}
+
+static void mpris_method_call(GDBusConnection*, const gchar*, const gchar*,
+                              const gchar* iface, const gchar* method,
+                              GVariant* params, GDBusMethodInvocation* inv, gpointer) {
+  if (!strcmp(iface, "org.mpris.MediaPlayer2.Player")) {
+    if (!strcmp(method, "Play")) pipe_write_line("MEDIAKEY play");
+    else if (!strcmp(method, "Pause")) pipe_write_line("MEDIAKEY pause");
+    else if (!strcmp(method, "PlayPause")) pipe_write_line("MEDIAKEY toggle");
+    else if (!strcmp(method, "Stop")) pipe_write_line("MEDIAKEY pause");
+    else if (!strcmp(method, "Next")) pipe_write_line("MEDIAKEY next");
+    else if (!strcmp(method, "Previous")) pipe_write_line("MEDIAKEY previous");
+    else if (!strcmp(method, "Seek")) {
+      gint64 offset_us = 0;
+      g_variant_get(params, "(x)", &offset_us);
+      char buf[64];
+      snprintf(buf, sizeof buf, "MEDIAKEY seek\t%.3f",
+               g_np.elapsed + offset_us / 1e6);
+      pipe_write_line(buf);
+    } else if (!strcmp(method, "SetPosition")) {
+      const gchar* track = nullptr;
+      gint64 pos_us = 0;
+      g_variant_get(params, "(&ox)", &track, &pos_us);
+      char buf[64];
+      snprintf(buf, sizeof buf, "MEDIAKEY seek\t%.3f", pos_us / 1e6);
+      pipe_write_line(buf);
+    }
+  } else if (!strcmp(method, "Raise")) {
+    gtk_window_present(g_win);
+  }
+  g_dbus_method_invocation_return_value(inv, nullptr);
+}
+
+static GVariant* mpris_get_property(GDBusConnection*, const gchar*, const gchar*,
+                                    const gchar* iface, const gchar* prop,
+                                    GError**, gpointer) {
+  if (!strcmp(iface, "org.mpris.MediaPlayer2")) {
+    if (!strcmp(prop, "Identity")) return g_variant_new_string(g_app_name.c_str());
+    if (!strcmp(prop, "CanQuit") || !strcmp(prop, "HasTrackList"))
+      return g_variant_new_boolean(FALSE);
+    if (!strcmp(prop, "CanRaise")) return g_variant_new_boolean(TRUE);
+    if (!strcmp(prop, "SupportedUriSchemes") || !strcmp(prop, "SupportedMimeTypes"))
+      return g_variant_new_strv(nullptr, 0);
+  } else {
+    if (!strcmp(prop, "PlaybackStatus"))
+      return g_variant_new_string(g_np.playing ? "Playing" : "Paused");
+    if (!strcmp(prop, "Metadata")) return mpris_metadata();
+    if (!strcmp(prop, "Position")) return g_variant_new_int64((gint64)(g_np.elapsed * 1e6));
+    if (!strcmp(prop, "Rate") || !strcmp(prop, "MinimumRate") ||
+        !strcmp(prop, "MaximumRate") || !strcmp(prop, "Volume"))
+      return g_variant_new_double(1.0);
+    if (!strcmp(prop, "CanGoNext") || !strcmp(prop, "CanGoPrevious") ||
+        !strcmp(prop, "CanPlay") || !strcmp(prop, "CanPause") ||
+        !strcmp(prop, "CanSeek") || !strcmp(prop, "CanControl"))
+      return g_variant_new_boolean(TRUE);
+  }
+  return nullptr;
+}
+
+static gboolean mpris_set_property(GDBusConnection*, const gchar*, const gchar*,
+                                   const gchar*, const gchar*, GVariant*,
+                                   GError**, gpointer) {
+  return TRUE;  // Rate/Volume writes accepted and ignored
+}
+
+static void mpris_emit_changed() {
+  GDBusConnection* bus = session_bus();
+  if (!bus || !g_mpris_owner) return;
+  GVariantBuilder props;
+  g_variant_builder_init(&props, G_VARIANT_TYPE("a{sv}"));
+  g_variant_builder_add(&props, "{sv}", "PlaybackStatus",
+      g_variant_new_string(g_np.playing ? "Playing" : "Paused"));
+  g_variant_builder_add(&props, "{sv}", "Metadata", mpris_metadata());
+  g_dbus_connection_emit_signal(bus, nullptr, "/org/mpris/MediaPlayer2",
+      "org.freedesktop.DBus.Properties", "PropertiesChanged",
+      g_variant_new("(sa{sv}as)", "org.mpris.MediaPlayer2.Player", &props, nullptr),
+      nullptr);
+}
+
+static void do_nowplaying(const std::string& rest) {
+  GDBusConnection* bus = session_bus();
+  if (!bus) return;
+  if (rest == "clear" || rest.empty()) {
+    if (g_mpris_owner) {
+      g_bus_unown_name(g_mpris_owner);
+      g_mpris_owner = 0;
+      if (g_mpris_reg_root) g_dbus_connection_unregister_object(bus, g_mpris_reg_root);
+      if (g_mpris_reg_player) g_dbus_connection_unregister_object(bus, g_mpris_reg_player);
+      g_mpris_reg_root = g_mpris_reg_player = 0;
+    }
+    g_np = NowPlaying();
+    return;
+  }
+  std::string json = wire_unescape(rest);
+  g_np.title = json_find_str(json, "title");
+  g_np.artist = json_find_str(json, "artist");
+  g_np.album = json_find_str(json, "album");
+  g_np.duration = json_find_num(json, "duration", 0);
+  g_np.elapsed = json_find_num(json, "elapsed", 0);
+  g_np.playing = json_find_bool(json, "playing", true);
+
+  if (!g_mpris_owner) {
+    static GDBusNodeInfo* node = nullptr;
+    if (!node) node = g_dbus_node_info_new_for_xml(MPRIS_XML, nullptr);
+    if (!node) return;
+    static const GDBusInterfaceVTable vtable = {
+      mpris_method_call, mpris_get_property, mpris_set_property, {nullptr}
+    };
+    g_mpris_reg_root = g_dbus_connection_register_object(bus,
+        "/org/mpris/MediaPlayer2", node->interfaces[0], &vtable,
+        nullptr, nullptr, nullptr);
+    g_mpris_reg_player = g_dbus_connection_register_object(bus,
+        "/org/mpris/MediaPlayer2", node->interfaces[1], &vtable,
+        nullptr, nullptr, nullptr);
+    std::string safe;
+    for (char c : (g_app_id.empty() ? g_app_name : g_app_id)) {
+      safe += (g_ascii_isalnum(c) ? c : '_');
+    }
+    g_mpris_owner = g_bus_own_name_on_connection(bus,
+        ("org.mpris.MediaPlayer2." + safe).c_str(),
+        G_BUS_NAME_OWNER_FLAGS_NONE, nullptr, nullptr, nullptr, nullptr);
+  }
+  mpris_emit_changed();
+}
+
+// --- audioTap: system-output PCM via the PipeWire/Pulse monitor --------------
+
+static GPid g_tap_pid = 0;
+static guint g_tap_timer = 0;
+static guint g_tap_watch = 0;
+static int g_tap_fd = -1;
+static std::mutex g_tap_mutex;
+static std::string g_tap_buf;        // raw s16le interleaved, filled by reader
+static int g_tap_rate = 44100, g_tap_channels = 2, g_tap_interval = 80;
+
+static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static std::string base64(const unsigned char* data, size_t len) {
+  std::string out;
+  out.reserve((len + 2) / 3 * 4);
+  for (size_t i = 0; i < len; i += 3) {
+    unsigned v = data[i] << 16;
+    if (i + 1 < len) v |= data[i + 1] << 8;
+    if (i + 2 < len) v |= data[i + 2];
+    out += B64[(v >> 18) & 63];
+    out += B64[(v >> 12) & 63];
+    out += i + 1 < len ? B64[(v >> 6) & 63] : '=';
+    out += i + 2 < len ? B64[v & 63] : '=';
+  }
+  return out;
+}
+
+static gboolean tap_tick(gpointer) {
+  // one chunk per interval; silence keeps the cadence when no data arrived
+  size_t want = (size_t)g_tap_rate * g_tap_interval / 1000 * g_tap_channels * 2;
+  std::string chunk;
+  {
+    std::lock_guard<std::mutex> lock(g_tap_mutex);
+    if (g_tap_buf.size() >= want) {
+      // keep only the freshest interval's worth (drop backlog)
+      if (g_tap_buf.size() > want * 4) {
+        g_tap_buf.erase(0, g_tap_buf.size() - want);
+      }
+      chunk = g_tap_buf.substr(0, want);
+      g_tap_buf.erase(0, want);
+    }
+  }
+  if (chunk.empty()) chunk.assign(want, '\0');
+  int frames = (int)(chunk.size() / (g_tap_channels * 2));
+  char head[128];
+  snprintf(head, sizeof head, "\t%d\t%d\t%d\t%lld", g_tap_rate, g_tap_channels,
+           frames, (long long)(g_get_monotonic_time() / 1000));
+  pipe_write_line("AUDIOTAP " +
+                  base64((const unsigned char*)chunk.data(), chunk.size()) + head);
+  return G_SOURCE_CONTINUE;
+}
+
+static void tap_stop() {
+  if (g_tap_timer) { g_source_remove(g_tap_timer); g_tap_timer = 0; }
+  if (g_tap_watch) { g_source_remove(g_tap_watch); g_tap_watch = 0; }
+  if (g_tap_fd >= 0) { close(g_tap_fd); g_tap_fd = -1; }
+  if (g_tap_pid) {
+    kill(g_tap_pid, SIGTERM);
+    g_spawn_close_pid(g_tap_pid);
+    g_tap_pid = 0;
+  }
+  std::lock_guard<std::mutex> lock(g_tap_mutex);
+  g_tap_buf.clear();
+}
+
+static gboolean tap_readable(gint fd, GIOCondition cond, gpointer) {
+  if (cond & (G_IO_HUP | G_IO_ERR)) { g_tap_watch = 0; return G_SOURCE_REMOVE; }
+  char buf[16384];
+  ssize_t n = read(fd, buf, sizeof buf);
+  if (n <= 0) { g_tap_watch = 0; return G_SOURCE_REMOVE; }
+  std::lock_guard<std::mutex> lock(g_tap_mutex);
+  g_tap_buf.append(buf, (size_t)n);
+  if (g_tap_buf.size() > (size_t)g_tap_rate * g_tap_channels * 2 * 4) {
+    g_tap_buf.erase(0, g_tap_buf.size() / 2);  // hard cap ~4s
+  }
+  return G_SOURCE_CONTINUE;
+}
+
+static void do_audiotap(const std::string& qid, const std::string& rest) {
+  auto f = split_tabs(rest);
+  int interval = atoi(tab_field(f, 2).c_str());
+  if (interval < 20) interval = 20;
+  if (interval > 500) interval = 500;
+  tap_stop();
+
+  // parec (PulseAudio compat, present with pipewire-pulse) or pw-cat --raw
+  std::string rate_s = std::to_string(g_tap_rate);
+  std::vector<std::string> cmd;
+  char* exe = g_find_program_in_path("parec");
+  if (exe) {
+    cmd = {exe, "-d", "@DEFAULT_MONITOR@", "--format=s16le",
+           "--rate=" + rate_s, "--channels=2", "--raw"};
+    g_free(exe);
+  } else if ((exe = g_find_program_in_path("pw-cat"))) {
+    cmd = {exe, "--record", "--raw", "--format", "s16", "--rate", rate_s,
+           "--channels", "2", "-P", "{ stream.capture.sink=true }", "-"};
+    g_free(exe);
+  } else {
+    send_got(qid, "{\"ok\":false,\"code\":\"unsupported\","
+                  "\"message\":\"no parec or pw-cat on PATH\"}");
+    return;
+  }
+
+  std::vector<const gchar*> argv;
+  for (auto& a : cmd) argv.push_back(a.c_str());
+  argv.push_back(nullptr);
+  gint out_fd = -1;
+  GError* err = nullptr;
+  if (!g_spawn_async_with_pipes(nullptr, (gchar**)argv.data(), nullptr,
+        (GSpawnFlags)(G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_STDERR_TO_DEV_NULL),
+        nullptr, nullptr, &g_tap_pid, nullptr, &out_fd, nullptr, &err)) {
+    g_clear_error(&err);
+    send_got(qid, "{\"ok\":false,\"code\":\"failed\"}");
+    return;
+  }
+  g_tap_fd = out_fd;
+  g_tap_interval = interval;
+  g_tap_watch = g_unix_fd_add(out_fd, (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR),
+                              tap_readable, nullptr);
+  g_tap_timer = g_timeout_add(interval, tap_tick, nullptr);
+  send_got(qid, "{\"ok\":true,\"sampleRate\":" + std::to_string(g_tap_rate) +
+                ",\"channels\":" + std::to_string(g_tap_channels) + "}");
+}
+
 // --- keystroke / hotkeys (X11) ------------------------------------------------
 
 struct KeyCombo { unsigned mods = 0; unsigned long keysym = 0; bool ok = false; };
@@ -2719,9 +3071,10 @@ static void handle_line(const std::string& line) {
     send_got(q, "{\"ok\":false,\"error\":\"not built in\"}");
     return;
   }
-  if (line == "AUDIOTAP STOP") return;
-  if (qid_op("AUDIOTAP", qid, body)) {
-    send_got(qid, "{\"ok\":false,\"code\":\"unsupported\"}");
+  if (line == "AUDIOTAP STOP") { tap_stop(); return; }
+  if (qid_op("AUDIOTAP", qid, body)) { do_audiotap(qid, body); return; }
+  if (line.rfind("NOWPLAYING", 0) == 0) {
+    do_nowplaying(line.size() > 11 ? line.substr(11) : "");
     return;
   }
 
@@ -2746,7 +3099,7 @@ static void handle_line(const std::string& line) {
     }
     return;
   }
-  // BADGE, SHARE, QUICKLOOK, NOWPLAYING, HAPTIC: silent no-ops (fire-and-forget)
+  // BADGE, SHARE, QUICKLOOK, HAPTIC: silent no-ops (fire-and-forget)
 }
 
 // ------------------------------------------------------- main window close --
@@ -2915,6 +3268,7 @@ int main(int argc, char** argv) {
   gtk_main();
 
   if (g_inhibit_fd >= 0) close(g_inhibit_fd);
+  tap_stop();
   remove_tray();
   _exit(0);
 }

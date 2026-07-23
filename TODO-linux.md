@@ -45,6 +45,16 @@ where missing.
       when installed.
 - [x] **battery** and **idleTime** (GNOME) and `dock.bounce` (urgency
       hint).
+- [x] **nowPlaying + media keys** — a real MPRIS
+      (`org.mpris.MediaPlayer2`) player object: metadata shows in the
+      GNOME/KDE media widget and lock screen, and Play/Pause/Next/Previous/
+      Seek route back as `onMediaKey`. This is the correct Linux mapping,
+      not a stopgap.
+- [x] **audioTap (system)** — captures the default sink's monitor via
+      `parec` (`@DEFAULT_MONITOR@`) or `pw-cat --record` (sink capture),
+      chunked to interleaved LE Int16 at the requested interval. Matches
+      the Windows WASAPI-loopback behavior: system scope only, `scope:'app'`
+      is approximated by the system mix (see Still open for true per-app).
 - [x] **Install script + release CI** — `curl -fsSL tinyjs.app/install | sh`
       detects Linux and installs to `~/.tinyjs` (needs the system
       `libwebkit2gtk-4.1-0` runtime); `setup.sh` now also builds on Linux
@@ -60,8 +70,9 @@ where missing.
 - [ ] **Wayland-native global hotkeys** — the X11 XGrabKey path covers
       X11/XWayland sessions; the `org.freedesktop.portal.GlobalShortcuts`
       portal would cover pure Wayland (user-facing rebind dialog).
-- [ ] **audioTap** — PipeWire/PulseAudio monitor-source capture (parec or
-      libpulse); scope:'app' needs per-sink-input capture.
+- [ ] **audioTap scope:'app'** — the system mix is captured (done above);
+      true per-process (own-window-only) capture needs a PipeWire
+      sink-input filter, like the Windows process-loopback path.
 - [ ] **recorder** — screen recording to a video file; not implemented on
       any Linux session yet. The PipeWire ScreenCast portal would be the
       route, and would also cover **captureScreen on pure Wayland** (X11
@@ -83,6 +94,5 @@ where missing.
 is dead — `dock.bounce` now works via an urgency hint, but badges/custom
 icons have no equivalent; could revisit via LauncherEntry), `setAllSpaces`
 (sticky windows exist on X11 only), `tiny.app.ai`, `wifi` (NetworkManager
-DBus — revisit if asked), `nowPlaying`/media keys (MPRIS — worth doing,
-revisit), `share`. All reject or report `'unsupported'` so apps can
+DBus — revisit if asked), `share`. All reject or report `'unsupported'` so apps can
 feature-detect.

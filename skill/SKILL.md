@@ -64,7 +64,11 @@ icon click (no menu set) is emulated via a synthetic menu entry, and
 (portal-based) — unlike Windows. Deep links / file associations / single
 instance work — a built app self-registers its `.desktop` entry (app-menu
 listing, icon, `urlScheme`, `fileExtensions`, single-instance) on first run,
-no separate install step.
+no separate install step. `nowPlaying`/media keys work via MPRIS (shows in
+the GNOME/KDE media widget + lock screen; transport routes to `onMediaKey`).
+`audioTap` works for `scope:'system'` (the default sink's monitor via
+`parec`/`pw-cat`); `scope:'app'` is approximated by the system mix, same as
+Windows.
 
 macOS-only (on Windows these reject or answer `'unsupported'`/null — always
 feature-detect): notification action buttons, `audioTap`, `proxyURL` media
@@ -76,9 +80,9 @@ TCC flow (Windows answers 'granted'), `quickLook`, `recorder`, `pickColor`,
 `tiny.app.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
 Not supported on Linux (reject or answer `'unsupported'`/empty — always
-feature-detect): `audioTap`, `recorder`, `ocr`, `quickLook`, `applescript`,
+feature-detect): `recorder`, `ocr`, `quickLook`, `applescript`,
 `haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`,
-`nowPlaying`/media keys (MPRIS planned), `share`, `wifi`, `spotlight`
+`share`, `wifi`, `spotlight`
 (returns `[]`), `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
 `authenticate`, `tiny.app.ai`, `setAllSpaces` (maps to sticky windows
 instead of true per-Space follow). (Linux plans: tarwin/tinyjsapp
