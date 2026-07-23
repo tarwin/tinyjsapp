@@ -2196,7 +2196,10 @@ static void do_audiotap(const std::string& qid, const std::string& rest) {
            "--rate=" + rate_s, "--channels=2", "--raw"};
     g_free(exe);
   } else if ((exe = g_find_program_in_path("pw-cat"))) {
-    cmd = {exe, "--record", "--raw", "--format", "s16", "--rate", rate_s,
+    // No --raw: pipewire dropped the flag, and writing to "-" is raw PCM
+    // anyway. Passing it made pw-cat exit immediately with "unrecognized
+    // option", which the tick below then papered over with silence.
+    cmd = {exe, "--record", "--format", "s16", "--rate", rate_s,
            "--channels", "2", "-P", "{ stream.capture.sink=true }", "-"};
     g_free(exe);
   } else {
@@ -2219,6 +2222,17 @@ static void do_audiotap(const std::string& qid, const std::string& rest) {
   }
   g_tap_fd = out_fd;
   g_tap_interval = interval;
+  // A tick with nothing buffered emits silence to keep the cadence steady,
+  // which is right for a brief underrun but would otherwise hide a capture
+  // tool that died on startup behind an endless silent stream. Stop the
+  // stream if the child exits so "no audio" can't masquerade as "silence".
+  g_child_watch_add(g_tap_pid, [](GPid pid, gint status, gpointer) {
+    if (g_tap_pid != pid) { g_spawn_close_pid(pid); return; }
+    fprintf(stderr, "[tinyjs] audio capture exited (status %d) — stopping tap\n", status);
+    g_tap_pid = 0;          // tap_stop() must not signal a reaped pid
+    tap_stop();
+    g_spawn_close_pid(pid);
+  }, nullptr);
   g_tap_watch = g_unix_fd_add(out_fd, (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR),
                               tap_readable, nullptr);
   g_tap_timer = g_timeout_add(interval, tap_tick, nullptr);
