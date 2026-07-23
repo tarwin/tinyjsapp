@@ -218,7 +218,9 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
       Seek route back as `onMediaKey`. This is the correct Linux mapping,
       not a stopgap.
 - [x] **audioTap (system)** — captures the default sink's monitor via
-      `parec` (`@DEFAULT_MONITOR@`) or `pw-cat --record` (sink capture),
+      `parec` (`@DEFAULT_MONITOR@`) or `pw-cat --record` (sink capture;
+      verified 2026-07-23 on a box with no pulseaudio-utils — silence while
+      idle, 100% FS while a wav plays through the default sink),
       chunked to interleaved LE Int16 at the requested interval. Matches
       the Windows WASAPI-loopback behavior: system scope only, `scope:'app'`
       is approximated by the system mix (see Still open for true per-app).
@@ -235,6 +237,12 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
         any non-Windows OS — they now take the polled-`mousePosition` path off
         macOS (real coordinates on X11, 0,0 on Wayland), and deja no longer
         spawns macOS's `screencapture` on Linux.
+- [x] **Auto-update verified on Linux (2026-07-23)** — end to end against a
+      local manifest (`assertSafeUrl` allows http://127.0.0.1 for exactly
+      this): published 0.1.0, installed the tarball, published 0.2.0, and the
+      installed app's `update.check()` reported 0.1.0 -> 0.2.0, `update.install()`
+      swapped the bundle in place, and the binary then reported 0.2.0. A
+      manifest with a bad sha256 is refused and the install is left untouched.
 - [x] **Install script + release CI** — `curl -fsSL tinyjs.app/install | sh`
       detects Linux and installs to `~/.tinyjs` (needs the system
       `libwebkit2gtk-4.1-0` runtime); `setup.sh` now also builds on Linux
