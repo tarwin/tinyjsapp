@@ -21,8 +21,10 @@ import { bundlePath, checkForUpdate, installUpdate, relaunch } from './update.js
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const DEBUG = !!tjs.env.TINYJS_DEBUG;
-// txiki has no tjs.platform; OS=Windows_NT is always set by Windows itself.
+// txiki has no tjs.platform; OS=Windows_NT is always set by Windows itself,
+// and navigator.platform reads "Linux …" from uname on Linux.
 const IS_WIN = tjs.env.OS === 'Windows_NT';
+const IS_LINUX = !IS_WIN && /linux/i.test(globalThis.navigator?.platform ?? '');
 // Strip the file name off a path, tolerating both separators (Windows paths
 // arrive with backslashes).
 const dirOf = (p) => String(p).replace(/[\\/][^\\/]*$/, '');
@@ -57,13 +59,13 @@ const DIALOG_OPS = {
   'win.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
 };
 
-// Per-app data root: ~/Library/Application Support/<id> (macOS) or
-// %APPDATA%\<id> (Windows).
+// Per-app data root: ~/Library/Application Support/<id> (macOS),
+// %APPDATA%\<id> (Windows), or $XDG_DATA_HOME/<id> (Linux).
 function appDataDir(appId) {
   const id = appId || 'tinyjs-app';
-  return IS_WIN
-    ? (tjs.env.APPDATA || tjs.homeDir + '/AppData/Roaming') + '/' + id
-    : tjs.homeDir + '/Library/Application Support/' + id;
+  if (IS_WIN) return (tjs.env.APPDATA || tjs.homeDir + '/AppData/Roaming') + '/' + id;
+  if (IS_LINUX) return (tjs.env.XDG_DATA_HOME || tjs.homeDir + '/.local/share') + '/' + id;
+  return tjs.homeDir + '/Library/Application Support/' + id;
 }
 
 // Tiny persistent JSON store in the per-app data dir.
@@ -218,11 +220,14 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // launcher.exe, which can't start on its own, so a default pin would be
     // dead on next launch. Dev spawns set nothing (nothing worth pinning).
     if (IS_WIN && bundlePath()) spawnEnv.TINYJS_APP_EXE = tjs.exePath;
-    // Windows built apps: the icon rides inside the compiled exe (app root of
-    // the TPK extraction, next to the frontend/ the page loads from); a
-    // dist/icon.png next to the exe still wins for older builds. Dev passes
-    // TINYJS_ICON from the CLI instead.
-    if (IS_WIN && !spawnEnv.TINYJS_ICON) {
+    // Linux: the app id names the WM class (window ↔ .desktop matching) and
+    // the notification identity. Dev sets it from the CLI; built apps here.
+    if (IS_LINUX && id && !spawnEnv.TINYJS_APP_ID) spawnEnv.TINYJS_APP_ID = id;
+    // Windows/Linux built apps: the icon rides inside the compiled binary
+    // (app root of the TPK extraction, next to the frontend/ the page loads
+    // from); a dist/icon.png next to the binary still wins for older builds.
+    // Dev passes TINYJS_ICON from the CLI instead.
+    if ((IS_WIN || IS_LINUX) && !spawnEnv.TINYJS_ICON) {
       const tpkIcon = pagePath ? dirOf(dirOf(pagePath)) + '/icon.png' : null;
       if (await exists(exeDir + 'icon.png')) spawnEnv.TINYJS_ICON = exeDir + 'icon.png';
       else if (tpkIcon && (await exists(tpkIcon))) spawnEnv.TINYJS_ICON = tpkIcon;
@@ -319,9 +324,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // bundle for UNUserNotificationCenter, so it falls back to osascript
   // (banner appears under "Script Editor").
   async function notify({ title, body, subtitle, id: nid, sound, actions } = {}) {
-    // Windows: the launcher shows a tray balloon in every mode (no bundle
-    // requirement), so the osascript fallback below stays macOS-only.
-    if (attachPath || IS_WIN) {
+    // Windows (tray balloon / toast) and Linux (org.freedesktop.Notifications
+    // over DBus) notify from the launcher in every mode — no bundle
+    // requirement — so the osascript fallback below stays macOS-only.
+    if (attachPath || IS_WIN || IS_LINUX) {
       // actions: [{ id, title, reply?, placeholder?, destructive? }] — buttons
       // (or a reply field) on the banner; taps come back as 'notification-action'.
       const acts = actions?.length ? esc(JSON.stringify(actions)) : '';
@@ -764,6 +770,17 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           data: appDataDir(id),
           cache: (tjs.env.LOCALAPPDATA || tjs.homeDir + '/AppData/Local') + '/' + (id || 'tinyjs-app') + '/Cache',
           logs: (tjs.env.LOCALAPPDATA || tjs.homeDir + '/AppData/Local') + '/' + (id || 'tinyjs-app') + '/Logs',
+          temp: tjs.tmpDir,
+          downloads: tjs.homeDir + '/Downloads',
+          desktop: tjs.homeDir + '/Desktop',
+          documents: tjs.homeDir + '/Documents',
+        }
+      : IS_LINUX
+      ? {
+          home: tjs.homeDir,
+          data: appDataDir(id),
+          cache: (tjs.env.XDG_CACHE_HOME || tjs.homeDir + '/.cache') + '/' + (id || 'tinyjs-app'),
+          logs: (tjs.env.XDG_STATE_HOME || tjs.homeDir + '/.local/state') + '/' + (id || 'tinyjs-app'),
           temp: tjs.tmpDir,
           downloads: tjs.homeDir + '/Downloads',
           desktop: tjs.homeDir + '/Desktop',
@@ -1272,14 +1289,17 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // call app.clipboard.watch(ms) on top (idempotent).
   if (onClipboardChange) app.clipboard.watch();
 
-  // --- Windows: single instance + deep links / file associations -----------
+  // --- Windows/Linux: single instance + deep links / file associations -----
   // Built apps only (macOS gets all of this from LaunchServices + the plist).
-  // The app listens on \\.\pipe\tinyjs-app-<id>; `launcher-win.exe --open`
-  // (the registered protocol/extension handler) forwards URLs and file paths
+  // The app listens on \\.\pipe\tinyjs-app-<id> (Windows) or
+  // $XDG_RUNTIME_DIR/tinyjs-app-<id>.sock (Linux); `launcher --open` (the
+  // registered protocol/extension handler) forwards URLs and file paths
   // over it, starting the app first when needed. A second direct launch of
   // the exe detects the pipe, activates the running instance, and exits.
-  if (IS_WIN && bundlePath()) {
-    const instPipe = '\\\\.\\pipe\\tinyjs-app-' + (id || 'tinyjs-app');
+  if ((IS_WIN || IS_LINUX) && bundlePath()) {
+    const instPipe = IS_WIN
+      ? '\\\\.\\pipe\\tinyjs-app-' + (id || 'tinyjs-app')
+      : (tjs.env.XDG_RUNTIME_DIR || tjs.tmpDir) + '/tinyjs-app-' + (id || 'tinyjs-app') + '.sock';
     let haveInstancePipe = false;
     try {
       const conn = await tjs.connect('pipe', instPipe);
@@ -1288,6 +1308,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       await w.write(enc.encode('{"activate":true}\n'));
       tjs.exit(0); // another instance owns the app — hand over
     } catch {}
+    // A unix socket left by a crashed instance blocks listen() — nothing
+    // answered above, so it's stale; clear it. (Windows pipes need no cleanup.)
+    if (IS_LINUX) await tjs.remove(instPipe).catch(() => {});
     try {
       const srv = await tjs.listen('pipe', instPipe);
       const srvInfo = await srv.opened;
@@ -1324,9 +1347,60 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       })();
     } catch {}
 
+    // --- Linux registration: a .desktop entry (app menu, window icon
+    // matching via StartupWMClass) written on first run — idempotent file
+    // writes under $XDG_DATA_HOME, no root. urlScheme becomes an
+    // x-scheme-handler MimeType (+ xdg-mime default); fileExtensions get
+    // glob'd mime types via a shared-mime-info package. Failures are silent:
+    // a sandboxed/odd session still runs the app, just unregistered.
+    if (IS_LINUX && haveInstancePipe) {
+      try {
+        const dataHome = tjs.env.XDG_DATA_HOME || tjs.homeDir + '/.local/share';
+        const appIdStr = id || 'tinyjs-app';
+        const openCmd = '"' + exeDir + 'launcher" --open ' + instPipe + ' "' + tjs.exePath + '" %u';
+        let iconLine = '';
+        if (await exists(exeDir + 'icon.png')) iconLine = 'Icon=' + exeDir + 'icon.png\n';
+        else if (pagePath && (await exists(dirOf(dirOf(pagePath)) + '/icon.png'))) {
+          iconLine = 'Icon=' + dirOf(dirOf(pagePath)) + '/icon.png\n';
+        }
+        const mimes = [];
+        for (const scheme of urlScheme ? [].concat(urlScheme) : []) {
+          mimes.push('x-scheme-handler/' + scheme);
+        }
+        if (fileExtensions?.length) {
+          const safeId = appIdStr.toLowerCase().replace(/[^a-z0-9.-]/g, '-');
+          let xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+            '<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">\n';
+          for (const ext of fileExtensions) {
+            const e = String(ext).replace(/^\./, '');
+            const mt = 'application/x-' + safeId + '-' + e.toLowerCase();
+            mimes.push(mt);
+            xml += `  <mime-type type="${mt}"><comment>${title} document</comment><glob pattern="*.${e}"/></mime-type>\n`;
+          }
+          xml += '</mime-info>\n';
+          await tjs.makeDir(dataHome + '/mime/packages', { recursive: true });
+          await tjs.writeFile(dataHome + '/mime/packages/' + safeId + '.xml', enc.encode(xml));
+          tjs.spawn(['update-mime-database', dataHome + '/mime'],
+                    { stdout: 'ignore', stderr: 'ignore' }).wait().catch(() => {});
+        }
+        const desktop = '[Desktop Entry]\nType=Application\nName=' + title +
+          '\nExec=' + openCmd + '\n' + iconLine +
+          'Terminal=false\nStartupWMClass=' + appIdStr + '\n' +
+          (mimes.length ? 'MimeType=' + mimes.join(';') + ';\n' : '');
+        await tjs.makeDir(dataHome + '/applications', { recursive: true });
+        await tjs.writeFile(dataHome + '/applications/' + appIdStr + '.desktop', enc.encode(desktop));
+        tjs.spawn(['update-desktop-database', dataHome + '/applications'],
+                  { stdout: 'ignore', stderr: 'ignore' }).wait().catch(() => {});
+        for (const scheme of urlScheme ? [].concat(urlScheme) : []) {
+          tjs.spawn(['xdg-mime', 'default', appIdStr + '.desktop', 'x-scheme-handler/' + scheme],
+                    { stdout: 'ignore', stderr: 'ignore' }).wait().catch(() => {});
+        }
+      } catch {}
+    }
+
     // Registration (idempotent HKCU writes; no admin). The handler command
     // is the launcher's --open mode pointing at this exe + instance pipe.
-    if (haveInstancePipe && (urlScheme || fileExtensions?.length)) {
+    if (IS_WIN && haveInstancePipe && (urlScheme || fileExtensions?.length)) {
       const launcherExe = exeDir + 'launcher.exe';
       const openCmd = '"' + launcherExe + '" --open ' + instPipe + ' "' + tjs.exePath + '" "%1"';
       const reg = (args) => tjs.spawn(hiddenArgv(['reg', 'add', ...args, '/f']),

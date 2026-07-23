@@ -11,8 +11,10 @@
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-// txiki has no tjs.platform; OS=Windows_NT is always set by Windows itself.
+// txiki has no tjs.platform; OS=Windows_NT is always set by Windows itself,
+// and navigator.platform reads "Linux …" from uname on Linux.
 const IS_WIN = tjs.env.OS === 'Windows_NT';
+const IS_LINUX = !IS_WIN && /linux/i.test(globalThis.navigator?.platform ?? '');
 
 // URL.pathname renders C:\Users\me as /C:/Users/me (percent-encoded) — decode
 // and drop the leading slash so the result is a usable Windows path.
@@ -571,33 +573,40 @@ async function cmdNew() {
   tinyjs build    # package it`);
 }
 
-// Dev-checkout convenience (Windows): if the native launcher sources (or the
-// injected client, which is compiled into it) are newer than the built
-// launcher-win.exe, rebuild via setup.ps1 before starting — so hacking on
-// tinyjs itself never runs a stale binary. Installed copies (VERSION file
-// present) never rebuild.
-async function ensureWinLauncherFresh() {
-  if (!IS_WIN || (await toolVersion()) !== 'dev') return;
-  const exe = TOOL_DIR + 'native/launcher-win.exe';
+// Dev-checkout convenience (Windows + Linux): if the native launcher sources
+// (or the injected client, which is compiled into it) are newer than the
+// built launcher, rebuild via setup.ps1 / setup.sh before starting — so
+// hacking on tinyjs itself never runs a stale binary. Installed copies
+// (VERSION file present) never rebuild.
+async function ensureLauncherFresh() {
+  if ((!IS_WIN && !IS_LINUX) || (await toolVersion()) !== 'dev') return;
+  const exe = TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : 'launcher-linux');
+  const srcs = IS_WIN
+    ? ['native/launcher-win.cc', 'runtime/tiny.js']
+    : ['native/launcher-linux.cc', 'runtime/tiny.js'];
   const mtime = async (p) => {
     try { return (await tjs.stat(p)).mtim.getTime(); } catch { return null; }
   };
   const built = await mtime(exe);
   let stale = built === null;
-  for (const src of ['native/launcher-win.cc', 'runtime/tiny.js']) {
+  for (const src of srcs) {
     const m = await mtime(TOOL_DIR + src);
     if (m !== null && (built === null || m > built)) stale = true;
   }
   if (!stale) return;
-  console.log('==> launcher sources changed — rebuilding (setup.ps1)');
-  await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-             '-File', TOOL_DIR + 'setup.ps1', '-SkipPath'], { cwd: TOOL_DIR });
+  console.log('==> launcher sources changed — rebuilding (' + (IS_WIN ? 'setup.ps1' : 'setup.sh') + ')');
+  if (IS_WIN) {
+    await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+               '-File', TOOL_DIR + 'setup.ps1', '-SkipPath'], { cwd: TOOL_DIR });
+  } else {
+    await run(['sh', TOOL_DIR + 'setup.sh'], { cwd: TOOL_DIR });
+  }
 }
 
 async function cmdDev() {
   const cfg = await loadConfig();
   maybeNotifyUpdate(); // fire-and-forget; prints if a newer release exists
-  await ensureWinLauncherFresh();
+  await ensureLauncherFresh();
 
   // Frontend dev server (vite etc.): spawn it, wait until it responds, and
   // point the window at it. HMR replaces tinyjs' own frontend watcher; the
@@ -653,10 +662,12 @@ async function cmdDev() {
       : tjs.cwd + '/' + B + '/entry.js';
     // An explicit TINYJS_LAUNCHER in the environment wins (matches the
     // bridge's own precedence) — useful for testing a different build.
-    const devEnv = { ...tjs.env, TINYJS_LAUNCHER: tjs.env.TINYJS_LAUNCHER || (TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : 'launcher')) };
-    // Windows: the launcher shows the project icon in the titlebar/taskbar.
+    const devEnv = { ...tjs.env, TINYJS_LAUNCHER: tjs.env.TINYJS_LAUNCHER || (TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : IS_LINUX ? 'launcher-linux' : 'launcher')) };
+    // Windows/Linux: the launcher shows the project icon in the titlebar/taskbar.
     const iconSrc = cfg.icon || 'icon.png';
-    if (IS_WIN && (await exists(iconSrc))) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
+    if ((IS_WIN || IS_LINUX) && (await exists(iconSrc))) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
+    // Linux: the app id names the WM class (window ↔ .desktop matching).
+    if (IS_LINUX) devEnv.TINYJS_APP_ID = cfg.id;
     child = tjs.spawn([tjs.exePath, 'run', entryPath], {
       stdin: 'inherit',
       stdout: 'inherit',
@@ -700,6 +711,12 @@ async function cmdBuild() {
   // `tjs app compile` runs from the parent of the app/ dir and bundles the
   // whole module graph into a standalone executable.
   let compiler = tjs.exePath;
+  if (IS_LINUX) {
+    // The icon rides inside the compiled binary's TPK bundle (next to the
+    // frontend); the launcher reads it for the window icon and notifications.
+    const linIcon = cfg.icon || 'icon.png';
+    if (await exists(linIcon)) await copyFile(linIcon, '.build/app/icon.png');
+  }
   if (IS_WIN) {
     const winIcon = cfg.icon || 'icon.png';
     if (await exists(winIcon)) {
@@ -755,6 +772,20 @@ async function cmdBuild() {
     }
     console.log('==> done');
     console.log(`run it:  .\\dist\\${cfg.name}.exe`);
+    return;
+  }
+
+  if (IS_LINUX) {
+    // Linux build: a portable dist/ folder — <name> (compiled backend; the
+    // frontend and icon ride inside its TPK bundle) with launcher + icon.png
+    // next to it. The bridge registers a .desktop entry (app menu, deep
+    // links, file associations) on the app's first run — no install step.
+    await copyFile(TOOL_DIR + 'native/launcher-linux', 'dist/launcher');
+    await run(['chmod', '+x', 'dist/launcher', 'dist/' + cfg.name]);
+    const linIcon = cfg.icon || 'icon.png';
+    if (await exists(linIcon)) await copyFile(linIcon, 'dist/icon.png');
+    console.log('==> done');
+    console.log(`run it:  ./dist/${cfg.name}`);
     return;
   }
 
@@ -942,7 +973,7 @@ async function cmdBuild() {
 // Needs a real Developer ID signature plus a notarytool keychain profile
 // (create one: xcrun notarytool store-credentials <name> --apple-id … --team-id …).
 async function cmdNotarize() {
-  if (IS_WIN) fail('notarization is a macOS step — nothing to do on Windows');
+  if (IS_WIN || IS_LINUX) fail('notarization is a macOS step — nothing to do here');
   const cfg = await loadConfig();
   const APP = 'dist/' + cfg.title + '.app';
   if (!(await exists(APP))) fail(`${APP} not found — run \`tinyjs build\` first`);
@@ -1004,13 +1035,26 @@ async function cmdPublish() {
   if (!version) fail('tinyjs.json needs a "version" to publish (e.g. "1.0.0")');
   await cmdBuild();
 
-  // Windows zips are suffixed -win; the manifest carries them in a "win"
-  // block alongside the macOS url/sha256, so one manifest serves both OSes.
-  const zipName = cfg.name + '-' + version + (IS_WIN ? '-win' : '') + '.zip';
+  // Windows zips are suffixed -win, Linux tarballs -linux-<arch>; the
+  // manifest carries them in "win" / "linux" blocks alongside the macOS
+  // url/sha256, so one manifest serves every OS.
+  const linuxArch = IS_LINUX ? (/aarch64|arm64/i.test(globalThis.navigator?.platform ?? '') ? 'arm64' : 'x86_64') : '';
+  const zipName = cfg.name + '-' + version +
+    (IS_WIN ? '-win.zip' : IS_LINUX ? '-linux-' + linuxArch + '.tar.gz' : '.zip');
   const PUB = 'dist/publish';
   await rmTree(PUB);
-  console.log('==> zipping ' + zipName);
-  if (IS_WIN) {
+  console.log('==> packing ' + zipName);
+  if (IS_LINUX) {
+    // Stage dist/ under a named folder so the tarball's one top-level entry
+    // is the app folder (what update.js swaps in).
+    const stage = '.build/publish-stage';
+    await rmTree(stage);
+    await tjs.makeDir(stage + '/' + cfg.name, { recursive: true });
+    await copyTree('dist', stage + '/' + cfg.name);
+    await run(['chmod', '+x', stage + '/' + cfg.name + '/' + cfg.name, stage + '/' + cfg.name + '/launcher']);
+    await tjs.makeDir(PUB, { recursive: true });
+    await run(['tar', '-czf', PUB + '/' + zipName, '-C', stage, cfg.name]);
+  } else if (IS_WIN) {
     // Stage dist/ under a named folder so the zip's one top-level entry is
     // the app folder (what update.js swaps in); bsdtar (Windows 10+) writes
     // zip when told -a with a .zip name.
@@ -1031,9 +1075,12 @@ async function cmdPublish() {
   const zipUrl = (base ?? 'https://YOUR-HOST/updates') + '/' + zipName;
   const manifest = IS_WIN
     ? { version, win: { url: zipUrl, sha256: sha } }
+    : IS_LINUX
+    ? { version, linux: { [linuxArch]: { url: zipUrl, sha256: sha } } }
     : { version, url: zipUrl, sha256: sha };
-  // Publishing both platforms? Merge this manifest's fields into your hosted
-  // one — mac owns url/sha256, Windows owns the win block; they coexist.
+  // Publishing several platforms? Merge this manifest's fields into your
+  // hosted one — mac owns url/sha256, Windows the win block, Linux the
+  // per-arch linux block; they coexist.
   // Release notes for the in-app update prompt: --notes "text" or
   // --notes-file CHANGES.md (fed to update.check() as `notes`).
   const ni = args.findIndex((a) => a === '--notes' || a === '--notes-file');
@@ -1046,7 +1093,7 @@ async function cmdPublish() {
 
   console.log('==> dist/publish/ ready:');
   console.log('    ' + zipName);
-  console.log('    manifest.json (version ' + version + ', url ' + manifest.url + ')');
+  console.log('    manifest.json (version ' + version + ', url ' + zipUrl + ')');
   if (!base) {
     console.log('note: no "update": { "url": … } in tinyjs.json — the manifest url is a');
     console.log('placeholder; set update.url so shipped apps know where to check.');
@@ -1067,7 +1114,7 @@ async function cmdVersion() {
 // devs — non-fatal, since local dev with the x86_64 build still works. Apple
 // Silicon CPUs report as "Apple M…"; Intel Macs report "Intel(R) …".
 function warnIfIntelMac() {
-  if (IS_WIN) return;
+  if (IS_WIN || IS_LINUX) return;
   const model = tjs.system?.cpus?.[0]?.model || '';
   // Only warn on a positively-identified non-Apple CPU; if detection returns
   // nothing, stay quiet rather than false-alarm an Apple Silicon user.

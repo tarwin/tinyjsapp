@@ -24,6 +24,8 @@
 
 const dec = new TextDecoder();
 const IS_WIN = tjs.env.OS === 'Windows_NT';
+const IS_LINUX = !IS_WIN && /linux/i.test(globalThis.navigator?.platform ?? '');
+const LINUX_ARCH = /aarch64|arm64/i.test(globalThis.navigator?.platform ?? '') ? 'arm64' : 'x86_64';
 
 function assertSafeUrl(u, what) {
   const s = String(u ?? '');
@@ -90,30 +92,31 @@ async function exists(p) {
   try { await tjs.stat(p); return true; } catch { return false; }
 }
 
-// macOS: …/MyApp.app/Contents/MacOS/tjs -> …/MyApp.app. Windows: a built app
-// is a portable folder — <name>.exe with launcher.exe beside it (the frontend
-// rides inside the exe) — so that folder is the "bundle". null when not
-// packaged (dev / bare CLI).
-let winBundle; // memoized (involves stat calls)
+// macOS: …/MyApp.app/Contents/MacOS/tjs -> …/MyApp.app. Windows/Linux: a
+// built app is a portable folder — the compiled backend with launcher(.exe)
+// beside it (the frontend rides inside the binary) — so that folder is the
+// "bundle". null when not packaged (dev / bare CLI).
+let portableBundle; // memoized (involves stat calls)
 export function bundlePath() {
   const exe = tjs.exePath;
-  if (!IS_WIN) {
+  if (!IS_WIN && !IS_LINUX) {
     const i = exe.indexOf('.app/Contents/MacOS/');
     return i < 0 ? null : exe.slice(0, i + 4);
   }
-  return winBundle ?? null; // resolved async by winBundleInit below
+  return portableBundle ?? null; // resolved async by portableBundleInit below
 }
 
-// Windows bundle detection needs async stats; run once at import.
-async function winBundleInit() {
-  if (!IS_WIN) return;
+// Windows/Linux bundle detection needs async stats; run once at import.
+async function portableBundleInit() {
+  if (!IS_WIN && !IS_LINUX) return;
   const dir = tjs.exePath.replace(/[\\/][^\\/]*$/, '');
   const base = tjs.exePath.slice(dir.length + 1).toLowerCase();
-  if (base !== 'tjs.exe' && (await exists(dir + '/launcher.exe'))) {
-    winBundle = dir;
+  const launcher = IS_WIN ? 'launcher.exe' : 'launcher';
+  if (base !== (IS_WIN ? 'tjs.exe' : 'tjs') && (await exists(dir + '/' + launcher))) {
+    portableBundle = dir;
   }
 }
-await winBundleInit();
+await portableBundleInit();
 
 export async function checkForUpdate({ url, version }) {
   if (!url) throw new Error('no update url configured (tinyjs.json "update": { "url": … })');
@@ -135,6 +138,20 @@ export async function checkForUpdate({ url, version }) {
       manifest.sha256 = manifest.win.sha256;
       if (manifest.win.version) latest = manifest.win.version;
       if (manifest.win.notes) manifest.notes = manifest.win.notes;
+    } else {
+      return { available: false, current: version, latest,
+               notes: manifest?.notes ?? null, manifest };
+    }
+  }
+  // Linux downloads are per-arch: "linux": { "arm64": { url, sha256 }, … }.
+  // No block for this arch → report "no update" rather than a foreign build.
+  if (IS_LINUX) {
+    const lin = manifest?.linux?.[LINUX_ARCH];
+    if (lin?.url && lin.sha256) {
+      manifest.url = lin.url;
+      manifest.sha256 = lin.sha256;
+      if (lin.version) latest = lin.version;
+      if (manifest.linux.notes) manifest.notes = manifest.linux.notes;
     } else {
       return { available: false, current: version, latest,
                notes: manifest?.notes ?? null, manifest };
@@ -186,27 +203,30 @@ export async function installUpdate({ url, version, manifest }) {
 
     // Extract: ditto on macOS; bsdtar (ships with Windows 10+) reads zips —
     // via `launcher --run` so the console tool doesn't flash a terminal
-    // (the updating app is a GUI-subsystem exe).
+    // (the updating app is a GUI-subsystem exe); plain tar on Linux (the
+    // Linux asset is a .tar.gz).
     await tjs.makeDir(tmp + '/x', { recursive: true }).catch(() => {});
-    const winTar = (b => b ? [b + '/launcher.exe', '--run'] : [])(bundlePath());
+    const winTar = (b => b ? [b + '/launcher.exe', '--run'] : [])(IS_WIN ? bundlePath() : null);
     const extractOk = IS_WIN
       ? await runOk([...winTar, 'tar', '-xf', zipPath, '-C', tmp + '/x'])
+      : IS_LINUX
+      ? await runOk(['tar', '-xzf', zipPath, '-C', tmp + '/x'])
       : await runOk(['ditto', '-x', '-k', zipPath, tmp + '/x']);
-    if (!extractOk) throw new Error('could not extract the update zip');
+    if (!extractOk) throw new Error('could not extract the update archive');
 
-    // The zip holds one top-level entry: MyApp.app (macOS) or a folder with
-    // the exe + launcher.exe (Windows).
+    // The archive holds one top-level entry: MyApp.app (macOS) or a folder
+    // with the compiled backend + launcher (Windows/Linux).
     let newApp = null;
     const iter = await tjs.readDir(tmp + '/x');
     for await (const e of iter) {
-      if (IS_WIN ? e.isDirectory : e.name.endsWith('.app')) {
+      if ((IS_WIN || IS_LINUX) ? e.isDirectory : e.name.endsWith('.app')) {
         newApp = tmp + '/x/' + e.name;
         break;
       }
     }
-    if (!newApp) throw new Error('update zip does not contain an app ' + (IS_WIN ? 'folder' : 'bundle'));
+    if (!newApp) throw new Error('update archive does not contain an app ' + ((IS_WIN || IS_LINUX) ? 'folder' : 'bundle'));
 
-    if (!IS_WIN) {
+    if (!IS_WIN && !IS_LINUX) {
       // Integrity check: the bundle's own seal must verify (ad-hoc or real
       // identity alike). A tampered or truncated download fails here.
       if (!(await runOk(['codesign', '--verify', '--strict', '--deep', newApp]))) {
@@ -236,8 +256,10 @@ export async function installUpdate({ url, version, manifest }) {
       return bundle;
     }
 
-    // Swap with rollback. Renaming a running .app is fine on macOS: open
-    // files keep working via their inodes until the process exits.
+    // Swap with rollback. Renaming a running .app/folder is fine on macOS
+    // and Linux: open files keep working via their inodes until the process
+    // exits. (The rename can cross filesystems when tmp is a different
+    // mount; the rollback path covers that failure.)
     const backup = bundle + '.update-backup';
     await rmrf(backup);
     try {
@@ -248,13 +270,41 @@ export async function installUpdate({ url, version, manifest }) {
     try {
       await tjs.rename(newApp, bundle);
     } catch {
-      await tjs.rename(backup, bundle).catch(() => {});
-      throw new Error('failed to move the new app into place');
+      // Cross-filesystem rename (tmp is tmpfs on most Linux systems) can't
+      // move a directory — copy it instead.
+      const copied = await copyTree(newApp, bundle);
+      if (!copied) {
+        await tjs.rename(backup, bundle).catch(() => {});
+        throw new Error('failed to move the new app into place');
+      }
     }
     await rmrf(backup);
     return bundle;
   } finally {
     rmrf(tmp);
+  }
+}
+
+// Recursive copy preserving the executable bit (cross-filesystem fallback
+// for the bundle swap). Returns false on any failure.
+async function copyTree(src, dst) {
+  try {
+    await tjs.makeDir(dst, { recursive: true }).catch(() => {});
+    const iter = await tjs.readDir(src);
+    for await (const e of iter) {
+      const s = src + '/' + e.name;
+      const d = dst + '/' + e.name;
+      if (e.isDirectory) {
+        if (!(await copyTree(s, d))) return false;
+      } else {
+        await tjs.writeFile(d, await tjs.readFile(s));
+        const st = await tjs.stat(s);
+        if (st.mode & 0o111) await tjs.chmod(d, st.mode & 0o7777).catch(() => {});
+      }
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -292,11 +342,15 @@ async function winSwapDir(src, dst) {
   }
 }
 
+// Captured at import: on Linux, once the running binary has been replaced by
+// an update, /proc/self/exe (and so tjs.exePath) reads "…/name (deleted)" —
+// resolve the name BEFORE any swap can happen.
+const EXE_NAME = tjs.exePath.replace(/^.*[\\/]/, '');
+
 export function relaunch(bundle) {
-  if (IS_WIN) {
+  if (IS_WIN || IS_LINUX) {
     // The new folder keeps the same exe name as the running app.
-    const exeName = tjs.exePath.replace(/^.*[\\/]/, '');
-    tjs.spawn([bundle + '\\' + exeName],
+    tjs.spawn([bundle + (IS_WIN ? '\\' : '/') + EXE_NAME],
               { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
     return;
   }
