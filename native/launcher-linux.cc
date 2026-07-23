@@ -2790,7 +2790,18 @@ static void do_say(const std::string& qid, const std::string& rest) {
   int spd_rate = (int)((rate <= 0 ? 0.5 : rate) * 200 - 100);
   std::string rate_s = std::to_string(spd_rate);
   std::vector<const gchar*> argv = {exe, "-w", "-r", rate_s.c_str()};
-  if (!voice.empty()) { argv.push_back("-l"); argv.push_back(voice.c_str()); }
+  if (!voice.empty()) {
+    // `voice` is either an id from voices() (a spd synthesis voice name, -y) or
+    // a language tag like 'en-AU' (-l). Anything shaped like a bare ISO code
+    // is treated as the latter.
+    bool lang_tag = voice.size() <= 6;
+    for (size_t i = 0; lang_tag && i < voice.size(); i++) {
+      char ch = voice[i];
+      if (!isalpha((unsigned char)ch) && ch != '-' && ch != '_') lang_tag = false;
+    }
+    argv.push_back(lang_tag ? "-l" : "-y");
+    argv.push_back(voice.c_str());
+  }
   argv.push_back(text.c_str());
   argv.push_back(nullptr);
   GPid pid = 0;
@@ -2814,6 +2825,110 @@ static void do_say(const std::string& qid, const std::string& rest) {
     g_free(q);
     g_spawn_close_pid(pid);
   }, qid_heap);
+}
+
+// `spd-say -L` prints a header row then one synthesis voice per line, in three
+// right-aligned whitespace-separated columns (NAME LANGUAGE VARIANT). NAME
+// itself can contain spaces ("Chinese (Cantonese, latin as Jyutping)+croak"),
+// so peel LANGUAGE/VARIANT off the end and keep the rest as the name. The name
+// is what `-y` takes, so it doubles as the voice id.
+struct VoicesCtx {
+  std::string qid;
+  GPid pid = 0;
+  int fd = -1;
+  guint watch = 0, timer = 0;
+  std::string buf;
+  bool done = false;
+};
+
+static void voices_finish(VoicesCtx* c) {
+  if (c->done) return;
+  c->done = true;
+  if (c->watch) { g_source_remove(c->watch); c->watch = 0; }
+  if (c->timer) { g_source_remove(c->timer); c->timer = 0; }
+  if (c->fd >= 0) { close(c->fd); c->fd = -1; }
+  if (c->pid) { kill(c->pid, SIGTERM); g_spawn_close_pid(c->pid); c->pid = 0; }
+
+  std::string json = "[";
+  int n = 0;
+  size_t start = 0;
+  bool header = true;
+  while (start < c->buf.size()) {
+    size_t nl = c->buf.find('\n', start);
+    if (nl == std::string::npos) break;  // ignore a trailing partial line
+    std::string line = c->buf.substr(start, nl - start);
+    start = nl + 1;
+    if (header) { header = false; continue; }  // NAME LANGUAGE VARIANT
+
+    // Split off the last two whitespace-separated fields.
+    auto rtrim = [](std::string& s) {
+      while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
+    };
+    auto pop_field = [&](std::string& s) {
+      rtrim(s);
+      size_t sp = s.find_last_of(" \t");
+      if (sp == std::string::npos) { std::string f = s; s.clear(); return f; }
+      std::string f = s.substr(sp + 1);
+      s.erase(sp);
+      return f;
+    };
+    rtrim(line);
+    if (line.empty()) continue;
+    std::string variant = pop_field(line);
+    std::string lang = pop_field(line);
+    rtrim(line);
+    size_t lead = line.find_first_not_of(" \t");
+    std::string name = lead == std::string::npos ? "" : line.substr(lead);
+    if (name.empty() || lang.empty()) continue;
+    (void)variant;  // encoded in the name already ("Afrikaans+Adam")
+
+    if (n) json += ",";
+    json += "{\"id\":" + json_escape(name) +
+            ",\"name\":" + json_escape(name) +
+            ",\"lang\":" + json_escape(lang) +
+            ",\"quality\":\"default\"}";
+    n++;
+  }
+  json += "]";
+  send_got(c->qid, "{\"ok\":true,\"voices\":" + json + "}");
+  delete c;
+}
+
+static gboolean voices_readable(gint fd, GIOCondition cond, gpointer data) {
+  VoicesCtx* c = (VoicesCtx*)data;
+  if (cond & (G_IO_HUP | G_IO_ERR)) { c->watch = 0; voices_finish(c); return G_SOURCE_REMOVE; }
+  char buf[8192];
+  ssize_t r = read(fd, buf, sizeof buf);
+  if (r <= 0) { c->watch = 0; voices_finish(c); return G_SOURCE_REMOVE; }
+  c->buf.append(buf, (size_t)r);
+  return G_SOURCE_CONTINUE;
+}
+
+static void do_voices(const std::string& qid) {
+  char* exe = g_find_program_in_path("spd-say");
+  if (!exe) { send_got(qid, "{\"ok\":true,\"voices\":[]}"); return; }
+  const gchar* argv[] = {exe, "-L", nullptr};
+  gint out_fd = -1;
+  GPid pid = 0;
+  gboolean ok = g_spawn_async_with_pipes(nullptr, (gchar**)argv, nullptr,
+      (GSpawnFlags)(G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_STDERR_TO_DEV_NULL),
+      nullptr, nullptr, &pid, nullptr, &out_fd, nullptr, nullptr);
+  g_free(exe);
+  if (!ok) { send_got(qid, "{\"ok\":true,\"voices\":[]}"); return; }
+  VoicesCtx* c = new VoicesCtx();
+  c->qid = qid;
+  c->pid = pid;
+  c->fd = out_fd;
+  c->watch = g_unix_fd_add(out_fd, (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR),
+                           voices_readable, c);
+  // speech-dispatcher autospawns on first contact; don't let a wedged daemon
+  // hang the caller.
+  c->timer = g_timeout_add(4000, [](gpointer d) -> gboolean {
+    VoicesCtx* c = (VoicesCtx*)d;
+    c->timer = 0;
+    voices_finish(c);
+    return G_SOURCE_REMOVE;
+  }, c);
 }
 
 static void do_saystop() {
@@ -3361,7 +3476,7 @@ static void handle_line(const std::string& line) {
   if (qid_op("AUTH", qid, body)) { send_got(qid, "{\"ok\":false}"); return; }
   if (qid_op("SAY", qid, body)) { do_say(qid, body); return; }
   if (line == "SAYSTOP") { do_saystop(); return; }
-  if (qid_op("VOICES", qid, body)) { send_got(qid, "{\"ok\":true,\"voices\":[]}"); return; }
+  if (qid_op("VOICES", qid, body)) { do_voices(qid); return; }
   if (qid_op("PICKCOLOR", qid, body)) { do_pickcolor(qid); return; }
   if (qid_op("OCR", qid, body)) {
     got_unsupported(qid, "OCR isn't available on Linux");
