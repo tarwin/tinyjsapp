@@ -1,6 +1,6 @@
 ---
 name: tinyjs
-description: Build and modify tinyjs desktop apps — tiny macOS (and beta Windows) apps with a txiki.js JavaScript backend and a native webview window. Use when working in a project with a tinyjs.json, or when the user mentions tinyjs, tiny.api, or tinyjs dev/build.
+description: Build and modify tinyjs desktop apps — tiny macOS (and beta Windows/Linux) apps with a txiki.js JavaScript backend and a native webview window. Use when working in a project with a tinyjs.json, or when the user mentions tinyjs, tiny.api, or tinyjs dev/build.
 ---
 
 # Building tinyjs apps
@@ -8,44 +8,63 @@ description: Build and modify tinyjs desktop apps — tiny macOS (and beta Windo
 tinyjs (https://tinyjs.app, repo tarwin/tinyjsapp) makes ~6 MB desktop apps:
 a **txiki.js backend** (full system access: files, sockets, processes, FFI)
 + a **native webview window** — WKWebView/WebKit on macOS, WebView2 on
-Windows (beta support). They talk JSON-RPC over a private Unix socket (macOS)
-or named pipe (Windows) — no HTTP server, no ports.
+Windows, GTK3 + WebKitGTK 4.1 on Linux (both beta support). They talk
+JSON-RPC over a private Unix socket (macOS, Linux) or named pipe (Windows) —
+no HTTP server, no ports.
 
 ## Platforms
 
-macOS is the primary platform; Windows support is in beta. The same project
-runs on both — same tinyjs.json, same `tiny.*` api, same commands.
+macOS is the primary platform; Windows and Linux support are both in beta.
+The same project runs on all three — same tinyjs.json, same `tiny.*` api,
+same commands.
 
-| | macOS | Windows |
-|---|---|---|
-| toolchain to develop tinyjs ITSELF | Xcode CLT (`./setup.sh`) | MinGW-w64 g++ (`winget install BrechtSanders.WinLibs.POSIX.UCRT`) + WebView2 runtime (preinstalled on Win 11); run `setup.ps1`, use `tinyjs.cmd` |
-| app users need | macOS 14+ (Apple Silicon) | Windows 10/11 with the WebView2 runtime |
-| `tinyjs build` output | `dist/<Name>.app` (codesigned) + bare `dist/<name>` | portable `dist/` folder: `<name>.exe` + `launcher.exe` + `frontend/` |
-| `publish` / auto-update | yes | yes (update swaps files in place, then relaunches) |
-| `notarize` | yes | n/a (no codesigning; https+sha256 is the update trust anchor) |
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| toolchain to develop tinyjs ITSELF | Xcode CLT (`./setup.sh`) | MinGW-w64 g++ (`winget install BrechtSanders.WinLibs.POSIX.UCRT`) + WebView2 runtime (preinstalled on Win 11); run `setup.ps1`, use `tinyjs.cmd` | `apt install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev` (Debian/Ubuntu); run the same `./setup.sh` as macOS |
+| app users need | macOS 14+ (Apple Silicon) | Windows 10/11 with the WebView2 runtime | Ubuntu 24.04+ / current distro with `webkit2gtk-4.1`, X11 or Wayland |
+| `tinyjs build` output | `dist/<Name>.app` (codesigned) + bare `dist/<name>` | portable `dist/` folder: `<name>.exe` + `launcher.exe` + `frontend/` | portable `dist/` folder: compiled backend binary (frontend + icon ride inside) + `launcher` + `icon.png` |
+| `publish` / auto-update | yes | yes (update swaps files in place, then relaunches) | yes (same file-swap + relaunch) |
+| `notarize` | yes | n/a (no codesigning; https+sha256 is the update trust anchor) | n/a (same https+sha256 trust anchor); a built app self-registers a `.desktop` entry on first run instead of an install step |
 
-Works on BOTH platforms: the whole bridge (api calls, push events,
-`tiny.fetch`), dev/hot-reload, Vite `devUrl`, multi-window (`win.open` —
-per-window bridge on both), drag & drop with real paths BOTH ways
-(`win.onDrop`, `startDrag({ files })`), file/folder/save dialogs,
-alert/confirm/prompt, menu bar (+ `menu.update`/`get`, `key:` accelerators —
-cmd on mac, Ctrl on win), tray + `notify` (Windows: balloon, no action
-buttons), custom context menus + `contextMenu: false`, clipboard (text/html/
-files/image, read + write), global hotkeys, `keystroke`/`paste` (`cmd` maps
-to Ctrl on Windows), `shell.open/reveal/trash`, `secrets` (Keychain /
-Credential Manager), `power.preventSleep`, `theme` + sleep/wake events,
-`store`, `screens`/`mousePosition`/`paths`/`battery`/`idleTime`/
-`frontmostApp`, `printToPDF`, `captureScreen` (no permission needed on win),
-`thumbnail`, `say`/`voices`/`stopSpeaking`, `launchAtLogin` (built apps
-only on win), auto-update (`update.check/install`), window ops (hide/show/
-center/minimize/fullscreen/ontop/resizable/pos/level/clickThrough/
-hideOnClose/zoom, `data-tiny-drag` regions, `chrome.frame`/`squareCorners`;
-win maps `transparent` to a clear WebView2 background and vibrancy names to
-mica/acrylic backdrops on Win11 — BUT a transparent MAIN window on Windows
-must be declared in tinyjs.json `"chrome"` (or `win.open` options for
-secondaries), not just via a late `setChrome`; transparency and a Win32
-menu bar are mutually exclusive there), `dock.bounce` (taskbar flash),
-sqlite.
+Works on ALL THREE platforms: the whole bridge (api calls, push events,
+`tiny.fetch`/`proxyURL` streaming), dev/hot-reload, Vite `devUrl`,
+multi-window (`win.open` — per-window bridge everywhere), file/folder/save
+dialogs, alert/confirm/prompt, menu bar (+ `menu.update`/`get`, `key:`
+accelerators — cmd on mac, Ctrl on win/linux), custom context menus +
+`contextMenu: false`, clipboard (text/html/files/image, read + write +
+watch), global hotkeys, `keystroke`/`paste` (`cmd` maps to Ctrl on
+win/linux; linux needs X11/XWayland — XTest/XGrabKey, not pure Wayland),
+`shell.open/reveal/trash`, `secrets` (Keychain / Credential Manager / Secret
+Service), `power.preventSleep`, `theme` + sleep/wake events, `store`,
+`screens`/`mousePosition`/`paths`/`battery`/`idleTime` (linux: needs GNOME),
+`printToPDF`, `captureScreen` (win: no permission needed; linux: X11
+sessions only), `thumbnail` (linux: images only), `say`/`voices`/
+`stopSpeaking` (linux: via speech-dispatcher's `spd-say` when installed),
+`launchAtLogin` (built apps only on win/linux; linux = autostart
+`.desktop`), auto-update (`update.check/install` — linux ships a per-arch
+`"linux": { "<arch>": { url, sha256 } }` manifest block alongside mac/win),
+window ops (hide/show/center/minimize/fullscreen/ontop/resizable/pos/level/
+clickThrough/hideOnClose/zoom, `data-tiny-drag` regions,
+`chrome.frame`/`squareCorners`; win maps `transparent` to a clear WebView2
+background and vibrancy names to mica/acrylic backdrops on Win11 — BUT a
+transparent MAIN window on Windows must be declared in tinyjs.json
+`"chrome"` (or `win.open` options for secondaries), not just via a late
+`setChrome`, and transparency + a Win32 menu bar are mutually exclusive
+there; linux accepts frameless/transparent chrome too but `vibrancy` is a
+no-op), `dock.bounce` (taskbar flash on win, urgency hint on linux), sqlite.
+
+Windows-specific: drag & drop with real paths BOTH ways (`win.onDrop`,
+`startDrag({ files })`); tray + `notify` work (balloon notifications, no
+action buttons, no reply fields); `frontmostApp` works (rejects on Linux).
+
+Linux-specific: tray is AppIndicator/StatusNotifier — menu-based; a bare
+icon click (no menu set) is emulated via a synthetic menu entry, and
+`tray.position()` returns `null`. `notify` DOES support action buttons
+(`org.freedesktop.Notifications`), just no reply fields. `pickColor` works
+(portal-based) — unlike Windows. Deep links / file associations / single
+instance work — a built app self-registers its `.desktop` entry (app-menu
+listing, icon, `urlScheme`, `fileExtensions`, single-instance) on first run,
+no separate install step.
 
 macOS-only (on Windows these reject or answer `'unsupported'`/null — always
 feature-detect): notification action buttons, `audioTap`, `proxyURL` media
@@ -55,6 +74,15 @@ TCC flow (Windows answers 'granted'), `quickLook`, `recorder`, `pickColor`,
 `selectedText`/`otherWindows`/`moveWindow`, `share`, `haptic`,
 `dock.setBadge`/`dockIcon`, `setAllSpaces`, `wifi`, `spotlight`,
 `tiny.app.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
+
+Not supported on Linux (reject or answer `'unsupported'`/empty — always
+feature-detect): `audioTap`, `recorder`, `ocr`, `quickLook`, `applescript`,
+`haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`,
+`nowPlaying`/media keys (MPRIS planned), `share`, `wifi`, `spotlight`
+(returns `[]`), `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
+`authenticate`, `tiny.app.ai`, `setAllSpaces` (maps to sticky windows
+instead of true per-Space follow). (Linux plans: tarwin/tinyjsapp
+TODO-linux.md.)
 
 Cross-platform app pattern: gate features, don't fork code —
 `if ((await tiny.app.permissions.check('accessibility')) !== 'unsupported')`,
@@ -253,6 +281,8 @@ tiny.tray.set({ title, icon, tooltip, menu: [{ id, label }, { separator: true }]
 // icon: png path OR 'sf:<name>' (SF Symbol, macOS) OR 'emoji:<glyph>' (Windows —
 // drawn as a mono tray silhouette); branch per-OS for asset-free icons on both
 // primaryAction: true → left click fires onClick, menu opens on right-click
+// Linux: AppIndicator/StatusNotifier, menu-based — a bare icon click (no menu
+// set) is emulated via a synthetic menu entry, and tray.position() -> null
 tiny.tray.on((id) => ...); tiny.tray.onClick(fn); tiny.tray.remove();
 tiny.app.setDockVisible(false);             // menu-bar-only app
 // tray-app recipe: tinyjs.json { "activation": "accessory" } (launches with no

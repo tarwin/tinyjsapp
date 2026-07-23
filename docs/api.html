@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tinyjs — API</title>
-<meta name="description" content="API reference for tinyjs — tiny macOS and Windows desktop apps in JavaScript.">
+<meta name="description" content="API reference for tinyjs — tiny macOS, Windows, and Linux desktop apps in JavaScript.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='%2314161b'/%3E%3Cpath d='M22 24l12 8-12 8z' fill='%2385b3ea'/%3E%3Crect x='36' y='38' width='10' height='4' fill='%2385b3ea'/%3E%3C/svg%3E">
 <style>
   :root {
@@ -78,6 +78,12 @@
     <h1>the <em>api</em></h1>
     <p class="sub">Everything a tinyjs app can do. Frontend calls live under
     <code>window.tiny</code>; the backend exports plain functions.</p>
+    <p class="sub">Written mac-first — most calls below work identically on
+    Windows and Linux (both in beta). Where an OS can't do something it
+    rejects or answers <code>'unsupported'</code> so cross-platform code can
+    feature-detect; the full per-OS breakdown lives in the
+    <a href="https://github.com/tarwin/tinyjsapp#readme" style="color:var(--accent)">README's Portability section</a>
+    and <a href="https://github.com/tarwin/tinyjsapp/blob/main/TODO-linux.md" style="color:var(--accent)">TODO-linux.md</a>.</p>
   </header>
 
   <nav class="toc">
@@ -182,7 +188,7 @@ tinyjs update       <i># update the tinyjs CLI itself (--check: report only)</i>
     plus <code>spawnHidden(args, opts)</code>: <code>tjs.spawn</code> that never
     flashes a console window on Windows (console tools spawned from a built
     app otherwise each pop a terminal; identical to <code>tjs.spawn</code> on
-    macOS).</p>
+    macOS and Linux, where there's no console to flash).</p>
     <p>SQLite ships in the runtime:</p>
     <pre><b>import</b> { Database } <b>from</b> 'tjs:sqlite';
 const db = new Database(dir + '/notes.db');

@@ -4,6 +4,56 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **Linux support (beta).** tinyjs apps now run on Linux: a third native
+  launcher (`native/launcher-linux.cc`, GTK3 + WebKitGTK 4.1 directly)
+  speaks the identical wire protocol over the same
+  Unix socket macOS uses, and the CLI, bridge, and build work cross-platform.
+  Runs on X11 and Wayland sessions, Ubuntu 24.04+ and current distros with
+  `webkit2gtk-4.1`. `tinyjs dev`/`build`/`publish` and auto-update all work:
+  `build` produces a portable `dist/` folder (compiled backend binary with
+  the frontend and icon riding inside it, plus `launcher` and `icon.png`)
+  with no install step — a built app registers its own `.desktop` entry
+  (app-menu listing, icon, deep links via `urlScheme`, file associations via
+  `fileExtensions`, single instance) on first run. `publish` emits
+  `<name>-<version>-linux-<arch>.tar.gz` plus a manifest carrying a per-arch
+  `"linux": { "<arch>": { url, sha256 } }` block alongside the existing mac
+  and win blocks; installs verify and swap in place, then relaunch.
+  Working: window ops, frameless/transparent chrome (`vibrancy` is a no-op),
+  menus + `key:` accelerators, tray via AppIndicator/StatusNotifier
+  (menu-based — a bare icon click is emulated via a menu entry,
+  `tray.position()` returns `null`), native dialogs, clipboard (+ watch),
+  notifications with action buttons (no reply fields), theme + sleep/wake,
+  `power.preventSleep` (logind), `secrets` (Secret Service/GNOME Keyring),
+  `shell.open/reveal/trash`, `launchAtLogin` (built apps, autostart
+  `.desktop`), multi-window, custom context menus + suppression, hot reload,
+  `tiny.fetch`/`proxyURL` streaming, `printToPDF`, the print dialog,
+  `screens`/`mousePosition`/`getWinState`, `captureScreen` (X11 sessions
+  only), `thumbnail` (images only), `keystroke` + global hotkeys
+  (X11/XWayland via XTest/XGrabKey — not pure Wayland), `playSound`/`beep`,
+  `say`/`voices` (via speech-dispatcher's `spd-say` when installed),
+  `pickColor` (portal), `idleTime` (GNOME), `battery`, `dock.bounce`
+  (urgency hint). Not (yet) supported: `audioTap`, `recorder`, `ocr`,
+  `quickLook`, `applescript`, `haptic`, Dock badge/
+  `bounce({critical: true})`/`dockIcon`, `nowPlaying`/media keys (MPRIS
+  planned), `share`, `wifi`, `spotlight` (empty array), `selectedText`/
+  `otherWindows`/`moveWindow`/`frontmostApp`, `authenticate`,
+  `tiny.app.ai`, and `setAllSpaces` (maps to sticky windows) — all reject
+  or report `'unsupported'` so cross-platform app code can feature-detect.
+  Burn-down list: [TODO-linux.md](TODO-linux.md).
+
+- **Linux installer + prebuilt binaries.**
+  `curl -fsSL https://tinyjs.app/install | sh` now detects Linux too,
+  installing to `~/.tinyjs` the same as macOS (needs the system
+  `libwebkit2gtk-4.1-0` runtime). From source, `./setup.sh` now also builds
+  on Linux — needs `build-essential pkg-config libgtk-3-dev
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev` — and downloads a
+  prebuilt `tjs`, or builds txiki.js from source with `TJS_BUILD=1`
+  (needs cmake + ninja). The release workflow gained `linux-x86_64` and
+  `linux-arm64` jobs that build txiki.js from source and ship it as
+  `tjs-linux-<arch>.gz`, checksummed alongside the macOS and Windows assets.
+
 ## 0.28.3 — 2026-07-22
 
 - **Windows: taskbar pins finally work.** The visible window belongs to

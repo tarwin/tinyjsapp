@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tinyjs — desktop apps for macOS and Windows in ~6 MB</title>
-<meta name="description" content="Build macOS and Windows desktop apps in JavaScript: txiki.js backend, native WebKit / WebView2 window, ~6 MB shipped. No Electron. No ports.">
+<title>tinyjs — desktop apps for macOS, Windows, and Linux in ~6 MB</title>
+<meta name="description" content="Build macOS, Windows, and Linux desktop apps in JavaScript: txiki.js backend, native WebKit / WebView2 / WebKitGTK window, ~6 MB shipped. No Electron. No ports.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='%2314161b'/%3E%3Cpath d='M22 24l12 8-12 8z' fill='%2385b3ea'/%3E%3Crect x='36' y='38' width='10' height='4' fill='%2385b3ea'/%3E%3C/svg%3E">
 <style>
   :root {
@@ -49,7 +49,7 @@
   .sub { margin: 26px 0 0; font-size: 20px; color: var(--muted); max-width: 34em; }
   .sub strong { color: var(--text); font-weight: 600; }
 
-  /* macOS / Windows tabs (synced; default picked by OS sniffing) */
+  /* macOS / Windows / Linux tabs (synced; default picked by OS sniffing) */
   .os-tabs { display: flex; gap: 6px; margin: 44px 0 0; }
   .os-tabs.small { margin: 0 0 14px; }
   .os-tab {
@@ -60,8 +60,12 @@
   .os-tab em { font-style: normal; font-size: 10px; color: var(--accent); opacity: .8; }
   .os-tab:hover { color: var(--text); }
   .os-tab.on { color: var(--accent); border-color: var(--accent); background: rgba(133,179,234,.06); }
-  html[data-os="mac"] [data-os-panel="win"] { display: none !important; }
-  html[data-os="win"] [data-os-panel="mac"] { display: none !important; }
+  html[data-os="mac"] [data-os-panel="win"],
+  html[data-os="mac"] [data-os-panel="linux"] { display: none !important; }
+  html[data-os="win"] [data-os-panel="mac"],
+  html[data-os="win"] [data-os-panel="linux"] { display: none !important; }
+  html[data-os="linux"] [data-os-panel="mac"],
+  html[data-os="linux"] [data-os-panel="win"] { display: none !important; }
 
   .install {
     margin: 12px 0 0; display: flex; align-items: stretch;
@@ -168,12 +172,13 @@
     <h1 class="r r2">Desktop apps<br>in <em>~6&hairsp;MB</em>.</h1>
     <p class="sub r r3">A <strong>JavaScript backend</strong> with full system access, a
     <strong>native webview window</strong> (WebKit on macOS, WebView2 on
-    Windows), and nothing else.
+    Windows, WebKitGTK on Linux), and nothing else.
     No Electron. No bundled Chromium. No HTTP server. <strong>No ports.</strong></p>
 
     <div class="os-tabs r r4" role="tablist">
       <button class="os-tab" data-os="mac" onclick="setOS('mac')">macOS</button>
       <button class="os-tab" data-os="win" onclick="setOS('win')">Windows</button>
+      <button class="os-tab" data-os="linux" onclick="setOS('linux')">Linux</button>
     </div>
     <div data-os-panel="mac">
       <div class="install r r4">
@@ -189,6 +194,13 @@
       </div>
       <div class="platform r r5">windows 10/11 · prebuilt, no compiler needed · just the WebView2 runtime (preinstalled on win 11) · adds tinyjs to your PATH (open a new terminal) · MIT</div>
     </div>
+    <div data-os-panel="linux">
+      <div class="install r r4">
+        <code><b>curl</b> -fsSL https://tinyjs.app/install | <b>sh</b></code>
+        <button onclick="copyCmd(this)">copy</button>
+      </div>
+      <div class="platform r r5">linux (beta) · x86_64 + arm64 · same script as macOS, detects Linux · needs libwebkit2gtk-4.1-0 (<code style="font-size:11px">sudo apt install libwebkit2gtk-4.1-0</code>) · MIT</div>
+    </div>
   </header>
 
   <section class="r r5">
@@ -201,7 +213,9 @@
     </div>
     <p class="bars-note">Your backend, a ~600 KB window process, and your
     plain HTML/CSS/JS. The window is the WebKit already on every Mac — or the
-    WebView2 runtime already on every Windows 11. The Windows zip lands at
+    WebView2 runtime already on every Windows 11 — or the WebKitGTK runtime
+    on most Linux desktops (one <code style="font-size:13px">apt install</code>
+    away where it's missing). The Windows zip and Linux tarball land at
     ~6 MB too.</p>
   </section>
 
@@ -222,6 +236,7 @@
     <div class="os-tabs small" role="tablist">
       <button class="os-tab" data-os="mac" onclick="setOS('mac')">macOS</button>
       <button class="os-tab" data-os="win" onclick="setOS('win')">Windows</button>
+      <button class="os-tab" data-os="linux" onclick="setOS('linux')">Linux</button>
     </div>
     <div class="try">
       <div class="try-body">
@@ -237,6 +252,12 @@
       <a class="try-dl" data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/raw/main/_builds/shelf-0.2.3.dmg">
         <img class="try-icon" src="shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf<span>.dmg · 4.6 MB · signed &amp; notarized</span>
       </a>
+      <div class="try-dl na" data-os-panel="linux">
+        <img class="try-icon" src="shelf-icon.png" alt="shelf app icon" width="64" height="64">shelf isn't built for Linux yet
+        <span>meanwhile, grab tinyjs itself:
+        <a href="https://github.com/tarwin/tinyjsapp/releases/latest/download/tinyjs-linux-x86_64.tar.gz">x86_64</a> ·
+        <a href="https://github.com/tarwin/tinyjsapp/releases/latest/download/tinyjs-linux-arm64.tar.gz">arm64</a></span>
+      </div>
     </div>
     <p class="bars-note">All 25 examples were swept app-by-app on Windows:
     transparency, multi-window, drag-and-drop with real paths, tray apps
@@ -244,7 +265,10 @@
     <code style="font-size:13px">sf:</code> symbols), WebGPU, and media /
     WebAudio all work. The calls that are genuinely mac-only — Quick Look,
     AppleScript, Touch ID — answer <code style="font-size:13px">'unsupported'</code>,
-    so a cross-platform app degrades honestly instead of breaking.</p>
+    so a cross-platform app degrades honestly instead of breaking. Linux
+    support just landed — the same one-by-one sweep hasn't happened yet, but
+    the framework-level parity list is in the
+    <a href="https://github.com/tarwin/tinyjsapp#readme" style="color:var(--accent)">README's Portability section</a>.</p>
   </section>
 
   <section>
@@ -255,7 +279,7 @@
         <pre><span class="a">tinyjs</span> new myapp
 <span class="a">cd</span> myapp
 <span class="a">tinyjs</span> dev    <span class="c"># window opens, hot reload</span>
-<span class="a">tinyjs</span> build  <span class="c"># dist/myapp.app, signed (win: dist/myapp.exe)</span></pre>
+<span class="a">tinyjs</span> build  <span class="c"># dist/myapp.app, signed (win/linux: dist/myapp.exe or dist/myapp)</span></pre>
       </div>
       <div class="qs-cell">
         <h3>src/main.js — the whole backend</h3>
@@ -274,8 +298,8 @@ tiny.menu.set([…]);
         <h3>how it fits</h3>
         <pre class="arch"><b>your page</b>
   ⇅  <i>tiny.api.call · tiny.api.on</i>
-<b>launcher</b> (WebKit / WebView2)
-  ⇅  <i>unix socket · named pipe on windows</i>
+<b>launcher</b> (WebKit / WebView2 / WebKitGTK)
+  ⇅  <i>unix socket (mac/linux) · named pipe on windows</i>
 <b>backend</b> (txiki.js)</pre>
       </div>
     </div>
@@ -311,8 +335,9 @@ function copyCmd(btn) {
 (function () {
   var saved = null;
   try { saved = localStorage.getItem('tinyjs-os'); } catch (e) {}
-  var sniffed = /Windows/i.test(navigator.userAgent) ? 'win' : 'mac';
-  setOS(saved === 'mac' || saved === 'win' ? saved : sniffed);
+  var sniffed = /Windows/i.test(navigator.userAgent) ? 'win'
+    : /Linux/i.test(navigator.userAgent) ? 'linux' : 'mac';
+  setOS(saved === 'mac' || saved === 'win' || saved === 'linux' ? saved : sniffed);
 })();
 </script>
 

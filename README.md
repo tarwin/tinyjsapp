@@ -1,6 +1,6 @@
 # tinyjs
 
-Tiny desktop apps for macOS — and, in beta, Windows: a
+Tiny desktop apps for macOS — and, in beta, Windows and Linux: a
 [txiki.js](https://txikijs.org/) backend + a native
 [webview](https://github.com/webview/webview) window.
 
@@ -22,10 +22,15 @@ Tiny desktop apps for macOS — and, in beta, Windows: a
 curl -fsSL https://tinyjs.app/install | sh
 ```
 
-Installs to `~/.tinyjs` and symlinks `tinyjs` onto your PATH. Pin a
-version with `TINYJS_VERSION=vX.Y.Z`. Later, `tinyjs update` re-runs the
-installer if a newer release exists (`tinyjs update --check` only reports);
-`tinyjs dev` also mentions new releases, checking at most once a day.
+The same script now handles Linux too (it detects the OS). Installs to
+`~/.tinyjs` and symlinks `tinyjs` onto your PATH. Pin a version with
+`TINYJS_VERSION=vX.Y.Z`. Later, `tinyjs update` re-runs the installer if a
+newer release exists (`tinyjs update --check` only reports); `tinyjs dev`
+also mentions new releases, checking at most once a day. Linux needs the
+system WebKitGTK runtime: `sudo apt install libwebkit2gtk-4.1-0` on
+Debian/Ubuntu. Prebuilt binaries ship for Linux x86_64 and arm64 with the
+first tagged release after Linux support merged — the installer says so
+plainly against older releases.
 To install from source instead:
 
 ```sh
@@ -33,6 +38,12 @@ git clone https://github.com/tarwin/tinyjsapp && cd tinyjsapp
 ./setup.sh    # downloads the txiki.js runtime, compiles the launcher
 ln -s "$(pwd)/tinyjs" /usr/local/bin/tinyjs
 ```
+
+On Linux, `setup.sh` needs the system dev packages first —
+`sudo apt install build-essential pkg-config libgtk-3-dev
+libwebkit2gtk-4.1-dev libayatana-appindicator3-dev` (Debian/Ubuntu). It
+downloads a prebuilt `tjs` from the tinyjsapp releases, or builds txiki.js
+from source (`TJS_BUILD=1 ./setup.sh`, needs cmake + ninja).
 
 **Windows (beta):**
 
@@ -57,7 +68,14 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 # `tinyjs dev` auto-rebuilds the launcher whenever the native sources change
 ```
 
-See **Portability** below for what's supported on Windows.
+**Linux (beta):**
+
+Runs on X11 and Wayland sessions — Ubuntu 24.04+ and current distros with
+`webkit2gtk-4.1`. Use the same install command above (it detects Linux) or
+build from source with `./setup.sh` (see the apt deps above). Needs the
+`libwebkit2gtk-4.1-0` runtime package.
+
+See **Portability** below for what's supported on Windows and Linux.
 
 Full API reference: [tinyjs.app/api](https://tinyjs.app/api) · release
 history: [tinyjs.app/changelog](https://tinyjs.app/changelog).
@@ -872,6 +890,8 @@ bin/tjs               txiki.js runtime (fetched by setup.sh, not committed;
 native/launcher.cc    the window process (Objective-C++; webview headers vendored)
 native/launcher-win.cc  the Windows window process (WebView2 via the same
                       vendored webview; named pipe instead of a Unix socket)
+native/launcher-linux.cc  the Linux window process (GTK3 + WebKitGTK 4.1
+                      directly, no vendored webview; Unix socket, same as macOS)
 native/make-icon.jxa  default template icon generator (osascript -l JavaScript)
 runtime/bridge.js     backend bridge library (socket, protocol, win.* methods)
 runtime/update.js     app auto-update (manifest check, verify, bundle swap)
@@ -885,9 +905,12 @@ docs/                 tinyjs.app site (GitHub Pages): landing page + installer
                       (docs/install is what `curl tinyjs.app/install` fetches)
                       + changelog.html (tinyjs.app/changelog)
 CHANGELOG.md          release history (canonical; the site page mirrors it)
-setup.sh              from-source bootstrap (fetch tjs, compile natives)
+setup.sh              from-source bootstrap (fetch tjs, compile natives) —
+                      handles both macOS and Linux, branching on `uname`
 setup.ps1             the same for Windows (also fetches the WebView2 header)
 TODO-windows.md       remaining Windows-port work, ordered (tick items off
+                      as they land)
+TODO-linux.md         remaining Linux-port work, ordered (tick items off
                       as they land)
 .github/workflows/    release automation: tag vX.Y.Z → universal binaries →
                       per-arch tarballs + checksums → GitHub release
@@ -998,11 +1021,14 @@ on the newer SDK.
 
 ### Portability
 
-macOS is the primary platform. **Windows support is in beta**: a second
-native launcher (`native/launcher-win.cc`, WebView2 through the same vendored
-webview library) speaks the identical wire protocol, with the Unix socket
-swapped for a named pipe (`\\.\pipe\…` — `tjs.listen('pipe', …)`/libuv
-abstracts both). Bootstrap with `setup.ps1`, use `tinyjs.cmd` as the CLI.
+macOS is the primary platform. **Windows and Linux support are both in
+beta.** Windows gets a second native launcher (`native/launcher-win.cc`,
+WebView2 through the same vendored webview library) that speaks the
+identical wire protocol, with the Unix socket swapped for a named pipe
+(`\\.\pipe\…` — `tjs.listen('pipe', …)`/libuv abstracts both). Bootstrap
+with `setup.ps1`, use `tinyjs.cmd` as the CLI. Linux gets a third native
+launcher (`native/launcher-linux.cc`, GTK3 + WebKitGTK 4.1), the Unix socket
+as-is, and bootstraps with the same `setup.sh` as macOS.
 
 Works on Windows: the full page↔backend bridge (api calls, push events,
 `tiny.fetch`), dev mode with hot reload and backend restart, Vite `devUrl`
@@ -1029,8 +1055,41 @@ associations / single instance, `authenticate` (Windows Hello), `audioTap`
 Spotlight, Now Playing, Dock badges, Spaces), which all reject or report
 `'unsupported'` cleanly so cross-platform code can feature-detect. The
 burn-down list with implementation notes lives in
-[TODO-windows.md](TODO-windows.md). Linux remains unported (WebKitGTK would
-be the route).
+[TODO-windows.md](TODO-windows.md).
+
+Works on Linux: window ops (hide/show/center/minimize/fullscreen/ontop/
+resizable/position/zoom/level/click-through/sticky), frameless + transparent
+chrome (`vibrancy` is a no-op), menus + accelerators (Ctrl+key), tray via
+AppIndicator/StatusNotifier (menu-based — a bare icon-click is emulated
+through a menu entry, and `tray.position()` returns `null`), native dialogs
+(open/save/folder/alert/confirm/prompt), clipboard (text/html/image/files +
+watch), notifications with action buttons (`org.freedesktop.Notifications`;
+no reply fields), theme dark/light (+ live changes), sleep/wake events,
+`power.preventSleep` (a logind inhibitor), `secrets` (Secret Service/GNOME
+Keyring), `shell.open/reveal/trash`, `launchAtLogin` (autostart `.desktop`,
+built apps only), `store`/`paths` (XDG dirs), multi-window, custom context
+menus + suppression, hot reload, `tiny.fetch`/`proxyURL` streaming,
+`printToPDF`, the print dialog, `screens`/`mousePosition`/`getWinState`,
+`battery`, `idleTime` (GNOME), `pickColor` (portal), `thumbnail` (images
+only), `captureScreen` (X11 sessions only), `keystroke` + global hotkeys
+(X11/XWayland via XTest/XGrabKey — not pure Wayland), `playSound`/`beep`,
+`say`/`voices` (via speech-dispatcher's `spd-say` when installed), and
+`dock.bounce` (a taskbar urgency hint). A built app registers its own
+`.desktop` entry on first run — app-menu listing, icon, deep links
+(`urlScheme`), file associations (`fileExtensions`), and single-instance —
+with no separate install step. `tinyjs publish` emits
+`<name>-<version>-linux-<arch>.tar.gz` plus a manifest carrying a per-arch
+`"linux": { "<arch>": { url, sha256 } }` block alongside the mac and win
+ones; auto-update works (swap + relaunch).
+
+Not (yet) supported on Linux (reject or report `'unsupported'` so apps can
+feature-detect): `audioTap`, `recorder`, `ocr`, `quickLook`, `applescript`,
+`haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`, `nowPlaying` +
+media keys (MPRIS planned), `share`, `wifi`, `spotlight` (returns an empty
+array), `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
+`authenticate`, `tiny.app.ai` — plus `setAllSpaces`, which maps onto sticky
+windows rather than true per-Space follow. The burn-down list with
+implementation notes lives in [TODO-linux.md](TODO-linux.md).
 
 ## Credits
 
