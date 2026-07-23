@@ -409,6 +409,19 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // page JS alone is too late for the main window on Windows.
     if (IS_WIN && chrome?.transparent) spawnEnv.TINYJS_TRANSPARENT = '1';
     if (readAccess) spawnEnv.TINYJS_READ_ACCESS = readAccess === true ? tjs.homeDir : String(readAccess);
+    // WebKitGTK plays media through GStreamer, and its autoaudiosink lands on
+    // pulsesink — i.e. PipeWire's PulseAudio compatibility layer — which on
+    // some systems degrades badly a few seconds in: crunchy, then silent, then
+    // briefly back. Measured on one such box: PipeWire reported no xruns, the
+    // audio clock never drifted, and the in-graph signal was clean the whole
+    // time, so nothing upstream saw a problem; the same file through plain
+    // GStreamer was perfect. Forcing the native PipeWire sink fixes it. Only
+    // when PipeWire is actually running, and never over an explicit setting.
+    if (IS_LINUX && !tjs.env.GST_PLUGIN_FEATURE_RANK
+        && tjs.env.XDG_RUNTIME_DIR
+        && await exists(`${tjs.env.XDG_RUNTIME_DIR}/pipewire-0`)) {
+      spawnEnv.GST_PLUGIN_FEATURE_RANK = 'pipewiresink:MAX';
+    }
     // "windowPlacement": true — the app places its own windows (setPosition/
     // center), e.g. to snap or dock them. Wayland forbids a client from
     // placing its own toplevels, so those calls do nothing there; X11 permits
