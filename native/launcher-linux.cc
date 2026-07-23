@@ -196,6 +196,11 @@ static bool file_exists(const std::string& p) {
   return stat(p.c_str(), &st) == 0;
 }
 
+// True when GTK is driving a real X11 display (including XWayland). Wayland
+// forbids a client from placing its own toplevels, so this is what decides
+// whether setPosition/center can do anything.
+static bool on_x11();
+
 // The monitor a window sits on. Both obvious lookups can come up empty — an
 // unrealized window has no GdkWindow, and Wayland compositors routinely expose
 // no "primary" monitor — so fall back to the first monitor rather than leaving
@@ -1306,6 +1311,7 @@ static std::string win_state_json(const std::string& winid) {
     ",\"transparent\":" + b(transparent) +
     ",\"vibrancy\":" + (vib.empty() ? "null" : json_escape(vib)) +
     ",\"squareCorners\":" + b(square) + ",\"acceptsFirstMouse\":" + b(first) + "}" +
+    ",\"canPosition\":" + b(on_x11()) +
     ",\"screen\":{\"width\":" + std::to_string(geo.width) +
     ",\"height\":" + std::to_string(geo.height) +
     ",\"scale\":" + std::to_string(scale) + "}}";

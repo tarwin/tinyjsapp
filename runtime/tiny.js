@@ -146,7 +146,10 @@
       setLevel: (level) => call('win.setLevel', { level }),
       // Follow the user across every Space + float over fullscreen apps.
       setAllSpaces: (enabled) => call('win.setAllSpaces', { enabled }),
-      setPosition: (x, y) => call('win.setPosition', { x, y }),    // top-left origin
+      // Top-left origin. Wayland forbids a client from placing its own
+      // toplevels, so this (and center()) do nothing there — check
+      // getWinState().canPosition and fall back to startDrag() for dragging.
+      setPosition: (x, y) => call('win.setPosition', { x, y }),
       restore: () => call('win.restore'),
       setFullscreen: (enabled) => call('win.setFullscreen', { enabled }),
       // { x, y, width, height, fullscreen, minimized, visible, focused,
