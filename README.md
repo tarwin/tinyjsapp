@@ -1076,7 +1076,9 @@ XGrabKey; pure Wayland via the GlobalShortcuts portal — the compositor
 prompts to approve them once), `keystroke` synthesis (X11/XWayland via
 XTest — not pure Wayland), `playSound`/`beep`,
 `say`/`voices` (via speech-dispatcher's `spd-say` when installed),
-`dock.bounce` (a taskbar urgency hint), `nowPlaying` + media keys (a real
+`spotlight` (name search — indexed `plocate`/`locate` when present, else a
+bounded `find`), `dock.bounce` (a taskbar urgency hint), `nowPlaying` +
+media keys (a real
 MPRIS player — shows in the GNOME/KDE media widget and lock screen, and
 Play/Pause/Next/Previous/Seek route back via `onMediaKey`), and `audioTap`
 (system scope — the default sink's monitor via `parec`/`pw-cat`; like
@@ -1092,11 +1094,15 @@ ones; auto-update works (swap + relaunch).
 Not (yet) supported on Linux (reject or report `'unsupported'` so apps can
 feature-detect): `recorder`, `ocr`, `quickLook`, `applescript`,
 `haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`, `share`, `wifi`,
-`spotlight` (returns an empty
-array), `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
+`selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
 `authenticate`, `tiny.app.ai` — plus `setAllSpaces`, which maps onto sticky
-windows rather than true per-Space follow. The burn-down list with
-implementation notes lives in [TODO-linux.md](TODO-linux.md).
+windows rather than true per-Space follow. These all fail cleanly so
+cross-platform code can feature-detect: capability calls reject with a
+specific reason (e.g. "screen recording isn't supported on Linux yet"),
+query calls (`wifi`, `frontmostApp`, `selectedText`, `otherWindows`,
+`tray.position`) resolve `null`, and fire-and-forget ones are silent
+no-ops. The burn-down list with implementation notes lives in
+[TODO-linux.md](TODO-linux.md).
 
 ## Credits
 

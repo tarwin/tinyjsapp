@@ -43,6 +43,17 @@ where missing.
       `fileExtensions`); a second `open` activates the running instance
       instead of launching another copy.
 - [x] **pickColor** — portal-based system eyedropper.
+- [x] **spotlight** — name search via the indexed `plocate`/`locate` when
+      present, else a bounded, pruned `find` under `$HOME` (name-only, capped
+      at 100 hits / 4s). The honest Linux degradation of Spotlight's
+      name+content search.
+- [x] **Unsupported ops report cleanly** — every capability with no Linux
+      equivalent (`ocr`, `applescript`, `recorder`, `moveWindow`, …) rejects
+      with a specific reason (e.g. "screen recording isn't supported on
+      Linux yet"); query-style ones (`wifi`, `frontmostApp`, `selectedText`,
+      `otherWindows`, `tray.position`) resolve `null`; fire-and-forget ones
+      (`haptic`, Dock badge, `share`, `quickLook`) are silent no-ops.
+      Nothing hangs — verified by an audit smoke that probes them all.
 - [x] **captureScreen** (X11 sessions only) and **thumbnail** (images
       only, via GdkPixbuf).
 - [x] **say / voices / stopSpeaking** — via speech-dispatcher's `spd-say`
@@ -78,10 +89,9 @@ where missing.
       route, and would also cover **captureScreen on pure Wayland** (X11
       sessions already get captureScreen via XGetImage — done above).
 - [ ] **authenticate** — polkit agent prompt or fprintd.
-- [ ] **ocr / thumbnail (non-image files) / quickLook / spotlight** — no
-      clean system equivalents; thumbnail already scales images via
-      GdkPixbuf (done above), spotlight could shell to `tracker3 search` /
-      `locate` when present.
+- [ ] **ocr / thumbnail (non-image files) / quickLook** — no clean system
+      equivalents; thumbnail already scales images via GdkPixbuf (done
+      above). These reject or degrade with a specific message.
 - [ ] **selectedText / otherWindows / moveWindow / frontmostApp** — EWMH on
       X11 sessions; nothing portable on Wayland. Currently 'unsupported'.
 - [ ] **Examples: Linux builds for shelf installs** — publish per-app Linux

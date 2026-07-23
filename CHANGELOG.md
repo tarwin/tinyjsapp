@@ -39,13 +39,15 @@ https://tinyjs.app/changelog.
   in the GNOME/KDE media widget and lock screen, transport back via
   `onMediaKey`), and `audioTap` (system scope — the default sink's monitor
   via `parec`/`pw-cat`; `scope:'app'` approximated by the system mix, like
-  Windows). Not (yet) supported: `recorder`, `ocr`, `quickLook`,
+  Windows), `spotlight` (name search via indexed `plocate`/`locate`, else a
+  bounded `find`). Not (yet) supported: `recorder`, `ocr`, `quickLook`,
   `applescript`, `haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`,
-  `share`, `wifi`, `spotlight` (empty array), `selectedText`/
-  `otherWindows`/`moveWindow`/`frontmostApp`, `authenticate`,
-  `tiny.app.ai`, and `setAllSpaces` (maps to sticky windows) — all reject
-  or report `'unsupported'` so cross-platform app code can feature-detect.
-  Burn-down list: [TODO-linux.md](TODO-linux.md).
+  `share`, `wifi`, `selectedText`/`otherWindows`/`moveWindow`/
+  `frontmostApp`, `authenticate`, `tiny.app.ai`, and `setAllSpaces` (maps to
+  sticky windows) — all fail cleanly so cross-platform code can
+  feature-detect: capability calls reject with a specific reason, query
+  calls resolve `null`, fire-and-forget ones are silent no-ops. Burn-down
+  list: [TODO-linux.md](TODO-linux.md).
 
 - **Linux installer + prebuilt binaries.**
   `curl -fsSL https://tinyjs.app/install | sh` now detects Linux too,

@@ -81,13 +81,15 @@ TCC flow (Windows answers 'granted'), `quickLook`, `recorder`, `pickColor`,
 `dock.setBadge`/`dockIcon`, `setAllSpaces`, `wifi`, `spotlight`,
 `tiny.app.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
-Not supported on Linux (reject or answer `'unsupported'`/empty — always
+Not supported on Linux (reject or answer `'unsupported'`/`null` — always
 feature-detect): `recorder`, `ocr`, `quickLook`, `applescript`,
 `haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`,
-`share`, `wifi`, `spotlight`
-(returns `[]`), `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
+`share`, `wifi`, `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
 `authenticate`, `tiny.app.ai`, `setAllSpaces` (maps to sticky windows
-instead of true per-Space follow). (Linux plans: tarwin/tinyjsapp
+instead of true per-Space follow). These fail cleanly — capability calls
+reject with a specific reason, query calls resolve `null`, fire-and-forget
+ones no-op — so nothing hangs. (`spotlight` DOES work: name search via
+`plocate`/`locate` or a bounded `find`.) (Linux plans: tarwin/tinyjsapp
 TODO-linux.md.)
 
 Cross-platform app pattern: gate features, don't fork code —

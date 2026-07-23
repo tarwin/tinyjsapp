@@ -166,8 +166,12 @@ static void send_got(const std::string& qid, const std::string& json) {
   pipe_write_line("GOT " + qid + " " + json);
 }
 
-static void got_unsupported(const std::string& qid) {
-  send_got(qid, "{\"ok\":false,\"error\":\"unsupported on linux\"}");
+// Answer a capability op that this platform can't do. `why` is a specific,
+// app-facing reason (e.g. "OCR isn't available on Linux") so callers can show
+// something useful; it always carries "unsupported" so code can substring-match.
+static void got_unsupported(const std::string& qid,
+                            const std::string& why = "unsupported on linux") {
+  send_got(qid, "{\"ok\":false,\"error\":" + json_escape(why) + "}");
 }
 
 // Run a function on the GTK main thread.
@@ -2877,6 +2881,107 @@ static void do_pickcolor(const std::string& qid) {
   g_variant_unref(r);
 }
 
+// spotlight: a name search — the indexed `plocate`/`locate` when present,
+// else a bounded `find` under $HOME. Capped at 100 paths and a 4s wall-clock
+// so a cold `find` can't wedge the caller. (macOS also matches content; a
+// name match is the honest Linux degradation.)
+struct SpotlightCtx {
+  std::string qid;
+  GPid pid = 0;
+  int fd = -1;
+  guint watch = 0, timer = 0;
+  std::string buf;
+  bool done = false;
+};
+
+static void spotlight_finish(SpotlightCtx* c) {
+  if (c->done) return;
+  c->done = true;
+  if (c->watch) { g_source_remove(c->watch); c->watch = 0; }
+  if (c->timer) { g_source_remove(c->timer); c->timer = 0; }
+  if (c->fd >= 0) { close(c->fd); c->fd = -1; }
+  if (c->pid) { kill(c->pid, SIGTERM); g_spawn_close_pid(c->pid); c->pid = 0; }
+  std::string json = "[";
+  int n = 0;
+  size_t start = 0;
+  while (n < 100) {
+    size_t nl = c->buf.find('\n', start);
+    if (nl == std::string::npos) break;
+    std::string path = c->buf.substr(start, nl - start);
+    start = nl + 1;
+    if (path.empty()) continue;
+    if (n) json += ",";
+    json += json_escape(path);
+    n++;
+  }
+  json += "]";
+  send_got(c->qid, "{\"ok\":true,\"paths\":" + json + "}");
+  delete c;
+}
+
+static gboolean spotlight_readable(gint fd, GIOCondition cond, gpointer data) {
+  SpotlightCtx* c = (SpotlightCtx*)data;
+  if (cond & (G_IO_HUP | G_IO_ERR)) { c->watch = 0; spotlight_finish(c); return G_SOURCE_REMOVE; }
+  char buf[8192];
+  ssize_t r = read(fd, buf, sizeof buf);
+  if (r <= 0) { c->watch = 0; spotlight_finish(c); return G_SOURCE_REMOVE; }
+  c->buf.append(buf, (size_t)r);
+  int nls = 0;
+  for (char ch : c->buf) if (ch == '\n') nls++;
+  if (nls >= 100) { c->watch = 0; spotlight_finish(c); return G_SOURCE_REMOVE; }
+  return G_SOURCE_CONTINUE;
+}
+
+static void do_spotlight(const std::string& qid, const std::string& rest) {
+  std::string query = wire_unescape(rest);
+  if (query.empty()) { send_got(qid, "{\"ok\":true,\"paths\":[]}"); return; }
+
+  std::vector<std::string> cmd;
+  char* exe = g_find_program_in_path("plocate");
+  if (!exe) exe = g_find_program_in_path("locate");
+  if (exe) {
+    cmd = {exe, "-i", "-l", "100", query};
+    g_free(exe);
+  } else if ((exe = g_find_program_in_path("find"))) {
+    // No index available — a bounded, pruned find under $HOME. Depth-capped
+    // and skipping hidden trees / build caches so it surfaces real hits fast
+    // (find is depth-first; without pruning it can spend the whole 4s budget
+    // inside one big node_modules). Best-effort, name-only.
+    cmd = {exe, home_dir(), "-maxdepth", "6",
+           "(", "-name", ".*", "-o", "-name", "node_modules",
+           "-o", "-name", "__pycache__", ")", "-prune", "-o",
+           "-iname", "*" + query + "*", "-print"};
+    g_free(exe);
+  } else {
+    send_got(qid, "{\"ok\":true,\"paths\":[]}");
+    return;
+  }
+
+  std::vector<const gchar*> argv;
+  for (auto& a : cmd) argv.push_back(a.c_str());
+  argv.push_back(nullptr);
+  gint out_fd = -1;
+  GPid pid = 0;
+  if (!g_spawn_async_with_pipes(nullptr, (gchar**)argv.data(), nullptr,
+        (GSpawnFlags)(G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_STDERR_TO_DEV_NULL),
+        nullptr, nullptr, &pid, nullptr, &out_fd, nullptr, nullptr)) {
+    send_got(qid, "{\"ok\":true,\"paths\":[]}");
+    return;
+  }
+  SpotlightCtx* c = new SpotlightCtx();
+  c->qid = qid;
+  c->pid = pid;
+  c->fd = out_fd;
+  c->watch = g_unix_fd_add(out_fd, (GIOCondition)(G_IO_IN | G_IO_HUP | G_IO_ERR),
+                           spotlight_readable, c);
+  c->timer = g_timeout_add(4000, [](gpointer d) -> gboolean {
+    SpotlightCtx* c = (SpotlightCtx*)d;
+    c->timer = 0;
+    spotlight_finish(c);
+    return G_SOURCE_REMOVE;
+  }, c);
+}
+
 // ------------------------------------------------------- secondary windows --
 
 static void load_target_into(WebKitWebView* wv, const std::string& target) {
@@ -3220,16 +3325,35 @@ static void handle_line(const std::string& line) {
   if (qid_op("CAPTURE", qid, body)) { do_capture(qid, body); return; }
   if (qid_op("PDF", qid, body)) { do_pdf(qid, body); return; }
   if (qid_op("THUMB", qid, body)) { do_thumb(qid, body); return; }
+  // No portable "prove it's the user" gate on Linux (polkit authorizes
+  // specific actions, not identity). Fail closed — an app gating a sensitive
+  // action on this sees false and blocks, which is the safe default.
   if (qid_op("AUTH", qid, body)) { send_got(qid, "{\"ok\":false}"); return; }
   if (qid_op("SAY", qid, body)) { do_say(qid, body); return; }
   if (line == "SAYSTOP") { do_saystop(); return; }
   if (qid_op("VOICES", qid, body)) { send_got(qid, "{\"ok\":true,\"voices\":[]}"); return; }
   if (qid_op("PICKCOLOR", qid, body)) { do_pickcolor(qid); return; }
-  if (qid_op("OCR", qid, body)) { got_unsupported(qid); return; }
-  if (qid_op("OSA", qid, body)) { got_unsupported(qid); return; }
-  if (qid_op("SPOTLIGHT", qid, body)) { send_got(qid, "{\"ok\":true,\"paths\":[]}"); return; }
-  if (qid_op("RECORD", qid, body)) { got_unsupported(qid); return; }
-  if (qid_op("WINCTRL", qid, body)) { got_unsupported(qid); return; }
+  if (qid_op("OCR", qid, body)) {
+    got_unsupported(qid, "OCR isn't available on Linux");
+    return;
+  }
+  if (qid_op("OSA", qid, body)) {
+    got_unsupported(qid, "AppleScript is macOS-only");
+    return;
+  }
+  if (qid_op("SPOTLIGHT", qid, body)) {
+    do_spotlight(qid, body);
+    return;
+  }
+  if (qid_op("RECORD", qid, body)) {
+    got_unsupported(qid, "screen recording isn't supported on Linux yet "
+                         "(would need the ScreenCast portal)");
+    return;
+  }
+  if (qid_op("WINCTRL", qid, body)) {
+    got_unsupported(qid, "moving other apps' windows isn't supported on Linux");
+    return;
+  }
   if (line.rfind("AI available ", 0) == 0) {
     send_got(line.substr(13), "{\"status\":\"unsupported\"}");
     return;
