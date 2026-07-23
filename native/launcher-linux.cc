@@ -2297,10 +2297,20 @@ static void grab_key(Display* dpy, Window root, KeyCode code, unsigned mods, boo
   }
 }
 
-static void hotkey_register(const std::string& id, const std::string& combo) {
+static bool on_x11() {
   GdkDisplay* gd = gdk_display_get_default();
 #ifdef GDK_WINDOWING_X11
-  if (!GDK_IS_X11_DISPLAY(gd)) return;  // Wayland: no global hotkeys
+  return GDK_IS_X11_DISPLAY(gd);
+#else
+  (void)gd;
+  return false;
+#endif
+}
+
+static void x11_hotkey_register(const std::string& id, const std::string& combo) {
+  GdkDisplay* gd = gdk_display_get_default();
+#ifdef GDK_WINDOWING_X11
+  if (!GDK_IS_X11_DISPLAY(gd)) return;
   Display* dpy = GDK_DISPLAY_XDISPLAY(gd);
   KeyCombo c = parse_combo(combo);
   if (!c.ok) return;
@@ -2325,7 +2335,7 @@ static void hotkey_register(const std::string& id, const std::string& combo) {
 #endif
 }
 
-static void hotkey_unregister(const std::string& id) {
+static void x11_hotkey_unregister(const std::string& id) {
   GdkDisplay* gd = gdk_display_get_default();
 #ifdef GDK_WINDOWING_X11
   if (!GDK_IS_X11_DISPLAY(gd)) return;
@@ -2339,9 +2349,171 @@ static void hotkey_unregister(const std::string& id) {
 }
 #else
 static bool do_keystroke(const std::string&) { return false; }
-static void hotkey_register(const std::string&, const std::string&) {}
-static void hotkey_unregister(const std::string&) {}
+static bool on_x11() { return false; }
+static void x11_hotkey_register(const std::string&, const std::string&) {}
+static void x11_hotkey_unregister(const std::string&) {}
 #endif
+
+// --- Wayland global hotkeys: org.freedesktop.portal.GlobalShortcuts ----------
+// The portal is dialog-driven (the user approves/rebinds shortcuts once, by
+// Wayland's design), and binds the whole set at once — so we accumulate the
+// app's shortcuts and (re)bind after the session is ready. Presses arrive as
+// Activated signals → HOTKEY <id>.
+
+static std::map<std::string, std::string> g_portal_shortcuts;  // id -> combo
+static std::string g_gs_session;      // portal session handle (empty until ready)
+static bool g_gs_creating = false;
+static bool g_gs_activated_wired = false;
+
+// "cmd+shift+k" -> the portal trigger syntax "CTRL+SHIFT+k"
+static std::string portal_trigger(const std::string& combo) {
+  std::string out, key;
+  size_t start = 0;
+  std::vector<std::string> parts;
+  for (;;) {
+    size_t i = combo.find('+', start);
+    if (i == std::string::npos) { parts.push_back(combo.substr(start)); break; }
+    parts.push_back(combo.substr(start, i - start));
+    start = i + 1;
+  }
+  for (auto& raw : parts) {
+    std::string p;
+    for (char c : raw) p += g_ascii_tolower(c);
+    const char* mod = nullptr;
+    if (p == "cmd" || p == "command" || p == "meta" || p == "ctrl" || p == "control") mod = "CTRL";
+    else if (p == "alt" || p == "opt" || p == "option") mod = "ALT";
+    else if (p == "shift") mod = "SHIFT";
+    else if (p == "win" || p == "super") mod = "LOGO";
+    if (mod) { out += out.empty() ? "" : "+"; out += mod; }
+    else key = raw;  // keep the key's original case
+  }
+  if (!key.empty()) { out += out.empty() ? "" : "+"; out += key; }
+  return out;
+}
+
+static void gs_bind_shortcuts();
+
+static void gs_on_activated(GDBusConnection*, const gchar*, const gchar*, const gchar*,
+                            const gchar*, GVariant* params, gpointer) {
+  const gchar* session = nullptr;
+  const gchar* shortcut_id = nullptr;
+  g_variant_get(params, "(&o&s@a{sv})", &session, &shortcut_id, nullptr);
+  if (shortcut_id) pipe_write_line(std::string("HOTKEY ") + shortcut_id);
+}
+
+static void gs_wire_activated(GDBusConnection* bus) {
+  if (g_gs_activated_wired) return;
+  g_gs_activated_wired = true;
+  g_dbus_connection_signal_subscribe(bus, "org.freedesktop.portal.Desktop",
+      "org.freedesktop.portal.GlobalShortcuts", "Activated",
+      "/org/freedesktop/portal/desktop", nullptr, G_DBUS_SIGNAL_FLAGS_NONE,
+      gs_on_activated, nullptr, nullptr);
+}
+
+// subscribe to a portal Request's Response, invoking cb(results) once (then
+// unsubscribing itself). cb runs only on a success (code 0) response.
+struct PortalWait {
+  GDBusConnection* bus;
+  guint sub;
+  std::function<void(GVariant*)> cb;
+};
+
+static void portal_await_response(GDBusConnection* bus, const std::string& request_path,
+                                  std::function<void(GVariant*)> cb) {
+  auto* w = new PortalWait{bus, 0, std::move(cb)};
+  w->sub = g_dbus_connection_signal_subscribe(bus, "org.freedesktop.portal.Desktop",
+      "org.freedesktop.portal.Request", "Response", request_path.c_str(), nullptr,
+      G_DBUS_SIGNAL_FLAGS_NONE,
+      [](GDBusConnection*, const gchar*, const gchar*, const gchar*, const gchar*,
+         GVariant* params, gpointer data) {
+        auto* w = (PortalWait*)data;
+        guint32 code = 0;
+        GVariant* results = nullptr;
+        g_variant_get(params, "(u@a{sv})", &code, &results);
+        if (code == 0) w->cb(results);
+        if (results) g_variant_unref(results);
+        g_dbus_connection_signal_unsubscribe(w->bus, w->sub);  // one-shot
+      }, w, [](gpointer data) { delete (PortalWait*)data; });
+}
+
+static std::string portal_sender_token(GDBusConnection* bus, const char* prefix,
+                                       std::string& out_token) {
+  const char* unique = g_dbus_connection_get_unique_name(bus);
+  std::string sender = unique ? unique + 1 : "";
+  for (auto& c : sender) if (c == '.') c = '_';
+  out_token = std::string(prefix) + std::to_string(g_get_monotonic_time() % 1000000);
+  return "/org/freedesktop/portal/desktop/request/" + sender + "/" + out_token;
+}
+
+static void gs_bind_shortcuts() {
+  GDBusConnection* bus = session_bus();
+  if (!bus || g_gs_session.empty()) return;
+  GVariantBuilder shortcuts;
+  g_variant_builder_init(&shortcuts, G_VARIANT_TYPE("a(sa{sv})"));
+  for (auto& kv : g_portal_shortcuts) {
+    GVariantBuilder meta;
+    g_variant_builder_init(&meta, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&meta, "{sv}", "description",
+        g_variant_new_string((g_app_name + ": " + kv.first).c_str()));
+    std::string trig = portal_trigger(kv.second);
+    if (!trig.empty()) {
+      g_variant_builder_add(&meta, "{sv}", "preferred_trigger",
+          g_variant_new_string(trig.c_str()));
+    }
+    g_variant_builder_add(&shortcuts, "(sa{sv})", kv.first.c_str(), &meta);
+  }
+  std::string token;
+  std::string req = portal_sender_token(bus, "tjbind", token);
+  GVariantBuilder opts;
+  g_variant_builder_init(&opts, G_VARIANT_TYPE("a{sv}"));
+  g_variant_builder_add(&opts, "{sv}", "handle_token", g_variant_new_string(token.c_str()));
+  g_dbus_connection_call(bus, "org.freedesktop.portal.Desktop",
+      "/org/freedesktop/portal/desktop", "org.freedesktop.portal.GlobalShortcuts",
+      "BindShortcuts",
+      g_variant_new("(oa(sa{sv})sa{sv})", g_gs_session.c_str(), &shortcuts, "", &opts),
+      G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, 30000, nullptr, nullptr, nullptr);
+}
+
+static void gs_create_session() {
+  if (g_gs_creating || !g_gs_session.empty()) return;
+  GDBusConnection* bus = session_bus();
+  if (!bus) return;
+  g_gs_creating = true;
+  gs_wire_activated(bus);
+  std::string session_token = "tjgs" + std::to_string(g_get_monotonic_time() % 1000000);
+  std::string handle_token;
+  std::string req = portal_sender_token(bus, "tjgscreate", handle_token);
+  portal_await_response(bus, req, [](GVariant* results) {
+    const gchar* handle = nullptr;
+    if (results && g_variant_lookup(results, "session_handle", "&s", &handle) && handle) {
+      g_gs_session = handle;
+    }
+    g_gs_creating = false;
+    if (!g_gs_session.empty()) gs_bind_shortcuts();
+  });
+  GVariantBuilder opts;
+  g_variant_builder_init(&opts, G_VARIANT_TYPE("a{sv}"));
+  g_variant_builder_add(&opts, "{sv}", "handle_token", g_variant_new_string(handle_token.c_str()));
+  g_variant_builder_add(&opts, "{sv}", "session_handle_token",
+      g_variant_new_string(session_token.c_str()));
+  g_dbus_connection_call(bus, "org.freedesktop.portal.Desktop",
+      "/org/freedesktop/portal/desktop", "org.freedesktop.portal.GlobalShortcuts",
+      "CreateSession", g_variant_new("(a{sv})", &opts),
+      G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, 30000, nullptr, nullptr, nullptr);
+}
+
+static void hotkey_register(const std::string& id, const std::string& combo) {
+  if (on_x11()) { x11_hotkey_register(id, combo); return; }
+  g_portal_shortcuts[id] = combo;
+  if (g_gs_session.empty()) gs_create_session();  // binds once ready
+  else gs_bind_shortcuts();
+}
+
+static void hotkey_unregister(const std::string& id) {
+  if (on_x11()) { x11_hotkey_unregister(id); return; }
+  g_portal_shortcuts.erase(id);
+  if (!g_gs_session.empty()) gs_bind_shortcuts();
+}
 
 // --- shell / login / sound / capture / pdf / thumb / say ---------------------
 

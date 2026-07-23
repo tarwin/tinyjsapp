@@ -1071,8 +1071,10 @@ built apps only), `store`/`paths` (XDG dirs), multi-window, custom context
 menus + suppression, hot reload, `tiny.fetch`/`proxyURL` streaming,
 `printToPDF`, the print dialog, `screens`/`mousePosition`/`getWinState`,
 `battery`, `idleTime` (GNOME), `pickColor` (portal), `thumbnail` (images
-only), `captureScreen` (X11 sessions only), `keystroke` + global hotkeys
-(X11/XWayland via XTest/XGrabKey — not pure Wayland), `playSound`/`beep`,
+only), `captureScreen` (X11 sessions only), global hotkeys (X11 via
+XGrabKey; pure Wayland via the GlobalShortcuts portal — the compositor
+prompts to approve them once), `keystroke` synthesis (X11/XWayland via
+XTest — not pure Wayland), `playSound`/`beep`,
 `say`/`voices` (via speech-dispatcher's `spd-say` when installed),
 `dock.bounce` (a taskbar urgency hint), `nowPlaying` + media keys (a real
 MPRIS player — shows in the GNOME/KDE media widget and lock screen, and

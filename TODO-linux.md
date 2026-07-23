@@ -30,8 +30,12 @@ where missing.
       buttons; no reply fields.
 - [x] **Theme + sleep/wake** — dark/light incl. live changes, sleep/wake
       events.
-- [x] **Global hotkeys + keystroke (X11)** — XGrabKey/XTest via
-      X11/XWayland sessions; pure Wayland not covered (see Still open).
+- [x] **Global hotkeys** — X11/XWayland sessions grab keys directly
+      (XGrabKey); pure-Wayland sessions go through the
+      `org.freedesktop.portal.GlobalShortcuts` portal (the compositor shows
+      a one-time approval dialog, then presses arrive as `onHotkey`).
+      `keystroke` synthesis stays X11/XWayland-only (XTest) — no Wayland
+      equivalent without the RemoteDesktop portal.
 - [x] **launchAtLogin** — autostart `.desktop` entry, built apps only.
 - [x] **`.desktop` self-registration + single instance + deep links** — a
       built app registers its own `.desktop` entry on first run (app-menu
@@ -66,10 +70,6 @@ where missing.
       Windows assets.
 
 ## Still open
-
-- [ ] **Wayland-native global hotkeys** — the X11 XGrabKey path covers
-      X11/XWayland sessions; the `org.freedesktop.portal.GlobalShortcuts`
-      portal would cover pure Wayland (user-facing rebind dialog).
 - [ ] **audioTap scope:'app'** — the system mix is captured (done above);
       true per-process (own-window-only) capture needs a PipeWire
       sink-input filter, like the Windows process-loopback path.

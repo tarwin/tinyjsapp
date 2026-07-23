@@ -30,8 +30,9 @@ https://tinyjs.app/changelog.
   `.desktop`), multi-window, custom context menus + suppression, hot reload,
   `tiny.fetch`/`proxyURL` streaming, `printToPDF`, the print dialog,
   `screens`/`mousePosition`/`getWinState`, `captureScreen` (X11 sessions
-  only), `thumbnail` (images only), `keystroke` + global hotkeys
-  (X11/XWayland via XTest/XGrabKey — not pure Wayland), `playSound`/`beep`,
+  only), `thumbnail` (images only), global hotkeys (XGrabKey on X11; the
+  GlobalShortcuts portal on pure Wayland — a one-time approval dialog),
+  `keystroke` synthesis (X11/XWayland via XTest only), `playSound`/`beep`,
   `say`/`voices` (via speech-dispatcher's `spd-say` when installed),
   `pickColor` (portal), `idleTime` (GNOME), `battery`, `dock.bounce`
   (urgency hint), `nowPlaying` + media keys (a real MPRIS player — metadata

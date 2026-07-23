@@ -32,8 +32,10 @@ multi-window (`win.open` — per-window bridge everywhere), file/folder/save
 dialogs, alert/confirm/prompt, menu bar (+ `menu.update`/`get`, `key:`
 accelerators — cmd on mac, Ctrl on win/linux), custom context menus +
 `contextMenu: false`, clipboard (text/html/files/image, read + write +
-watch), global hotkeys, `keystroke`/`paste` (`cmd` maps to Ctrl on
-win/linux; linux needs X11/XWayland — XTest/XGrabKey, not pure Wayland),
+watch), global hotkeys (`cmd` maps to Ctrl on win/linux; linux uses
+XGrabKey on X11 and the GlobalShortcuts portal on pure Wayland — the
+compositor prompts once to approve them), `keystroke`/`paste`
+(X11/XWayland only on linux — XTest, no pure-Wayland route),
 `shell.open/reveal/trash`, `secrets` (Keychain / Credential Manager / Secret
 Service), `power.preventSleep`, `theme` + sleep/wake events, `store`,
 `screens`/`mousePosition`/`paths`/`battery`/`idleTime` (linux: needs GNOME),
