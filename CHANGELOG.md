@@ -34,10 +34,13 @@ https://tinyjs.app/changelog.
   (X11/XWayland via XTest/XGrabKey — not pure Wayland), `playSound`/`beep`,
   `say`/`voices` (via speech-dispatcher's `spd-say` when installed),
   `pickColor` (portal), `idleTime` (GNOME), `battery`, `dock.bounce`
-  (urgency hint). Not (yet) supported: `audioTap`, `recorder`, `ocr`,
-  `quickLook`, `applescript`, `haptic`, Dock badge/
-  `bounce({critical: true})`/`dockIcon`, `nowPlaying`/media keys (MPRIS
-  planned), `share`, `wifi`, `spotlight` (empty array), `selectedText`/
+  (urgency hint), `nowPlaying` + media keys (a real MPRIS player — metadata
+  in the GNOME/KDE media widget and lock screen, transport back via
+  `onMediaKey`), and `audioTap` (system scope — the default sink's monitor
+  via `parec`/`pw-cat`; `scope:'app'` approximated by the system mix, like
+  Windows). Not (yet) supported: `recorder`, `ocr`, `quickLook`,
+  `applescript`, `haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`,
+  `share`, `wifi`, `spotlight` (empty array), `selectedText`/
   `otherWindows`/`moveWindow`/`frontmostApp`, `authenticate`,
   `tiny.app.ai`, and `setAllSpaces` (maps to sticky windows) — all reject
   or report `'unsupported'` so cross-platform app code can feature-detect.
