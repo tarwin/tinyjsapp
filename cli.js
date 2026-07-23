@@ -432,6 +432,7 @@ const app = await createApp({
   readAccess: ${JSON.stringify(cfg.readAccess ?? null)},
   userAgent: ${JSON.stringify(cfg.userAgent ?? null)},
   audioTap: ${JSON.stringify(cfg.audioTap ?? null)},
+  windowPlacement: ${JSON.stringify(cfg.windowPlacement ?? null)},
   contextMenu: ${JSON.stringify(cfg.contextMenu ?? true)},
   urlScheme: ${JSON.stringify(cfg.urlScheme ?? null)},
   fileExtensions: ${JSON.stringify(cfg.fileExtensions ?? null)},

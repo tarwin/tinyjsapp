@@ -25,6 +25,73 @@ const DEBUG = !!tjs.env.TINYJS_DEBUG;
 // and navigator.platform reads "Linux …" from uname on Linux.
 const IS_WIN = tjs.env.OS === 'Windows_NT';
 const IS_LINUX = !IS_WIN && /linux/i.test(globalThis.navigator?.platform ?? '');
+// navigator.platform here is the runtime's own (uname on Linux), not a
+// webview's — so unlike the page it reports the real machine.
+const ARCH = /aarch64|arm64/i.test(globalThis.navigator?.platform ?? '') ? 'arm64'
+  : /x86_64|amd64/i.test(globalThis.navigator?.platform ?? '') ? 'x86_64'
+  : IS_WIN ? 'x86_64' : 'arm64';
+const OS = IS_WIN ? 'windows' : IS_LINUX ? 'linux' : 'macos';
+// Linux only: several capabilities exist on X11 but not on Wayland, which
+// hides other windows and the global pointer by design. GDK_BACKEND wins
+// because that is what the launcher will actually use (see windowPlacement).
+const ON_X11 = IS_LINUX && (tjs.env.GDK_BACKEND === 'x11'
+  || (!!tjs.env.DISPLAY && tjs.env.GDK_BACKEND !== 'wayland'
+      && tjs.env.XDG_SESSION_TYPE !== 'wayland'));
+
+function systemInfo() {
+  return {
+    os: OS,
+    arch: ARCH,
+    // Linux desktops differ enough that apps sometimes need the specifics;
+    // null everywhere else.
+    session: IS_LINUX ? (ON_X11 ? 'x11' : (tjs.env.XDG_SESSION_TYPE || null)) : null,
+    desktop: IS_LINUX ? (tjs.env.XDG_CURRENT_DESKTOP || null) : null,
+  };
+}
+
+// What this machine can actually do, so an app can degrade on purpose
+// instead of calling something that quietly does nothing. true = works,
+// false = the OS/session has no equivalent. Anything absent from a platform's
+// column below is simply true on that platform.
+function systemCapabilities() {
+  const linux = {
+    // Wayland forbids a client placing its own toplevels, reading the global
+    // pointer, seeing other windows, or synthesising input. X11 allows all of
+    // it — see the "windowPlacement" manifest key, which selects X11.
+    windowPosition: ON_X11,
+    mousePosition: ON_X11,
+    captureScreen: ON_X11,
+    keystroke: ON_X11,
+    otherWindows: ON_X11,
+    moveOtherWindows: ON_X11,
+    selectedText: ON_X11,
+    // no Linux equivalent at all
+    recorder: false,
+    ocr: false,
+    quickLook: false,
+    share: false,
+    applescript: false,
+    ai: false,
+    wifi: false,
+    dockBadge: false,
+    authenticate: false,
+    // present, with the caveats in the README
+    globalHotkeys: true, tray: true, notifications: true,
+    notificationActions: true, notificationReply: false,
+    secrets: true, mediaKeys: true, nowPlaying: true, audioTap: true,
+    speech: true, pickColor: true, spotlight: true, launchAtLogin: true,
+    printToPDF: true, transparency: true, vibrancy: false,
+  };
+  const windows = {
+    applescript: false, ai: false, quickLook: false, share: false,
+    vibrancy: false, selectedText: false, ocr: false,
+    windowPosition: true, mousePosition: true, captureScreen: true,
+    keystroke: true, recorder: false,
+  };
+  const macos = { vibrancy: true, applescript: true, quickLook: true, share: true };
+  const table = IS_LINUX ? linux : IS_WIN ? windows : macos;
+  return { os: OS, ...table };
+}
 // Strip the file name off a path, tolerating both separators (Windows paths
 // arrive with backslashes).
 const dirOf = (p) => String(p).replace(/[\\/][^\\/]*$/, '');
@@ -125,7 +192,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -211,6 +278,15 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // page JS alone is too late for the main window on Windows.
     if (IS_WIN && chrome?.transparent) spawnEnv.TINYJS_TRANSPARENT = '1';
     if (readAccess) spawnEnv.TINYJS_READ_ACCESS = readAccess === true ? tjs.homeDir : String(readAccess);
+    // "windowPlacement": true — the app places its own windows (setPosition/
+    // center), e.g. to snap or dock them. Wayland forbids a client from
+    // placing its own toplevels, so those calls do nothing there; X11 permits
+    // them. Ask GTK for the X11 backend when an X server is reachable
+    // (XWayland counts), which is the only way such an app works on a Wayland
+    // desktop. No-op on macOS and Windows, which always allow placement.
+    if (IS_LINUX && windowPlacement && tjs.env.DISPLAY && !tjs.env.GDK_BACKEND) {
+      spawnEnv.GDK_BACKEND = 'x11';
+    }
     // Custom User-Agent: WKWebView's default UA lacks the "Version/x Safari/x"
     // suffix, so UA-sniffing sites reject it. Packaged apps use the
     // TinyjsUserAgent plist key instead (this env only applies to the dev spawn).
@@ -1088,6 +1164,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     },
     'theme.get': async () => lastTheme,
     'app.info': async () => app.info,
+    'system.info': async () => systemInfo(),
+    'system.capabilities': async () => systemCapabilities(),
     'app.screens': async () => app.screens(),
     'app.paths': async () => app.paths,
     'shell.open': async ({ target }) => app.shell.open(target),

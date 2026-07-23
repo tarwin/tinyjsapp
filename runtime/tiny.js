@@ -117,6 +117,29 @@
 
     log: (msg) => call('log', { msg }),
     quit: () => call('quit'),
+
+    // Which machine is this? os()/isMacOS()/isWindows()/isLinux() answer
+    // synchronously (the webview's own UA is decisive: WKWebView says
+    // Macintosh, WebView2 says Windows NT, WebKitGTK says Linux), so they're
+    // safe to branch on during page setup. architecture() and capabilities()
+    // ask the backend, which sees the real machine — a Mac webview reports
+    // "MacIntel" even on Apple silicon, so arch cannot be read from the page.
+    system: {
+      os: () => (/Windows/i.test(navigator.userAgent) ? 'windows'
+        : /Linux|X11/i.test(navigator.userAgent) ? 'linux' : 'macos'),
+      isMacOS: () => window.tiny.system.os() === 'macos',
+      isWindows: () => window.tiny.system.os() === 'windows',
+      isLinux: () => window.tiny.system.os() === 'linux',
+      // -> { os, arch: 'arm64'|'x86_64', session, desktop }. session/desktop
+      // are the Linux display server ('x11' | 'wayland') and desktop name;
+      // null elsewhere.
+      info: () => call('system.info'),
+      architecture: async () => (await call('system.info')).arch,
+      // -> { os, <feature>: boolean, … }. What this machine can actually do,
+      // so an app can degrade deliberately instead of calling something that
+      // quietly does nothing (Wayland, for instance, ignores setPosition).
+      capabilities: () => call('system.capabilities'),
+    },
     // opts: { id?, subtitle?, sound? }. Packaged apps get real Notification
     // Center banners (app icon, permission prompt); clicks arrive via
     // tiny.app.onNotificationClick. Dev falls back to osascript.

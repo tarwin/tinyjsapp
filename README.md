@@ -677,6 +677,41 @@ dev mode behaves the same. The window exists but stays hidden until you call
 `tiny.win.show()` / `app.show()`, and `setDockVisible(true)` turns the app
 back into a regular one.
 
+### Apps that place their own windows
+
+If your app moves its own windows — `win.setPosition`, `win.center`, snapping,
+docking, anything that decides where a window goes — say so:
+
+```json
+{ "windowPlacement": true }
+```
+
+It's a no-op on macOS and Windows, which always let a window place itself.
+It matters on Linux: **Wayland forbids a client from placing its own
+toplevels**, so `setPosition` and `center` do nothing on a Wayland session,
+and `mousePosition` reads 0,0 because the global pointer is hidden too. With
+this key set, the launcher asks GTK for the X11 backend (XWayland on a
+Wayland desktop), where placement, the global cursor, `captureScreen` and
+`keystroke` all work — so a window-choreographing app behaves the same as it
+does on macOS.
+
+Don't set it if you don't need it: the Wayland backend is the better one when
+you don't (native fractional scaling, no XWayland translation layer).
+
+To branch at runtime instead, ask what the machine can do:
+
+```js
+tiny.system.os()                     // 'macos' | 'windows' | 'linux'   (sync)
+tiny.system.isLinux()                // sync — safe during page setup
+await tiny.system.architecture()     // 'arm64' | 'x86_64'
+await tiny.system.info()             // { os, arch, session, desktop }
+const can = await tiny.system.capabilities();
+if (!can.windowPosition) useDragInstead();   // e.g. tiny.win.startDrag()
+```
+
+`capabilities()` reports what this machine can actually do, so an app can
+degrade on purpose instead of calling something that quietly does nothing.
+
 ## Build for release
 
 ```sh
