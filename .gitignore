@@ -2,6 +2,7 @@
 bin/
 native/launcher
 native/launcher-win.exe
+native/launcher-linux
 native/include/WebView2.h
 native/shim
 
