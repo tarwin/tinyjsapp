@@ -38,6 +38,137 @@ const ON_X11 = IS_LINUX && (tjs.env.GDK_BACKEND === 'x11'
   || (!!tjs.env.DISPLAY && tjs.env.GDK_BACKEND !== 'wayland'
       && tjs.env.XDG_SESSION_TYPE !== 'wayland'));
 
+// ── system requirements ─────────────────────────────────────────────────────
+// Linux ships its media stack in pieces, and which pieces are present varies
+// by distro and install. Rather than let a feature fail mutely (silent audio,
+// a dead tray), an app can ask what's missing and tell the user exactly what
+// to install. Every entry is a real probe, not a guess about the distro.
+
+// Package names per family, keyed by the manager an app should suggest.
+const PKG_MANAGERS = [
+  { id: 'apt', test: /debian|ubuntu|mint|pop|elementary/i, cmd: 'sudo apt install' },
+  { id: 'dnf', test: /fedora|rhel|centos|rocky|alma/i, cmd: 'sudo dnf install' },
+  { id: 'pacman', test: /arch|manjaro|endeavour/i, cmd: 'sudo pacman -S' },
+  { id: 'zypper', test: /suse/i, cmd: 'sudo zypper install' },
+];
+
+let osRelease = null;
+async function distroId() {
+  if (osRelease !== null) return osRelease;
+  try {
+    const txt = new TextDecoder().decode(await tjs.readFile('/etc/os-release'));
+    const id = /^ID=(.*)$/m.exec(txt)?.[1]?.replace(/"/g, '') ?? '';
+    const like = /^ID_LIKE=(.*)$/m.exec(txt)?.[1]?.replace(/"/g, '') ?? '';
+    osRelease = `${id} ${like}`;
+  } catch { osRelease = ''; }
+  return osRelease;
+}
+
+// does `argv` exit 0? used to ask gst-inspect whether a decoder exists
+async function probeOk(argv) {
+  try {
+    const p = tjs.spawn(argv, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+    return (await p.wait()).exit_status === 0;
+  } catch { return false; }
+}
+
+const GST_CODECS = ['gstreamer1.0-plugins-bad', 'gstreamer1.0-plugins-ugly', 'gstreamer1.0-libav'];
+const REQUIREMENTS = {
+  'media.aac': {
+    feature: 'AAC / M4A playback',
+    detail: 'WebKitGTK decodes through GStreamer, and AAC lives in the optional '
+      + 'plugin sets. Without them <audio> refuses AAC outright — most podcasts '
+      + 'and internet radio.',
+    probe: () => probeOk(['gst-inspect-1.0', 'avdec_aac']).then((a) => a || probeOk(['gst-inspect-1.0', 'faad'])),
+    packages: { apt: GST_CODECS, dnf: ['gstreamer1-plugins-bad-free', 'gstreamer1-libav'],
+                pacman: ['gst-plugins-bad', 'gst-plugins-ugly', 'gst-libav'],
+                zypper: ['gstreamer-plugins-bad', 'gstreamer-plugins-libav'] },
+  },
+  'media.h264': {
+    feature: 'H.264 video playback',
+    detail: 'Same GStreamer plugin sets as AAC; without them <video> stays black.',
+    probe: () => probeOk(['gst-inspect-1.0', 'avdec_h264']).then((a) => a || probeOk(['gst-inspect-1.0', 'openh264dec'])),
+    packages: { apt: GST_CODECS, dnf: ['gstreamer1-plugins-bad-free', 'gstreamer1-libav'],
+                pacman: ['gst-plugins-bad', 'gst-libav'], zypper: ['gstreamer-plugins-libav'] },
+  },
+  'media.mp3': {
+    feature: 'MP3 playback',
+    detail: 'Usually present as part of the base GStreamer install.',
+    probe: () => probeOk(['gst-inspect-1.0', 'mpg123audiodec']).then((a) => a || probeOk(['gst-inspect-1.0', 'avdec_mp3'])),
+    packages: { apt: ['gstreamer1.0-plugins-good'], dnf: ['gstreamer1-plugins-good'],
+                pacman: ['gst-plugins-good'], zypper: ['gstreamer-plugins-good'] },
+  },
+  'speech': {
+    feature: 'tiny.app.say / voices',
+    detail: 'Speech goes through speech-dispatcher; without it say() resolves false.',
+    probe: () => probeOk(['sh', '-c', 'command -v spd-say']),
+    packages: { apt: ['speech-dispatcher'], dnf: ['speech-dispatcher'],
+                pacman: ['speech-dispatcher'], zypper: ['speech-dispatcher'] },
+  },
+  'spotlight.index': {
+    feature: 'fast tiny.app.spotlight',
+    detail: 'With plocate the search is indexed and instant; without it tinyjs '
+      + 'falls back to a bounded find under $HOME, which is slower and name-only.',
+    probe: () => probeOk(['sh', '-c', 'command -v plocate || command -v locate']),
+    packages: { apt: ['plocate'], dnf: ['plocate'], pacman: ['plocate'], zypper: ['plocate'] },
+  },
+  'audioTap': {
+    feature: 'tiny.audioTap',
+    detail: 'Capturing the system mix needs pw-cat (PipeWire) or parec (PulseAudio).',
+    probe: () => probeOk(['sh', '-c', 'command -v pw-cat || command -v parec']),
+    packages: { apt: ['pipewire-bin'], dnf: ['pipewire-utils'], pacman: ['pipewire'],
+                zypper: ['pipewire-tools'] },
+  },
+  'tray': {
+    feature: 'tiny.tray',
+    detail: 'The tray needs an AppIndicator/StatusNotifier host. GNOME needs the '
+      + 'AppIndicator shell extension; most other desktops have one built in.',
+    probe: async () => !!(await busNameOwned('org.kde.StatusNotifierWatcher')),
+    packages: { apt: ['gnome-shell-extension-appindicator'], dnf: ['gnome-shell-extension-appindicator'],
+                pacman: ['libappindicator-gtk3'], zypper: ['gnome-shell-extension-appindicator'] },
+  },
+  'windowPosition': {
+    feature: 'placing your own windows (setPosition / center)',
+    // nothing to install — it is the session, so say so plainly
+    detail: 'Wayland forbids a client from placing its own toplevels. Set '
+      + '"windowPlacement": true in tinyjs.json to run under X11/XWayland, or log '
+      + 'out and pick an X11 session.',
+    probe: async () => ON_X11,
+    packages: null,
+  },
+};
+
+// is a bus name currently owned? (tray host detection)
+async function busNameOwned(name) {
+  return probeOk(['sh', '-c',
+    `gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus `
+    + `-m org.freedesktop.DBus.NameHasOwner ${name} 2>/dev/null | grep -q true`]);
+}
+
+const reqCache = new Map();
+async function systemRequirements(ids) {
+  const wanted = (Array.isArray(ids) && ids.length ? ids : Object.keys(REQUIREMENTS))
+    .filter((id) => REQUIREMENTS[id]);
+  // Only Linux splits these out; elsewhere the platform ships them.
+  if (!IS_LINUX) return wanted.map((id) => ({ id, ok: true, feature: REQUIREMENTS[id].feature }));
+  const distro = await distroId();
+  const mgr = PKG_MANAGERS.find((m) => m.test.test(distro)) ?? PKG_MANAGERS[0];
+  const out = [];
+  for (const id of wanted) {
+    const r = REQUIREMENTS[id];
+    if (!reqCache.has(id)) reqCache.set(id, await r.probe().catch(() => false));
+    const ok = reqCache.get(id);
+    const pkgs = r.packages?.[mgr.id] ?? null;
+    out.push({
+      id, ok, feature: r.feature,
+      detail: ok ? null : r.detail,
+      // ready to show, e.g. "sudo apt install gstreamer1.0-plugins-bad …"
+      install: ok || !pkgs ? null : { manager: mgr.id, packages: pkgs, command: `${mgr.cmd} ${pkgs.join(' ')}` },
+    });
+  }
+  return out;
+}
+
 function systemInfo() {
   return {
     os: OS,
@@ -1166,6 +1297,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.info': async () => app.info,
     'system.info': async () => systemInfo(),
     'system.capabilities': async () => systemCapabilities(),
+    'system.requirements': async ({ ids } = {}) => systemRequirements(ids),
     'app.screens': async () => app.screens(),
     'app.paths': async () => app.paths,
     'shell.open': async ({ target }) => app.shell.open(target),

@@ -139,6 +139,25 @@
       // so an app can degrade deliberately instead of calling something that
       // quietly does nothing (Wayland, for instance, ignores setPosition).
       capabilities: () => call('system.capabilities'),
+
+      // What this machine is MISSING for a feature, and how to fix it. Linux
+      // ships its media stack in pieces (AAC and H.264 live in optional
+      // GStreamer plugin sets), so a feature can be absent on one box and
+      // present on the next — ask instead of assuming, and tell the user
+      // something actionable rather than letting audio go quiet.
+      //
+      //   const [aac] = await tiny.system.requirements(['media.aac']);
+      //   if (!aac.ok) alert(`${aac.feature} needs:\n${aac.install.command}`);
+      //
+      // -> [{ id, ok, feature, detail, install: { manager, packages, command } }]
+      // install is null when it's already there, or when nothing installable
+      // would fix it (windowPosition on Wayland is the session, not a package).
+      // Ids: media.aac, media.h264, media.mp3, speech, spotlight.index,
+      // audioTap, tray, windowPosition. Everything reports ok on macOS/Windows.
+      requirements: (ids) => call('system.requirements', { ids: ids ?? null }),
+      // Just the ones that aren't satisfied — the common case.
+      missing: async (ids) => (await call('system.requirements', { ids: ids ?? null }))
+        .filter((r) => !r.ok),
     },
     // opts: { id?, subtitle?, sound? }. Packaged apps get real Notification
     // Center banners (app icon, permission prompt); clicks arrive via
