@@ -57,6 +57,26 @@ protocol as macOS/Windows. If you need the exhaustive op-by-op spec, it can be
 re-derived from `native/launcher.cc` + `native/launcher-win.cc` (a distilled
 version was generated into a scratch file during the port but not committed).
 
+## This Parallels VM (set up 2026-07-22/23, aarch64, GNOME **Wayland**)
+
+- **GPU acceleration works** — WebGL reports `Apple GPU` / `Apple Inc.`, so the
+  UTM software-compositing problem is gone. Re-check `amp`'s audio here; the
+  skipping should be fixed.
+- **Node**: the distro `nodejs` package has no npm, which the TS examples need
+  (`npx esbuild`, `vite`). Node 22 + npm 10 is installed at `~/.local/node` —
+  put `~/.local/node/bin` first on PATH. With it, all 26 examples build.
+  Do NOT commit the `package-lock.json` churn an install here produces: npm
+  drops the darwin/win32 optional binaries, which would break mac/win builds.
+- **gnome-keyring is locked** (autologin VM), so `secrets.set` fails with
+  `org.freedesktop.Secret.Error.IsLocked`. Not a launcher bug — unlock the
+  login keyring, or run `secrets` tests after a real password login.
+- **Wayland session**, so per the notes below: `mouse`/window x,y report 0,0,
+  `captureScreen` rejects, `keystroke` is unsupported. An X11 session lights
+  those up.
+- One harmless `Gtk-CRITICAL … gtk_widget_get_scale_factor` line at startup for
+  any app with a tray. It comes from inside libayatana-appindicator (we never
+  call it); setting the icon after the menu doesn't avoid it.
+
 ## Environment gotchas seen on the previous VM (UTM on Apple Silicon)
 
 - **GPU acceleration was broken** (the constant `libEGL … failed to create
@@ -78,8 +98,10 @@ version was generated into a scratch file during the port but not committed).
 
 ## NEEDS INTERACTIVE RE-TEST (couldn't verify headlessly on the last machine)
 
-These are implemented and compile clean, but need a human at the screen to
-confirm — do this early in Parallels:
+Items 3 (tray) and the MPRIS half of the fleet have since been verified on
+Parallels **without a human**, by speaking the same D-Bus a panel speaks —
+see "Driving the desktop over D-Bus" below. What's left genuinely needs eyes
+or a keypress:
 
 1. **Frameless window drag** (`fix(linux): frameless window drag on Wayland`,
    commit 573b22c). `win.startDrag`/`data-tiny-drag` now grabs the live
@@ -94,15 +116,48 @@ confirm — do this early in Parallels:
    pressing the combo should fire `onHotkey`. Verified the `CreateSession`/
    `BindShortcuts` D-Bus calls reach the portal, but the approval dialog +
    physical keypress couldn't be automated.
-3. **Tray** (AppIndicator) — icon appears, menu opens, clicks fire `onTray`;
-   bare-icon click (no menu) fires `onTray(null)` via the synthetic entry.
+3. **Tray** — DONE, verified over D-Bus (2026-07-23). The item registers with
+   `org.kde.StatusNotifierWatcher` (Status=Active, a host is registered), the
+   dbusmenu layout is correct, and `Event(clicked)` on the entries produced
+   `tray {"id":"one"}` / `{"id":"two"}`; a tray with no menu gets the synthetic
+   entry and produces `trayclick {}`. Note the doc line above was wrong: a bare
+   icon click is `tiny.tray.onClick()`, not `onTray(null)` — `tray.on()` is
+   menu items. Only "does the icon look right on screen" is unverified.
 4. **notify action buttons** — buttons appear and route to
-   `onNotificationAction` (no reply-field support on Linux).
+   `onNotificationAction` (no reply-field support on Linux). Can't be driven
+   over D-Bus: `ActionInvoked` is emitted by the notification daemon, which
+   owns the name, so this one needs a click.
 5. **pickColor** — the portal eyedropper dialog appears and returns `#rrggbb`.
 
 Everything else (dev/build/publish/auto-update/dialogs/menus/clipboard/
 secrets/mpris/system-audioTap/spotlight/the full unsupported-op surface) was
 verified end-to-end on the previous machine.
+
+### Driving the desktop over D-Bus (no human needed)
+
+Anything the desktop shell talks to us through can be exercised by speaking
+that protocol directly — this closed out the tray and MPRIS without a click.
+Run an app with a page that logs `window.__emit` events, then from a shell:
+
+```sh
+# tray: find our item, read its menu, click an entry
+gdbus call --session -d org.kde.StatusNotifierWatcher -o /StatusNotifierWatcher \
+  -m org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierWatcher \
+  RegisteredStatusNotifierItems                     # -> :1.NNN@/org/ayatana/...
+busctl --user call :1.NNN <menupath> com.canonical.dbusmenu GetLayout iias 0 1 1 label
+busctl --user call :1.NNN <menupath> com.canonical.dbusmenu Event isvu 2 clicked s "" 0
+
+# mpris: read what nowplaying.set published, then send transport commands
+gdbus call --session -d org.mpris.MediaPlayer2.<app_id> -o /org/mpris/MediaPlayer2 \
+  -m org.freedesktop.DBus.Properties.Get org.mpris.MediaPlayer2.Player Metadata
+gdbus call --session -d org.mpris.MediaPlayer2.<app_id> -o /org/mpris/MediaPlayer2 \
+  -m org.mpris.MediaPlayer2.Player.Next            # -> media-key {"command":"next"}
+```
+
+(`busctl` parses a leading `-1` as an option, so pass a positive GetLayout
+depth.) MPRIS checked out fully: metadata (title/artist/album/length) matches
+what `nowplaying.set` was given, PlaybackStatus tracks `playing`, and
+Pause/Next/Previous/PlayPause all arrive as `media-key` events.
 --------------------------------------------------------------------------
 
 ## Done
@@ -167,6 +222,19 @@ verified end-to-end on the previous machine.
       chunked to interleaved LE Int16 at the requested interval. Matches
       the Windows WASAPI-loopback behavior: system scope only, `scope:'app'`
       is approximated by the system mix (see Still open for true per-app).
+- [x] **Fleet sweep on Parallels (2026-07-23)** — all 26 examples build AND
+      launch. Seven died on the first pass; the fixes are in the commits above
+      plus the examples repo:
+      * `spotlight` silently returned `[]` for most queries — the reader
+        dropped output when GLib reported `G_IO_IN | G_IO_HUP` together.
+      * `tray.set` on a ticker used freed memory (worldclock died in seconds).
+      * `getWinState().screen` was 0x0 on Wayland, so treez sized its windows
+        to zero height.
+      * `app.voices` was a hardcoded `[]`, and `say` sent voice ids to `-l`.
+      * boo/kraa/kraa3d/coo3d/treez dlopen'd CoreGraphics for the cursor on
+        any non-Windows OS — they now take the polled-`mousePosition` path off
+        macOS (real coordinates on X11, 0,0 on Wayland), and deja no longer
+        spawns macOS's `screencapture` on Linux.
 - [x] **Install script + release CI** — `curl -fsSL tinyjs.app/install | sh`
       detects Linux and installs to `~/.tinyjs` (needs the system
       `libwebkit2gtk-4.1-0` runtime); `setup.sh` now also builds on Linux
@@ -184,16 +252,34 @@ currently fail cleanly (reject with a specific message, or resolve
 null/empty) so nothing here is a correctness hazard — they're missing
 features, not bugs.
 
-- [ ] **Examples: Linux builds for shelf installs** — the highest-value
-      *product* task and the one the user cares about for testing. `shelf`
-      is a mini app store listing the examples; it needs per-app Linux
-      tarballs published + a `linuxUrl` (mirroring the existing `winUrl`) in
-      `../tinyjsapp-examples/catalog.json`, and a tarball install path in the
-      shelf frontend so it's a real store on Linux, not just a filtered list.
-      This is content/infra in the examples repo, not launcher C++. Start by
-      reading how the Windows `winUrl`/zip flow works in catalog.json + the
-      shelf example, then mirror it: `tinyjs publish` each example on Linux
-      (produces `<name>-<ver>-linux-<arch>.tar.gz`), host them, add the urls.
+- [~] **Examples: Linux builds for shelf installs** — BUILT AND VERIFIED
+      LOCALLY, not yet published. In `../tinyjsapp-examples` (all uncommitted,
+      for review):
+      * `shelf/src/main.js` gained a Linux path mirroring the Windows one —
+        installs under `$XDG_DATA_HOME/tinyjs-apps/<folder>/`, sha256-verified
+        tar extract, `.tinyjs-shelf.json` marker, `ps`-based running detection,
+        guarded uninstall, `xdg-open` for reveal/urls.
+      * `shelf/src/frontend/app.js` — `normalizeEntry` handles a `linux` block;
+        since Linux builds are per-arch, the backend exposes `arch()` and the
+        page picks `linux[arch]`. An entry with no build for this arch is
+        dropped from the list, exactly like a missing win block.
+      * `shelf/gen-catalog-linux.js` (new) — merges linux blocks into
+        catalog.json + the bundled catalog.js from tarballs staged in
+        `_builds/<dir>/`. Deliberately additive: `gen-catalog.js` rebuilds the
+        whole catalog from the macOS dmgs and would drop the win/linux blocks.
+      * All 26 examples were `tinyjs publish`ed for linux-arm64 and the
+        tarballs staged into `_builds/<dir>/`; catalog.json now carries 25
+        linux blocks (~120 MB of artifacts — decide whether they belong in the
+        repo like the win zips, or in releases).
+      Verified end to end against a local HTTP server: 25/25 entries
+      installable, install → launch → running-detection → uninstall clean for
+      three different app types, and the checksum + non-repo-URL guards both
+      reject.
+      REMAINING: (1) **x86_64 tarballs** — this VM is aarch64, so the catalog
+      is arm64-only and shelf on an x86_64 desktop would list nothing; release
+      CI already builds linux-x86_64 for tjs, so extend it to the examples or
+      publish from an x86_64 box, then re-run gen-catalog-linux.js there.
+      (2) push the tarballs so the raw.githubusercontent URLs resolve.
 - [ ] **recorder** — screen recording to a video file. Route: the
       `org.freedesktop.portal.ScreenCast` portal (CreateSession →
       SelectSources → Start → returns a PipeWire node fd), feed the PipeWire
