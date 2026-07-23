@@ -67,6 +67,14 @@ version was generated into a scratch file during the port but not committed).
   put `~/.local/node/bin` first on PATH. With it, all 26 examples build.
   Do NOT commit the `package-lock.json` churn an install here produces: npm
   drops the darwin/win32 optional binaries, which would break mac/win builds.
+- **Media codecs are incomplete out of the box** — `gstreamer1.0-plugins-bad`,
+  `-ugly` and `libav` are not installed, so WebKit plays MP3/Ogg/Opus/WAV/FLAC
+  but reports `""` for AAC/M4A and `isTypeSupported: false` for every MSE type.
+  That is silence for most podcasts and internet radio. Fix:
+  `sudo apt install gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav`.
+  Not an amp bug and not a launcher bug — verified with a bare page: a tone,
+  a WAV, an Ogg and an MP3 all produce healthy signal, PipeWire reports ERR=0
+  even under heavy visual load, and ALSA shows samples reaching the hardware.
 - **gnome-keyring is locked** (autologin VM), so `secrets.set` fails with
   `org.freedesktop.Secret.Error.IsLocked`. Not a launcher bug — unlock the
   login keyring, or run `secrets` tests after a real password login.

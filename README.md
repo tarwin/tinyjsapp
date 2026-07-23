@@ -75,6 +75,20 @@ Runs on X11 and Wayland sessions — Ubuntu 24.04+ and current distros with
 build from source with `./setup.sh` (see the apt deps above). Needs the
 `libwebkit2gtk-4.1-0` runtime package.
 
+**Playing media?** WebKitGTK decodes through GStreamer, and a stock desktop
+install carries only some of it. Without the rest, `<audio>`/`<video>` play
+MP3, Ogg/Vorbis, Opus, WAV and FLAC, but **AAC/M4A won't play at all**
+(`canPlayType('audio/mp4; codecs="mp4a.40.2"')` returns `""`) and Media
+Source Extensions report every type unsupported — which covers most podcasts,
+most internet radio, and most adaptive streaming. Add:
+
+```sh
+sudo apt install gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+```
+
+WebKit hints at this itself, logging "WebKit wasn't able to find a WebVTT
+encoder … unless gst-plugins-bad is installed" on startup.
+
 See **Portability** below for what's supported on Windows and Linux.
 
 Full API reference: [tinyjs.app/api](https://tinyjs.app/api) · release
