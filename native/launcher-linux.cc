@@ -2136,6 +2136,60 @@ static int g_tap_fd = -1;
 static std::mutex g_tap_mutex;
 static std::string g_tap_buf;        // raw s16le interleaved, filled by reader
 static int g_tap_rate = 44100, g_tap_channels = 2, g_tap_interval = 80;
+// scope:'app' plumbing (PipeWire only). We can't capture one application's
+// output directly — PipeWire has no per-app capture primitive — so we build
+// one: a private null sink, our own playback streams fanned into it (they keep
+// playing to the real sink too), and pw-cat reading that sink's monitor. A
+// timer re-links because our streams come and go (new windows, a track that
+// stops and starts). Empty name = not an app-scope tap.
+static std::string g_tap_sink;       // "tinyjs-tap-<pid>" while an app tap runs
+static guint g_tap_link_timer = 0;
+
+// Fire-and-forget a pw-* helper; errors (a port not there yet, a link that
+// already exists) are the normal case here, so ignore them.
+static void pw_run(std::vector<std::string> args) {
+  std::vector<const gchar*> argv;
+  for (auto& a : args) argv.push_back(a.c_str());
+  argv.push_back(nullptr);
+  g_spawn_async(nullptr, (gchar**)argv.data(), nullptr,
+                (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
+                              G_SPAWN_STDERR_TO_DEV_NULL),
+                nullptr, nullptr, nullptr, nullptr);
+}
+
+// Link this app's playback ports into our tap sink. Our WebKit streams are
+// named after the app id (node.name == g_app_id), so their ports are
+// "<app_id>:output_FL/FR". Re-linking an existing link is a harmless no-op, so
+// running this on a timer keeps new streams captured without tracking them.
+static gboolean tap_link_tick(gpointer) {
+  if (g_tap_sink.empty() || g_app_id.empty()) return G_SOURCE_CONTINUE;
+  for (const char* ch : {"FL", "FR"}) {
+    pw_run({"pw-link", g_app_id + ":output_" + ch, g_tap_sink + ":playback_" + ch});
+  }
+  return G_SOURCE_CONTINUE;
+}
+
+// Tear down the tap sink (this also drops every link into it).
+//
+// `pw-cli ls Node` prints "id <n>," and then that node's properties, so the id
+// belonging to a node is the LAST one seen before its node.name line — hence
+// the awk carry. Matching on a window of surrounding lines instead (an earlier
+// grep -B20) swept up neighbouring nodes' ids and destroyed OTHER
+// applications' streams: stopping a tap silenced Firefox until it was
+// reloaded. Only ever destroy the id that our own uniquely-named node owns.
+static void tap_destroy_sink() {
+  if (g_tap_sink.empty()) return;
+  std::string script =
+      "pw-cli ls Node 2>/dev/null | awk '/^[[:space:]]*id [0-9]+/{id=$2; "
+      "gsub(/[^0-9]/,\"\",id)} /node\\.name = \"" + g_tap_sink +
+      "\"/{print id}' | while read n; do pw-cli destroy \"$n\" >/dev/null 2>&1; done";
+  const gchar* argv[] = {"sh", "-c", script.c_str(), nullptr};
+  g_spawn_async(nullptr, (gchar**)argv, nullptr,
+                (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
+                              G_SPAWN_STDERR_TO_DEV_NULL),
+                nullptr, nullptr, nullptr, nullptr);
+  g_tap_sink.clear();
+}
 
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static std::string base64(const unsigned char* data, size_t len) {
@@ -2180,6 +2234,7 @@ static gboolean tap_tick(gpointer) {
 
 static void tap_stop() {
   if (g_tap_timer) { g_source_remove(g_tap_timer); g_tap_timer = 0; }
+  if (g_tap_link_timer) { g_source_remove(g_tap_link_timer); g_tap_link_timer = 0; }
   if (g_tap_watch) { g_source_remove(g_tap_watch); g_tap_watch = 0; }
   if (g_tap_fd >= 0) { close(g_tap_fd); g_tap_fd = -1; }
   if (g_tap_pid) {
@@ -2187,6 +2242,7 @@ static void tap_stop() {
     g_spawn_close_pid(g_tap_pid);
     g_tap_pid = 0;
   }
+  tap_destroy_sink();
   std::lock_guard<std::mutex> lock(g_tap_mutex);
   g_tap_buf.clear();
 }
@@ -2206,31 +2262,64 @@ static gboolean tap_readable(gint fd, GIOCondition cond, gpointer) {
 
 static void do_audiotap(const std::string& qid, const std::string& rest) {
   auto f = split_tabs(rest);
+  std::string scope = tab_field(f, 0);
   int interval = atoi(tab_field(f, 2).c_str());
   if (interval < 20) interval = 20;
   if (interval > 500) interval = 500;
   tap_stop();
 
-  // parec (PulseAudio compat, present with pipewire-pulse) or pw-cat --raw
   std::string rate_s = std::to_string(g_tap_rate);
   std::vector<std::string> cmd;
-  char* exe = g_find_program_in_path("parec");
-  if (exe) {
+
+  // scope:'app' — capture only our own output. Needs the PipeWire tools
+  // (pw-cli to make the null sink, pw-link to fan our streams in, pw-cat to
+  // read the sink's monitor) and a known app id to name our streams by. If any
+  // of that is missing, fall through to the system-monitor capture below —
+  // honest degradation, the same the docs describe.
+  char* pwcli = g_find_program_in_path("pw-cli");
+  char* pwcat = g_find_program_in_path("pw-cat");
+  char* pwlink = g_find_program_in_path("pw-link");
+  bool app_ok = scope == "app" && pwcli && pwcat && pwlink && !g_app_id.empty();
+  if (app_ok) {
+    g_tap_sink = "tinyjs-tap-" + std::to_string(getpid());
+    // Create a private null sink. object.linger keeps it alive after pw-cli
+    // exits; tap_stop destroys it by name.
+    std::string spec =
+        "{ factory.name=support.null-audio-sink node.name=" + g_tap_sink +
+        " media.class=Audio/Sink object.linger=true audio.position=[FL FR] }";
+    const gchar* mkargv[] = {pwcli, "create-node", "adapter", spec.c_str(), nullptr};
+    g_spawn_sync(nullptr, (gchar**)mkargv, nullptr,
+                 (GSpawnFlags)(G_SPAWN_STDOUT_TO_DEV_NULL | G_SPAWN_STDERR_TO_DEV_NULL),
+                 nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
+    // Capture the tap sink's monitor (not the default sink).
+    cmd = {pwcat, "--record", "--format", "s16", "--rate", rate_s,
+           "--channels", "2", "-P", "{ stream.capture.sink=true }",
+           "--target", g_tap_sink, "-"};
+    tap_link_tick(nullptr);                                   // link what's already playing
+    g_tap_link_timer = g_timeout_add(250, tap_link_tick, nullptr);  // and whatever appears
+  }
+  g_free(pwcli); g_free(pwlink);
+
+  // System scope (or app-scope fallback): capture the default sink's monitor.
+  // parec (PulseAudio compat) if present, else pw-cat.
+  char* exe = nullptr;
+  if (cmd.empty() && (exe = g_find_program_in_path("parec"))) {
     cmd = {exe, "-d", "@DEFAULT_MONITOR@", "--format=s16le",
            "--rate=" + rate_s, "--channels=2", "--raw"};
     g_free(exe);
-  } else if ((exe = g_find_program_in_path("pw-cat"))) {
+  } else if (cmd.empty() && pwcat) {
     // No --raw: pipewire dropped the flag, and writing to "-" is raw PCM
     // anyway. Passing it made pw-cat exit immediately with "unrecognized
     // option", which the tick below then papered over with silence.
-    cmd = {exe, "--record", "--format", "s16", "--rate", rate_s,
+    cmd = {pwcat, "--record", "--format", "s16", "--rate", rate_s,
            "--channels", "2", "-P", "{ stream.capture.sink=true }", "-"};
-    g_free(exe);
-  } else {
+  } else if (cmd.empty()) {
+    g_free(pwcat);
     send_got(qid, "{\"ok\":false,\"code\":\"unsupported\","
                   "\"message\":\"no parec or pw-cat on PATH\"}");
     return;
   }
+  g_free(pwcat);
 
   std::vector<const gchar*> argv;
   for (auto& a : cmd) argv.push_back(a.c_str());

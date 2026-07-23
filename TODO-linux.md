@@ -243,6 +243,23 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
       GNOME/KDE media widget and lock screen, and Play/Pause/Next/Previous/
       Seek route back as `onMediaKey`. This is the correct Linux mapping,
       not a stopgap.
+- [x] **audioTap scope:'app'** — real per-app capture, so `scope:'app'` means
+      the same thing it does on macOS/Windows instead of quietly handing back
+      the system mix. PipeWire has no per-app capture primitive, so the
+      launcher builds one: a private null sink (`tinyjs-tap-<pid>`), this
+      app's own playback streams fanned into it — they keep playing to the
+      real sink, so nothing about playback changes — and pw-cat reading that
+      sink's monitor. Our streams are found by name: WebKit tags them with the
+      app id (`node.name == <app id>`), so their ports are
+      `<app id>:output_FL/FR`. A 250ms timer re-links, because streams come and
+      go (new windows, a track stopping and starting) and re-linking an
+      existing link is a no-op. Needs pw-cli/pw-link/pw-cat and a known app id;
+      without any of those it falls back to the system monitor.
+      CAREFUL: teardown must destroy ONLY our own node. `pw-cli ls Node` prints
+      "id <n>," before each node's properties, so the owning id is the last one
+      seen before the matching node.name — matching a window of nearby lines
+      instead (grep -B20) sweeps up neighbouring ids and destroys OTHER apps'
+      streams; that bug silenced Firefox until it was reloaded.
 - [x] **audioTap (system)** — captures the default sink's monitor via
       `parec` (`@DEFAULT_MONITOR@`) or `pw-cat --record` (sink capture;
       verified 2026-07-23 on a box with no pulseaudio-utils — silence while
@@ -323,11 +340,6 @@ features, not bugs.
       ScreenCast path would ALSO give **captureScreen on pure Wayland** (X11
       sessions already have captureScreen via GdkPixbuf/XGetImage) — do both
       together. `RECORD`/`CAPTURE` currently reject with a clear message.
-- [ ] **audioTap scope:'app'** — true per-process capture (own window only).
-      The system mix is already captured (see Done). Route: a PipeWire
-      sink-input filter targeting the app's own stream nodes, like the
-      Windows process-loopback path. Non-trivial (PipeWire node graph
-      walking). Today `scope:'app'` transparently gets the system mix.
 - [ ] **authenticate** — a "prove it's the user" gate. POOR FIT on Linux:
       polkit authorizes *actions*, not identity, so there's no clean generic
       call. Options if pursued: register a private polkit action + agent
