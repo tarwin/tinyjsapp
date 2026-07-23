@@ -196,6 +196,17 @@ static bool file_exists(const std::string& p) {
   return stat(p.c_str(), &st) == 0;
 }
 
+// The monitor a window sits on. Both obvious lookups can come up empty — an
+// unrealized window has no GdkWindow, and Wayland compositors routinely expose
+// no "primary" monitor — so fall back to the first monitor rather than leaving
+// the caller with a 0x0 screen rect, which apps then size themselves from.
+static GdkMonitor* monitor_for(GdkDisplay* d, GdkWindow* gw) {
+  GdkMonitor* m = gw ? gdk_display_get_monitor_at_window(d, gw) : nullptr;
+  if (!m) m = gdk_display_get_primary_monitor(d);
+  if (!m && gdk_display_get_n_monitors(d) > 0) m = gdk_display_get_monitor(d, 0);
+  return m;
+}
+
 // -------------------------------------------------------- window registry ---
 
 static WebKitWebView* wv_for(const std::string& winid) {
@@ -571,6 +582,7 @@ static int menubar_height() {
 static void set_content_size(const std::string& winid, int w, int h) {
   GtkWindow* win = win_for(winid);
   if (!win) return;
+  if (w <= 0 || h <= 0) return;   // gtk_window_resize asserts on either
   int extra = (winid.empty() || winid == "main") ? menubar_height() : 0;
   gtk_window_resize(win, w, h + extra);
 }
@@ -626,8 +638,7 @@ static void do_winop(const std::string& winid, const std::string& op) {
   } else if (op == "center") {
     GdkDisplay* d = gdk_display_get_default();
     GdkWindow* gw = gtk_widget_get_window(GTK_WIDGET(win));
-    GdkMonitor* m = gw ? gdk_display_get_monitor_at_window(d, gw)
-                       : gdk_display_get_primary_monitor(d);
+    GdkMonitor* m = monitor_for(d, gw);
     if (m) {
       GdkRectangle wa;
       gdk_monitor_get_workarea(m, &wa);
@@ -1268,8 +1279,7 @@ static std::string win_state_json(const std::string& winid) {
 
   GdkDisplay* d = gdk_display_get_default();
   GdkWindow* gw = gtk_widget_get_window(GTK_WIDGET(win));
-  GdkMonitor* m = gw ? gdk_display_get_monitor_at_window(d, gw)
-                     : gdk_display_get_primary_monitor(d);
+  GdkMonitor* m = monitor_for(d, gw);
   GdkRectangle geo = {0, 0, 0, 0};
   int scale = 1;
   if (m) { gdk_monitor_get_geometry(m, &geo); scale = gdk_monitor_get_scale_factor(m); }
@@ -1324,6 +1334,7 @@ static std::string mouse_json(const std::string& winid) {
   }
 
   GdkMonitor* m = gdk_display_get_monitor_at_point(d, gx, gy);
+  if (!m) m = monitor_for(d, nullptr);   // Wayland hides the pointer: 0,0 may match nothing
   GdkRectangle geo = {0, 0, 0, 0};
   int scale = 1;
   if (m) { gdk_monitor_get_geometry(m, &geo); scale = gdk_monitor_get_scale_factor(m); }
