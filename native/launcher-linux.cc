@@ -33,6 +33,7 @@
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <cstring>
 #include <cstdio>
@@ -2827,6 +2828,23 @@ static void do_say(const std::string& qid, const std::string& rest) {
   }, qid_heap);
 }
 
+// Drain a child's stdout pipe into `into`, returning true once it has hit EOF
+// (or errored) and the caller should wrap up. GLib can report G_IO_IN and
+// G_IO_HUP in the *same* callback when a short-lived child writes and exits
+// between polls, so a handler that acts on HUP before reading throws the whole
+// result away. Always drain first, then honour HUP. Requires a non-blocking fd
+// (the callers set O_NONBLOCK) so the final read can't stall the UI thread.
+static bool drain_pipe(int fd, std::string& into) {
+  for (;;) {
+    char buf[8192];
+    ssize_t r = read(fd, buf, sizeof buf);
+    if (r > 0) { into.append(buf, (size_t)r); continue; }
+    if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return false;
+    if (r < 0 && errno == EINTR) continue;
+    return true;  // 0 = EOF, or a real error
+  }
+}
+
 // `spd-say -L` prints a header row then one synthesis voice per line, in three
 // right-aligned whitespace-separated columns (NAME LANGUAGE VARIANT). NAME
 // itself can contain spaces ("Chinese (Cantonese, latin as Jyutping)+croak"),
@@ -2896,11 +2914,12 @@ static void voices_finish(VoicesCtx* c) {
 
 static gboolean voices_readable(gint fd, GIOCondition cond, gpointer data) {
   VoicesCtx* c = (VoicesCtx*)data;
-  if (cond & (G_IO_HUP | G_IO_ERR)) { c->watch = 0; voices_finish(c); return G_SOURCE_REMOVE; }
-  char buf[8192];
-  ssize_t r = read(fd, buf, sizeof buf);
-  if (r <= 0) { c->watch = 0; voices_finish(c); return G_SOURCE_REMOVE; }
-  c->buf.append(buf, (size_t)r);
+  bool eof = drain_pipe(fd, c->buf);
+  if (eof || (cond & (G_IO_HUP | G_IO_ERR))) {
+    c->watch = 0;
+    voices_finish(c);
+    return G_SOURCE_REMOVE;
+  }
   return G_SOURCE_CONTINUE;
 }
 
@@ -2915,6 +2934,7 @@ static void do_voices(const std::string& qid) {
       nullptr, nullptr, &pid, nullptr, &out_fd, nullptr, nullptr);
   g_free(exe);
   if (!ok) { send_got(qid, "{\"ok\":true,\"voices\":[]}"); return; }
+  fcntl(out_fd, F_SETFL, fcntl(out_fd, F_GETFL, 0) | O_NONBLOCK);
   VoicesCtx* c = new VoicesCtx();
   c->qid = qid;
   c->pid = pid;
@@ -3053,11 +3073,12 @@ static void spotlight_finish(SpotlightCtx* c) {
 
 static gboolean spotlight_readable(gint fd, GIOCondition cond, gpointer data) {
   SpotlightCtx* c = (SpotlightCtx*)data;
-  if (cond & (G_IO_HUP | G_IO_ERR)) { c->watch = 0; spotlight_finish(c); return G_SOURCE_REMOVE; }
-  char buf[8192];
-  ssize_t r = read(fd, buf, sizeof buf);
-  if (r <= 0) { c->watch = 0; spotlight_finish(c); return G_SOURCE_REMOVE; }
-  c->buf.append(buf, (size_t)r);
+  bool eof = drain_pipe(fd, c->buf);
+  if (eof || (cond & (G_IO_HUP | G_IO_ERR))) {
+    c->watch = 0;
+    spotlight_finish(c);
+    return G_SOURCE_REMOVE;
+  }
   int nls = 0;
   for (char ch : c->buf) if (ch == '\n') nls++;
   if (nls >= 100) { c->watch = 0; spotlight_finish(c); return G_SOURCE_REMOVE; }
@@ -3100,6 +3121,7 @@ static void do_spotlight(const std::string& qid, const std::string& rest) {
     send_got(qid, "{\"ok\":true,\"paths\":[]}");
     return;
   }
+  fcntl(out_fd, F_SETFL, fcntl(out_fd, F_GETFL, 0) | O_NONBLOCK);
   SpotlightCtx* c = new SpotlightCtx();
   c->qid = qid;
   c->pid = pid;
