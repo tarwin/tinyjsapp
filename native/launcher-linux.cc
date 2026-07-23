@@ -383,6 +383,23 @@ static void on_drag_data_received(GtkWidget*, GdkDragContext*, gint, gint,
 
 // ------------------------------------------------------------- webview ------
 
+// The pointer button-press that a page drag region rides on is consumed by
+// the WebView, and by the time `win.startDrag` round-trips through the backend
+// there's no event context left — so gtk_window_begin_move_drag with
+// GDK_CURRENT_TIME can't get a valid grab serial from the compositor (windows
+// silently refuse to move on Wayland). Capture the live press here (device +
+// timestamp) and hand it to begin_move_drag when DRAGWIN arrives.
+static GdkDevice* g_last_press_device = nullptr;
+static guint32 g_last_press_time = 0;
+
+static gboolean on_button_press(GtkWidget*, GdkEventButton* ev, gpointer) {
+  if (ev->button == 1) {
+    g_last_press_device = ev->device;
+    g_last_press_time = ev->time;
+  }
+  return FALSE;  // let the WebView handle the click too
+}
+
 static WebKitSettings* make_settings() {
   WebKitSettings* s = webkit_settings_new();
   webkit_settings_set_enable_developer_extras(s, TRUE);
@@ -3013,6 +3030,10 @@ static WebKitWebView* make_webview(const std::string& winid) {
   g_signal_connect(wv, "context-menu", G_CALLBACK(on_context_menu), nullptr);
   g_signal_connect_after(wv, "drag-data-received",
                          G_CALLBACK(on_drag_data_received), nullptr);
+  // Track the live left-button press so DRAGWIN can start a real move-drag
+  // (needs the press's device + serial, lost by the round-trip otherwise).
+  gtk_widget_add_events(GTK_WIDGET(wv), GDK_BUTTON_PRESS_MASK);
+  g_signal_connect(wv, "button-press-event", G_CALLBACK(on_button_press), nullptr);
   return wv;
 }
 
@@ -3259,13 +3280,22 @@ static void handle_line(const std::string& line) {
   if (peel_target(line, "WINOP", winid, rest)) { do_winop(winid, rest); return; }
   if (peel_target(line, "CHROME", winid, rest)) { apply_chrome(winid, split_tabs(rest)); return; }
 
-  if (line == "DRAGWIN") {
-    GdkDisplay* d = gdk_display_get_default();
+  if (peel_target(line, "DRAGWIN", winid, rest)) {
+    GtkWindow* win = win_for(winid);
+    if (!win) return;
+    GdkDisplay* d = gtk_widget_get_display(GTK_WIDGET(win));
     GdkSeat* seat = gdk_display_get_default_seat(d);
-    GdkDevice* pointer = seat ? gdk_seat_get_pointer(seat) : nullptr;
+    // Prefer the device from the actual press (valid grab serial); fall back
+    // to the seat pointer if we somehow never saw one.
+    GdkDevice* dev = g_last_press_device ? g_last_press_device
+                                         : (seat ? gdk_seat_get_pointer(seat) : nullptr);
+    if (!dev) return;
+    GdkWindow* gw = gtk_widget_get_window(GTK_WIDGET(win));
+    if (!gw) return;
     int x = 0, y = 0;
-    if (pointer) gdk_device_get_position(pointer, nullptr, &x, &y);
-    gtk_window_begin_move_drag(g_win, 1, x, y, GDK_CURRENT_TIME);
+    gdk_device_get_position(dev, nullptr, &x, &y);
+    guint32 t = g_last_press_time ? g_last_press_time : gtk_get_current_event_time();
+    gdk_window_begin_move_drag_for_device(gw, dev, 1, x, y, t);
     return;
   }
 
