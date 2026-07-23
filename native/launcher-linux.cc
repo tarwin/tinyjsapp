@@ -943,8 +943,15 @@ static void apply_tray() {
     g_items[it.id] = reg;
   }
   gtk_widget_show_all(menu);
+  // Take our own reference on the new menu (menus are created floating), then
+  // release the one we held on the menu it replaces. Destroying the old menu
+  // outright is a use-after-free: app_indicator_set_menu() already unrefs the
+  // menu it displaces, so by this point the widget can be finalized — which
+  // showed up as Gtk-CRITICAL GTK_IS_WIDGET assertions on every tray repaint
+  // and killed apps that repaint the tray on a ticker (worldclock, 1s).
+  g_object_ref_sink(menu);
   app_indicator_set_menu(g_indicator, GTK_MENU(menu));
-  if (g_tray_menu) gtk_widget_destroy(g_tray_menu);
+  if (g_tray_menu) g_object_unref(g_tray_menu);
   g_tray_menu = menu;
   app_indicator_set_status(g_indicator, APP_INDICATOR_STATUS_ACTIVE);
 #endif
