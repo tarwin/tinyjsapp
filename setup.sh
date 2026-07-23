@@ -2,22 +2,102 @@
 # Bootstrap tinyjs from a source checkout: download the txiki.js runtime
 # and compile the native launcher. Run once after cloning (the curl
 # installer ships these prebuilt; this script is for developing tinyjs
-# itself).
+# itself). Supports macOS and Linux (see README: Portability).
 set -e
 cd "$(dirname "$0")"
 
 TJS_VERSION="${TJS_VERSION:-v26.6.0}"
+REPO="tarwin/tinyjsapp"
 
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "tinyjs currently supports macOS only (see README: Portability)" >&2
-  exit 1
-fi
-
+OS="$(uname -s)"
 case "$(uname -m)" in
-  arm64)  TJS_ARCH=arm64 ;;
-  x86_64) TJS_ARCH=x86_64 ;;
+  arm64|aarch64) TJS_ARCH=arm64 ;;
+  x86_64)        TJS_ARCH=x86_64 ;;
   *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
+
+# ---------------------------------------------------------------- Linux ----
+if [ "$OS" = "Linux" ]; then
+  # Build deps: a C++ toolchain + GTK3/WebKitGTK dev packages (AppIndicator
+  # optional — tray support). Debian/Ubuntu:
+  #   sudo apt install build-essential pkg-config libgtk-3-dev \
+  #        libwebkit2gtk-4.1-dev libayatana-appindicator3-dev
+  for p in gtk+-3.0 webkit2gtk-4.1; do
+    pkg-config --exists "$p" 2>/dev/null || {
+      echo "missing dev package: $p" >&2
+      echo "Debian/Ubuntu: sudo apt install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev" >&2
+      exit 1
+    }
+  done
+
+  if [ ! -x bin/tjs ]; then
+    # txiki.js publishes no Linux binaries — grab the one from our own
+    # releases (built by CI), or build from source (TJS_BUILD=1 forces it).
+    mkdir -p bin
+    GOT=""
+    if [ "${TJS_BUILD:-0}" != "1" ]; then
+      TJS_REL="${TINYJS_TJS_RELEASE:-latest}"
+      if [ "$TJS_REL" = "latest" ]; then
+        TJS_URL="https://github.com/$REPO/releases/latest/download/tjs-linux-$TJS_ARCH.gz"
+      else
+        TJS_URL="https://github.com/$REPO/releases/download/$TJS_REL/tjs-linux-$TJS_ARCH.gz"
+      fi
+      echo "==> downloading tjs (linux-$TJS_ARCH) from $REPO releases"
+      if curl -fsSL -o /tmp/tjs-$$.gz "$TJS_URL" 2>/dev/null; then
+        gunzip -c /tmp/tjs-$$.gz > bin/tjs && rm -f /tmp/tjs-$$.gz && GOT=1
+      else
+        echo "    (no prebuilt tjs in the latest release — building from source)"
+      fi
+    fi
+    if [ -z "$GOT" ]; then
+      command -v cmake >/dev/null || { echo "building txiki.js needs cmake (sudo apt install cmake ninja-build)" >&2; exit 1; }
+      echo "==> building txiki.js $TJS_VERSION from source (a few minutes)"
+      rm -rf /tmp/txiki-src-$$
+      git clone --depth 1 --branch "$TJS_VERSION" --recurse-submodules --shallow-submodules -j4 \
+        https://github.com/saghul/txiki.js /tmp/txiki-src-$$
+      GEN="Unix Makefiles"; command -v ninja >/dev/null && GEN=Ninja
+      cmake -S /tmp/txiki-src-$$ -B /tmp/txiki-src-$$/build -DCMAKE_BUILD_TYPE=Release -G "$GEN"
+      cmake --build /tmp/txiki-src-$$/build --target tjs -j"$(nproc)"
+      cp /tmp/txiki-src-$$/build/tjs bin/tjs
+      rm -rf /tmp/txiki-src-$$
+    fi
+    chmod +x bin/tjs
+  fi
+
+  echo "==> compiling launcher"
+  ./native/gen-client.sh
+
+  # Tray icons need an AppIndicator library (ayatana preferred); without one
+  # the launcher compiles fine and tiny.tray reports 'unsupported'.
+  IND_PKG=""
+  for p in ayatana-appindicator3-0.1 appindicator3-0.1; do
+    pkg-config --exists "$p" 2>/dev/null && { IND_PKG="$p"; break; }
+  done
+  EXTRA_DEFS=""
+  [ -n "$IND_PKG" ] && EXTRA_DEFS="-DTINYJS_APPINDICATOR"
+  [ -z "$IND_PKG" ] && echo "    (no appindicator dev package — tray support disabled)"
+
+  # X11/XTest power global hotkeys + synthetic keystrokes on X11/XWayland
+  # sessions (no Wayland-native route yet; see TODO-linux.md).
+  XT_PKGS=""
+  pkg-config --exists x11 xtst 2>/dev/null && { XT_PKGS="x11 xtst"; EXTRA_DEFS="$EXTRA_DEFS -DTINYJS_X11"; }
+
+  # shellcheck disable=SC2086
+  c++ -std=c++17 -O2 native/launcher-linux.cc -o native/launcher-linux \
+    $EXTRA_DEFS \
+    $(pkg-config --cflags --libs gtk+-3.0 webkit2gtk-4.1 $IND_PKG $XT_PKGS) -ldl
+
+  echo "==> done"
+  ./bin/tjs --version
+  echo "try:  ./tinyjs new hello && cd hello && ../tinyjs dev"
+  exit 0
+fi
+
+# ---------------------------------------------------------------- macOS ----
+if [ "$OS" != "Darwin" ]; then
+  echo "tinyjs supports macOS and Linux (see README: Portability)" >&2
+  exit 1
+fi
 
 if [ ! -x bin/tjs ]; then
   echo "==> downloading txiki.js $TJS_VERSION ($TJS_ARCH)"

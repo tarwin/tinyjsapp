@@ -11,16 +11,29 @@ REPO="tarwin/tinyjsapp"
 INSTALL_DIR="${TINYJS_HOME:-$HOME/.tinyjs}"
 VERSION="${TINYJS_VERSION:-latest}"
 
-if [ "$(uname -s)" != "Darwin" ]; then
-  echo "tinyjs currently supports macOS only" >&2
-  exit 1
-fi
+OS="$(uname -s)"
+case "$OS" in
+  Darwin) PLAT=macos ;;
+  Linux)  PLAT=linux ;;
+  *) echo "tinyjs supports macOS and Linux (Windows: irm https://tinyjs.app/install.ps1 | iex)" >&2
+     exit 1 ;;
+esac
 
 case "$(uname -m)" in
-  arm64)  ARCH=arm64 ;;
-  x86_64) ARCH=x86_64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  x86_64)        ARCH=x86_64 ;;
   *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
+
+# Linux runs the system WebKitGTK — check it's there before downloading.
+if [ "$PLAT" = linux ] && ! ldconfig -p 2>/dev/null | grep -q libwebkit2gtk-4.1; then
+  echo "tinyjs needs the WebKitGTK runtime." >&2
+  echo "  Debian/Ubuntu:  sudo apt install libwebkit2gtk-4.1-0" >&2
+  echo "  Fedora:         sudo dnf install webkit2gtk4.1" >&2
+  echo "  Arch:           sudo pacman -S webkit2gtk-4.1" >&2
+  echo "then re-run this installer." >&2
+  exit 1
+fi
 
 if [ "$VERSION" = "latest" ]; then
   VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" |
@@ -28,7 +41,7 @@ if [ "$VERSION" = "latest" ]; then
   [ -n "$VERSION" ] || { echo "could not determine latest release" >&2; exit 1; }
 fi
 
-ASSET="tinyjs-macos-$ARCH.tar.gz"
+ASSET="tinyjs-$PLAT-$ARCH.tar.gz"
 URL="https://github.com/$REPO/releases/download/$VERSION/$ASSET"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -39,7 +52,8 @@ curl -fsSL -o "$TMP/$ASSET" "$URL"
 echo "==> verifying checksum"
 curl -fsSL -o "$TMP/checksums.txt" \
   "https://github.com/$REPO/releases/download/$VERSION/checksums.txt"
-(cd "$TMP" && grep " $ASSET\$" checksums.txt | shasum -a 256 -c - > /dev/null) ||
+if command -v shasum >/dev/null 2>&1; then SHACMD="shasum -a 256"; else SHACMD="sha256sum"; fi
+(cd "$TMP" && grep " $ASSET\$" checksums.txt | $SHACMD -c - > /dev/null) ||
   { echo "checksum verification FAILED" >&2; exit 1; }
 
 echo "==> installing to $INSTALL_DIR"
@@ -48,7 +62,7 @@ mkdir -p "$INSTALL_DIR"
 tar -xzf "$TMP/$ASSET" -C "$INSTALL_DIR" --strip-components 1
 
 # Clear quarantine on the binaries (curl doesn't set it, but belt & braces).
-xattr -dr com.apple.quarantine "$INSTALL_DIR" 2>/dev/null || true
+[ "$PLAT" = macos ] && xattr -dr com.apple.quarantine "$INSTALL_DIR" 2>/dev/null || true
 
 # Symlink onto PATH. Prefer a writable dir that is ALREADY on PATH
 # (/usr/local/bin, or /opt/homebrew/bin on Apple Silicon brew setups);
