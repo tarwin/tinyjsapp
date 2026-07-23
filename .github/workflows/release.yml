@@ -71,9 +71,80 @@ jobs:
           name: windows-zip
           path: out/tinyjs-windows-x86_64.zip
 
+  # Linux binaries (x86_64 + arm64): txiki.js has no upstream Linux releases,
+  # so tjs is built from source here (cached per version) and shipped both
+  # inside the tinyjs tarball and as a standalone tjs-linux-<arch>.gz that
+  # setup.sh downloads for source checkouts.
+  linux:
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            libwebkit2gtk-4.1-0 xvfb
+
+      - name: Cache txiki.js build
+        id: tjs-cache
+        uses: actions/cache@v4
+        with:
+          path: bin/tjs
+          key: tjs-${{ env.TJS_VERSION }}-linux-${{ matrix.arch }}-v1
+
+      - name: Build (setup.sh — build tjs from source if uncached, compile launcher)
+        run: TJS_BUILD=1 ./setup.sh
+
+      - name: Stamp version
+        run: printf '%s' "${GITHUB_REF_NAME}" > VERSION
+
+      - name: Assemble tarball
+        run: |
+          set -e
+          STAGE=/tmp/stage/tinyjs
+          mkdir -p "$STAGE/bin" "$STAGE/native" out
+          cp bin/tjs "$STAGE/bin/tjs"
+          cp native/launcher-linux "$STAGE/native/"
+          cp -R runtime template test skill "$STAGE/"
+          cp cli.js tinyjs VERSION README.md LICENSE "$STAGE/"
+          tar -czf "out/tinyjs-linux-${{ matrix.arch }}.tar.gz" -C /tmp/stage tinyjs
+          gzip -9 -c bin/tjs > "out/tjs-linux-${{ matrix.arch }}.gz"
+
+      - name: Smoke test (build pipeline + GUI under Xvfb)
+        run: |
+          set -e
+          tar -xzf out/tinyjs-linux-${{ matrix.arch }}.tar.gz -C /tmp
+          cd "$(mktemp -d)"
+          /tmp/tinyjs/tinyjs version
+          /tmp/tinyjs/tinyjs new ci-check
+          cd ci-check && /tmp/tinyjs/tinyjs build
+          test -x dist/ci-check && test -x dist/launcher
+          echo "linux build pipeline OK"
+          # GUI smoke: the self-driving smoke page in a real window on Xvfb.
+          cd ..
+          OUT=$(TINYJS_HTML=/tmp/tinyjs/test/smoke.html xvfb-run -a sh -c 'cd ci-check && /tmp/tinyjs/tinyjs dev' 2>&1 || true)
+          echo "$OUT"
+          echo "$OUT" | grep -q 'SMOKE RESULTS' || { echo 'GUI smoke produced no results'; exit 1; }
+          if echo "$OUT" | grep -q 'FAIL'; then echo 'GUI smoke has failures'; exit 1; fi
+          echo "linux GUI smoke OK"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: out/*
+
   release:
     runs-on: macos-14
-    needs: windows
+    needs: [windows, linux]
     steps:
       - uses: actions/checkout@v4
 
@@ -114,8 +185,15 @@ jobs:
           name: windows-zip
           path: out
 
+      - name: Fetch Linux tarballs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          merge-multiple: true
+          path: out
+
       - name: Checksums (all assets)
-        run: (cd out && shasum -a 256 *.tar.gz *.zip > checksums.txt && cat checksums.txt)
+        run: (cd out && shasum -a 256 *.tar.gz *.zip tjs-*.gz > checksums.txt && cat checksums.txt)
 
       - name: Smoke test (native arch)
         run: |
@@ -133,6 +211,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" out/*.tar.gz out/*.zip out/checksums.txt \
+          gh release create "${GITHUB_REF_NAME}" out/*.tar.gz out/*.zip out/tjs-*.gz out/checksums.txt \
             --title "tinyjs ${GITHUB_REF_NAME}" \
             --generate-notes
