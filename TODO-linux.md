@@ -326,11 +326,13 @@ features, not bugs.
       installable, install → launch → running-detection → uninstall clean for
       three different app types, and the checksum + non-repo-URL guards both
       reject.
-      REMAINING: (1) **x86_64 tarballs** — this VM is aarch64, so the catalog
-      is arm64-only and shelf on an x86_64 desktop would list nothing; release
-      CI already builds linux-x86_64 for tjs, so extend it to the examples or
-      publish from an x86_64 box, then re-run gen-catalog-linux.js there.
-      (2) push the tarballs so the raw.githubusercontent URLs resolve.
+      DONE 2026-07-24 on the Rosetta VM: x86_64 tarballs built in an amd64
+      container (see § "x86_64 builds" below) and the payload moved to
+      GitHub Releases (tag `<dir>-v<version>` per app) instead of committing
+      another ~120 MB — `merge-manifest-linux.js --release` /
+      `gen-catalog-linux.js --release` + `upload-releases-linux.sh`; runbook
+      in ../tinyjsapp-examples/CLAUDE.md. Pre-release-era arm64 tarballs stay
+      committed so wild raw URLs keep resolving.
 - [ ] **recorder** — screen recording to a video file. Route: the
       `org.freedesktop.portal.ScreenCast` portal (CreateSession →
       SelectSources → Start → returns a PipeWire node fd), feed the PipeWire
