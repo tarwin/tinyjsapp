@@ -368,3 +368,39 @@ icons have no equivalent; could revisit via LauncherEntry), `setAllSpaces`
 (sticky windows exist on X11 only), `tiny.app.ai`, `wifi` (NetworkManager
 DBus — revisit if asked), `share`. All reject or report `'unsupported'` so apps can
 feature-detect.
+
+## x86_64 builds from the next VM (Ubuntu + Rosetta under Parallels)
+
+Planned: moving to an Ubuntu VM with Parallels' Rosetta integration to produce
+the x86_64 tarballs. **Yes — that one VM can build BOTH arches:**
+
+- **arm64**: natively, exactly the flow used here (`tinyjs publish` per app →
+  copy tarballs into `_builds/<dir>/` → `node shelf/gen-catalog-linux.js`).
+- **x86_64**: the VM itself stays aarch64 (Parallels on Apple silicon cannot
+  boot an x86 kernel) — Rosetta translates x86-64 *userspace* binaries. So
+  build inside an amd64 userspace running under Rosetta:
+  1. Parallels VM config → CPU & Memory → enable **"Use Rosetta to run
+     x86-64 binaries"**; in the guest, `systemd-binfmt` registers the
+     interpreter (check `ls /proc/sys/fs/binfmt_misc | grep rosetta`).
+  2. Cleanest route: an amd64 container —
+     `docker run --platform linux/amd64 -v $PWD:/work ubuntu:24.04` (or a
+     `debootstrap --arch=amd64` chroot). Inside: apt the deps `setup.sh`
+     names, build `bin/tjs` and the launcher (both come out x86_64 because
+     the toolchain itself is x86_64-under-Rosetta), then `tinyjs publish`
+     per app as usual. Multiarch apt on the host
+     (`dpkg --add-architecture amd64`) also works but webkit dev packages
+     make it fiddlier than a container.
+  3. Copy the `*-linux-x86_64.tar.gz` into `_builds/<dir>/` and re-run
+     `node shelf/gen-catalog-linux.js` — it ADDS `x86_64` blocks next to the
+     committed `arm64` ones (already built for two arches). Merge each
+     `_builds/<dir>/manifest.json` the same way: add `linux.x86_64`
+     `{ url, sha256, version }` beside `linux.arm64`; the updater picks its
+     own arch and reports "no update" rather than offering a foreign build.
+
+Caveats worth knowing before that session:
+- Rosetta exposes no AVX — irrelevant for compiling (gcc/GTK don't need it)
+  and runtime code paths CPUID-detect, so they just won't use it.
+- Builds run ~2-3× slower under translation. Fine for a release pass.
+- Smoke-test the x86_64 launcher under Rosetta in the VM, but the real
+  confidence check is one run on actual x86 hardware — PipeWire/GTK behave
+  the same, but it's the audio path we've been bitten on before.
