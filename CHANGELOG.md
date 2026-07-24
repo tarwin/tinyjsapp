@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.29.0 — 2026-07-23
 
 - **Linux support (beta).** tinyjs apps now run on Linux: a third native
   launcher (`native/launcher-linux.cc`, GTK3 + WebKitGTK 4.1 directly)
@@ -37,9 +37,10 @@ https://tinyjs.app/changelog.
   `pickColor` (portal), `idleTime` (GNOME), `battery`, `dock.bounce`
   (urgency hint), `nowPlaying` + media keys (a real MPRIS player — metadata
   in the GNOME/KDE media widget and lock screen, transport back via
-  `onMediaKey`), and `audioTap` (system scope — the default sink's monitor
-  via `parec`/`pw-cat`; `scope:'app'` approximated by the system mix, like
-  Windows), `spotlight` (name search via indexed `plocate`/`locate`, else a
+  `onMediaKey`), and `audioTap` — `scope:'app'` is REAL per-app capture on
+  Linux (a private PipeWire null sink fed by the app's own output ports, so
+  it hears itself and nothing else; playback untouched), with system scope
+  falling back to the default sink's monitor — plus `spotlight` (name search via indexed `plocate`/`locate`, else a
   bounded `find`). Not (yet) supported: `recorder`, `ocr`, `quickLook`,
   `applescript`, `haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`,
   `share`, `wifi`, `selectedText`/`otherWindows`/`moveWindow`/
@@ -48,6 +49,49 @@ https://tinyjs.app/changelog.
   feature-detect: capability calls reject with a specific reason, query
   calls resolve `null`, fire-and-forget ones are silent no-ops. Burn-down
   list: [TODO-linux.md](TODO-linux.md).
+
+- **`tiny.system` — know where you are, and what's missing.**
+  `os()`/`isMacOS()`/`isWindows()`/`isLinux()` answer synchronously;
+  `info()` adds arch and the Linux session/desktop; `capabilities()` reports
+  what this machine can actually do so apps degrade deliberately. On Linux,
+  where the media stack ships in optional pieces, `requirements(ids)` says
+  what's missing and how to fix it (per-distro package lists + the exact
+  install command), `requirements(ids, { refresh: true })` re-probes after
+  the user installs, and `promptMissing(ids)` puts a native dialog in front
+  of them with a **Copy install command** button — showing nothing at all
+  when everything's present, so it's safe to call from a failure path.
+  Dialog `detail` text keeps its line breaks on Linux.
+
+- **`tiny.audio` — native DSP on the app's own output (Linux).**
+  Web Audio is the right tool for an EQ on macOS/Windows and unusable on
+  Linux: WebKitGTK renders the graph on a normal-priority thread, so
+  anything reaching `ctx.destination` crackles. `audio.filters(list)` runs
+  the chain in PipeWire instead (peaking/shelves/passes/notch/allpass +
+  linear gain, up to 28 filters, per-channel gains via `gainR`), applies to
+  audio the page never sees (raw radio streams, native HLS), retunes live
+  with no gap, and survives reloads. `audio.balance(v)` pans on the chain's
+  output stream — no filter slot, no rebuild. `capabilities().audioFilters`
+  gates it; the chain dies with the launcher, so nothing can be left behind.
+
+- **Frameless windows resize on Linux — and windowing grew up generally.**
+  Undecorated GTK windows have no WM resize edges, so the injected client
+  mounts invisible grips on every frameless window (opt out per page with
+  `data-tiny-noresize`, or via `setResizable(false)`);
+  `tiny.win.startResize(edge)` starts a native resize from your own handle.
+  `setResizable(false)` now means what it means elsewhere — the USER can't
+  drag the edges — without blocking the app's own `setSize` (GTK conflated
+  the two, so a fixed-size deck couldn't collapse into its own shade view).
+  `startDrag`/`startResize` are correctly per-window (a satellite's grip
+  used to move the main window). New: `tiny.win.setMinSize(w, h)` (+
+  `minSize` in `win.open`) puts a WM-enforced floor under user resizes, and
+  `tiny.win.setZoom(factor)` renders native page zoom — crisp double-size
+  modes on hi-dpi screens with no page changes (Linux launcher today;
+  no-ops elsewhere until the mac/win launchers grow the op).
+
+- **`windowPlacement` manifest key.** Wayland forbids clients placing their
+  own toplevels; apps whose whole design is windows that place each other
+  (amp's docked satellites) can declare `"windowPlacement": true` and run
+  on X11/XWayland where all of it works — everything else stays Wayland.
 
 - **Linux installer + prebuilt binaries.**
   `curl -fsSL https://tinyjs.app/install | sh` now detects Linux too,
