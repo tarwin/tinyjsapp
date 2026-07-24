@@ -768,6 +768,50 @@ if (!can.windowPosition) useDragInstead();   // e.g. tiny.win.startDrag()
 `capabilities()` reports what this machine can actually do, so an app can
 degrade on purpose instead of calling something that quietly does nothing.
 
+### Filtering your own audio (Linux)
+
+`tiny.audio.filters` runs a DSP chain on **this app's own output** — a graphic
+EQ, headphone correction, a crossover — below the browser:
+
+```js
+const can = await tiny.system.capabilities();
+if (can.audioFilters) {
+  await tiny.audio.filters([
+    { type: 'gain', gain: 1.0 },                          // preamp (linear)
+    { type: 'peaking', freq: 60, q: 1.1, gain: 4 },       // dB
+    { type: 'highshelf', freq: 8000, q: 0.7, gain: -2 },
+  ]);
+  tiny.audio.filter(1, { gain: -3 });   // retune one, live, no gap
+  await tiny.audio.clear?.() ?? tiny.audio.filters([]);   // remove
+} else {
+  buildWebAudioChain();   // BiquadFilterNode — correct on macOS/Windows
+}
+```
+
+Types: `peaking`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `bandpass`,
+`notch`, `allpass` (`freq`/`q`/`gain`, gain in dB) and `gain` (a linear
+multiplier). Filters apply in order.
+
+Why this exists rather than "just use Web Audio": on Linux you can't. WebKitGTK
+renders the Web Audio graph on a normal-priority thread while its media threads
+get real-time priority, so **anything reaching `ctx.destination` crackles** —
+on an idle machine, at any `latencyHint`, from an element or a decoded buffer.
+Filtering in PipeWire sidesteps that, and picks up two things Web Audio never
+had: it applies to audio the page doesn't own (raw radio streams, native HLS),
+and it survives a page reload.
+
+Two limits worth knowing:
+
+- **`capabilities().audioFilters` is Linux-only for now.** macOS and Windows
+  report `false` and should use Web Audio, which works properly there. See
+  `TODO-audio-filters.md` for what native support would take.
+- **15 filters maximum.** PipeWire's filter-chain crashes above that, so
+  tinyjs truncates rather than letting a page take the audio server down.
+
+Replacing the chain rebuilds it (a brief gap); changing only *values* retunes
+in place. Keep the shape stable if you're driving it from a slider — pass the
+same list of types every time and just vary the numbers.
+
 ### Missing system packages
 
 Linux ships its media stack in pieces — AAC and H.264 live in optional

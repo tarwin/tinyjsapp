@@ -708,6 +708,26 @@ static void do_winop(const std::string& winid, const std::string& op) {
   else if (op == "fullscreen 0") gtk_window_unfullscreen(win);
   else if (op == "ontop 1") gtk_window_set_keep_above(win, TRUE);
   else if (op == "ontop 0") gtk_window_set_keep_above(win, FALSE);
+  else if (op.rfind("zoomfactor ", 0) == 0) {
+    // Page zoom rendered natively (crisp at any factor) — a "double size" mode
+    // for hi-dpi screens costs one call and no page changes. The page keeps
+    // laying out in CSS px; the window shows factor× the pixels.
+    double f = atof(op.c_str() + 11);
+    WebKitWebView* wv = wv_for(winid);
+    if (wv && f >= 0.25 && f <= 5.0) webkit_web_view_set_zoom_level(wv, f);
+  }
+  else if (op.rfind("minsize ", 0) == 0) {
+    // Floor for user resizes (and programmatic ones — GTK clamps both). A
+    // window whose layout has a natural size can stop content like amp's
+    // headphone row being resized out of existence.
+    int mw = 0, mh = 0;
+    if (sscanf(op.c_str() + 8, "%dx%d", &mw, &mh) == 2 && mw > 0 && mh > 0) {
+      GdkGeometry geom;
+      geom.min_width = mw;
+      geom.min_height = mh + (main_win ? menubar_height() : 0);
+      gtk_window_set_geometry_hints(win, nullptr, &geom, GDK_HINT_MIN_SIZE);
+    }
+  }
   else if (op == "resizable 1" || op == "resizable 0") {
     bool fixed = op == "resizable 0";
     if (main_win) g_fixed_main = fixed; else if (SecWin* sw = sec_for(winid)) sw->fixed = fixed;
@@ -2273,6 +2293,262 @@ static void tap_sweep_stale() {
                 nullptr, nullptr, nullptr, nullptr);
 }
 
+// ---------------------------------------------------------- audio filters ---
+// A native DSP chain on this app's OWN output. Web Audio would be the obvious
+// home for this, but WebKitGTK renders that graph on a normal-priority thread
+// while its media threads get real-time priority, so anything reaching
+// ctx.destination crackles no matter how it's fed (measured; see
+// TODO-linux.md). Filtering below the browser sidesteps that entirely, and
+// picks up something Web Audio never had: it applies to audio the page doesn't
+// own — raw radio streams, native HLS — and survives a page reload.
+//
+// Built from libpipewire-module-filter-chain's builtin biquads. The module is
+// held open by a pw-cli child: unlike a node created with object.linger, a
+// module dies with the process that loaded it, so a killed launcher can't
+// strand a sink the way an audioTap could. That's why there's no sweep here.
+struct EqFilter {
+  std::string label;                      // bq_peaking, gain, …
+  double freq = 1000, q = 1.0, gain = 0;  // dB for bq_*, a multiplier for linear
+  double gainR = 0;                       // right channel; equals gain unless split
+  bool split = false;                     // true when the channels differ
+};
+// module-filter-chain SEGFAULTS past ~30 DECLARED nodes on PipeWire 1.0.5
+// (measured: 15 stereo pairs load, 16 take pw-cli down; 30 mono load). A page
+// must not be able to crash the user's audio server, so the chain is truncated
+// here rather than trusted. Mono layout (channels identical, module replicates
+// the graph per channel) costs one declared node per filter; split L/R (some
+// filter carries gainR) costs two.
+static const size_t EQ_MAX_MONO = 28;     // 30 declared proven, minus margin
+static const size_t EQ_MAX_SPLIT = 15;    // two declared nodes per filter
+static bool g_eq_mono = true;             // layout of the RUNNING chain
+static double g_eq_balance = 0;           // -1..1, lives on the -out stream
+static std::vector<EqFilter> g_eq;        // current chain (empty = none)
+static std::string g_eq_sink;             // "tinyjs-eq-<pid>" while it runs
+static GPid g_eq_pid = 0;                 // the pw-cli holding the module open
+static guint g_eq_route_timer = 0;
+
+static std::string eq_num(double v) {
+  char b[32];
+  snprintf(b, sizeof b, "%.6g", v);       // never locale-formatted: pw parses C floats
+  return b;
+}
+
+// Point every stream this app owns at a sink (or back to the default when
+// `sink` is empty). Our WebKit streams are named after the app id, the same
+// handle audioTap links by. Runs on a timer because a stream that appears
+// later — a second window, a page reload — must be routed too.
+static void eq_route(const std::string& sink) {
+  if (g_app_id.empty()) return;
+  std::string val = sink.empty() ? "" : sink;
+  std::string script =
+      "pw-cli ls Node 2>/dev/null | awk '/^[[:space:]]*id [0-9]+/{id=$2; "
+      "gsub(/[^0-9]/,\"\",id)} /node\\.name = \"" + g_app_id +
+      "\"/{print id}' | while read n; do pw-metadata \"$n\" target.object \"" +
+      val + "\" >/dev/null 2>&1; done";
+  const gchar* argv[] = {"sh", "-c", script.c_str(), nullptr};
+  g_spawn_async(nullptr, (gchar**)argv, nullptr,
+                (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
+                              G_SPAWN_STDERR_TO_DEV_NULL),
+                nullptr, nullptr, nullptr, nullptr);
+}
+
+static gboolean eq_route_tick(gpointer) {
+  if (!g_eq_sink.empty()) eq_route(g_eq_sink);
+  return G_SOURCE_CONTINUE;
+}
+
+// One control-value expression for a filter (right channel when asked).
+static std::string eq_node_ctrl(const EqFilter& f, bool right) {
+  double g = (f.split && right) ? f.gainR : f.gain;
+  // The `gain` builtin is advertised but takes the whole chain down with it on
+  // PipeWire 1.0.5 (every config containing one fails to load, however small)
+  // — `linear` does the same job with Mult as a plain multiplier.
+  if (f.label == "linear") return "\"Mult\" = " + eq_num(g) + " \"Add\" = 0.0";
+  return "\"Freq\" = " + eq_num(f.freq) + " \"Q\" = " + eq_num(f.q) +
+         " \"Gain\" = " + eq_num(g);
+}
+
+// The filter.graph config. Mono layout whenever both channels are identical:
+// a single-input graph is replicated per channel by the module, which halves
+// the declared-node count (the crash ceiling counts DECLARED nodes) and lets
+// one control name drive both channels. Only per-channel gains (gainR) pay
+// for the explicit L/R layout.
+static std::string eq_config(const std::string& sink) {
+  std::string nodes, links;
+  size_t last = g_eq.size() - 1;
+  if (g_eq_mono) {
+    for (size_t i = 0; i < g_eq.size(); i++) {
+      nodes += "{ type = builtin name = f" + std::to_string(i) + " label = " +
+               g_eq[i].label + " control = { " + eq_node_ctrl(g_eq[i], false) + " } }\n";
+      if (i > 0)
+        links += "{ output = \"f" + std::to_string(i - 1) + ":Out\" input = \"f" +
+                 std::to_string(i) + ":In\" }\n";
+    }
+  } else {
+    for (size_t i = 0; i < g_eq.size(); i++) {
+      for (const char* ch : {"L", "R"}) {
+        std::string n = "f" + std::to_string(i) + ch;
+        nodes += "{ type = builtin name = " + n + " label = " + g_eq[i].label +
+                 " control = { " + eq_node_ctrl(g_eq[i], ch[0] == 'R') + " } }\n";
+        if (i > 0)
+          links += "{ output = \"f" + std::to_string(i - 1) + ch + ":Out\" input = \"" +
+                   n + ":In\" }\n";
+      }
+    }
+  }
+  std::string ins = g_eq_mono ? "\"f0:In\"" : "\"f0L:In\" \"f0R:In\"";
+  std::string outs = g_eq_mono
+      ? "\"f" + std::to_string(last) + ":Out\""
+      : "\"f" + std::to_string(last) + "L:Out\" \"f" + std::to_string(last) + "R:Out\"";
+  return "{ node.name = \"" + sink + "\" media.class = Audio/Sink\n"
+         "  filter.graph = {\n    nodes = [\n" + nodes + "    ]\n"
+         "    links = [\n" + links + "    ]\n"
+         "    inputs  = [ " + ins + " ]\n"
+         "    outputs = [ " + outs + " ]\n  }\n"
+         "  capture.props  = { node.name = \"" + sink +
+         "\" media.class = Audio/Sink audio.position = [ FL FR ] }\n"
+         "  playback.props = { node.name = \"" + sink +
+         "-out\" node.passive = true audio.position = [ FL FR ] }\n}";
+}
+
+// Balance rides on the chain's OUTPUT STREAM as plain channelVolumes — no
+// filter slot, no rebuild, works in both layouts. (channelVolumes is ignored
+// on an app's own stream node but honored exactly here — measured: [1, 0.1]
+// yields a 0.1 R/L ratio at the sink.)
+static void eq_apply_balance() {
+  if (g_eq_sink.empty()) return;
+  double bal = g_eq_balance < -1 ? -1 : g_eq_balance > 1 ? 1 : g_eq_balance;
+  double l = bal > 0 ? 1.0 - bal : 1.0;
+  double r = bal < 0 ? 1.0 + bal : 1.0;
+  std::string script =
+      "id=$(pw-cli ls Node 2>/dev/null | awk '/^[[:space:]]*id [0-9]+/{i=$2; "
+      "gsub(/[^0-9]/,\"\",i)} /node\\.name = \"" + g_eq_sink + "-out\"/"
+      "{print i; exit}'); [ -n \"$id\" ] && pw-cli set-param \"$id\" Props "
+      "'{ channelVolumes = [ " + eq_num(l) + ", " + eq_num(r) + " ] }' >/dev/null 2>&1";
+  const gchar* argv[] = {"sh", "-c", script.c_str(), nullptr};
+  g_spawn_async(nullptr, (gchar**)argv, nullptr,
+                (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
+                              G_SPAWN_STDERR_TO_DEV_NULL),
+                nullptr, nullptr, nullptr, nullptr);
+}
+
+static void eq_push_params(int only);   // defined below; eq_start needs it
+
+// Tear the chain down: streams back to the default sink FIRST, so there is no
+// window in which they point at a sink that is about to vanish.
+static void eq_stop() {
+  if (g_eq_route_timer) { g_source_remove(g_eq_route_timer); g_eq_route_timer = 0; }
+  if (!g_eq_sink.empty()) { eq_route(""); g_eq_sink.clear(); }
+  if (g_eq_pid) {
+    kill(g_eq_pid, SIGTERM);
+    g_spawn_close_pid(g_eq_pid);
+    g_eq_pid = 0;
+  }
+  g_eq.clear();
+}
+
+// (Re)build the chain from g_eq. Changing a control value does NOT come through
+// here — see eq_set_param, which retunes in place without a gap.
+static bool eq_start() {
+  if (g_eq.empty()) { eq_stop(); return true; }
+  char* pwcli = g_find_program_in_path("pw-cli");
+  if (!pwcli) return false;
+  if (g_eq_pid) {   // rebuilding: drop the old chain first
+    if (g_eq_route_timer) { g_source_remove(g_eq_route_timer); g_eq_route_timer = 0; }
+    kill(g_eq_pid, SIGTERM);
+    g_spawn_close_pid(g_eq_pid);
+    g_eq_pid = 0;
+  }
+  g_eq_mono = true;
+  for (const EqFilter& f : g_eq) if (f.split) { g_eq_mono = false; break; }
+  g_eq_sink = "tinyjs-eq-" + std::to_string(getpid());
+  std::string cfg = eq_config(g_eq_sink);
+  // -m keeps pw-cli connected; without it the module unloads the moment it
+  // exits and the sink never appears.
+  const gchar* argv[] = {pwcli, "-m", "load-module",
+                         "libpipewire-module-filter-chain", cfg.c_str(), nullptr};
+  GError* err = nullptr;
+  if (!g_spawn_async(nullptr, (gchar**)argv, nullptr,
+                     (GSpawnFlags)(G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_STDOUT_TO_DEV_NULL |
+                                   G_SPAWN_STDERR_TO_DEV_NULL),
+                     nullptr, nullptr, &g_eq_pid, &err)) {
+    if (err) g_error_free(err);
+    g_eq_sink.clear();
+    return false;
+  }
+  // The sink takes a moment to appear. Route our streams once it has, and
+  // re-push the control values: anything that arrived between the spawn and
+  // the sink existing (a balance change right after the chain is built) would
+  // otherwise have been set-param'd at a node that wasn't there yet.
+  g_timeout_add(600, [](gpointer) -> gboolean {
+    if (g_eq_sink.empty()) return G_SOURCE_REMOVE;
+    eq_route(g_eq_sink);
+    eq_push_params(-1);
+    eq_apply_balance();   // a balance set before/while the chain built
+    return G_SOURCE_REMOVE;
+  }, nullptr);
+  g_eq_route_timer = g_timeout_add(1500, eq_route_tick, nullptr);
+  return true;
+}
+
+// Retune in place — this is what a slider drag ends up calling, so it must not
+// rebuild anything. `only` < 0 pushes the whole chain in a single set-param;
+// a ten-band EQ is one spawn, not ten.
+static void eq_push_params(int only) {
+  if (g_eq_sink.empty()) return;
+  // One pw-cli set-param can only carry ~20 key/value pairs — past that its
+  // parser overflows an internal buffer and emits an EMPTY pod with exit 0
+  // (measured: 20 pairs -> pod 824, 28 pairs -> pod 8, silently a no-op). A
+  // full 15-filter chain is 86 pairs, so every full retune was being thrown
+  // away while small manual pushes worked. Chunk it.
+  std::vector<std::string> pairs;
+  auto push_one = [&](const std::string& n, const EqFilter& f, bool right) {
+    double g = (f.split && right) ? f.gainR : f.gain;
+    if (f.label == "linear") pairs.push_back("\"" + n + ":Mult\" " + eq_num(g));
+    else {
+      pairs.push_back("\"" + n + ":Freq\" " + eq_num(f.freq));
+      pairs.push_back("\"" + n + ":Q\" " + eq_num(f.q));
+      pairs.push_back("\"" + n + ":Gain\" " + eq_num(g));
+    }
+  };
+  for (size_t i = 0; i < g_eq.size(); i++) {
+    if (only >= 0 && (size_t)only != i) continue;
+    if (g_eq_mono) push_one("f" + std::to_string(i), g_eq[i], false);
+    else for (const char* ch : {"L", "R"})
+      push_one("f" + std::to_string(i) + ch, g_eq[i], ch[0] == 'R');
+  }
+  if (pairs.empty()) return;
+  const size_t CHUNK = 18;   // comfortably under the ~20-pair ceiling
+  std::string script =
+      "id=$(pw-cli ls Node 2>/dev/null | awk '/^[[:space:]]*id [0-9]+/{i=$2; "
+      "gsub(/[^0-9]/,\"\",i)} /node\\.name = \"" + g_eq_sink +
+      "\"/{print i; exit}'); [ -n \"$id\" ] || exit 0; ";
+  for (size_t at = 0; at < pairs.size(); at += CHUNK) {
+    std::string chunk;
+    for (size_t j = at; j < pairs.size() && j < at + CHUNK; j++) chunk += pairs[j] + " ";
+    script += "pw-cli set-param \"$id\" Props '{ params = [ " + chunk +
+              "] }' >/dev/null 2>&1; ";
+  }
+  const gchar* argv[] = {"sh", "-c", script.c_str(), nullptr};
+  g_spawn_async(nullptr, (gchar**)argv, nullptr,
+                (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
+                              G_SPAWN_STDERR_TO_DEV_NULL),
+                nullptr, nullptr, nullptr, nullptr);
+}
+
+// Dragging a slider fires input events far faster than a process can be
+// spawned, so coalesce: one push per frame-ish window, always carrying the
+// latest values.
+static guint g_eq_push_timer = 0;
+static void eq_push_soon() {
+  if (g_eq_push_timer) return;
+  g_eq_push_timer = g_timeout_add(30, [](gpointer) -> gboolean {
+    g_eq_push_timer = 0;
+    eq_push_params(-1);
+    return G_SOURCE_REMOVE;
+  }, nullptr);
+}
+
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static std::string base64(const unsigned char* data, size_t len) {
   std::string out;
@@ -3692,6 +3968,67 @@ static void handle_line(const std::string& line) {
     return;
   }
 
+  // AUDIOFILTERS <type,freq,q,gain>\t… — replace the chain (empty = clear)
+  if (line.rfind("AUDIOFILTERS", 0) == 0 && line.rfind("AUDIOFILTERSET", 0) != 0) {
+    std::string rest = line.size() > 13 ? line.substr(13) : "";
+    std::vector<EqFilter> prev = g_eq;
+    g_eq.clear();
+    for (const std::string& f : split_tabs(rest)) {
+      if (f.empty()) continue;
+      std::vector<std::string> p;
+      size_t start = 0;
+      for (;;) {
+        size_t c = f.find(',', start);
+        p.push_back(f.substr(start, c == std::string::npos ? c : c - start));
+        if (c == std::string::npos) break;
+        start = c + 1;
+      }
+      if (p.size() < 4) continue;
+      EqFilter e;
+      e.label = p[0];
+      e.freq = atof(p[1].c_str());
+      e.q = atof(p[2].c_str());
+      e.gain = atof(p[3].c_str());
+      e.gainR = e.gain;
+      if (p.size() >= 5 && !p[4].empty()) { e.gainR = atof(p[4].c_str()); e.split = true; }
+      g_eq.push_back(e);
+    }
+    bool anySplit = false;
+    for (const EqFilter& f : g_eq) if (f.split) { anySplit = true; break; }
+    size_t cap = anySplit ? EQ_MAX_SPLIT : EQ_MAX_MONO;
+    if (g_eq.size() > cap) g_eq.resize(cap);
+    if (g_eq.empty()) { eq_stop(); return; }
+    // Same shape (same filters in the same order)? Then this is a retune, and
+    // rebuilding would drop audio for no reason — push the values instead.
+    // Same labels AND same splitness: splitness changes the node naming, so
+    // it is a shape change even though the filters look alike.
+    bool sameShape = !g_eq_sink.empty() && prev.size() == g_eq.size()
+                     && (anySplit == !g_eq_mono);
+    for (size_t i = 0; sameShape && i < prev.size(); i++)
+      if (prev[i].label != g_eq[i].label || prev[i].split != g_eq[i].split)
+        sameShape = false;
+    if (sameShape) eq_push_soon(); else eq_start();
+    return;
+  }
+  // AUDIOBALANCE <-1..1> — stereo balance on the chain's output stream
+  if (line.rfind("AUDIOBALANCE", 0) == 0) {
+    g_eq_balance = line.size() > 13 ? atof(line.substr(13).c_str()) : 0;
+    eq_apply_balance();
+    return;
+  }
+  // AUDIOFILTERSET <index>\t<freq>\t<q>\t<gain> — retune one, no rebuild
+  if (line.rfind("AUDIOFILTERSET ", 0) == 0) {
+    auto f = split_tabs(line.substr(15));
+    if (f.size() < 4) return;
+    size_t i = (size_t)atoi(f[0].c_str());
+    if (i >= g_eq.size()) return;
+    g_eq[i].freq = atof(f[1].c_str());
+    g_eq[i].q = atof(f[2].c_str());
+    g_eq[i].gain = atof(f[3].c_str());
+    eq_push_params((int)i);
+    return;
+  }
+
   if (line.rfind("WINOPEN ", 0) == 0) { do_winopen(line.substr(8)); return; }
   if (line.rfind("WINCLOSE ", 0) == 0) { do_winclose(line.substr(9)); return; }
 
@@ -3999,6 +4336,7 @@ int main(int argc, char** argv) {
   gtk_main();
 
   if (g_inhibit_fd >= 0) close(g_inhibit_fd);
+  eq_stop();
   tap_stop();
   remove_tray();
   _exit(0);

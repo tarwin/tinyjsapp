@@ -215,14 +215,20 @@ function systemCapabilities() {
     secrets: true, mediaKeys: true, nowPlaying: true, audioTap: true,
     speech: true, pickColor: true, spotlight: true, launchAtLogin: true,
     printToPDF: true, transparency: true, vibrancy: false,
+    // Native DSP on our own output. Linux-only for now precisely BECAUSE
+    // Web Audio can't do it here — see TODO-audio-filters.md for the
+    // macOS/Windows plan; there, apps should use Web Audio instead.
+    audioFilters: true,
   };
   const windows = {
+    audioFilters: false,
     applescript: false, ai: false, quickLook: false, share: false,
     vibrancy: false, selectedText: false, ocr: false,
     windowPosition: true, mousePosition: true, captureScreen: true,
     keystroke: true, recorder: false,
   };
-  const macos = { vibrancy: true, applescript: true, quickLook: true, share: true };
+  const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
+    audioFilters: false };
   const table = IS_LINUX ? linux : IS_WIN ? windows : macos;
   return { os: OS, ...table };
 }
@@ -259,6 +265,16 @@ const esc = (s) => String(s ?? '')
 // Reverse of esc() / the launcher's wire_escape, for inbound tab fields.
 const unesc = (s) => String(s ?? '').replace(/\\(.)/g,
   (_, c) => c === 'n' ? '\n' : c === 't' ? '\t' : c === 'r' ? '\r' : c);
+// tiny.audio.filters types -> libpipewire-module-filter-chain builtins.
+const FILTER_LABELS = {
+  peaking: 'bq_peaking', lowshelf: 'bq_lowshelf', highshelf: 'bq_highshelf',
+  lowpass: 'bq_lowpass', highpass: 'bq_highpass', bandpass: 'bq_bandpass',
+  notch: 'bq_notch', allpass: 'bq_allpass',
+  // 'gain' is a builtin too, but it fails to load on PipeWire 1.0.5 — `linear`
+  // multiplies by the same factor and does load.
+  gain: 'linear',
+};
+
 const DIALOG_OPS = {
   'win.openFile': { op: 'open', args: () => [] },
   'win.openFiles': { op: 'openmulti', args: () => [] },
@@ -746,6 +762,28 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                         bit(opts.transparent), one(vib), bit(opts.squareCorners),
                         bit(opts.acceptsFirstMouse)].join('\t'));
     },
+    // Native DSP on this app's own output — see tiny.audio.filters. The chain
+    // is rebuilt only when its SHAPE changes; moving a control goes through
+    // setAudioFilter, which retunes in place.
+    setAudioFilters(list) {
+      const spec = (list ?? []).map((f) => {
+        const row = [FILTER_LABELS[f.type] ?? 'bq_peaking',
+          Number(f.freq ?? 1000), Number(f.q ?? 1), Number(f.gain ?? 0)];
+        // gainR only rides along when the channels actually differ, so the
+        // common symmetric case stays a 4-field row
+        if (f.gainR != null && Number(f.gainR) !== Number(f.gain ?? 0)) row.push(Number(f.gainR));
+        return row.join(',');
+      });
+      send('AUDIOFILTERS' + (spec.length ? ' ' + spec.join('\t') : ''));
+    },
+    setAudioBalance(v) {
+      const b = Math.max(-1, Math.min(1, Number(v) || 0));
+      send('AUDIOBALANCE ' + b);
+    },
+    setAudioFilter(i, f) {
+      send('AUDIOFILTERSET ' + [Number(i) | 0, Number(f.freq ?? 1000),
+        Number(f.q ?? 1), Number(f.gain ?? 0)].join('\t'));
+    },
     startDrag() { send('DRAGWIN'); },
     // edge: 'n'|'ne'|'e'|'se'|'s'|'sw'|'w'|'nw' — frameless windows have no
     // WM resize border, so the page supplies the grip.
@@ -1050,7 +1088,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // squareCorners?, acceptsFirstMouse? }) and position ({ x, y }) are applied
     // BEFORE the window paints — no titlebar flash for frameless panels, no
     // jump from center.
-    openWindow(id, { page, title, size, chrome, x, y } = {}) {
+    openWindow(id, { page, title, size, minSize, chrome, x, y } = {}) {
       let p = String(page ?? 'index.html');
       if (!isUrl(p) && !isAbs(p)) {
         if (!frontendDir) throw new Error('win.open needs an absolute page path or URL here');
@@ -1066,6 +1104,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                          bit(c.frame), bit(c.trafficLights), bit(c.transparent), one(vib),
                          bit(c.squareCorners), bit(c.acceptsFirstMouse),
                          hasPos ? (x | 0) : '', hasPos ? (y | 0) : ''].join('\t'));
+      // minSize: "WxH" — a floor under user resizes, so a layout with a
+      // natural size can't be shrunk until content falls off the bottom.
+      if (minSize) send('WINOP@' + id + ' minsize ' + one(minSize));
     },
     // Handle for any window ('main' or a secondary id).
     window(id) {
@@ -1090,6 +1131,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         setFullscreen: (v) => t('WINOP', 'fullscreen ' + (v ? 1 : 0)),
         setAlwaysOnTop: (v) => t('WINOP', 'ontop ' + (v ? 1 : 0)),
         setResizable: (v) => t('WINOP', 'resizable ' + (v ? 1 : 0)),
+        setMinSize: (w, h) => t('WINOP', 'minsize ' + (w | 0) + 'x' + (h | 0)),
+        setZoom: (f) => t('WINOP', 'zoomfactor ' + Number(f || 1)),
         // Both must name the window: a bare DRAGWIN/RESIZEWIN means 'main', so
         // a satellite's grip would have moved/resized the deck instead.
         startDrag: () => t('DRAGWIN'),
@@ -1224,6 +1267,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.fullscreen': async (_p, _a, m) => (forWin(m).fullscreen(), true),
     'win.setAlwaysOnTop': async ({ enabled }, _a, m) => (forWin(m).setAlwaysOnTop(enabled), true),
     'win.setResizable': async ({ enabled }, _a, m) => (forWin(m).setResizable(enabled), true),
+    'win.setMinSize': async ({ width, height }, _a, m) => (forWin(m).setMinSize(width, height), true),
+    'win.setZoom': async ({ factor }, _a, m) => (forWin(m).setZoom(factor), true),
     'win.setClickThrough': async ({ enabled }, _a, m) => (forWin(m).setClickThrough(enabled), true),
     'win.setLevel': async ({ level }, _a, m) => (forWin(m).setLevel(level), true),
     'win.setAllSpaces': async ({ enabled }, _a, m) => (forWin(m).setAllSpaces(enabled), true),
@@ -1290,6 +1335,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.restore': async (_p, _a, m) => (forWin(m).restore(), true),
     'win.setFullscreen': async ({ enabled }, _a, m) => (forWin(m).setFullscreen(enabled), true),
     'win.setChrome': async (opts, _a, m) => (forWin(m).setChrome(opts), true),
+    'audio.filters': async ({ filters }) => (app.setAudioFilters(filters), true),
+    'audio.filterSet': async ({ index, filter }) => (app.setAudioFilter(index, filter ?? {}), true),
+    'audio.balance': async ({ value }) => (app.setAudioBalance(value), true),
     'win.startDrag': async (_p, _a, m) => (forWin(m).startDrag(), true),
     'win.startResize': async ({ edge } = {}, _a, m) => (forWin(m).startResize(edge), true),
     'win.zoom': async (_p, _a, m) => (forWin(m).zoom(), true),

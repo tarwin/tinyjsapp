@@ -232,6 +232,13 @@
       fullscreen: () => call('win.fullscreen'),                    // toggles
       setAlwaysOnTop: (enabled) => call('win.setAlwaysOnTop', { enabled }),
       setResizable: (enabled) => call('win.setResizable', { enabled }),
+      // Floor for user resizes (and win.open takes minSize: 'WxH'). Use it
+      // when shrinking the window would push content out of view.
+      setMinSize: (width, height) => call('win.setMinSize', { width, height }),
+      // Native page zoom (0.25–5). The page keeps laying out in CSS px; the
+      // window renders factor× — pair with setSize(w*f, h*f) for a crisp
+      // "double size" mode on hi-dpi screens.
+      setZoom: (factor) => call('win.setZoom', { factor }),
       // Mouse events pass through to what's behind (overlays/HUDs).
       setClickThrough: (enabled) => call('win.setClickThrough', { enabled }),
       // 'normal' | 'floating' | 'overlay' (above fullscreen) | 'desktop'.
@@ -317,6 +324,54 @@
     //     for (let i = 0; i < n; i++) s[i] = (bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) << 8)) << 16 >> 16;
     //     // …float = s[i] / 32768, interleaved by `channels`
     //   });
+    // Native DSP on this app's OWN output — a graphic EQ, headphone
+    // correction, a crossover — applied below the browser.
+    //
+    // Web Audio's BiquadFilterNode is the obvious tool and is the right one on
+    // macOS and Windows. It is NOT usable on Linux: WebKitGTK renders the Web
+    // Audio graph on a normal-priority thread while its media threads get
+    // real-time priority, so anything reaching ctx.destination crackles however
+    // it's fed. These filters run in PipeWire instead, which also means they
+    // apply to audio the page never sees — raw radio, native HLS — and survive
+    // a reload. Check before using:
+    //
+    //   const can = await tiny.system.capabilities();
+    //   if (can.audioFilters) await tiny.audio.filters(bands);
+    //   else buildWebAudioChain();          // fine on macOS/Windows
+    //
+    // Types: peaking, lowshelf, highshelf, lowpass, highpass, bandpass, notch,
+    // allpass (freq/q/gain, gain in dB) and gain (a linear multiplier, for a
+    // preamp). Filters run in the order given.
+    //
+    // Every filter takes an optional `gainR` — the right channel's gain, when
+    // it differs from the left. That's how you get balance without spending a
+    // filter slot: fold it into a gain you already have.
+    //   { type: 'gain', gain: 1.0, gainR: 0.4 }   // panned left
+    //
+    // At most 28 filters (15 if any filter uses gainR — per-channel gains
+    // double the node count): PipeWire's filter-chain crashes above its node
+    // ceiling, so the list is truncated rather than allowed to take the audio
+    // server down.
+    // Replacing the chain rebuilds it (a brief gap) while changing only VALUES
+    // retunes in place — so if a slider drives it, keep the shape stable and
+    // vary the numbers.
+    audio: {
+      // Replace the whole chain. Idempotent; [] (or nothing) removes it and
+      // restores unprocessed output.
+      //   await tiny.audio.filters([{ type: 'peaking', freq: 60, q: 1.1, gain: 4 }]);
+      filters: (list) => call('audio.filters', { filters: list ?? [] }),
+      // Retune ONE filter in place — no rebuild, no gap. This is what a slider
+      // drag should call.
+      //   tiny.audio.filter(0, { gain: -3 });
+      filter: (index, patch) => call('audio.filterSet', { index, filter: patch ?? {} }),
+      // Stereo balance, -1 (left) .. 0 .. 1 (right) — applied to the chain's
+      // output, so it costs no filter slot and never rebuilds. Needs an active
+      // chain (filters() with at least one entry); amp keeps a flat chain up
+      // for exactly this.
+      balance: (v) => call('audio.balance', { value: v }),
+      clear: () => call('audio.filters', { filters: [] }),
+    },
+
     audioTap: {
       // opts: { scope?: 'app'|'system', excludeSelf?: boolean, interval?: ms }.
       // Resolves true, or throws an Error with a .code: 'unsupported' |
