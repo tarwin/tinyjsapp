@@ -70,6 +70,7 @@ static bool g_accessory = false;
 static bool g_quitting = false;
 
 // chrome state (main window), reported by GET win
+static bool g_fixed_main = false;      // app asked for setResizable(false)
 static bool g_chrome_frame = true, g_chrome_traffic = true,
             g_chrome_transparent = false, g_chrome_square = false,
             g_chrome_first_mouse = false;
@@ -82,6 +83,7 @@ struct SecWin {
   GtkWindow* win = nullptr;
   WebKitWebView* wv = nullptr;
   bool frame = true, transparent = false, square = false, first_mouse = false;
+  bool fixed = false;          // app asked for setResizable(false)
   std::string vibrancy;
   std::string level = "normal";
   bool click_through = false;
@@ -226,6 +228,35 @@ static GtkWindow* win_for(const std::string& winid) {
   return it == g_secwins.end() ? nullptr : it->second->win;
 }
 
+static SecWin* sec_for(const std::string& winid) {
+  auto it = g_secwins.find(winid);
+  return it == g_secwins.end() ? nullptr : it->second;
+}
+
+// Is this window meant to be user-fixed? (what the app asked for, which is not
+// the same as GTK's resizable flag — see apply_fixed.)
+static bool win_fixed(const std::string& winid) {
+  if (winid.empty() || winid == "main") return g_fixed_main;
+  SecWin* sw = sec_for(winid);
+  return sw ? sw->fixed : false;
+}
+
+// setResizable(false) means "the user can't drag the edges". On macOS and
+// Windows it leaves the app's own setSize alone; GTK conflates the two, sizing
+// a non-resizable window to its child's natural request, so the app can no
+// longer shrink its own window (a fixed deck collapsing to a titlebar just
+// stayed put). Only enforce it at the toolkit level where the WM actually
+// offers a resize affordance — on an undecorated window there is nothing to
+// suppress, so leave GTK resizable and let setSize mean what it says. The
+// app's intent is still what getState reports and what suppresses the
+// client-side grips.
+static void apply_fixed(const std::string& winid) {
+  GtkWindow* win = win_for(winid);
+  if (!win) return;
+  bool enforce = win_fixed(winid) && gtk_window_get_decorated(win);
+  gtk_window_set_resizable(win, enforce ? FALSE : TRUE);
+}
+
 static void eval_in(const std::string& winid, const std::string& js) {
   WebKitWebView* wv = wv_for(winid);
   if (!wv) return;
@@ -253,10 +284,17 @@ static void reply_to_call(const std::string& callid, int status, const std::stri
 // --------------------------------------------------------- page injection ---
 
 static std::string tiny_shim_js(const std::string& winid) {
+  // An undecorated GTK window has no resize edges — the WM draws none and the
+  // WebView covers the whole surface — so a frameless app simply can't be
+  // resized unless the page provides the grips. Tell the client which windows
+  // need them (macOS/Windows get theirs from the platform).
+  GtkWindow* w0 = win_for(winid);
+  const char* frameless = (w0 && !gtk_window_get_decorated(w0)) ? "true" : "false";
   return
     "(() => {\n"
     "  if (window.__tinyShim) return; window.__tinyShim = true;\n"
     "  window.__TINY_WIN = '" + winid + "';\n"
+    "  window.__TINY_FRAMELESS = " + frameless + ";\n"
     "  let seq = 0; const pending = {};\n"
     "  window.__invoke = (payload) => new Promise((res, rej) => {\n"
     "    const s = ++seq; pending[s] = { res, rej };\n"
@@ -540,6 +578,7 @@ static void apply_chrome(const std::string& winid, const std::vector<std::string
     bool on = frame == "1";
     gtk_window_set_decorated(win, on);
     if (main_win) g_chrome_frame = on; else if (sec) sec->frame = on;
+    apply_fixed(winid);   // decoration decides whether "fixed" is enforceable
   }
   if (!traffic.empty() && main_win) g_chrome_traffic = traffic == "1";
   if (!transp.empty()) {
@@ -557,6 +596,7 @@ static void apply_chrome(const std::string& winid, const std::vector<std::string
     if (on) gtk_window_set_decorated(win, FALSE);
     else gtk_window_set_decorated(win, main_win ? g_chrome_frame : (sec ? sec->frame : true));
     if (main_win) g_chrome_square = on; else if (sec) sec->square = on;
+    apply_fixed(winid);
   }
   if (!first.empty()) {
     bool on = first == "1";
@@ -668,8 +708,11 @@ static void do_winop(const std::string& winid, const std::string& op) {
   else if (op == "fullscreen 0") gtk_window_unfullscreen(win);
   else if (op == "ontop 1") gtk_window_set_keep_above(win, TRUE);
   else if (op == "ontop 0") gtk_window_set_keep_above(win, FALSE);
-  else if (op == "resizable 1") gtk_window_set_resizable(win, TRUE);
-  else if (op == "resizable 0") gtk_window_set_resizable(win, FALSE);
+  else if (op == "resizable 1" || op == "resizable 0") {
+    bool fixed = op == "resizable 0";
+    if (main_win) g_fixed_main = fixed; else if (SecWin* sw = sec_for(winid)) sw->fixed = fixed;
+    apply_fixed(winid);
+  }
   else if (op == "clickthrough 1") set_click_through(winid, true);
   else if (op == "clickthrough 0") set_click_through(winid, false);
   else if (op.rfind("level ", 0) == 0) set_level(winid, op.substr(6));
@@ -1314,7 +1357,7 @@ static std::string win_state_json(const std::string& winid) {
   bool ontop = st & GDK_WINDOW_STATE_ABOVE;
   bool visible = gtk_widget_get_visible(GTK_WIDGET(win));
   bool focused = gtk_window_is_active(win);
-  bool resizable = gtk_window_get_resizable(win);
+  bool resizable = !win_fixed(winid);
 
   GdkDisplay* d = gdk_display_get_default();
   GdkWindow* gw = gtk_widget_get_window(GTK_WIDGET(win));
@@ -3618,6 +3661,34 @@ static void handle_line(const std::string& line) {
     gdk_device_get_position(dev, nullptr, &x, &y);
     guint32 t = g_last_press_time ? g_last_press_time : gtk_get_current_event_time();
     gdk_window_begin_move_drag_for_device(gw, dev, 1, x, y, t);
+    return;
+  }
+
+  // Same dance as DRAGWIN (the live press carries the grab serial Wayland
+  // needs), but resizing from a named edge.
+  if (peel_target(line, "RESIZEWIN", winid, rest)) {
+    GtkWindow* win = win_for(winid);
+    if (!win) return;
+    static const struct { const char* name; GdkWindowEdge edge; } EDGES[] = {
+      {"nw", GDK_WINDOW_EDGE_NORTH_WEST}, {"n", GDK_WINDOW_EDGE_NORTH},
+      {"ne", GDK_WINDOW_EDGE_NORTH_EAST}, {"w", GDK_WINDOW_EDGE_WEST},
+      {"e", GDK_WINDOW_EDGE_EAST}, {"sw", GDK_WINDOW_EDGE_SOUTH_WEST},
+      {"s", GDK_WINDOW_EDGE_SOUTH}, {"se", GDK_WINDOW_EDGE_SOUTH_EAST},
+    };
+    GdkWindowEdge edge = GDK_WINDOW_EDGE_SOUTH_EAST;
+    for (const auto& e : EDGES) if (rest == e.name) { edge = e.edge; break; }
+    if (!gtk_window_get_resizable(win)) return;
+    GdkDisplay* d = gtk_widget_get_display(GTK_WIDGET(win));
+    GdkSeat* seat = gdk_display_get_default_seat(d);
+    GdkDevice* dev = g_last_press_device ? g_last_press_device
+                                         : (seat ? gdk_seat_get_pointer(seat) : nullptr);
+    if (!dev) return;
+    GdkWindow* gw = gtk_widget_get_window(GTK_WIDGET(win));
+    if (!gw) return;
+    int x = 0, y = 0;
+    gdk_device_get_position(dev, nullptr, &x, &y);
+    guint32 t = g_last_press_time ? g_last_press_time : gtk_get_current_event_time();
+    gdk_window_begin_resize_drag_for_device(gw, edge, dev, 1, x, y, t);
     return;
   }
 

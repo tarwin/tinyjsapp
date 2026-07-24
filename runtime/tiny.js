@@ -255,6 +255,10 @@
       // image? }: drag real files OUT of the app (into Finder, Slack, …) —
       // call from a mousedown handler while the button is held.
       startDrag: (opts) => opts?.files ? call('win.dragOut', opts) : call('win.startDrag'),
+      // Begin a resize from an edge: 'n','ne','e','se','s','sw','w','nw'.
+      // Frameless windows get invisible grips automatically (see below); this
+      // is for putting a resize handle somewhere of your own.
+      startResize: (edge) => call('win.startResize', { edge }),
       dragOut: (opts) => call('win.dragOut', opts),
       zoom: () => call('win.zoom'),
       print: () => call('win.print'),
@@ -532,4 +536,63 @@
     if (e.detail === 2) call('win.zoom');
     else call('win.startDrag');
   });
+
+  // Resize grips for frameless windows. An undecorated window has no WM resize
+  // border and the WebView covers the whole surface, so without these a
+  // frameless app simply cannot be resized. Eight thin strips around the edge,
+  // invisible, above the page, each starting a native resize drag — so every
+  // app gets working edges without doing anything, and pages that already have
+  // their own handle are unaffected (theirs sits inside these 5px).
+  // Only where the platform doesn't provide them. __TINY_FRAMELESS is injected
+  // (as a boolean) by the Linux launcher, so its presence marks the host; its
+  // value can't be trusted on its own, because the page is injected before the
+  // CHROME op removes the decorations — ask the window itself instead.
+  if (typeof window.__TINY_FRAMELESS === 'boolean') {
+    const T = 5;                     // grip thickness, px
+    const EDGES = [
+      ['nw', 'nwse-resize', { left: 0, top: 0, width: T, height: T }],
+      ['ne', 'nesw-resize', { right: 0, top: 0, width: T, height: T }],
+      ['sw', 'nesw-resize', { left: 0, bottom: 0, width: T, height: T }],
+      ['se', 'nwse-resize', { right: 0, bottom: 0, width: T, height: T }],
+      ['n', 'ns-resize', { left: T, right: T, top: 0, height: T }],
+      ['s', 'ns-resize', { left: T, right: T, bottom: 0, height: T }],
+      ['w', 'ew-resize', { top: T, bottom: T, left: 0, width: T }],
+      ['e', 'ew-resize', { top: T, bottom: T, right: 0, width: T }],
+    ];
+    const mount = () => {
+      if (document.getElementById('__tinyGrips')) return;
+      const host = document.createElement('div');
+      host.id = '__tinyGrips';
+      // pointer-events only on the strips, so the page keeps every other pixel
+      host.style.cssText = 'position:fixed;inset:0;z-index:2147483647;pointer-events:none';
+      for (const [edge, cursor, box] of EDGES) {
+        const g = document.createElement('div');
+        let css = 'position:absolute;pointer-events:auto;cursor:' + cursor + ';';
+        for (const k in box) css += k + ':' + box[k] + 'px;';
+        g.style.cssText = css;
+        g.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          e.preventDefault(); e.stopPropagation();
+          call('win.startResize', { edge });
+        });
+        host.appendChild(g);
+      }
+      document.body.appendChild(host);
+    };
+    // Not every frameless window wants edges: a fixed-size skin (a Winamp-style
+    // deck) is meant to stay put, and it still resizes ITSELF for a shade view.
+    // Opt out per page with <html data-tiny-noresize>, or globally by making the
+    // window non-resizable — either way the grips stay off.
+    const optedOut = () => document.documentElement.hasAttribute('data-tiny-noresize')
+      || !!(document.body && document.body.hasAttribute('data-tiny-noresize'));
+    call('win.getState')
+      .then((s) => {
+        if (!s || !s.chrome || s.chrome.frame !== false) return;
+        if (s.resizable === false) return;
+        const go = () => { if (!optedOut()) mount(); };
+        if (document.body) go();
+        else document.addEventListener('DOMContentLoaded', go);
+      })
+      .catch(() => {});
+  }
 })();

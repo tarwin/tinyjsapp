@@ -747,6 +747,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                         bit(opts.acceptsFirstMouse)].join('\t'));
     },
     startDrag() { send('DRAGWIN'); },
+    // edge: 'n'|'ne'|'e'|'se'|'s'|'sw'|'w'|'nw' — frameless windows have no
+    // WM resize border, so the page supplies the grip.
+    startResize(edge) { send('RESIZEWIN ' + String(edge || 'se')); },
     zoom() { send('WINOP zoom'); },
     // Native NSPasteboard — no osascript/pbpaste spawns, no scratch files.
     clipboard: {
@@ -1087,6 +1090,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         setFullscreen: (v) => t('WINOP', 'fullscreen ' + (v ? 1 : 0)),
         setAlwaysOnTop: (v) => t('WINOP', 'ontop ' + (v ? 1 : 0)),
         setResizable: (v) => t('WINOP', 'resizable ' + (v ? 1 : 0)),
+        // Both must name the window: a bare DRAGWIN/RESIZEWIN means 'main', so
+        // a satellite's grip would have moved/resized the deck instead.
+        startDrag: () => t('DRAGWIN'),
+        startResize: (edge) => t('RESIZEWIN', String(edge || 'se')),
         setClickThrough: (v) => t('WINOP', 'clickthrough ' + (v ? 1 : 0)),
         setLevel: (level) => t('WINOP', 'level ' + one(level ?? 'normal')),
         setAllSpaces: (v) => t('WINOP', 'allspaces ' + (v ? 1 : 0)),
@@ -1283,7 +1290,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.restore': async (_p, _a, m) => (forWin(m).restore(), true),
     'win.setFullscreen': async ({ enabled }, _a, m) => (forWin(m).setFullscreen(enabled), true),
     'win.setChrome': async (opts, _a, m) => (forWin(m).setChrome(opts), true),
-    'win.startDrag': async () => (app.startDrag(), true),
+    'win.startDrag': async (_p, _a, m) => (forWin(m).startDrag(), true),
+    'win.startResize': async ({ edge } = {}, _a, m) => (forWin(m).startResize(edge), true),
     'win.zoom': async (_p, _a, m) => (forWin(m).zoom(), true),
     // Drag files OUT of the window (page must call this from a mousedown,
     // while the button is still held). files: real paths; image: optional

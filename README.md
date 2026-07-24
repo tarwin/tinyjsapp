@@ -264,6 +264,16 @@ tiny.win.setChrome({ frame: false, trafficLights: false, vibrancy: 'hud' });
 // (packaged apps apply it before first paint — no titlebar flash).
 tiny.win.startDrag();  tiny.win.zoom();   // manual equivalents
 
+// Resizing a frameless window: macOS and Windows keep their native resize
+// edges, but an undecorated GTK window has none — so on Linux the client adds
+// invisible 5px grips around the edge automatically. Nothing to do per app.
+tiny.win.startResize('se');   // 'n','ne','e','se','s','sw','w','nw' — for your own handle
+// A fixed-size window (a Winamp-style deck) opts out of the grips:
+//   <html data-tiny-noresize>   …or make it non-resizable:
+tiny.win.setResizable(false);
+// setResizable(false) means the USER can't drag the edges — your own
+// setSize() still works, including shrinking to a titlebar for a shade view.
+
 // square corners (drop macOS's rounded window corners). This makes the
 // window BORDERLESS — square, no titlebar, no traffic lights — and is
 // deliberately un-native: you lose the native titlebar drag (use
