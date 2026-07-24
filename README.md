@@ -89,19 +89,37 @@ sudo apt install gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0
 WebKit hints at this itself, logging "WebKit wasn't able to find a WebVTT
 encoder … unless gst-plugins-bad is installed" on startup.
 
-**Routing an `<audio>`/`<video>` element through Web Audio?** On Linux,
-WebKitGTK plays such an element *twice* — once straight to the speakers and
-once through your `createMediaElementSource` graph — and the two copies phase
-into a stuttering mess (macOS/Windows WebKit mute the direct output; WebKitGTK
-doesn't). The graph taps the signal before the element's own volume, so mute
-the element and carry volume with a `GainNode`:
+**Don't play audio through Web Audio on Linux.** WebKitGTK renders the Web
+Audio graph on a normal-priority (`SCHED_OTHER`) thread while its media threads
+get real-time priority, so anything reaching `ctx.destination` misses its
+deadline and crunches — on an idle machine, at any `latencyHint`, whether the
+source is an element or a decoded buffer. A plain `<audio>` element goes
+through GStreamer instead and is flawless. There is no graph-side fix; buffering
+only softens it, and rtkit won't promote the thread.
+
+So on Linux, play the element directly and get analysis from `tiny.audioTap`:
 
 ```js
-const src = ctx.createMediaElementSource(el);
-src.connect(gain); gain.connect(ctx.destination);
-gain.gain.value = volume;
-if (tiny.system.isLinux()) el.volume = 0;   // silence the leaked direct copy
+if (tiny.system.isLinux()) {
+  audio.volume = volume;          // straight to the speakers, no graph
+  await tiny.audioTap.start({ scope: 'app' });   // PCM for your visualiser
+} else {
+  const src = ctx.createMediaElementSource(audio);
+  src.connect(gain); gain.connect(ctx.destination);
+}
 ```
+
+`scope: 'app'` captures only your own output (a private PipeWire null sink fed
+by your app's ports), so playback is unaffected and you don't hear the rest of
+the desktop. What you lose is anything that *was* a graph node — an equalizer,
+a `StereoPanner` — so tell the user rather than leaving dead controls on screen.
+See `examples/amp` for the whole pattern, visualisers included.
+
+Analysis-only graphs are fine: a `MediaElementSource` feeding nothing but an
+`AnalyserNode` never reaches `destination`, so a missed deadline costs a
+dropped frame rather than audible crackle. Keep such elements at `volume = 0`,
+since WebKitGTK also plays a graph-routed element's own output straight to the
+speakers (macOS/Windows mute it).
 
 See **Portability** below for what's supported on Windows and Linux.
 
@@ -739,6 +757,44 @@ if (!can.windowPosition) useDragInstead();   // e.g. tiny.win.startDrag()
 
 `capabilities()` reports what this machine can actually do, so an app can
 degrade on purpose instead of calling something that quietly does nothing.
+
+### Missing system packages
+
+Linux ships its media stack in pieces — AAC and H.264 live in optional
+GStreamer plugin sets — so a feature can be absent on one machine and present
+on the next. `requirements()` answers what's missing and how to fix it:
+
+```js
+const [aac] = await tiny.system.requirements(['media.aac']);
+// -> { id, ok, feature, detail, install: { manager, packages, command } }
+```
+
+`promptMissing()` is the presentable version: it shows a native dialog naming
+the feature, explaining why it's absent, and offering a **Copy install
+command** button — nobody retypes `gstreamer1.0-plugins-bad` correctly from a
+toast. It shows **nothing at all** when the requirements are satisfied, so
+call it straight from a failure path:
+
+```js
+audio.addEventListener('error', () => tiny.system.promptMissing(['media.aac']));
+```
+
+Ask for several at once and their packages merge into a single command, so the
+user runs one line. Where nothing installable would fix it (`windowPosition`
+on Wayland is the session, not a package) it explains instead of offering a
+command that doesn't exist.
+
+Probes are cached for the life of the app, so a package the user just
+installed would still read as missing — pass `{ refresh: true }` to re-probe
+when they retry:
+
+```js
+const [aac] = await tiny.system.requirements(['media.aac'], { refresh: true });
+```
+
+Ids: `media.aac`, `media.h264`, `media.mp3`, `speech`, `spotlight.index`,
+`audioTap`, `tray`, `windowPosition`. Everything reports `ok` on macOS and
+Windows, so this costs nothing to call cross-platform.
 
 ## Build for release
 

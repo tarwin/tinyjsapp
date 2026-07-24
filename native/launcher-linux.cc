@@ -989,6 +989,22 @@ static void remove_tray() {
 
 // --------------------------------------------------------------- dialogs ----
 
+// Put back the line breaks the bridge escaped for a dialog's detail text (the
+// wire is newline-delimited, so they can't travel raw). "\\n" is a literal
+// backslash followed by n, not a break — the bridge doubled those first.
+static std::string unescape_lines(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] == '\\' && i + 1 < s.size()) {
+      if (s[i + 1] == 'n') { out += '\n'; i++; continue; }
+      if (s[i + 1] == '\\') { out += '\\'; i++; continue; }
+    }
+    out += s[i];
+  }
+  return out;
+}
+
 static void do_dialog(const std::string& callid, const std::string& body) {
   auto f = split_tabs(body);
   std::string op = tab_field(f, 0);
@@ -1036,7 +1052,7 @@ static void do_dialog(const std::string& callid, const std::string& body) {
 
   if (op == "alert" || op == "confirm") {
     std::string message = label_or(tab_field(f, 1), g_app_name.c_str());
-    std::string detail = tab_field(f, 2);
+    std::string detail = unescape_lines(tab_field(f, 2));
     std::string ok = label_or(tab_field(f, 3), "OK");
     std::string cancel = label_or(tab_field(f, 4), "Cancel");
     GtkWidget* dlg = gtk_message_dialog_new(g_win,
@@ -2191,6 +2207,29 @@ static void tap_destroy_sink() {
   g_tap_sink.clear();
 }
 
+// Reap tap sinks orphaned by an app that died without reaching its teardown —
+// SIGKILL, a crash, a `kill` from a script. object.linger is what makes the
+// sink outlive the pw-cli that created it, so nothing in the session will ever
+// collect one: they pile up in the sink list, and in WirePlumber's saved state,
+// for as long as the machine is up. Each is named with its owner's pid, so a
+// dead pid means a dead sink. A pid the kernel HAS recycled onto some unrelated
+// process just leaves the sink alone — leaking one is recoverable, destroying a
+// live app's sink is not.
+static void tap_sweep_stale() {
+  static const char* script =
+      "pw-cli ls Node 2>/dev/null | awk '"
+      "/^[[:space:]]*id [0-9]+/{id=$2; gsub(/[^0-9]/,\"\",id)} "
+      "/node\\.name = \"tinyjs-tap-/{p=$0; sub(/.*tinyjs-tap-/,\"\",p); "
+      "sub(/\".*/,\"\",p); print id, p}' "
+      "| while read n p; do kill -0 \"$p\" 2>/dev/null || "
+      "pw-cli destroy \"$n\" >/dev/null 2>&1; done";
+  const gchar* argv[] = {"sh", "-c", script, nullptr};
+  g_spawn_async(nullptr, (gchar**)argv, nullptr,
+                (GSpawnFlags)(G_SPAWN_SEARCH_PATH | G_SPAWN_STDOUT_TO_DEV_NULL |
+                              G_SPAWN_STDERR_TO_DEV_NULL),
+                nullptr, nullptr, nullptr, nullptr);
+}
+
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 static std::string base64(const unsigned char* data, size_t len) {
   std::string out;
@@ -2281,6 +2320,7 @@ static void do_audiotap(const std::string& qid, const std::string& rest) {
   char* pwlink = g_find_program_in_path("pw-link");
   bool app_ok = scope == "app" && pwcli && pwcat && pwlink && !g_app_id.empty();
   if (app_ok) {
+    tap_sweep_stale();   // collect any orphaned by a previous run that was killed
     g_tap_sink = "tinyjs-tap-" + std::to_string(getpid());
     // Create a private null sink. object.linger keeps it alive after pw-cli
     // exits; tap_stop destroys it by name.
@@ -3872,6 +3912,18 @@ int main(int argc, char** argv) {
 
   std::thread reader(reader_thread);
   reader.detach();
+
+  // A terminated launcher must still run the teardown below — the tap's null
+  // sink lingers by design, so exiting without destroying it leaves a stray
+  // sink in the user's session for good. g_unix_signal_add dispatches on the
+  // main loop, so the handler can do real work instead of being signal-safe.
+  for (int sig : {SIGTERM, SIGINT, SIGHUP}) {
+    g_unix_signal_add(sig, [](gpointer) -> gboolean {
+      g_quitting = true;
+      gtk_main_quit();
+      return G_SOURCE_REMOVE;
+    }, nullptr);
+  }
 
   gtk_main();
 

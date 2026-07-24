@@ -146,7 +146,7 @@ async function busNameOwned(name) {
 }
 
 const reqCache = new Map();
-async function systemRequirements(ids) {
+async function systemRequirements(ids, refresh) {
   const wanted = (Array.isArray(ids) && ids.length ? ids : Object.keys(REQUIREMENTS))
     .filter((id) => REQUIREMENTS[id]);
   // Only Linux splits these out; elsewhere the platform ships them.
@@ -156,6 +156,9 @@ async function systemRequirements(ids) {
   const out = [];
   for (const id of wanted) {
     const r = REQUIREMENTS[id];
+    // refresh: the user has just installed something and wants a fresh answer,
+    // so the cached "missing" must not outlive the fix.
+    if (refresh) reqCache.delete(id);
     if (!reqCache.has(id)) reqCache.set(id, await r.probe().catch(() => false));
     const ok = reqCache.get(id);
     const pkgs = r.packages?.[mgr.id] ?? null;
@@ -239,6 +242,15 @@ function dbg(dir, line) {
 // Each entry maps a method to its wire op and the params serialized as
 // tab-separated args (order matters; see launcher.cc do_dialog).
 const one = (s) => String(s ?? '').replace(/[\t\n\r]/g, ' ');
+// Same, but real line breaks survive as a literal \n for the launcher to undo.
+// Existing backslashes are doubled first so text that already contained "\n"
+// comes out as itself rather than as a break. Only the Linux launcher unescapes
+// this, so elsewhere keep flattening — a stray "\n" on screen would be worse
+// than a long line, and requirements (the reason this exists) only ever report
+// something missing on Linux anyway.
+const lines = (s) => (IS_LINUX
+  ? String(s ?? '').replace(/\\/g, '\\\\').replace(/[\t\r]/g, ' ').replace(/\n/g, '\\n')
+  : one(s));
 // Wire-escape for payloads that must survive tabs/newlines intact (clipboard
 // text, drag-out paths); the launcher reverses it (wire_unescape).
 const esc = (s) => String(s ?? '')
@@ -252,8 +264,12 @@ const DIALOG_OPS = {
   'win.openFiles': { op: 'openmulti', args: () => [] },
   'win.pickFolder': { op: 'dir', args: () => [] },
   'win.saveFile': { op: 'save', args: () => [] },
-  'win.alert': { op: 'alert', args: (p) => [one(p.message), one(p.detail), one(p.ok)] },
-  'win.confirm': { op: 'confirm', args: (p) => [one(p.message), one(p.detail), one(p.ok), one(p.cancel)] },
+  // A dialog's detail is the one field where line breaks earn their keep — a
+  // list of what's missing, or a command on a line of its own. The wire is
+  // newline-delimited, so they ride across escaped and the launcher puts them
+  // back; everything else still gets flattened by one().
+  'win.alert': { op: 'alert', args: (p) => [one(p.message), lines(p.detail), one(p.ok)] },
+  'win.confirm': { op: 'confirm', args: (p) => [one(p.message), lines(p.detail), one(p.ok), one(p.cancel)] },
   'win.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
 };
 
@@ -1297,7 +1313,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.info': async () => app.info,
     'system.info': async () => systemInfo(),
     'system.capabilities': async () => systemCapabilities(),
-    'system.requirements': async ({ ids } = {}) => systemRequirements(ids),
+    'system.requirements': async ({ ids, refresh } = {}) => systemRequirements(ids, refresh),
     'app.screens': async () => app.screens(),
     'app.paths': async () => app.paths,
     'shell.open': async ({ target }) => app.shell.open(target),

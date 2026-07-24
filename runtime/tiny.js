@@ -154,10 +154,60 @@
       // would fix it (windowPosition on Wayland is the session, not a package).
       // Ids: media.aac, media.h264, media.mp3, speech, spotlight.index,
       // audioTap, tray, windowPosition. Everything reports ok on macOS/Windows.
-      requirements: (ids) => call('system.requirements', { ids: ids ?? null }),
+      // Probes are cached for the life of the app, so a missing package stays
+      // "missing" even after the user installs it — pass { refresh: true } to
+      // re-probe, e.g. when they come back from a terminal and retry.
+      requirements: (ids, opts = {}) =>
+        call('system.requirements', { ids: ids ?? null, refresh: !!opts.refresh }),
       // Just the ones that aren't satisfied — the common case.
       missing: async (ids) => (await call('system.requirements', { ids: ids ?? null }))
         .filter((r) => !r.ok),
+
+      // The presentable version: check, and if anything is missing put a native
+      // dialog in front of the user that names the feature, explains why it's
+      // absent, and offers to COPY the install command — nobody retypes
+      // "gstreamer1.0-plugins-bad" correctly from a toast. Returns without
+      // showing anything when everything is present, so it's safe to call
+      // straight from a failure path:
+      //
+      //   audio.addEventListener('error', () => tiny.system.promptMissing(['media.aac']));
+      //
+      // -> { missing: [...], copied: boolean }. Packages for several missing
+      // features merge into ONE command, so the user runs a single line.
+      // opts: { title?, ok?, cancel? }.
+      async promptMissing(ids, opts = {}) {
+        const missing = (await call('system.requirements', { ids: ids ?? null }))
+          .filter((r) => !r.ok);
+        if (!missing.length) return { missing: [], copied: false };
+        // One command for everything missing: same manager, packages merged,
+        // deduped, order preserved.
+        const mgr = missing.find((r) => r.install)?.install ?? null;
+        const pkgs = [...new Set(missing.flatMap((r) => r.install?.packages ?? []))];
+        const at = mgr ? mgr.command.indexOf(mgr.packages[0]) : -1;
+        const cmd = !mgr || !pkgs.length ? null
+          : at < 0 ? mgr.command                      // unexpected shape — use it as given
+          : mgr.command.slice(0, at) + pkgs.join(' ');
+        const detail = missing.map((r) => '• ' + r.feature + ' — ' + r.detail).join('\n\n')
+          + (cmd ? '\n\n' + cmd : '');
+        const title = opts.title
+          ?? (missing.length === 1
+            ? missing[0].feature + ' needs a system package'
+            : 'Some features need system packages');
+        // Nothing installable would fix it (Wayland's setPosition, say) — then
+        // there is no command to copy, so just say what's up.
+        if (!cmd) {
+          await call('win.alert', { message: title, detail });
+          return { missing, copied: false };
+        }
+        const yes = await call('win.confirm', {
+          message: title, detail,
+          ok: opts.ok ?? 'Copy install command',
+          cancel: opts.cancel ?? 'Not now',
+        });
+        if (!yes) return { missing, copied: false };
+        try { await call('clip.write', { text: cmd }); } catch (e) { return { missing, copied: false }; }
+        return { missing, copied: true };
+      },
     },
     // opts: { id?, subtitle?, sound? }. Packaged apps get real Notification
     // Center banners (app icon, permission prompt); clicks arrive via
