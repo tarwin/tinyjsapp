@@ -331,8 +331,11 @@ features, not bugs.
       GitHub Releases (tag `<dir>-v<version>` per app) instead of committing
       another ~120 MB — `merge-manifest-linux.js --release` /
       `gen-catalog-linux.js --release` + `upload-releases-linux.sh`; runbook
-      in ../tinyjsapp-examples/CLAUDE.md. Pre-release-era arm64 tarballs stay
-      committed so wild raw URLs keep resolving.
+      in ../tinyjsapp-examples/CLAUDE.md. 2026-07-25: mac/win payloads moved
+      to the same releases and ALL payload blobs purged from the examples
+      repo's history (git filter-repo, 683 MB → 19 MB) — only
+      `_builds/<dir>/manifest.json` survives, since shipped apps poll those
+      raw URLs. Never commit a payload there again.
 - [ ] **recorder** — screen recording to a video file. Route: the
       `org.freedesktop.portal.ScreenCast` portal (CreateSession →
       SelectSources → Start → returns a PipeWire node fd), feed the PipeWire
