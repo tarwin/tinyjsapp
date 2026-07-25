@@ -1,7 +1,7 @@
 // tinyjs window launcher — Windows.
 //
-// The same dumb window process as native/launcher.cc (macOS), speaking the
-// identical newline-delimited wire protocol, but over a named pipe
+// The same dumb window process as native/launcher-macos.cc (macOS),
+// speaking the identical newline-delimited wire protocol, but over a named pipe
 // (\\.\pipe\tinyjs-…) and rendering with WebView2 via the vendored webview
 // library. The backend (txiki.js) listens on the pipe and spawns this as a
 // child: argv = <html-file-or-url> <pipe-name> [title] [WxH] [version].
@@ -4257,7 +4257,7 @@ static void do_bounce(webview_t, void *arg) {
 // ============================ tiny.audioTap ================================
 // Read the whole system's *rendered* audio output as PCM chunks, for VU meters
 // / visualizers — including audio that never touches Web Audio. On macOS this
-// uses Core Audio process taps (see native/launcher.cc); Windows has no
+// uses Core Audio process taps (see native/launcher-macos.cc); Windows has no
 // per-process render tap in a MinGW-linkable form, so this implements the
 // 'system' scope only, via WASAPI loopback capture off the default render
 // endpoint. Loopback hears the whole mix, so `excludeSelf` cannot be honoured
@@ -5207,7 +5207,7 @@ static int run(int argc, char **argv) {
   webview_init(g_w, "window.__TINY_WIN = 'main';");
   webview_init(g_w, TINY_CLIENT_JS);
   {
-    // Optional user-supplied document-start glue (see launcher.cc).
+    // Optional user-supplied document-start glue (see launcher-macos.cc).
     char inj[8192];
     DWORD n = GetEnvironmentVariableA("TINYJS_INJECT", inj, sizeof(inj));
     if (n > 0 && n < sizeof(inj))

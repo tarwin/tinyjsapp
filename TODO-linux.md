@@ -54,8 +54,9 @@ were in a scratch dir, not committed):
 
 **Wire protocol reference:** the launcher speaks the same newline-delimited
 protocol as macOS/Windows. If you need the exhaustive op-by-op spec, it can be
-re-derived from `native/launcher.cc` + `native/launcher-win.cc` (a distilled
-version was generated into a scratch file during the port but not committed).
+re-derived from `native/launcher-macos.cc` + `native/launcher-win.cc` (a
+distilled version was generated into a scratch file during the port but not
+committed).
 
 ## This Parallels VM (set up 2026-07-22/23, aarch64, GNOME **Wayland**)
 

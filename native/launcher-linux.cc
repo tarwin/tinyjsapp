@@ -1,7 +1,8 @@
 // tinyjs native launcher — Linux (GTK3 + WebKitGTK 4.1).
 //
-// Speaks the same newline-delimited wire protocol as launcher.cc (macOS) and
-// launcher-win.cc (Windows) over a unix domain socket the backend listens on:
+// Speaks the same newline-delimited wire protocol as launcher-macos.cc
+// (macOS) and launcher-win.cc (Windows) over a unix domain socket the
+// backend listens on:
 //   launcher <html-file-or-url> <socket> [title] [WxH] [version]
 //
 // Also: `launcher --open <socket> <app-exe> [url-or-path]` — single-instance /

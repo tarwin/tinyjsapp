@@ -246,7 +246,7 @@ function dbg(dir, line) {
 
 // Dialogs run in the launcher, which answers the page's call directly.
 // Each entry maps a method to its wire op and the params serialized as
-// tab-separated args (order matters; see launcher.cc do_dialog).
+// tab-separated args (order matters; see launcher-macos.cc do_dialog).
 const one = (s) => String(s ?? '').replace(/[\t\n\r]/g, ' ');
 // Same, but real line breaks survive as a literal \n for the launcher to undo.
 // Existing backslashes are doubled first so text that already contained "\n"

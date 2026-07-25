@@ -996,14 +996,14 @@ only remaining step.
 ## How it works
 
 ```
-┌──────────────────────┐  unix socket   ┌───────────────────────┐
-│ backend (txiki.js)   │◄──────────────►│ launcher (C++, ~380 KB)│
-│ your src/main.js     │  line protocol │ native/launcher.cc    │
-│ + runtime/bridge.js  │                │ · WKWebView window    │
-│ · owns app logic     │                │ · webview_bind bridge │
-│ · fs/net/process API │                │ · native dialogs      │
-│ · spawns launcher    │                │ · else: dumb forwarder│
-└──────────────────────┘                └──────────┬────────────┘
+┌──────────────────────┐  unix socket   ┌──────────────────────────┐
+│ backend (txiki.js)   │◄──────────────►│ launcher (C++, ~380 KB)  │
+│ your src/main.js     │  line protocol │ native/launcher-macos.cc │
+│ + runtime/bridge.js  │                │ · WKWebView window       │
+│ · owns app logic     │                │ · webview_bind bridge    │
+│ · fs/net/process API │                │ · native dialogs         │
+│ · spawns launcher    │                │ · else: dumb forwarder   │
+└──────────────────────┘                └──────────┬───────────────┘
                                                    │ window.__invoke / eval
                                         ┌──────────▼────────────┐
                                         │ your page (file://)   │
@@ -1060,7 +1060,8 @@ promise — the shim in `tiny.js` is ~10 lines.
 ```
 bin/tjs               txiki.js runtime (fetched by setup.sh, not committed;
                       bin/tjs.exe on Windows via setup.ps1)
-native/launcher.cc    the window process (Objective-C++; webview headers vendored)
+native/launcher-macos.cc  the macOS window process (Objective-C++; webview
+                      headers vendored)
 native/launcher-win.cc  the Windows window process (WebView2 via the same
                       vendored webview; named pipe instead of a Unix socket)
 native/launcher-linux.cc  the Linux window process (GTK3 + WebKitGTK 4.1
@@ -1195,87 +1196,116 @@ on the newer SDK.
 ### Portability
 
 macOS is the primary platform. **Windows and Linux support are both in
-beta.** Windows gets a second native launcher (`native/launcher-win.cc`,
-WebView2 through the same vendored webview library) that speaks the
-identical wire protocol, with the Unix socket swapped for a named pipe
-(`\\.\pipe\…` — `tjs.listen('pipe', …)`/libuv abstracts both). Bootstrap
-with `setup.ps1`, use `tinyjs.cmd` as the CLI. Linux gets a third native
-launcher (`native/launcher-linux.cc`, GTK3 + WebKitGTK 4.1), the Unix socket
-as-is, and bootstraps with the same `setup.sh` as macOS.
+beta.** All three run the same runtime and speak the identical wire
+protocol — only the launcher and the transport differ:
 
-Works on Windows: the full page↔backend bridge (api calls, push events,
-`tiny.fetch`), dev mode with hot reload and backend restart, Vite `devUrl`
-frontends, `tinyjs build` (a portable `dist/` folder: `<name>.exe` +
-`launcher.exe` + `frontend/`), **multi-window** (`win.open` — each window
-gets its own WebView2 + bridge), **drag & drop with real paths both ways**
-(`win.onDrop` in, `startDrag({ files })` out), file/folder/save dialogs,
-alert/confirm/prompt, menu bar with working `key:` accelerators
-(Ctrl+<key>), tray (+ balloon notifications), custom context menus,
-clipboard (text/html/files/image, both directions), global hotkeys,
-`keystroke` (`cmd` maps to Ctrl), `shell.open/reveal/trash`, `secrets`
-(Credential Manager), `power.preventSleep`, theme + sleep/wake events,
-`printToPDF`, `captureScreen`, `thumbnail`, `say`/`voices` (SAPI),
-`launchAtLogin` (built apps; HKCU Run), `tinyjs publish` + **app
-auto-update** (file-by-file swap — Windows can't replace a whole running
-folder — then relaunch), chrome `transparent` + vibrancy→mica/acrylic
-backdrops (Win11), and the window ops
-(fullscreen/ontop/click-through/level/…).
+|         | launcher source            | webview              | transport                 | bootstrap    | CLI          |
+| ------- | -------------------------- | -------------------- | ------------------------- | ------------ | ------------ |
+| macOS   | `native/launcher-macos.cc` | WebKit               | Unix socket               | `./setup.sh` | `tinyjs`     |
+| Windows | `native/launcher-win.cc`   | WebView2             | named pipe (`\\.\pipe\…`) | `setup.ps1`  | `tinyjs.cmd` |
+| Linux   | `native/launcher-linux.cc` | GTK3 + WebKitGTK 4.1 | Unix socket               | `./setup.sh` | `tinyjs`     |
 
-Not yet ported: notification action buttons (balloons only — real toasts
-need an AppUserModelID story), exe icons in built apps, deep links / file
-associations / single instance, `authenticate` (Windows Hello), `audioTap`
-— plus the genuinely macOS-only APIs (Quick Look, OCR, AppleScript,
-Spotlight, Now Playing, Dock badges, Spaces), which all reject or report
-`'unsupported'` cleanly so cross-platform code can feature-detect. The
-burn-down list with implementation notes lives in
+Windows and Linux use the same vendored webview library as macOS;
+`tjs.listen('pipe', …)`/libuv abstracts the socket-vs-named-pipe split.
+
+**Anything unported fails cleanly, so cross-platform code can
+feature-detect.** Capability calls reject with a specific reason (e.g.
+"screen recording isn't supported on Linux yet"), query calls (`wifi`,
+`frontmostApp`, `selectedText`, `otherWindows`, `tray.position`) resolve
+`null`, and fire-and-forget ones are silent no-ops.
+
+#### Windows
+
+Works:
+
+- **Bridge & dev loop** — the full page↔backend bridge (api calls, push
+  events, `tiny.fetch`), dev mode with hot reload and backend restart, Vite
+  `devUrl` frontends.
+- **Windows & chrome** — **multi-window** (`win.open` — each window gets its
+  own WebView2 + bridge), the window ops
+  (fullscreen/ontop/click-through/level/…), `transparent` chrome, and
+  vibrancy→mica/acrylic backdrops (Win11).
+- **Native UI** — menu bar with working `key:` accelerators (Ctrl+<key>),
+  tray (+ balloon notifications), custom context menus, file/folder/save
+  dialogs, alert/confirm/prompt.
+- **Data in & out** — **drag & drop with real paths both ways**
+  (`win.onDrop` in, `startDrag({ files })` out), clipboard
+  (text/html/files/image, both directions).
+- **System** — global hotkeys, `keystroke` (`cmd` maps to Ctrl),
+  `shell.open/reveal/trash`, `secrets` (Credential Manager),
+  `power.preventSleep`, theme + sleep/wake events, `printToPDF`,
+  `captureScreen`, `thumbnail`, `say`/`voices` (SAPI), `launchAtLogin`
+  (built apps; HKCU Run).
+- **Shipping** — `tinyjs build` (a portable `dist/` folder: `<name>.exe` +
+  `launcher.exe` + `frontend/`), `tinyjs publish` + **app auto-update**
+  (file-by-file swap — Windows can't replace a whole running folder — then
+  relaunch).
+
+Not yet ported:
+
+- notification action buttons — balloons only; real toasts need an
+  AppUserModelID story
+- exe icons in built apps
+- deep links / file associations / single instance
+- `authenticate` (Windows Hello)
+- `audioTap`
+- the genuinely macOS-only APIs: Quick Look, OCR, AppleScript, Spotlight,
+  Now Playing, Dock badges, Spaces
+
+Burn-down list with implementation notes:
 [TODO-windows.md](TODO-windows.md).
 
-Works on Linux: window ops (hide/show/center/minimize/fullscreen/ontop/
-resizable/position/zoom/level/click-through/sticky), frameless + transparent
-chrome (`vibrancy` is a no-op), menus + accelerators (Ctrl+key), tray via
-AppIndicator/StatusNotifier (menu-based — a bare icon-click is emulated
-through a menu entry, and `tray.position()` returns `null`), native dialogs
-(open/save/folder/alert/confirm/prompt), clipboard (text/html/image/files +
-watch), notifications with action buttons (`org.freedesktop.Notifications`;
-no reply fields), theme dark/light (+ live changes), sleep/wake events,
-`power.preventSleep` (a logind inhibitor), `secrets` (Secret Service/GNOME
-Keyring), `shell.open/reveal/trash`, `launchAtLogin` (autostart `.desktop`,
-built apps only), `store`/`paths` (XDG dirs), multi-window, custom context
-menus + suppression, hot reload, `tiny.fetch`/`proxyURL` streaming,
-`printToPDF`, the print dialog, `screens`/`mousePosition`/`getWinState`,
-`battery`, `idleTime` (GNOME), `pickColor` (portal), `thumbnail` (images
-only), `captureScreen` (X11 sessions only), global hotkeys (X11 via
-XGrabKey; pure Wayland via the GlobalShortcuts portal — the compositor
-prompts to approve them once), `keystroke` synthesis (X11/XWayland via
-XTest — not pure Wayland), `playSound`/`beep`,
-`say`/`voices` (via speech-dispatcher's `spd-say` when installed),
-`spotlight` (name search — indexed `plocate`/`locate` when present, else a
-bounded `find`), `dock.bounce` (a taskbar urgency hint), `nowPlaying` +
-media keys (a real
-MPRIS player — shows in the GNOME/KDE media widget and lock screen, and
-Play/Pause/Next/Previous/Seek route back via `onMediaKey`), and `audioTap`
-(system scope — the default sink's monitor via `parec`/`pw-cat`; like
-Windows, `scope:'app'` is approximated by the system mix). A built app
-registers its own
-`.desktop` entry on first run — app-menu listing, icon, deep links
-(`urlScheme`), file associations (`fileExtensions`), and single-instance —
-with no separate install step. `tinyjs publish` emits
-`<name>-<version>-linux-<arch>.tar.gz` plus a manifest carrying a per-arch
-`"linux": { "<arch>": { url, sha256 } }` block alongside the mac and win
-ones; auto-update works (swap + relaunch).
+#### Linux
 
-Not (yet) supported on Linux (reject or report `'unsupported'` so apps can
-feature-detect): `recorder`, `ocr`, `quickLook`, `applescript`,
-`haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`, `share`, `wifi`,
-`selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
-`authenticate`, `tiny.app.ai` — plus `setAllSpaces`, which maps onto sticky
-windows rather than true per-Space follow. These all fail cleanly so
-cross-platform code can feature-detect: capability calls reject with a
-specific reason (e.g. "screen recording isn't supported on Linux yet"),
-query calls (`wifi`, `frontmostApp`, `selectedText`, `otherWindows`,
-`tray.position`) resolve `null`, and fire-and-forget ones are silent
-no-ops. The burn-down list with implementation notes lives in
-[TODO-linux.md](TODO-linux.md).
+Works:
+
+- **Windows & chrome** — window ops (hide/show/center/minimize/fullscreen/
+  ontop/resizable/position/zoom/level/click-through/sticky), frameless +
+  transparent chrome (`vibrancy` is a no-op), multi-window, hot reload.
+- **Native UI** — menus + accelerators (Ctrl+key), native dialogs
+  (open/save/folder/alert/confirm/prompt), custom context menus +
+  suppression, notifications with action buttons
+  (`org.freedesktop.Notifications`; no reply fields), the print dialog +
+  `printToPDF`, and tray via AppIndicator/StatusNotifier (menu-based — a
+  bare icon-click is emulated through a menu entry, and `tray.position()`
+  returns `null`).
+- **Data & storage** — clipboard (text/html/image/files + watch),
+  `store`/`paths` (XDG dirs), `tiny.fetch`/`proxyURL` streaming, `secrets`
+  (Secret Service/GNOME Keyring), `shell.open/reveal/trash`, `spotlight`
+  (name search — indexed `plocate`/`locate` when present, else a bounded
+  `find`).
+- **System** — theme dark/light (+ live changes), sleep/wake events,
+  `power.preventSleep` (a logind inhibitor), `launchAtLogin` (autostart
+  `.desktop`, built apps only), `screens`/`mousePosition`/`getWinState`,
+  `battery`, `idleTime` (GNOME), `pickColor` (portal), `thumbnail` (images
+  only), `captureScreen` (X11 sessions only), `dock.bounce` (a taskbar
+  urgency hint).
+- **Input** — global hotkeys (X11 via XGrabKey; pure Wayland via the
+  GlobalShortcuts portal — the compositor prompts to approve them once),
+  `keystroke` synthesis (X11/XWayland via XTest — not pure Wayland).
+- **Audio & media** — `playSound`/`beep`, `say`/`voices` (via
+  speech-dispatcher's `spd-say` when installed), `nowPlaying` + media keys
+  (a real MPRIS player — shows in the GNOME/KDE media widget and lock
+  screen, and Play/Pause/Next/Previous/Seek route back via `onMediaKey`),
+  `audioTap` (system scope — the default sink's monitor via `parec`/
+  `pw-cat`; like Windows, `scope:'app'` is approximated by the system mix).
+- **Shipping** — a built app registers its own `.desktop` entry on first run
+  (app-menu listing, icon, deep links via `urlScheme`, file associations via
+  `fileExtensions`, and single-instance) with no separate install step.
+  `tinyjs publish` emits `<name>-<version>-linux-<arch>.tar.gz` plus a
+  manifest carrying a per-arch `"linux": { "<arch>": { url, sha256 } }`
+  block alongside the mac and win ones; auto-update works (swap + relaunch).
+
+Not (yet) supported:
+
+- `recorder`, `ocr`, `quickLook`, `applescript`, `haptic`
+- Dock badge / `bounce({critical: true})` / `dockIcon`, `share`
+- `wifi`, `selectedText`, `otherWindows`, `moveWindow`, `frontmostApp`
+- `authenticate`, `tiny.app.ai`
+- `setAllSpaces` — maps onto sticky windows rather than true per-Space
+  follow
+
+Burn-down list with implementation notes: [TODO-linux.md](TODO-linux.md).
 
 ## Credits
 

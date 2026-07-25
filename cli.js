@@ -663,7 +663,7 @@ async function cmdDev() {
       : tjs.cwd + '/' + B + '/entry.js';
     // An explicit TINYJS_LAUNCHER in the environment wins (matches the
     // bridge's own precedence) — useful for testing a different build.
-    const devEnv = { ...tjs.env, TINYJS_LAUNCHER: tjs.env.TINYJS_LAUNCHER || (TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : IS_LINUX ? 'launcher-linux' : 'launcher')) };
+    const devEnv = { ...tjs.env, TINYJS_LAUNCHER: tjs.env.TINYJS_LAUNCHER || (TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : IS_LINUX ? 'launcher-linux' : 'launcher-macos')) };
     // Windows/Linux: the launcher shows the project icon in the titlebar/taskbar.
     const iconSrc = cfg.icon || 'icon.png';
     if ((IS_WIN || IS_LINUX) && (await exists(iconSrc))) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
@@ -790,7 +790,7 @@ async function cmdBuild() {
     return;
   }
 
-  await run(['cp', TOOL_DIR + 'native/launcher', 'dist/launcher']);
+  await run(['cp', TOOL_DIR + 'native/launcher-macos', 'dist/launcher']);
   // The bare binary resolves its frontend next to the executable.
   await run(['cp', '-R', '.build/app/frontend', 'dist/frontend']);
 
@@ -804,7 +804,7 @@ async function cmdBuild() {
   // The launcher IS the bundle executable ("bundle mode"): it owns the window,
   // receives Apple Events (deep links, file opens, single-instance activation),
   // and spawns the backend (tjs) itself.
-  await run(['cp', TOOL_DIR + 'native/launcher', APP + '/Contents/MacOS/' + cfg.name]);
+  await run(['cp', TOOL_DIR + 'native/launcher-macos', APP + '/Contents/MacOS/' + cfg.name]);
   await run(['cp', tjs.exePath, APP + '/Contents/MacOS/tjs']);
   await run(['cp', '-R', '.build/app', APP + '/Contents/Resources/app']);
   // App icon: icon.png in the project root (1024×1024; the template ships a

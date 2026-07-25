@@ -151,10 +151,10 @@ jobs:
       - name: Build universal launcher
         run: |
           ./native/gen-client.sh
-          c++ -std=c++17 -x objective-c++ -Inative/include native/launcher.cc \
-            -o native/launcher -framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -framework AVFoundation -framework ServiceManagement -framework IOKit -framework Quartz -weak_framework ScreenCaptureKit -framework Vision -framework QuickLookThumbnailing -framework Security -framework LocalAuthentication -framework MediaPlayer -framework CoreMedia -framework CoreWLAN -framework CoreAudio -framework AudioToolbox -ldl \
+          c++ -std=c++17 -x objective-c++ -Inative/include native/launcher-macos.cc \
+            -o native/launcher-macos -framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -framework AVFoundation -framework ServiceManagement -framework IOKit -framework Quartz -weak_framework ScreenCaptureKit -framework Vision -framework QuickLookThumbnailing -framework Security -framework LocalAuthentication -framework MediaPlayer -framework CoreMedia -framework CoreWLAN -framework CoreAudio -framework AudioToolbox -ldl \
             -arch arm64 -arch x86_64
-          codesign --force --sign - native/launcher
+          codesign --force --sign - native/launcher-macos
 
       - name: Stamp version
         run: echo "${GITHUB_REF_NAME}" > VERSION
@@ -172,7 +172,7 @@ jobs:
             mkdir -p "$STAGE/bin" "$STAGE/native"
             cp "/tmp/tjs-$ARCH/txiki-macos-$ARCH/tjs" "$STAGE/bin/tjs"
             chmod +x "$STAGE/bin/tjs"
-            cp native/launcher native/make-icon.jxa "$STAGE/native/"
+            cp native/launcher-macos native/make-icon.jxa "$STAGE/native/"
             cp -R runtime template test skill "$STAGE/"
             cp cli.js tinyjs VERSION README.md LICENSE "$STAGE/"
 

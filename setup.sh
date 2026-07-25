@@ -129,19 +129,19 @@ if [ "${TINYJS_AI:-0}" = "1" ]; then
   echo "==> (TINYJS_AI=1) building with FoundationModels"
   SWIFT_TARGET="$(uname -m)-apple-macos14.0"
   c++ -std=c++17 -c -x objective-c++ -DTINYJS_AI $MIN_OS -Inative/include \
-    native/launcher.cc -o /tmp/tinyjs-launcher.o
+    native/launcher-macos.cc -o /tmp/tinyjs-launcher.o
   swiftc -parse-as-library -target "$SWIFT_TARGET" \
     -c native/tiny_ai.swift -o /tmp/tinyjs-ai.o
-  swiftc /tmp/tinyjs-launcher.o /tmp/tinyjs-ai.o -o native/launcher -lc++ \
+  swiftc /tmp/tinyjs-launcher.o /tmp/tinyjs-ai.o -o native/launcher-macos -lc++ \
     -target "$SWIFT_TARGET" $FW \
     -Xlinker -weak_framework -Xlinker ScreenCaptureKit \
     -Xlinker -weak_framework -Xlinker FoundationModels -ldl
 else
-  c++ -std=c++17 -x objective-c++ $MIN_OS -Inative/include native/launcher.cc \
-    -o native/launcher $FW -weak_framework ScreenCaptureKit -ldl
+  c++ -std=c++17 -x objective-c++ $MIN_OS -Inative/include native/launcher-macos.cc \
+    -o native/launcher-macos $FW -weak_framework ScreenCaptureKit -ldl
 fi
 
-codesign --force --sign - native/launcher 2>/dev/null || true
+codesign --force --sign - native/launcher-macos 2>/dev/null || true
 
 echo "==> done"
 ./bin/tjs --version

@@ -1,8 +1,10 @@
 # vendored/built artifacts — fetched or compiled by setup.sh / setup.ps1
 bin/
-native/launcher
+native/launcher-macos
 native/launcher-win.exe
 native/launcher-linux
+# pre-rename build product; harmless if an old checkout still has it
+native/launcher
 native/include/WebView2.h
 native/shim
 
