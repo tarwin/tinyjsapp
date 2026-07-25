@@ -117,22 +117,31 @@
 
   /* try shelf */
   .try { display: flex; align-items: stretch; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
-  .try-body { flex: 1; padding: 20px 22px; }
+  .try-body { flex: 1 1 auto; min-width: 0; padding: 20px 22px; }
   .try-body b { display: block; font: 600 13px var(--mono); color: var(--accent); margin-bottom: 6px; letter-spacing: .02em; }
   .try-body p { font-size: 15px; color: var(--muted); }
   .try-dl {
+    flex: 0 1 auto; max-width: 44%;
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
     border-left: 1px solid var(--line); padding: 22px 24px; text-decoration: none;
     color: var(--accent); font: 600 14px var(--mono); white-space: nowrap; text-align: center;
     background: rgba(133,179,234,.04);
   }
   .try-icon { display: block; width: 64px; height: 64px; border-radius: 14px; margin-bottom: 10px; }
-  .try-dl span { font-weight: 400; font-size: 11px; color: var(--muted); letter-spacing: .02em; }
-  .try-dl:hover { background: rgba(133,179,234,.09); }
-  .try-dl.na { color: var(--muted); background: transparent; cursor: default; }
-  .try-dl.na:hover { background: transparent; }
-  .try-dl.na a { color: var(--accent); }
-  @media (max-width: 560px) { .try { flex-direction: column; } .try-dl { border-left: 0; border-top: 1px solid var(--line); padding: 16px 22px; } }
+  .try-dl span { font-weight: 400; font-size: 11px; line-height: 1.6; color: var(--muted); letter-spacing: .02em; white-space: normal; }
+  a.try-dl:hover { background: rgba(133,179,234,.09); }
+  /* linux: two architectures, so the archs are the buttons */
+  .try-dl .arch { display: flex; gap: 8px; margin: 10px 0 2px; }
+  .try-dl .arch a {
+    color: var(--text); text-decoration: none; font: 600 12px var(--mono); letter-spacing: .02em;
+    border: 1px solid var(--line); border-radius: 7px; padding: 5px 12px;
+    background: rgba(255,255,255,.03);
+  }
+  .try-dl .arch a:hover { color: #fff; border-color: var(--accent); background: rgba(133,179,234,.12); }
+  @media (max-width: 560px) {
+    .try { flex-direction: column; }
+    .try-dl { max-width: none; border-left: 0; border-top: 1px solid var(--line); padding: 16px 22px; }
+  }
 
   /* code blocks */
   pre {
@@ -255,10 +264,11 @@
       </a>
       <div class="try-dl" data-os-panel="linux">
         <img class="try-icon" src="shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf
-        <span>-linux.tar.gz · 5 MB ·
-        <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.5/shelf-0.2.5-linux-x86_64.tar.gz">x86_64</a> ·
-        <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.5/shelf-0.2.5-linux-arm64.tar.gz">arm64</a>
-        · needs libwebkit2gtk-4.1-0</span>
+        <span class="arch">
+          <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.5/shelf-0.2.5-linux-x86_64.tar.gz">x86_64</a>
+          <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.5/shelf-0.2.5-linux-arm64.tar.gz">arm64</a>
+        </span>
+        <span>.tar.gz · 5 MB · needs libwebkit2gtk-4.1-0</span>
       </div>
     </div>
     <p class="bars-note">All 25 examples were swept app-by-app on Windows:
@@ -270,7 +280,7 @@
     so a cross-platform app degrades honestly instead of breaking. Linux
     support just landed — the same one-by-one sweep hasn't happened yet, but
     the framework-level parity list is in the
-    <a href="https://github.com/tarwin/tinyjsapp#readme" style="color:var(--accent)">README's Portability section</a>.</p>
+    <a href="https://github.com/tarwin/tinyjsapp#portability" style="color:var(--accent)">README's Portability section</a>.</p>
   </section>
 
   <section>
