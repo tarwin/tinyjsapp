@@ -1466,6 +1466,28 @@ static void set_style_bits(HWND hwnd, LONG bits, bool on) {
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 }
 
+// Same, but the PAGE keeps its size instead of the window frame.
+// SWP_NOSIZE above holds the outer rect, so dropping WS_CAPTION donates the
+// title bar's space to the client: a window sized 320x172 while it still had a
+// caption (the startup order — size first, then apply chrome.frame=false) came
+// out with a 333x208 page, +13 wide and +36 tall, exactly the overlapped-window
+// frame. Every frameless app was oversized by its own title bar.
+static void set_style_bits_keep_client(HWND hwnd, LONG bits, bool on) {
+  RECT before;
+  GetClientRect(hwnd, &before);
+  set_style_bits(hwnd, bits, on);
+  RECT after;
+  GetClientRect(hwnd, &after);
+  if (after.right == before.right && after.bottom == before.bottom)
+    return;
+  RECT o;
+  GetWindowRect(hwnd, &o);
+  SetWindowPos(hwnd, nullptr, 0, 0,
+               (o.right - o.left) + (before.right - after.right),
+               (o.bottom - o.top) + (before.bottom - after.bottom),
+               SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED);
+}
+
 static void set_click_through(bool on) {
   LONG ex = GetWindowLongW(g_hwnd, GWL_EXSTYLE);
   if (on) {
@@ -1641,7 +1663,7 @@ static void do_chrome(webview_t, void *arg) {
     bool frameless = req->frame == "0";
     if (main)
       g_frameless = frameless;
-    set_style_bits(hwnd, WS_CAPTION, !frameless);
+    set_style_bits_keep_client(hwnd, WS_CAPTION, !frameless);
   }
   if (!req->square.empty()) {
     bool square = req->square == "1";
@@ -1651,7 +1673,11 @@ static void do_chrome(webview_t, void *arg) {
       // Borderless like macOS: square corners, no titlebar; resize edges kept.
       if (main)
         g_frameless = true;
-      set_style_bits(hwnd, WS_CAPTION, false);
+      // keep_client here too: g_square/g_frameless flip what WM_NCCALCSIZE
+      // hands back, so even when WS_CAPTION is already off the FRAMECHANGED
+      // re-calc donates the border inset to the page (main came out +12 wide
+      // and +6 tall — exactly the left/right and bottom resize borders).
+      set_style_bits_keep_client(hwnd, WS_CAPTION, false);
     }
     DWORD pref = square ? 1 /* DWMWCP_DONOTROUND */ : 0 /* DEFAULT */;
     DwmSetWindowAttribute(hwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */,
@@ -3781,6 +3807,7 @@ struct TinyWin {
   ICoreWebView2Controller *ctrl = nullptr;
   ICoreWebView2 *wv = nullptr;
   bool transparent = false;            // clear WebView2 background on create
+  bool frameless = false;              // no caption -> client covers the frame
   int min_w = 0, min_h = 0;            // win.setMinSize, logical px (0 = none)
   std::string url;                     // navigated once the controller exists
   std::vector<std::string> pending_js; // eval'd once the controller exists
@@ -3804,9 +3831,20 @@ static void set_min_size(const std::string &id, int w, int h) {
   }
 }
 
+// setMinSize is "a floor under USER resizes" (bridge.js) — an explicit
+// win.setSize from the app must still be obeyed. WM_GETMINMAXINFO can't tell
+// the two apart, so do_size raises this around its SetWindowPos; the message
+// is delivered synchronously from inside that call, on this same thread.
+// Without it, a window whose min IS its design size can never be collapsed by
+// its own code — amp's satellites windowshaded their content away but the
+// frame refused to shrink, while main (which sets no floor) was fine.
+static bool g_programmatic_size = false;
+
 // Clamp a MINMAXINFO to a logical-px floor. ptMinTrackSize is the OUTER window
 // size in physical px, matching what setSize/getState now speak.
 static void clamp_min_track(HWND hwnd, LPARAM lp, int min_w, int min_h) {
+  if (g_programmatic_size)
+    return;
   if (min_w <= 0 && min_h <= 0)
     return;
   double sc = window_scale(hwnd);
@@ -4029,6 +4067,15 @@ struct SecCtrlHandler
 static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
                                     LPARAM lp) {
   switch (msg) {
+  case WM_NCCALCSIZE: {
+    // Frameless: the client fills the whole window, matching the main window
+    // and macOS (where a borderless window's content IS its frame). Keeps
+    // WS_THICKFRAME for edge hit-testing; only the inset goes away.
+    TinyWin *tw = win_for_id(id_for_hwnd(hwnd));
+    if (wp && tw && tw->frameless)
+      return 0;
+    break;
+  }
   case WM_GETMINMAXINFO: {
     // let the default fill in the usual limits, then lower-bound them
     LRESULT r = DefWindowProcW(hwnd, msg, wp, lp);
@@ -4103,7 +4150,14 @@ static void do_winopen(webview_t, void *arg) {
                           : WS_OVERLAPPEDWINDOW;
   double sc = window_scale(g_hwnd); // logical wire units -> physical pixels
   RECT rc = {0, 0, (LONG)lround(wr->width * sc), (LONG)lround(wr->height * sc)};
-  AdjustWindowRect(&rc, style, FALSE);
+  // Frameless secondaries answer WM_NCCALCSIZE with "no non-client area" (see
+  // secwin_proc), exactly as the main window does, so frame == page and there
+  // is nothing for AdjustWindowRect to add. Running it anyway inflated the
+  // page by the resize border and — because win.setSize speaks frame units —
+  // made a windowshaded satellite collapse to about half the bar height it
+  // asked for, while main (already borderless-client) was right.
+  if (!frameless)
+    AdjustWindowRect(&rc, style, FALSE);
   int px = wr->hasPos ? (int)lround(wr->x * sc) : CW_USEDEFAULT;
   int py = wr->hasPos ? (int)lround(wr->y * sc) : CW_USEDEFAULT;
   if (wr->hasPos) {
@@ -4148,10 +4202,17 @@ static void do_winopen(webview_t, void *arg) {
   TinyWin *tw = new TinyWin();
   tw->hwnd = hwnd;
   tw->transparent = wr->transparent == "1";
+  tw->frameless = frameless;
   bool is_url = wr->page.rfind("http://", 0) == 0 ||
                 wr->page.rfind("https://", 0) == 0;
   tw->url = is_url ? wr->page : to_file_url(wr->page);
   g_windows[wr->id] = tw;
+  // The first WM_NCCALCSIZE fired during CreateWindowExW, before this window
+  // was in g_windows, so secwin_proc couldn't yet know it was frameless and
+  // let the default insets stand. Re-ask now that the flag is readable.
+  if (frameless)
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
   ShowWindow(hwnd, SW_SHOW);
   // Reuse the main webview's environment for the new controller.
   ICoreWebView2_2 *wv22 = nullptr;
@@ -4360,8 +4421,10 @@ static void do_size(webview_t w, void *arg) {
   HWND h = s->win == "main" ? g_hwnd : hwnd_for_win(s->win);
   if (h) {
     double sc = window_scale(h); // wire is logical; SetWindowPos physical
+    g_programmatic_size = true;  // the app's own size beats the user floor
     SetWindowPos(h, nullptr, 0, 0, (int)lround(s->width * sc),
                  (int)lround(s->height * sc), SWP_NOMOVE | SWP_NOZORDER);
+    g_programmatic_size = false;
   }
   delete s;
 }
@@ -5527,7 +5590,25 @@ static int run(int argc, char **argv) {
   }
 
   webview_set_title(g_w, title.c_str());
+  // Size so the PAGE gets exactly the declared size, whatever the frame turns
+  // out to be. webview_set_size runs AdjustWindowRect for the window's style,
+  // but a frameless main window then has those insets taken straight back off
+  // by our WM_NCCALCSIZE — the client swallows the padding and the page comes
+  // out bigger than asked (amp declared 320x172 and got 332x178, +12 and +6:
+  // the left/right and bottom resize borders). Measuring the real insets works
+  // for both cases: they are zero once frameless, so outer == client == asked.
   webview_set_size(g_w, width, height, WEBVIEW_HINT_NONE);
+  {
+    RECT o, c;
+    GetWindowRect(g_hwnd, &o);
+    GetClientRect(g_hwnd, &c);
+    double sc = window_scale(g_hwnd);
+    LONG want_w = (LONG)lround(width * sc) + ((o.right - o.left) - c.right);
+    LONG want_h = (LONG)lround(height * sc) + ((o.bottom - o.top) - c.bottom);
+    if (want_w != o.right - o.left || want_h != o.bottom - o.top)
+      SetWindowPos(g_hwnd, nullptr, 0, 0, want_w, want_h,
+                   SWP_NOMOVE | SWP_NOZORDER);
+  }
 
   // Window icon from a png (dev: the project's icon.png via TINYJS_ICON;
   // built apps: dist/icon.png set by the bridge). Kept in g_icon_default so
