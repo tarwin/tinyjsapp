@@ -95,6 +95,25 @@ matches the file the bridge actually wrote into
 `~/.local/share/applications/`. A mismatch means the signal is addressed to an
 app the shell has never heard of — silently doing nothing.
 
+## macOS — does `setSize` → `getState` round-trip on a TITLED window?
+
+Unverified suspicion, found while fixing the Windows twin (2026-07-25). The
+contract is stated in launcher-macos.cc: "width/height are frame size — the
+same units setSize uses, so set → get round-trips". But `getState` reports
+`win.frame` while the size op calls `[win setContentSize:]`, and those differ
+by the title bar. On Windows the identical mismatch (GetWindowRect vs
+AdjustWindowRect) made any read-modify-write of the size ratchet up by the
+frame on every pass — a window grew 13px wider and 36px taller each time, and
+amp's windowshade guard walked off the right of the screen.
+
+It has never bitten on macOS because tinyjs windows there are usually
+borderless, where content == frame and the drift is exactly zero. A **titled**
+window should drift. To check: `setSize(w, h)` on a titled window, read
+`getState()` back, and see whether height comes back `h` or `h + titlebar`; then
+feed it back a few times and watch for a ratchet. If it drifts, the fix is the
+one applied on Windows — set the FRAME size, and leave window creation taking a
+content/client size (no feedback loop there).
+
 ## Windows-only
 
 - [ ] `app.badge` isn't implemented at all — needs an overlay HICON rendered

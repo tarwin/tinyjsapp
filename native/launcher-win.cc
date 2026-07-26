@@ -4255,20 +4255,24 @@ struct SizeReq {
   std::string win = "main";
 };
 
+// win.setSize takes the FRAME size — the same units win.getState() reports, so
+// set -> get round-trips. That contract matters more than it looks: an app that
+// re-asserts its own size (read getState, hand the width back to setSize) is
+// doing something the API invites, and if these two disagree by the window
+// border the size ratchets up by that border on every pass. It did: both paths
+// here used to set the CLIENT area while getState returns GetWindowRect, so a
+// plain read-modify-write grew a window 13px wider and 36px taller each time
+// (amp's windowshade guard walked off the right of the screen).
+// Do NOT "fix" this by running the size through AdjustWindowRect again.
+// Window CREATION deliberately still takes a client size — it has no feedback
+// loop, and changing it would resize every existing app.
 static void do_size(webview_t w, void *arg) {
   SizeReq *s = static_cast<SizeReq *>(arg);
-  if (s->win == "main") {
-    webview_set_size(w, s->width, s->height, WEBVIEW_HINT_NONE);
-  } else {
-    HWND h = hwnd_for_win(s->win);
-    if (h) {
-      double sc = window_scale(h);
-      RECT rc = {0, 0, (LONG)lround(s->width * sc),
-                 (LONG)lround(s->height * sc)};
-      AdjustWindowRect(&rc, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE);
-      SetWindowPos(h, nullptr, 0, 0, rc.right - rc.left, rc.bottom - rc.top,
-                   SWP_NOMOVE | SWP_NOZORDER);
-    }
+  HWND h = s->win == "main" ? g_hwnd : hwnd_for_win(s->win);
+  if (h) {
+    double sc = window_scale(h); // wire is logical; SetWindowPos physical
+    SetWindowPos(h, nullptr, 0, 0, (int)lround(s->width * sc),
+                 (int)lround(s->height * sc), SWP_NOMOVE | SWP_NOZORDER);
   }
   delete s;
 }
