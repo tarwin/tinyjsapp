@@ -56,6 +56,8 @@
       width: 196px; margin: 0; padding: 14px 16px;
       display: block; max-height: calc(100vh - 150px); overflow-y: auto;
       scrollbar-width: thin;
+      /* hint that there's more below when the rail is taller than the screen */
+      mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent);
     }
     nav.toc .toc-label {
       display: block; color: var(--muted); opacity: .55; font-size: 10px;
@@ -187,7 +189,9 @@
     <a href="#keystrokes">keystrokes</a>
     <a href="#permissions">permissions</a>
     <a href="#shell">shell &amp; app surface</a>
-    <a href="#superpowers">superpowers</a>
+    <a href="#services">system services</a>
+    <a href="#secrets">secrets &amp; auth</a>
+    <a href="#superpowers">macOS only</a>
     <a href="#media">media</a>
     <a href="#windowfx">window fx</a>
     <a href="#system">system</a>
@@ -797,33 +801,64 @@ await <b>tiny.system.idleTime</b>();
 const { path, width, height } = await <b>tiny.app.captureScreen</b>();</pre>
   </section>
 
-  <section id="superpowers">
-    <h2>Mac superpowers <span class="tag">you can do that with JS?</span></h2>
-    <p class="note">The frameworks macOS ships that nobody in JS-land can
-    usually touch — all on-device, no cloud, no extra permissions
-    infrastructure.</p>
+  <section id="services">
+    <h2>system services <span class="tag">the OS does the work</span></h2>
+    <p class="note">On-device, no cloud, no extra permission infrastructure —
+    and, despite where these used to be documented, <b>not macOS-only</b>.
+    Ask <code>tiny.system.capabilities()</code> if in doubt.</p>
     <pre><i>// the system eyedropper — any pixel, any app, NO screen-recording perm</i>
+<i>// macOS · Windows · Linux (xdg portal)</i>
 const color = await <b>tiny.app.pickColor</b>();   <i>// '#rrggbb' | null on cancel</i>
 
-<i>// on-device OCR (Vision) — captureScreen + this = screenshot-to-text</i>
-const { text, blocks } = await <b>tiny.app.ocr</b>('/path/scan.png');
-<i>// blocks: [{ text, confidence, box }] — box normalized 0..1, top-left</i>
-
-<i>// a thumbnail png for ANY file type Quick Look understands</i>
+<i>// a thumbnail png for a file type the OS knows how to preview</i>
+<i>// macOS (anything Quick Look understands) · Windows · Linux (images)</i>
 const thumb = await <b>tiny.app.thumbnail</b>('/path/file.psd', 256);
 <i>// -&gt; { path, width, height }</i>
 
-<i>// Keychain secrets — tokens live here, never in tiny.store</i>
+<i>// find files by name or content — macOS Spotlight, Windows Search,</i>
+<i>// plocate/locate on Linux (falling back to a bounded find)</i>
+const hits = await <b>tiny.app.spotlight</b>('invoice');   <i>// up to 100 paths</i></pre>
+  </section>
+
+  <section id="secrets">
+    <h2>secrets &amp; auth <span class="tag">the OS keychain, not your JSON</span></h2>
+    <p class="note">Tokens belong in the platform's credential store, never in
+    <code>tiny.store</code> — which is a plain JSON file anyone can read.</p>
+    <pre><i>// macOS Keychain · Windows Credential Manager · Linux Secret Service</i>
 await <b>tiny.app.secrets.set</b>('api-token', 'abc123');
 await <b>tiny.app.secrets.get</b>('api-token');     <i>// string | null</i>
 await <b>tiny.app.secrets.delete</b>('api-token');
 
-<i>// Touch ID (or the account-password sheet on Macs without it)</i>
-if (await <b>tiny.app.authenticate</b>('unlock the vault')) { … }
+<i>// Touch ID / Windows Hello / the account-password sheet</i>
+<i>// (no Linux equivalent yet — capabilities().authenticate says so)</i>
+if (await <b>tiny.app.authenticate</b>('unlock the vault')) { … }</pre>
+  </section>
 
-<i>// AppleScript in-process — control Music, Spotify, Finder, anything</i>
+  <section id="superpowers">
+    <h2>macOS only <span class="tag">no equivalent elsewhere</span></h2>
+    <p class="note">Two different kinds of macOS-only live here. The
+    <code>tiny.macos.*</code> namespace is for concepts the other OSes don't
+    have <em>at all</em> — those reject off macOS, deliberately. The rest are
+    ordinary <code>tiny.app</code> calls that simply aren't built elsewhere
+    yet, and answer <code>'unsupported'</code> until they are.</p>
+    <pre><i>// AppleScript in-process — control Music, Spotify, Finder, anything</i>
 <i>// scriptable; no osascript spawn, same 'automation' permission</i>
-await <b>tiny.macos.applescript</b>('tell application "Music" to playpause');</pre>
+await <b>tiny.macos.applescript</b>('tell application "Music" to playpause');
+
+<i>// the Finder-spacebar preview panel; no args closes it</i>
+<b>tiny.macos.quickLook</b>('/path/photo.heic');
+
+<i>// Force Touch trackpad feedback</i>
+<b>tiny.macos.haptic</b>('generic');   <i>// 'generic' | 'alignment' | 'level'</i>
+
+<i>// ---- not built elsewhere YET (answer 'unsupported', not reject) ----</i>
+<i>// on-device OCR (Vision) — captureScreen + this = screenshot-to-text</i>
+const { text, blocks } = await <b>tiny.app.ocr</b>('/path/scan.png');
+<i>// blocks: [{ text, confidence, box }] — box normalized 0..1, top-left</i>
+
+await <b>tiny.app.share</b>({ url });        <i>// the native share sheet</i>
+await <b>tiny.app.recorder.start</b>({ path }); <i>// screen recording to .mp4</i>
+await <b>tiny.app.selectedText</b>();        <i>// text selected in the front app</i></pre>
   </section>
 
   <section id="media">
@@ -1079,6 +1114,15 @@ tjs.spawn(argv, { stdout: <b>'ignore'</b> });
       if (current) current.classList.remove('on');
       found.a.classList.add('on');
       current = found.a;
+      // On a short screen the rail scrolls, so the item just highlighted can
+      // be out of view. Nudge the RAIL only — never scrollIntoView, which
+      // would drag the page and fight the scroll that triggered this.
+      const nav = found.a.parentElement;
+      if (nav.scrollHeight > nav.clientHeight) {
+        const nb = nav.getBoundingClientRect(), ab = found.a.getBoundingClientRect();
+        if (ab.top < nb.top) nav.scrollTop -= (nb.top - ab.top) + 8;
+        else if (ab.bottom > nb.bottom) nav.scrollTop += (ab.bottom - nb.bottom) + 8;
+      }
     };
     addEventListener('scroll', () => {
       if (!queued) { queued = true; requestAnimationFrame(sync); }

@@ -227,6 +227,25 @@ right edge moves (a wrong `HT*` mapping resizes the opposite side).
       an AppUserModelID + `RelaunchIconResource` that dev spawns skip, and that
       path is untested.
 
+## Written 2026-07-26, never run off macOS
+
+- [ ] **kitchen-sink FFI, Linux** — `libc.so.6` `sysinfo()` decoded by struct
+      offset (uptime / loads / totalram × mem_unit / procs at 0/8/32/104/80)
+      plus `gethostname()`, and zlib via `libz.so.1`. The offsets are the
+      x86_64 ABI; **aarch64 uses the same layout, but that is an assumption
+      worth one check** — if `ram` reads absurd, the struct is being decoded
+      at the wrong offsets.
+- [ ] **kitchen-sink FFI, Windows** — `kernel32.dll` `GetTickCount64()` and
+      `GlobalMemoryStatusEx()`. The struct's first field must be its own size
+      (64) before the call or the API refuses; if `ram` is 0, that's the
+      first thing to check. zlib is deliberately absent on Windows and the
+      card says so rather than failing.
+- [ ] **`chrome.trafficLights` reporting** — it only ever worked on macOS,
+      but Linux stored the bit and echoed it back through `getState`, so an
+      app that set it and read it back was told it had worked. Linux now
+      reports the truth, and `capabilities().trafficLights` is `false` on both
+      Windows and Linux. Worth confirming nothing depended on the old lie.
+
 ## Driving these checks headlessly on Windows
 
 No clicking needed, and worth reusing — the decorations live outside the app

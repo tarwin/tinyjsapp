@@ -254,6 +254,10 @@ async function systemCapabilities() {
     icon: ON_X11,
     attention: ON_X11,
     presence: ON_X11,
+    // chrome.trafficLights hides the window buttons. GTK can't do it per
+    // window, and the bit was being stored and echoed back by getState — so
+    // an app that asked for it was told it had worked.
+    trafficLights: false,
     // present, with the caveats in the README
     globalHotkeys: true, tray: true, notifications: true,
     notificationActions: true, notificationReply: false,

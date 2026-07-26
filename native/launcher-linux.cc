@@ -1420,7 +1420,10 @@ static std::string win_state_json(const std::string& winid) {
   if (m) { gdk_monitor_get_geometry(m, &geo); scale = gdk_monitor_get_scale_factor(m); }
 
   bool frame = main_win ? g_chrome_frame : (sec ? sec->frame : true);
-  bool traffic = main_win ? g_chrome_traffic : true;
+  // GTK has no per-window control of the WM's min/max/close buttons, so the
+  // trafficLights bit is stored but never acted on. Reporting the stored bit
+  // told an app its request had worked — report the truth instead.
+  bool traffic = true;
   bool transparent = main_win ? g_chrome_transparent : (sec ? sec->transparent : false);
   std::string vib = main_win ? g_chrome_vibrancy : (sec ? sec->vibrancy : "");
   bool square = main_win ? g_chrome_square : (sec ? sec->square : false);
