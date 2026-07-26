@@ -157,11 +157,34 @@ myapp/
                          #   urlScheme?, fileExtensions?, chrome?, update?, notarize?,
                          #   permissions? ({ microphone: "why", camera: "why" } for getUserMedia),
                          #   contextMenu? (false suppresses WebKit's default right-click menu),
-                         #   activation? ("accessory" = menu-bar agent: no Dock, starts hidden) }
+                         #   activation? ("accessory" = menu-bar agent: no Dock, starts hidden),
+                         #   macos?/windows?/linux? (merged on top for that OS) }
   icon.png                # 1024×1024 app icon (template ships a default)
   src/main.js             # backend: export const api = {...}; export function init(app) {}
   src/frontend/           # index.html + any local js/css/images
 ```
+
+Keys that genuinely differ per platform go in a `macos` / `windows` / `linux`
+block, merged on top of the root ones for that OS — the block names are the
+strings `tiny.system.os()` returns:
+
+```json
+{
+  "name": "myapp",
+  "icon": "icon.png",
+  "chrome": { "frame": false },
+
+  "macos":   { "signIdentity": "Developer ID Application: …",
+               "chrome": { "vibrancy": "hud" } },
+  "windows": { "icon": "icon.ico" },
+  "linux":   { "icon": "icon-512.png" }
+}
+```
+
+Plain objects merge (the macOS build above gets `{ frame: false, vibrancy:
+'hud' }`), scalars and arrays replace. `TINYJS_SIGN_IDENTITY` and
+`TINYJS_NOTARY_PROFILE` override the file — and say so when they displace a
+value that was really there. Resolution order: **root → OS block → env**.
 
 ### Writing the app
 

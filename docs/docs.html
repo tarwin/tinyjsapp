@@ -45,7 +45,7 @@
   }
   nav.toc a { color: var(--muted); text-decoration: none; }
   nav.toc a:hover { color: var(--accent); }
-  nav.toc .toc-label { display: none; }
+  nav.toc .toc-label, nav.toc .toc-group { display: none; }
 
   /* Wide screens: the same nav becomes a sticky rail in the left margin.
      680px column + 24px wrap padding, so the rail's right edge sits 16px
@@ -67,6 +67,12 @@
       overflow: hidden; text-overflow: ellipsis;
     }
     nav.toc a:hover { border-left-color: var(--line); }
+    nav.toc .toc-group {
+      display: block; color: var(--muted); opacity: .45; font-size: 10px;
+      letter-spacing: .16em; text-transform: uppercase;
+      margin: 14px 0 4px; padding-left: 10px;
+    }
+    nav.toc .toc-group:first-of-type { margin-top: 4px; }
     /* current section, set by the scroll spy below */
     nav.toc a.on { color: var(--accent); border-left-color: var(--accent); }
   }
@@ -161,9 +167,11 @@
 
   <nav class="toc">
     <span class="toc-label">contents</span>
+    <span class="toc-group">start</span>
     <a href="#install">install</a>
     <a href="#cli">cli</a>
     <a href="#config">tinyjs.json</a>
+    <span class="toc-group">api</span>
     <a href="#backend">backend</a>
     <a href="#frontend">tiny.api</a>
     <a href="#fetch">tiny.fetch</a>
@@ -183,8 +191,13 @@
     <a href="#media">media</a>
     <a href="#windowfx">window fx</a>
     <a href="#system">system</a>
+    <span class="toc-group">ship</span>
     <a href="#open">deep links</a>
     <a href="#update">auto-update</a>
+    <span class="toc-group">good to know</span>
+    <a href="#howitworks">how it works</a>
+    <a href="#portability">portability</a>
+    <a href="#gotchas">gotchas</a>
   </nav>
 
   <section id="install">
@@ -335,8 +348,12 @@
 
 <b>TINYJS_NOTARY_PROFILE</b>="my-notary-profile"
   <i># used by `tinyjs notarize` when "notarize": { "profile" } is absent</i></pre>
-    <p class="note">These are <em>fallbacks</em>, not overrides — a value present in
-    <code>tinyjs.json</code> wins, so the env var only fills a gap. The rest of the
+    <p class="note">These <em>override</em> the file rather than merely filling a
+    gap — but never silently: if an env var displaces a value that was actually
+    present in <code>tinyjs.json</code>, the build says so
+    (<code>==&gt; signIdentity from TINYJS_SIGN_IDENTITY (overriding
+    tinyjs.json)</code>), because a variable left exported in a shell quietly
+    changing how a project signs is worth shouting about. The rest of the
     <code>TINYJS_*</code> vars are for running and debugging rather than
     configuration:</p>
     <pre><b>TINYJS_DEBUG</b>=1        <i># trace every bridge line in `tinyjs dev`</i>
@@ -345,6 +362,29 @@
 <b>TINYJS_LAUNCHER</b>=/path/to/launcher
                     <i># run against a different launcher binary</i>
 <b>TINYJS_HOME</b>=/opt/tinyjs   <i># where the CLI installs and looks for itself</i></pre>
+
+    <h3 style="margin-top:26px;font:700 15px var(--mono)">per-OS overrides</h3>
+    <p class="note">Root keys apply everywhere. An optional
+    <code>macos</code> / <code>windows</code> / <code>linux</code> block is
+    merged on top for that platform — so the keys that genuinely differ (an
+    <code>.ico</code>, a macOS-only signing identity, a vibrancy that means
+    nothing elsewhere) don't force you to write three of everything. The block
+    names are the strings <code>tiny.system.os()</code> returns.</p>
+    <pre>{
+  "name": "myapp",
+  "icon": "icon.png",
+  "chrome": { "frame": false },
+
+  <i>// merged on top when building on that OS</i>
+  "macos":   { "signIdentity": "Developer ID Application: …",
+               "chrome": { "vibrancy": "hud" } },
+  "windows": { "icon": "icon.ico" },
+  "linux":   { "icon": "icon-512.png" }
+}</pre>
+    <p class="note">Plain objects <em>merge</em>, so the macOS block above ends
+    up with <code>{ frame: false, vibrancy: 'hud' }</code> rather than losing
+    the root's <code>frame</code>. Scalars and arrays replace outright. The
+    full resolution order is <b>root → OS block → env var</b>.</p>
   </section>
 
   <section id="backend">
@@ -890,6 +930,93 @@ if (available) await <b>tiny.api.call</b>('update.install');
     await <b>tiny.api.call</b>('update.install');
 });
 <i>// backend twin: export function onUpdateAvailable(info, app) { … }</i></pre>
+  </section>
+
+  <section id="howitworks">
+    <h2>how it works <span class="tag">two processes, one socket</span></h2>
+    <p class="note">Your app is a backend process (txiki.js, full system
+    access) and a native window, talking over a private socket. No HTTP
+    server, no ports, nothing listening for anything else to find.</p>
+    <pre>┌──────────────────────┐  unix socket   ┌──────────────────────────┐
+│ backend (txiki.js)   │◄──────────────►│ launcher (C++, ~380 KB)  │
+│ your src/main.js     │  line protocol │ native/launcher-macos.cc │
+│ + runtime/bridge.js  │                │ · WKWebView window       │
+│ · owns app logic     │                │ · webview_bind bridge    │
+│ · fs/net/process API │                │ · native dialogs         │
+│ · spawns launcher    │                │ · else: dumb forwarder   │
+└──────────────────────┘                └──────────┬───────────────┘
+                                                   │ window.__invoke / eval
+                                        ┌──────────▼────────────┐
+                                        │ your page (file://)   │
+                                        │ api.call('m', params) │
+                                        │ api.on('event', fn)   │
+                                        └───────────────────────┘</pre>
+    <p class="note">The backend creates the socket in a fresh <code>0700</code>
+    temp dir — invisible to other users, with no port to collide with or scan
+    — then spawns the launcher pointed at your frontend's
+    <code>index.html</code>. Closing the window ends the launcher; the backend
+    notices, cleans up and exits. <code>tiny.quit()</code> works the other way.
+    On Windows the socket is a named pipe; everything above it is identical.</p>
+    <p class="note">The protocol is newline-delimited text, one line per
+    message, payloads JSON — <code>CALL</code> / <code>RET</code> for
+    request–response, <code>EVT</code> for backend→page pushes, and a verb per
+    native operation. <code>TINYJS_DEBUG=1</code> traces every line.</p>
+  </section>
+
+  <section id="portability">
+    <h2>portability <span class="tag">mac-first, Windows + Linux in beta</span></h2>
+    <p class="note">All three run the same runtime and the same protocol; only
+    the launcher and the transport differ.</p>
+    <pre>              launcher source            webview               transport
+macOS         launcher-macos.cc         WebKit                unix socket
+Windows       launcher-win.cc           WebView2              named pipe
+Linux         launcher-linux.cc         GTK3 + WebKitGTK 4.1  unix socket</pre>
+    <p class="note"><b>Anything unported fails cleanly, so cross-platform code
+    can feature-detect.</b> Capability calls reject with a specific reason,
+    query calls resolve <code>null</code>, and fire-and-forget ones are silent
+    no-ops. Ask before you call:</p>
+    <pre>const caps = await <b>tiny.system.capabilities</b>();
+<i>// -&gt; { os: 'macos' | 'windows' | 'linux', badge: true, progress: true, … }</i>
+<i>// Anything ABSENT from the answer is supported on that platform.</i>
+if (caps.badge) <b>tiny.app.badge</b>('3');
+
+<i>// synchronous, safe during page setup (the webview's own UA is decisive)</i>
+<b>tiny.system.os</b>();  <b>tiny.system.isMacOS</b>();  <b>tiny.system.isLinux</b>();</pre>
+    <p class="note">Some things are not "not ported yet" but concepts the other
+    OSes don't have — AppleScript, Quick Look, trackpad haptics. Those live in
+    <code>tiny.macos.*</code> and reject elsewhere, so the split is visible in
+    the call itself. Everything that <em>could</em> exist on another OS stays
+    on <code>tiny.app</code> and answers <code>'unsupported'</code> until it
+    does. The full per-OS breakdown is in the
+    <a href="https://github.com/tarwin/tinyjsapp#portability">README's
+    Portability section</a>.</p>
+  </section>
+
+  <section id="gotchas">
+    <h2>gotchas <span class="tag">things that cost real debugging</span></h2>
+    <p class="note">Mostly txiki.js (v26.6.0) and WebKit sharp edges, kept here
+    so you don't rediscover them:</p>
+    <pre><i>// txiki streams have no `for await` — use a reader</i>
+const reader = res.body.<b>getReader</b>();
+
+<i>// tjs.cwd is a PROPERTY, not a function</i>
+const here = <b>tjs.cwd</b>;
+
+<i>// silencing a child's output is 'ignore' — 'null' silently INHERITS</i>
+tjs.spawn(argv, { stdout: <b>'ignore'</b> });
+
+<i>// import.meta.url throws inside a compiled binary — resolve against</i>
+<i>// tjs.exePath instead</i></pre>
+    <p class="note">Pages load as real <code>file://</code> documents rather
+    than through <code>webview_set_html</code>: the latter's
+    <code>about:blank</code> origin isn't a secure context, and WebKit hides
+    SecureContext-only APIs there — <code>navigator.gpu</code> among them. The
+    file:// origin is also what makes multi-file frontends work, with relative
+    scripts and images loading straight from the page's directory.</p>
+    <p class="note">On Linux, Web Audio reaching <code>ctx.destination</code>
+    crackles under WebKitGTK — the graph renders on a normal-priority thread
+    and nothing will promote it. That's measured, not theoretical; the native
+    audio filters exist precisely because of it.</p>
   </section>
 
   <footer>
