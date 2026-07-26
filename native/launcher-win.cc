@@ -4479,6 +4479,106 @@ static ITaskbarList3 *taskbar_list() {
   return tb;
 }
 
+// ---- app.badge: an overlay icon on the taskbar button ----------------------
+// UNTESTED — written on macOS, never run on Windows. capabilities() still
+// reports badge:false; flip it only once this has been SEEN, not merely
+// compiled. The taskbar overlay is ~16px, so this is 1-2 glyphs or a dot.
+//
+// The trap: GDI writes RGB but leaves the alpha byte of a 32bpp DIB alone, so
+// text drawn the obvious way is fully transparent. Everything is painted in
+// colours that are never pure black, then the alpha byte is set for every
+// pixel that got written.
+static HICON g_overlay = nullptr;
+
+static HICON badge_icon(const std::string &text) {
+  int n = GetSystemMetrics(SM_CXSMICON);
+  if (n <= 0) n = 16;
+
+  BITMAPINFO bi = {};
+  bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+  bi.bmiHeader.biWidth = n;
+  bi.bmiHeader.biHeight = -n; // top-down
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  bi.bmiHeader.biCompression = BI_RGB;
+
+  void *bits = nullptr;
+  HDC screen = GetDC(nullptr);
+  HDC dc = CreateCompatibleDC(screen);
+  HBITMAP colour = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  if (!colour) {
+    DeleteDC(dc);
+    ReleaseDC(nullptr, screen);
+    return nullptr;
+  }
+  std::memset(bits, 0, (size_t)n * n * 4);
+  HGDIOBJ oldBmp = SelectObject(dc, colour);
+
+  // filled disc
+  HBRUSH brush = CreateSolidBrush(RGB(214, 69, 65));
+  HPEN pen = CreatePen(PS_SOLID, 1, RGB(214, 69, 65));
+  HGDIOBJ oldBrush = SelectObject(dc, brush);
+  HGDIOBJ oldPen = SelectObject(dc, pen);
+  Ellipse(dc, 0, 0, n, n);
+
+  // 1-2 glyphs, centred; longer text can't fit at this size
+  std::wstring w = widen(text);
+  if (w.size() > 2) w = L"\u2022"; // bullet
+  if (!w.empty()) {
+    LOGFONTW lf = {};
+    lf.lfHeight = -(n * (w.size() > 1 ? 5 : 7) / 10);
+    lf.lfWeight = FW_BOLD;
+    lstrcpynW(lf.lfFaceName, L"Segoe UI", LF_FACESIZE);
+    HFONT font = CreateFontIndirectW(&lf);
+    HGDIOBJ oldFont = SelectObject(dc, font);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(255, 255, 255));
+    RECT r = {0, 0, n, n};
+    DrawTextW(dc, w.c_str(), (int)w.size(), &r,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOCLIP);
+    SelectObject(dc, oldFont);
+    DeleteObject(font);
+  }
+
+  SelectObject(dc, oldPen);
+  SelectObject(dc, oldBrush);
+  DeleteObject(pen);
+  DeleteObject(brush);
+
+  // GDI never touched alpha — opaque wherever anything was drawn
+  unsigned char *px = static_cast<unsigned char *>(bits);
+  for (int i = 0; i < n * n; i++) {
+    unsigned char *p = px + i * 4;
+    p[3] = (p[0] || p[1] || p[2]) ? 255 : 0;
+  }
+
+  HBITMAP mask = CreateBitmap(n, n, 1, 1, nullptr); // unused with an alpha DIB
+  ICONINFO ii = {};
+  ii.fIcon = TRUE;
+  ii.hbmColor = colour;
+  ii.hbmMask = mask;
+  HICON icon = CreateIconIndirect(&ii);
+
+  SelectObject(dc, oldBmp);
+  DeleteObject(mask);
+  DeleteObject(colour);
+  DeleteDC(dc);
+  ReleaseDC(nullptr, screen);
+  return icon;
+}
+
+static void do_badge(webview_t, void *arg) {
+  std::string *text = static_cast<std::string *>(arg);
+  ITaskbarList3 *tb = taskbar_list();
+  if (tb && g_hwnd) {
+    HICON next = text->empty() ? nullptr : badge_icon(*text);
+    tb->SetOverlayIcon(g_hwnd, next, next ? L"badge" : nullptr);
+    if (g_overlay) DestroyIcon(g_overlay); // only after the shell has the new one
+    g_overlay = next;
+  }
+  delete text;
+}
+
 static void do_progress(webview_t, void *arg) {
   double *v = static_cast<double *>(arg);
   ITaskbarList3 *tb = taskbar_list();
@@ -5138,6 +5238,11 @@ static void pipe_read_loop() {
         webview_dispatch(g_w, do_attention,
                          new int(line.size() > 10 ? std::atoi(line.c_str() + 10)
                                                   : 0));
+      } else if (line == "BADGE" || line.rfind("BADGE ", 0) == 0) {
+        webview_dispatch(g_w, do_badge,
+                         new std::string(line.size() > 6
+                                             ? wire_unescape(line.substr(6))
+                                             : ""));
       } else if (line.rfind("PROGRESS", 0) == 0) {
         webview_dispatch(g_w, do_progress,
                          new double(line.size() > 9
@@ -5249,9 +5354,9 @@ static void pipe_read_loop() {
       } else if (line == "QUIT") {
         webview_dispatch(g_w, do_terminate, nullptr);
       }
-      // WINCLOSE / SHARE / NOWPLAYING / QUICKLOOK / HAPTIC: not wired up
-      // yet. BADGE needs an overlay HICON rendered at runtime — capabilities()
-      // reports badge:false so apps can check instead of hitting a no-op.
+      // WINCLOSE / SHARE / QUICKLOOK: not wired up yet. BADGE now draws an
+      // overlay icon, but it has never been run on Windows, so
+      // capabilities() still reports badge:false — see TODO-verify.md.
     }
   }
   webview_dispatch(g_w, do_terminate, nullptr);
