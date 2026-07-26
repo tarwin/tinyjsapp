@@ -348,6 +348,23 @@ function applyEnvOverrides(cfg) {
   return cfg;
 }
 
+// An app can declare the oldest tinyjs it works with. Optional — but without
+// it, running an app against a tinyjs that predates an API it uses fails as an
+// unexplained TypeError in the page, with nothing naming the real cause.
+// A source checkout reports 'dev' and is assumed newest, so it never trips.
+async function checkMinVersion(cfg) {
+  const want = cfg.minTinyjsVersion;
+  if (!want) return;
+  const have = await toolVersion();
+  if (have === 'dev') return;
+  if (!parseVer(want)) return; // unparseable: not worth blocking a build over
+  if (isNewer(have, want)) {
+    fail(`${cfg.name} needs tinyjs ${want} or newer — you have ${have}.\n` +
+         '  run `tinyjs update`, or drop "minTinyjsVersion" from tinyjs.json ' +
+         'if you know better.');
+  }
+}
+
 async function loadConfig() {
   if (!(await exists('tinyjs.json'))) {
     fail('no tinyjs.json here — run this from a tinyjs project (or `tinyjs new <dir>` to create one)');
@@ -362,6 +379,7 @@ async function loadConfig() {
   if (cfg.activation && !['regular', 'accessory'].includes(cfg.activation)) {
     fail('tinyjs.json "activation" must be "regular" or "accessory"');
   }
+  await checkMinVersion(cfg);
   return { title: cfg.name, size: '960x640', id: 'com.example.' + cfg.name, ...cfg };
 }
 
@@ -613,7 +631,16 @@ async function cmdNew() {
 
   await copyTree(TOOL_DIR + 'template', dir);
   const cfgPath = dir + '/tinyjs.json';
-  const cfg = dec.decode(await tjs.readFile(cfgPath)).replaceAll('__NAME__', name);
+  let cfg = dec.decode(await tjs.readFile(cfgPath)).replaceAll('__NAME__', name);
+  // Record the tinyjs this app was made with, so running it on an older one
+  // says so instead of half-working. A source checkout has no version to
+  // stamp, so scaffolds from a checkout simply omit the key.
+  const stamp = await toolVersion();
+  if (parseVer(stamp)) {
+    const o = JSON.parse(cfg);
+    o.minTinyjsVersion = String(stamp).replace(/^v/, '');
+    cfg = JSON.stringify(o, null, 2) + '\n';
+  }
   await tjs.writeFile(cfgPath, enc.encode(cfg));
 
   await writeAgentSkill(dir);

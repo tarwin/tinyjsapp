@@ -158,7 +158,8 @@ myapp/
                          #   permissions? ({ microphone: "why", camera: "why" } for getUserMedia),
                          #   contextMenu? (false suppresses WebKit's default right-click menu),
                          #   activation? ("accessory" = menu-bar agent: no Dock, starts hidden),
-                         #   macos?/windows?/linux? (merged on top for that OS) }
+                         #   macos?/windows?/linux? (merged on top for that OS),
+                         #   minTinyjsVersion? (refuse to run on an older tinyjs) }
   icon.png                # 1024×1024 app icon (template ships a default)
   src/main.js             # backend: export const api = {...}; export function init(app) {}
   src/frontend/           # index.html + any local js/css/images

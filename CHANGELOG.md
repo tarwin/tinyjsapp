@@ -55,6 +55,13 @@ deprecated.
   and `null` on Linux, where the WM owns the decision and won't say.
   Previously the bit was macOS-only in effect but stored and echoed back on
   Linux, so an app that set it and read it back was told it had worked.
+- **`minTinyjsVersion` in `tinyjs.json`.** Optional: the oldest tinyjs an app
+  works with. Running it on an older one now fails with
+  `myapp needs tinyjs 0.30.0 or newer — you have 0.28.3` instead of the app
+  half-working, which is what an app calling an API its runtime predates
+  actually looks like — an unexplained TypeError in the page with nothing
+  naming the cause. `tinyjs new` stamps the version it scaffolded with; a
+  source checkout reports `dev` and is never blocked.
 - **Per-OS config blocks.** Root keys in `tinyjs.json` apply everywhere; an
   optional `macos` / `windows` / `linux` block merges on top for that platform,
   so only the keys that genuinely differ get repeated. Plain objects merge,

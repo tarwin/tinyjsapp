@@ -286,6 +286,9 @@
   "id": "com.example.myapp",
   <i>// shown in About; drives auto-update</i>
   "version": "1.0.0",
+  <i>// oldest tinyjs this app works with — optional, but it turns "some calls</i>
+  <i>// mysteriously do nothing" into a message naming the real problem</i>
+  "minTinyjsVersion": "0.30.0",
   <i>// 1024×1024 → AppIcon.icns</i>
   "icon": "icon.png",
   <i>// codesigning identity (default: ad-hoc)</i>
@@ -324,6 +327,7 @@
   "size": "960x640",
   "id": "com.example.myapp",
   "version": "1.0.0",
+  "minTinyjsVersion": "0.30.0",
   "icon": "icon.png",
   "signIdentity": "Developer ID Application: …",
   "urlScheme": "myapp",

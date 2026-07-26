@@ -128,7 +128,9 @@ tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        chrome?: { frame, windowControls, transparent, vibrancy, squareCorners, acceptsFirstMouse },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build: "npm run build", dist: "dist",
-                                    dev: "npm run dev", devUrl: "http://127.0.0.1:5173" } }
+                                    dev: "npm run dev", devUrl: "http://127.0.0.1:5173" },
+                       macos?/windows?/linux?: { ...keys merged on top for that OS },
+                       minTinyjsVersion?: "0.30.0"    // refuse to run on an older tinyjs }
 icon.png             1024×1024 app icon
 src/main.js          backend (see below)
 src/frontend/        index.html + js/css/images — served as real files
