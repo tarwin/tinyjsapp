@@ -418,8 +418,19 @@ static void do_size(webview_t w, void *arg) {
   } else {
 #ifdef __APPLE__
     NSWindow *win = window_for_id(w, s->win);
-    if (win)
-      [win setContentSize:NSMakeSize(s->width, s->height)];
+    if (win) {
+      // FRAME size, not content size: getState reports win.frame, so any
+      // read-modify-write of a TITLED satellite ratcheted up by the title bar
+      // every pass (measured: 600x400 -> 600x432 -> 464 -> 496…). Borderless
+      // windows never showed it because content == frame there. Same fix as
+      // the Windows twin. Window CREATION still takes a content size — it has
+      // no feedback loop to ratchet.
+      NSRect f = win.frame;
+      CGFloat top = NSMaxY(f); // keep the top-left anchored, as users expect
+      f.size = NSMakeSize(s->width, s->height);
+      f.origin.y = top - s->height;
+      [win setFrame:f display:YES];
+    }
 #endif
   }
   delete s;
