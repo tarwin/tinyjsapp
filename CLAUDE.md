@@ -11,6 +11,10 @@ Releases are git tags (`vX.Y.Z` on main); a tag push builds macOS + Windows
 + linux-x86_64 + linux-arm64 in CI. Update CHANGELOG.md AND
 docs/changelog.html before tagging. Linux burn-down + platform notes:
 TODO-linux.md. Native-filters-on-other-OSes plan: TODO-audio-filters.md.
+Anything built on one OS but never watched run on another goes in
+TODO-verify.md — tick a box there only after seeing it work on that OS,
+since a fire-and-forget op a shell ignores looks just like an unimplemented
+one. `test/appsurface.html` is the self-driving page for those checks.
 Example-app payloads (all platforms) live on GitHub Releases in
 tinyjsapp-examples (tag `<dir>-v<version>`; binaries purged from its git
 history 2026-07-25) — runbook in ../tinyjsapp-examples/CLAUDE.md.
