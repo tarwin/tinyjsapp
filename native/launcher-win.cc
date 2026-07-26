@@ -97,6 +97,9 @@ static bool g_target_is_url = false;
 static std::string g_app_name = "tinyjs";
 static std::string g_app_version = "0.0.0";
 
+// win.setMinSize for the main window, logical px (0 = no floor). Enforced in
+// WM_GETMINMAXINFO; satellites keep their own in TinyWin.
+static int g_min_w = 0, g_min_h = 0;
 static bool g_hide_on_close = false;
 static bool g_frameless = false;
 static bool g_square = false;
@@ -1512,6 +1515,9 @@ static void do_center(HWND hwnd) {
   SetWindowPos(hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
 }
 
+static ICoreWebView2Controller *ctrl_for_win(const std::string &id);
+static void set_min_size(const std::string &id, int w, int h);
+
 struct WinopReq {
   std::string win, op;
 };
@@ -1541,6 +1547,24 @@ static void do_winop(webview_t, void *arg) {
     ShowWindow(hwnd, SW_RESTORE);
   } else if (op == "zoom") {
     ShowWindow(hwnd, IsZoomed(hwnd) ? SW_RESTORE : SW_MAXIMIZE);
+  } else if (starts("minsize ")) {
+    // win.setMinSize — a resize floor, enforced in WM_GETMINMAXINFO. Was
+    // missing entirely, so a window could be dragged (or opened) smaller than
+    // its content needs; amp's EQ lost its bottom selector that way.
+    int w = 0, h = 0;
+    if (std::sscanf(op.c_str() + 8, "%dx%d", &w, &h) == 2)
+      set_min_size(req->win, w, h);
+  } else if (starts("zoomfactor ")) {
+    // win.setZoom — native page zoom (amp's 2x "double size"). The page keeps
+    // laying out in CSS px and WebView2 scales the rendering, which is what
+    // the API promises. Distinct from the "zoom" op above, which maximizes.
+    // This was missing entirely: the op reached the else-if chain, matched
+    // nothing and was dropped, so setZoom resolved true and did nothing on
+    // Windows while working on macOS.
+    double f = std::atof(op.c_str() + 11);
+    ICoreWebView2Controller *c = ctrl_for_win(req->win);
+    if (c && f > 0.0)
+      c->put_ZoomFactor(f);
   } else if (op == "fullscreen" && main) {
     set_fullscreen(!g_fullscreen);
   } else if (starts("fullscreen ") && main) {
@@ -1603,7 +1627,6 @@ struct ChromeReq {
   std::string win, frame, traffic, transparent, vibrancy, square, first_mouse;
 };
 
-static ICoreWebView2Controller *ctrl_for_win(const std::string &id);
 static void set_win_transparent_flag(const std::string &id, bool on);
 
 static void do_chrome(webview_t, void *arg) {
@@ -1693,9 +1716,35 @@ static void release_webview_capture() {
   }
 }
 
-static void do_dragwin(webview_t, void *) {
-  release_webview_capture();
-  SendMessageW(g_hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+// win.startDrag / win.startResize — hand the gesture to the OS by faking a
+// non-client button press. Both must honour @win: a bare op means 'main', so a
+// satellite's grip used to move the deck instead (DRAGWIN matched exactly, so
+// DRAGWIN@id was dropped outright, and RESIZEWIN was never handled at all —
+// every frameless window gets auto grips from tiny.js that call it).
+struct NcDragReq {
+  std::string win;
+  int ht;
+};
+
+static int ht_for_edge(const std::string &e) {
+  if (e == "n") return HTTOP;
+  if (e == "s") return HTBOTTOM;
+  if (e == "e") return HTRIGHT;
+  if (e == "w") return HTLEFT;
+  if (e == "ne") return HTTOPRIGHT;
+  if (e == "nw") return HTTOPLEFT;
+  if (e == "sw") return HTBOTTOMLEFT;
+  return HTBOTTOMRIGHT; // 'se', and anything unrecognised
+}
+
+static void do_ncdrag(webview_t, void *arg) {
+  NcDragReq *r = static_cast<NcDragReq *>(arg);
+  HWND h = hwnd_for_win(r->win);
+  if (h) {
+    release_webview_capture();
+    SendMessageW(h, WM_NCLBUTTONDOWN, r->ht, 0);
+  }
+  delete r;
 }
 
 // ---------------------------------------------------------------------------
@@ -3732,6 +3781,7 @@ struct TinyWin {
   ICoreWebView2Controller *ctrl = nullptr;
   ICoreWebView2 *wv = nullptr;
   bool transparent = false;            // clear WebView2 background on create
+  int min_w = 0, min_h = 0;            // win.setMinSize, logical px (0 = none)
   std::string url;                     // navigated once the controller exists
   std::vector<std::string> pending_js; // eval'd once the controller exists
 };
@@ -3739,6 +3789,32 @@ struct TinyWin {
 static TinyWin *win_for_id(const std::string &id) {
   auto it = g_windows.find(id);
   return it == g_windows.end() ? nullptr : it->second;
+}
+
+static void set_min_size(const std::string &id, int w, int h) {
+  if (id.empty() || id == "main") {
+    g_min_w = w;
+    g_min_h = h;
+    return;
+  }
+  TinyWin *tw = win_for_id(id);
+  if (tw) {
+    tw->min_w = w;
+    tw->min_h = h;
+  }
+}
+
+// Clamp a MINMAXINFO to a logical-px floor. ptMinTrackSize is the OUTER window
+// size in physical px, matching what setSize/getState now speak.
+static void clamp_min_track(HWND hwnd, LPARAM lp, int min_w, int min_h) {
+  if (min_w <= 0 && min_h <= 0)
+    return;
+  double sc = window_scale(hwnd);
+  MINMAXINFO *mmi = (MINMAXINFO *)lp;
+  if (min_w > 0)
+    mmi->ptMinTrackSize.x = (LONG)lround(min_w * sc);
+  if (min_h > 0)
+    mmi->ptMinTrackSize.y = (LONG)lround(min_h * sc);
 }
 
 static HWND hwnd_for_win(const std::string &id) {
@@ -3953,6 +4029,14 @@ struct SecCtrlHandler
 static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
                                     LPARAM lp) {
   switch (msg) {
+  case WM_GETMINMAXINFO: {
+    // let the default fill in the usual limits, then lower-bound them
+    LRESULT r = DefWindowProcW(hwnd, msg, wp, lp);
+    TinyWin *tw = win_for_id(id_for_hwnd(hwnd));
+    if (tw)
+      clamp_min_track(hwnd, lp, tw->min_w, tw->min_h);
+    return r;
+  }
   case WM_SIZE: {
     TinyWin *tw = win_for_id(id_for_hwnd(hwnd));
     if (tw && tw->ctrl) {
@@ -4142,6 +4226,11 @@ static void send_theme() {
 static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
                                      LPARAM lp) {
   switch (msg) {
+  case WM_GETMINMAXINFO: {
+    LRESULT r = CallWindowProcW(g_orig_wndproc, hwnd, msg, wp, lp);
+    clamp_min_track(hwnd, lp, g_min_w, g_min_h);
+    return r;
+  }
   case WM_NCCALCSIZE:
     // Frameless polish: WS_CAPTION removal leaves a top frame sliver; extend
     // the client to the true top while keeping left/right/bottom resize
@@ -4911,8 +5000,24 @@ static void pipe_read_loop() {
         req->square = p.size() > 4 ? p[4] : "";
         req->first_mouse = p.size() > 5 ? p[5] : "";
         webview_dispatch(g_w, do_chrome, req);
-      } else if (line == "DRAGWIN") {
-        webview_dispatch(g_w, do_dragwin, nullptr);
+      } else if (line.rfind("DRAGWIN", 0) == 0 &&
+                 (line.size() == 7 || line[7] == '@')) {
+        std::string win = line.size() > 8 ? line.substr(8) : "main";
+        webview_dispatch(g_w, do_ncdrag, new NcDragReq{win, HTCAPTION});
+      } else if (line.rfind("RESIZEWIN", 0) == 0 && line.size() > 9 &&
+                 (line[9] == ' ' || line[9] == '@')) {
+        std::string win = "main";
+        size_t body = 10;
+        if (line[9] == '@') {
+          size_t sp = line.find(' ', 10);
+          if (sp == std::string::npos)
+            continue;
+          win = line.substr(10, sp - 10);
+          body = sp + 1;
+        }
+        webview_dispatch(
+            g_w, do_ncdrag,
+            new NcDragReq{win, ht_for_edge(line.substr(body))});
       } else if (line.rfind("CLIPWRITE ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(10));
         ClipWriteReq *req = new ClipWriteReq;

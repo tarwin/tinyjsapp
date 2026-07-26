@@ -256,6 +256,13 @@ function systemCapabilities() {
     // which under the "absent = true" rule above claimed support that was
     // never there.
     badge: false, icon: true, progress: true,
+    // Same trap as badge, found by auditing every wire op the bridge can send
+    // against what launcher-win.cc actually dispatches (2026-07-25): both of
+    // these reach the launcher's else-if chain, match nothing and are dropped,
+    // so they resolved true while doing nothing. nowPlaying wants the WinRT
+    // SystemMediaTransportControls (see TODO-windows.md); haptic has no
+    // Windows equivalent at all.
+    nowPlaying: false, haptic: false,
   };
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
     audioFilters: false };

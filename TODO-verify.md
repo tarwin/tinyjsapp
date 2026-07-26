@@ -114,6 +114,26 @@ feed it back a few times and watch for a ratchet. If it drifts, the fix is the
 one applied on Windows — set the FRAME size, and leave window creation taking a
 content/client size (no feedback loop there).
 
+## Windows — `win.startDrag` / `win.startResize` gestures need a real mouse
+
+Implemented 2026-07-25 (`do_ncdrag`), NOT yet watched. Both fake a non-client
+button press — `WM_NCLBUTTONDOWN` with `HTCAPTION` for a drag, the matching
+`HT*` edge code for a resize — and that hands control to a modal OS loop that
+only ends when a real mouse button is released. So this cannot be driven
+headlessly: synthesising the message with no button down risks wedging the UI
+thread rather than proving anything. It needs hands on a mouse.
+
+What was wrong before: `DRAGWIN` was matched with `line == "DRAGWIN"`, exact,
+so the per-window `DRAGWIN@<id>` form the bridge sends for satellites was
+dropped — a satellite's drag handle did nothing. `RESIZEWIN` was never handled
+at all, and tiny.js gives **every frameless window** invisible resize grips
+that call it, so custom grips were dead on Windows (native `WS_THICKFRAME`
+borders still worked, which is probably why nobody noticed).
+
+To check: a frameless window, drag it by a `data-tiny-drag` region and by a
+satellite's own handle; then drag each of the eight edge grips and confirm the
+right edge moves (a wrong `HT*` mapping resizes the opposite side).
+
 ## Windows-only
 
 - [ ] `app.badge` isn't implemented at all — needs an overlay HICON rendered

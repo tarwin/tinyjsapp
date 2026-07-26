@@ -49,6 +49,18 @@ names refer to the protocol table in the README; Windows handlers live in
 
 - [ ] **scope:'app' audioTap** — system loopback shipped; per-process
       capture needs the Win10 2004+ process-loopback path.
+- [ ] **nowPlaying** — `NOWPLAYING` reaches the launcher, matches nothing in the
+      dispatch chain and is dropped, so `tiny.nowPlaying.set()` did nothing
+      while `capabilities()` claimed it worked (absent from the windows table =
+      true). Now declared `nowPlaying: false`, which is honest but not the fix.
+      Route: WinRT `SystemMediaTransportControls` (`ISystemMediaTransportControls`
+      via `ISystemMediaTransportControlsInterop::GetForWindow`) — set
+      DisplayUpdater properties + PlaybackStatus, and its button events are
+      also the natural home for Windows media-key handling.
+- [ ] **haptic** — same drop, same false claim, now `haptic: false`. Unlike the
+      rest of this list there is no Windows equivalent to implement: it's a
+      macOS trackpad feature (`NSHapticFeedbackManager`). Honest degradation is
+      the end state, not a stepping stone.
 - [~] **Taskbar pin used to pin launcher.exe when the app was opened from
       shelf** — reported 2026-07-25 (pin was dead on relaunch); opening the
       same app's exe directly and pinning worked. **Appears fixed** by shelf's
