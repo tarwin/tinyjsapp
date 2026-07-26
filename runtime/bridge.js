@@ -271,6 +271,10 @@ async function systemCapabilities() {
     vibrancy: false, selectedText: false, ocr: false,
     windowPosition: true, mousePosition: true, captureScreen: true,
     keystroke: true, recorder: false,
+    // The launcher answers null for a wifi query unconditionally, so claiming
+    // it (by omission, under the "absent = true" rule) was a third instance of
+    // the same over-claim that nowPlaying/haptic had.
+    wifi: false,
     // app.attention (FlashWindowEx) and app.presence (WS_EX_TOOLWINDOW) both
     // work. app.badge needs an overlay HICON rendered at runtime and isn't
     // built yet; it was a silent no-op before, and absent from this table,
