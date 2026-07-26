@@ -103,6 +103,26 @@ committed).
 - One harmless `Gtk-CRITICAL … gtk_widget_get_scale_factor` line at startup for
   any app with a tray. It comes from inside libayatana-appindicator (we never
   call it); setting the icon after the menu doesn't avoid it.
+- **The app surface (`icon`/`attention`/`presence`) is X11-only** — measured
+  2026-07-26 with `WAYLAND_DEBUG=1`: under a Wayland session all three produce
+  zero protocol bytes, because GTK3's Wayland backend has nothing to carry a
+  window icon, an urgency bit or a skip-taskbar hint. On XWayland each moves
+  its X property. `capabilities()` now gates them on `ON_X11`.
+  `badge`/`progress` are unaffected — they are a DBus signal, not a window
+  property — but only a **built** app registers the `.desktop` entry the
+  signal is addressed to, so they cannot show in `tinyjs dev`.
+- **A window icon bigger than 256×256 never reaches the shell** — GDK only
+  writes `_NET_WM_ICON` while the property fits X11's per-request limit, and
+  every tinyjs `icon.png` is 1024×1024, so `gtk_window_set_icon_from_file()`
+  quietly left only the legacy `WM_HINTS` pixmap. Bisected against a plain
+  GTK3 control: 256 lands, 512 does not. The launcher now scales to an icon
+  list instead (`set_window_icon()`), which fixed both `app.icon()` and the
+  startup icon. If you touch that path, re-check with `xprop _NET_WM_ICON` —
+  the call returns success either way.
+- **Ubuntu Dock owns `com.canonical.Unity`** on this session. That name is the
+  reliable "a launcher implements LauncherEntry" probe (libunity looks for the
+  same thing), and `capabilities()` now uses it instead of pattern-matching
+  `XDG_CURRENT_DESKTOP`.
 
 ## Environment gotchas seen on the previous VM (UTM on Apple Silicon)
 
@@ -337,8 +357,15 @@ features, not bugs.
       repo's history (git filter-repo, 683 MB → 19 MB) — only
       `_builds/<dir>/manifest.json` survives, since shipped apps poll those
       raw URLs. Never commit a payload there again.
-- [ ] **Examples: does closing shelf close the app it launched?** — on Windows
-      it did. `shelf/src/main.js` `openApp()` spawned the app as shelf's own
+- [x] **Examples: does closing shelf close the app it launched?** — NO on
+      Linux, measured 2026-07-26: **the Linux branch needs no fix.** A tjs
+      script spawning `tjs.spawn([exe], {stdio: 'ignore'})` and then exiting
+      leaves the child running — it is reparented to the user `systemd` (PPID
+      1731) and keeps going. There is no job-object equivalent here, so the
+      Windows failure mode does not reproduce and the un-fixed shape below is
+      correct as written. (Run the parent under `setsid`, as the desktop does,
+      or your own terminal's SIGHUP confounds the result.) Kept for the
+      Windows history: `shelf/src/main.js` `openApp()` spawned the app as shelf's own
       direct child (`tjs.spawn([exe], {stdin/stdout/stderr:'ignore'})`, with a
       comment claiming ignoring stdio made it "detached-ish" — it does not).
       Measured 2026-07-25: launching two real installed apps side by side, the
@@ -346,14 +373,10 @@ features, not bugs.
       `explorer.exe` kept running; `detached: true` did **not** save it either.
       Fixed on Windows by handing the launch to the shell, the same shape as
       `open -a` on macOS.
-      **The Linux branch still has the un-fixed shape** — one line above the
-      Windows one, `tjs.spawn(['<LINUX_ROOT>/<folder>/<exe>'], …)` — and was
-      deliberately left alone rather than changed on the strength of a Windows
-      measurement. Check it on a real desktop: install something from shelf,
-      launch it, quit shelf, see whether the app survives. If it dies, the
-      equivalent fix is `gio open` / `xdg-open` on the exe, or a `setsid`
-      double-fork; note that `detached: true` is the *documented* libuv answer
-      and still wasn't enough on Windows, so verify rather than assume.
+      The Linux branch keeps that shape deliberately — it was left alone rather
+      than changed on the strength of a Windows measurement, and the Linux
+      measurement above now says leaving it was right. `gio open`/`xdg-open` or
+      a `setsid` double-fork would have been the fix had the child died.
       (Careful reading the Windows evidence: the agent shell there runs inside
       a job object with `KILL_ON_JOB_CLOSE`, so only the within-run A/B is
       trustworthy, not the absolute mechanism.)

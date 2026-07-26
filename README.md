@@ -1282,7 +1282,14 @@ Works:
   `.desktop`, built apps only), `screens`/`mousePosition`/`getWinState`,
   `battery`, `idleTime` (GNOME), `pickColor` (portal), `thumbnail` (images
   only), `captureScreen` (X11 sessions only), `app.attention` (a taskbar
-  urgency hint), `app.icon` (the window icon), `app.presence`.
+  urgency hint), `app.icon` (the window icon), `app.presence` (the
+  skip-taskbar hint) — those last three are **X11 sessions only**, since GTK's
+  Wayland backend has no protocol to carry any of them and drops all three;
+  `capabilities()` reports them per session. `app.badge`/`app.progress` go out
+  over the Unity LauncherEntry DBus protocol instead, so they work on either
+  session but only where the dock implements it (KDE Plasma, Ubuntu Dock,
+  Dash-to-Dock — not vanilla GNOME Shell), and only for a **built** app, whose
+  `.desktop` entry is what the signal is addressed to.
 - **Input** — global hotkeys (X11 via XGrabKey; pure Wayland via the
   GlobalShortcuts portal — the compositor prompts to approve them once),
   `keystroke` synthesis (X11/XWayland via XTest — not pure Wayland).

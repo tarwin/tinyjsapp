@@ -42,18 +42,77 @@ Added 2026-07-25 (the dock→intent-verb rename + `progress`).
 
 | check | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| `badge('3')` shows a count | ✅ seen | ❌ not built ([TODO-windows.md]) | ⬜ needs KDE/Ubuntu Dock |
+| `badge('3')` shows a count | ✅ seen | ❌ not built ([TODO-windows.md]) | 🔶 signal correct, drawing unseen |
 | `badge('NEW')` (non-numeric) | ✅ arbitrary text | — | ⬜ hides — Unity badge is an int |
-| `attention()` | ✅ bounces | ✅ flashes the taskbar button | ⬜ urgency hint |
-| `icon(png)` replaces the icon | ✅ seen | ✅ seen (fixed 2026-07-25) | ⬜ window icon |
+| `attention()` | ✅ bounces | ✅ flashes the taskbar button | ✅ X11 urgency bit / ❌ Wayland |
+| `icon(png)` replaces the icon | ✅ seen | ✅ seen (fixed 2026-07-25) | ✅ X11 (fixed 2026-07-26) / ❌ Wayland |
 | `icon(ico)` replaces the icon | n/a | ✅ seen | n/a |
-| `icon` reaches the taskbar button | ✅ Dock icon | ❌ **title bar + Alt-Tab only** | ⬜ |
-| `icon('')` restores | ✅ seen | ✅ back to icon.png (fixed 2026-07-25) | ⬜ |
-| `progress(0..1)` draws a bar | ✅ seen | ✅ seen — 45% then 90% | ⬜ Unity protocol |
+| `icon` reaches the taskbar button | ✅ Dock icon | ❌ **title bar + Alt-Tab only** | ⬜ dock uses the .desktop icon |
+| `icon('')` restores | ✅ seen | ✅ back to icon.png (fixed 2026-07-25) | ✅ byte-identical restore |
+| `progress(0..1)` draws a bar | ✅ seen | ✅ seen — 45% then 90% | 🔶 signal correct, drawing unseen |
 | `progress` + `icon` compose | ✅ seen — the macOS-specific risk | n/a | n/a |
-| `progress(null)` clears | ✅ seen | ✅ bar goes, button stays | ⬜ |
-| `presence('menubar')` hides it | ✅ seen | ✅ button vanishes | ⬜ skip-taskbar hint |
-| `presence('normal')` restores | ✅ seen | ✅ button comes back | ⬜ |
+| `progress(null)` clears | ✅ seen | ✅ bar goes, button stays | 🔶 signal correct |
+| `presence('menubar')` hides it | ✅ seen | ✅ button vanishes | ✅ X11 skip-taskbar / ❌ Wayland |
+| `presence('normal')` restores | ✅ seen | ✅ button comes back | ✅ X11 / ❌ Wayland |
+
+Linux column checked 2026-07-26 on Ubuntu 24.04 aarch64, GNOME 46, in **both**
+a native Wayland session and XWayland (`GDK_BACKEND=x11`), against a launcher
+rebuilt from source. Nothing was watched with eyes — GNOME's screenshot and
+`Shell.Introspect` D-Bus APIs are both locked to portal callers on this box —
+so each row was settled at the protocol layer instead: `xprop` for the X11
+properties, `WAYLAND_DEBUG=1` for Wayland traffic, `dbus-monitor` for the
+LauncherEntry signal. 🔶 means the wire side is proven and only the pixels are
+unconfirmed.
+
+**Three of the five verbs are X11-only, and now say so.** Under a Wayland
+session `app.icon`, `app.attention` and `app.presence` emitted **zero bytes**
+of Wayland protocol — GTK3's Wayland backend has nowhere to put a window icon,
+an urgency bit or a skip-taskbar hint, so all three were silent no-ops while
+`capabilities()` claimed `icon=true presence=true` (and `attention` wasn't in
+the table at all, which the "absent = true" rule reads as supported). This is
+the same trap as the Windows `nowPlaying`/`haptic` finding. Fixed by gating all
+three on `ON_X11`; the page now prints `icon=false presence=false` on Wayland
+and `true` on XWayland.
+
+**`app.icon` never worked on Linux at all, on either session** — fixed
+2026-07-26. `gtk_window_set_icon_from_file()` hands GDK the image at its
+natural size, and GDK only publishes `_NET_WM_ICON` — the property shells
+actually read — while it fits X11's per-request limit. Measured by bisecting
+sizes against a plain GTK3 control program: **256×256 lands, 512×512 is
+dropped**, leaving only the legacy `WM_HINTS` icon pixmap that nothing reads.
+Every tinyjs app ships a 1024×1024 `icon.png`, so this silently swallowed both
+`app.icon()` *and the startup window icon* for every app ever shipped. The
+launcher now scales to an icon list (256/128/64/48/32, never upscaling).
+Verified by checksumming the property: baseline → a red test icon changes it,
+and `icon('')` restores the original **byte-identically**.
+
+**`attention()` latched forever** — fixed alongside. Nothing ever cleared the
+urgency hint, and Mutter does not clear it on focus (measured: still set while
+`_NET_WM_STATE_FOCUSED`), so one `attention()` left the window demanding
+attention for the rest of the run, unlike the transient macOS bounce and
+Windows flash. A `focus-in-event` handler now drops it; verified across a
+minimize/restore cycle (0 → 1 → 0).
+
+**The `.desktop` id question is closed — the ids match.** The bridge writes
+`~/.local/share/applications/<app id>.desktop` and the launcher addresses
+`application://<app id>.desktop`; a built test app produced
+`app.tinyjs.surfacetest.desktop` on disk and that exact string on the bus.
+But note **`tinyjs dev` registers no `.desktop` at all** (registration is gated
+on `bundlePath()`), so in dev the badge/progress signal is addressed to an
+entry the shell has never heard of. Badge/progress can only be seen from a
+**built** app — don't read a blank dock in dev as a bug.
+
+**Capability detection for badge/progress is now a probe, not a guess.** A dock
+implementing LauncherEntry takes the `com.canonical.Unity` bus name (it is what
+libunity itself looks for), and it is owned on this box — so `capabilities()`
+asks the bus via the existing `busNameOwned()` helper instead of regexing
+`XDG_CURRENT_DESKTOP`, which was wrong in both directions: false for plain
+GNOME with Dash-to-Dock added, true for an Ubuntu session with the dock
+removed. The old guess survives only as the fallback where there is no `gdbus`.
+
+Still genuinely needing eyes on Linux: whether Ubuntu Dock *draws* the badge
+and progress bar for a built app, and `badge('NEW')` hiding rather than
+showing something wrong.
 
 Windows column checked 2026-07-25 on Windows 11 Pro 26200, launcher rebuilt
 from current source first — the checked-in `launcher-win.exe` was three days
@@ -86,14 +145,9 @@ built apps additionally get an AppUserModelID + `RelaunchIconResource` via
 **Linux badge/progress ride one DBus signal** — `com.canonical.Unity.
 LauncherEntry`, addressed as `application://<app_id>.desktop`. KDE Plasma,
 Ubuntu Dock and Dash-to-Dock listen; **vanilla GNOME Shell does not**, and
-there is nothing to detect and no error when nobody is listening.
-`capabilities()` guesses from `XDG_CURRENT_DESKTOP` — verify that guess is
-right on the box you're on, since a wrong guess is worse than no guess.
-
-Also unverified on Linux: whether the `.desktop` id the launcher builds
-matches the file the bridge actually wrote into
-`~/.local/share/applications/`. A mismatch means the signal is addressed to an
-app the shell has never heard of — silently doing nothing.
+there is nothing to detect and no error when nobody is listening. Both the
+detection and the `.desktop` id worry are settled — see the Linux notes under
+the table above.
 
 ## macOS — does `setSize` → `getState` round-trip on a TITLED window?
 

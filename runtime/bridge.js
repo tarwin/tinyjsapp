@@ -199,13 +199,28 @@ function macosOnly(name) {
 // Unity's LauncherEntry DBus protocol carries the launcher badge count and
 // progress bar. It is a desktop-shell feature, not a Linux one: KDE Plasma,
 // Ubuntu's Dock and Dash-to-Dock implement it, vanilla GNOME Shell doesn't.
-// XDG_CURRENT_DESKTOP is a colon-separated list ("ubuntu:GNOME").
-const HAS_UNITY_LAUNCHER = IS_LINUX && (() => {
-  const de = (tjs.env.XDG_CURRENT_DESKTOP || '').toLowerCase();
-  return /kde|plasma|unity|ubuntu|pantheon|lxqt/.test(de);
-})();
+// A launcher that implements it takes the com.canonical.Unity bus name, so ask
+// the bus rather than guessing from XDG_CURRENT_DESKTOP (a colon-separated
+// list, "ubuntu:GNOME"): the name is what libunity itself looks for, and the
+// desktop-name guess is wrong in both directions — false for plain GNOME with
+// Dash-to-Dock added, true for an Ubuntu session with the dock removed. The
+// guess survives only as the answer for a box with no gdbus to ask with.
+const UNITY_LAUNCHER_GUESS = IS_LINUX &&
+  /kde|plasma|unity|ubuntu|pantheon|lxqt/.test((tjs.env.XDG_CURRENT_DESKTOP || '').toLowerCase());
 
-function systemCapabilities() {
+let unityLauncher = null;
+async function hasUnityLauncher() {
+  // The table below is built on every OS, so answer without spawning anything
+  // off Linux. Probed once — a dock does not come and go mid-run.
+  if (!IS_LINUX) return false;
+  if (unityLauncher === null) {
+    unityLauncher = (await busNameOwned('com.canonical.Unity'))
+      || (!(await probeOk(['sh', '-c', 'command -v gdbus'])) && UNITY_LAUNCHER_GUESS);
+  }
+  return unityLauncher;
+}
+
+async function systemCapabilities() {
   const linux = {
     // Wayland forbids a client placing its own toplevels, reading the global
     // pointer, seeing other windows, or synthesising input. X11 allows all of
@@ -228,11 +243,17 @@ function systemCapabilities() {
     authenticate: false,
     // app.badge / app.progress ride the Unity LauncherEntry DBus protocol,
     // which KDE Plasma, Ubuntu Dock and Dash-to-Dock implement but vanilla
-    // GNOME Shell does not — so this is per-desktop, not per-OS. app.icon
-    // sets the window icon and app.presence the skip-taskbar hint: both work
-    // everywhere.
-    badge: HAS_UNITY_LAUNCHER,
-    progress: HAS_UNITY_LAUNCHER,
+    // GNOME Shell does not — so this is per-desktop, not per-OS.
+    badge: await hasUnityLauncher(),
+    progress: await hasUnityLauncher(),
+    // The rest of the app surface is X11-only, and not by our choice: these go
+    // out as the window icon, the WM_HINTS urgency bit and the skip-taskbar
+    // hint, and GTK's Wayland backend has nowhere to put any of them. Measured
+    // with WAYLAND_DEBUG on GNOME 46 — the three calls produce not one byte of
+    // protocol traffic, while on XWayland each moves its X property.
+    icon: ON_X11,
+    attention: ON_X11,
+    presence: ON_X11,
     // present, with the caveats in the README
     globalHotkeys: true, tray: true, notifications: true,
     notificationActions: true, notificationReply: false,

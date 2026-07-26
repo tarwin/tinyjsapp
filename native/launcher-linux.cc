@@ -199,6 +199,38 @@ static bool file_exists(const std::string& p) {
   return stat(p.c_str(), &st) == 0;
 }
 
+// Set a window's icon from a png, as a SCALED LIST rather than the file.
+// gtk_window_set_icon_from_file() hands GDK the image at its natural size, and
+// GDK only publishes _NET_WM_ICON — the property every modern shell reads —
+// while it fits X11's per-request limit. Measured on GNOME/XWayland: a 256x256
+// icon lands, 512x512 is dropped and the window keeps only the legacy WM_HINTS
+// pixmap, which nothing reads. Every tinyjs app ships a 1024x1024 icon.png, so
+// the natural-size call was a silent no-op for all of them. Offering a few
+// sizes also lets the shell pick per use (titlebar vs alt-tab).
+// Wayland has no per-window icon at all — the shell matches the toplevel to a
+// .desktop by app id — so this is X11-only by nature, not by choice.
+static void set_window_icon(GtkWindow* win, const std::string& path) {
+  if (!win || path.empty()) return;
+  GdkPixbuf* src = gdk_pixbuf_new_from_file(path.c_str(), nullptr);
+  if (!src) return;
+  const int w = gdk_pixbuf_get_width(src), h = gdk_pixbuf_get_height(src);
+  const int longest = w > h ? w : h;
+  GList* icons = nullptr;
+  if (longest > 0 && longest <= 256) icons = g_list_prepend(icons, g_object_ref(src));
+  for (int size : {256, 128, 64, 48, 32}) {
+    if (longest <= size) continue;  // never upscale
+    int sw = w * size / longest, sh = h * size / longest;
+    GdkPixbuf* p = gdk_pixbuf_scale_simple(src, sw > 0 ? sw : 1, sh > 0 ? sh : 1,
+                                           GDK_INTERP_BILINEAR);
+    if (p) icons = g_list_prepend(icons, p);
+  }
+  if (icons) {
+    gtk_window_set_icon_list(win, icons);
+    g_list_free_full(icons, g_object_unref);
+  }
+  g_object_unref(src);
+}
+
 // True when GTK is driving a real X11 display (including XWayland). Wayland
 // forbids a client from placing its own toplevels, so this is what decides
 // whether setPosition/center can do anything.
@@ -3756,7 +3788,7 @@ static void do_winopen(const std::string& rest) {
   gtk_window_set_default_size(sec->win, w, h);
   apply_rgba_visual(GTK_WIDGET(sec->win));
   const char* icon = getenv("TINYJS_ICON");
-  if (icon && *icon) gtk_window_set_icon_from_file(sec->win, icon, nullptr);
+  if (icon && *icon) set_window_icon(sec->win, icon);
   sec->wv = make_webview(id);
   gtk_container_add(GTK_CONTAINER(sec->win), GTK_WIDGET(sec->wv));
   g_signal_connect(sec->win, "window-state-event", G_CALLBACK(on_window_state), nullptr);
@@ -4189,9 +4221,9 @@ static void handle_line(const std::string& line) {
     std::string path = wire_unescape(line.substr(8));
     if (path.empty()) {
       const char* icon = getenv("TINYJS_ICON");
-      if (icon && *icon) gtk_window_set_icon_from_file(g_win, icon, nullptr);
+      if (icon && *icon) set_window_icon(g_win, icon);
     } else if (file_exists(path)) {
-      gtk_window_set_icon_from_file(g_win, path.c_str(), nullptr);
+      set_window_icon(g_win, path);
     }
     return;
   }
@@ -4232,6 +4264,15 @@ static void on_main_destroy(GtkWidget*, gpointer) {
     g_quitting = true;
     gtk_main_quit();
   }
+}
+
+// The urgency hint latches: once ATTENTION sets it, nothing takes it back, so
+// the window would keep demanding attention for the rest of the run. macOS's
+// bounce and Windows' flash both stop once the user looks at the window, so
+// drop the hint when focus arrives.
+static gboolean on_main_focus_in(GtkWidget*, GdkEvent*, gpointer) {
+  gtk_window_set_urgency_hint(g_win, FALSE);
+  return FALSE;
 }
 
 // ------------------------------------------------------------ --open mode ---
@@ -4342,7 +4383,7 @@ int main(int argc, char** argv) {
   gtk_window_set_position(g_win, GTK_WIN_POS_CENTER);
   apply_rgba_visual(GTK_WIDGET(g_win));
   const char* icon = getenv("TINYJS_ICON");
-  if (icon && *icon) gtk_window_set_icon_from_file(g_win, icon, nullptr);
+  if (icon && *icon) set_window_icon(g_win, icon);
 
   g_accel = gtk_accel_group_new();
   gtk_window_add_accel_group(g_win, g_accel);
@@ -4358,6 +4399,7 @@ int main(int argc, char** argv) {
   g_signal_connect(g_win, "window-state-event", G_CALLBACK(on_window_state), nullptr);
   g_signal_connect(g_win, "delete-event", G_CALLBACK(on_main_delete), nullptr);
   g_signal_connect(g_win, "destroy", G_CALLBACK(on_main_destroy), nullptr);
+  g_signal_connect(g_win, "focus-in-event", G_CALLBACK(on_main_focus_in), nullptr);
 
   GtkClipboard* cb = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
   g_signal_connect(cb, "owner-change", G_CALLBACK(on_clip_owner_change), nullptr);
