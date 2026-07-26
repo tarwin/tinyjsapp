@@ -550,9 +550,17 @@
       otherWindows: () => call('app.otherWindows'),
       // Move/resize another app's frontmost window (pid from otherWindows()).
       moveWindow: (pid, rect) => call('app.moveWindow', { pid, ...(rect ?? {}) }),
-      // System beep / a system sound name ('Ping', 'Glass', …) or an audio
-      // file path -> false if the name/file didn't load.
+      // The system alert beep — the one portable sound, everywhere.
       beep: () => call('sound.play', {}),
+      // playSound(target) -> false if the name/file didn't load. `target` is:
+      //   'info' | 'success' | 'alert' | 'error' — portable, mapped to each
+      //     OS's nearest sound (Ping/Glass/Funk/Basso on macOS, the
+      //     SystemAsterisk-family aliases on Windows, the freedesktop sound
+      //     theme on Linux). Use these unless you need a specific sound.
+      //   a platform sound name — 'Glass' (macOS), 'SystemHand' (Windows),
+      //     'complete' (Linux). Names do NOT port: asking for 'Glass' on
+      //     Windows resolves false rather than throwing or silently beeping.
+      //   an absolute audio file path — the portable way to ship your own.
       playSound: (target) => call('sound.play', { target }),
       // Screenshot a display (id from screens(); default primary) ->
       // { path (png temp file — copy to keep), width, height }. Needs the

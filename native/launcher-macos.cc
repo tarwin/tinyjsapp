@@ -2012,7 +2012,8 @@ static void do_power(webview_t, void *arg) {
   delete req;
 }
 
-// NSSound stops when released; hold the last one until the next play.
+// NSSound stops when released; hold the last one until the next play. We own
+// exactly one reference to it — see the ownership note in do_sound.
 static NSSound *g_sound = nil;
 
 static void do_sound(webview_t, void *arg) {
@@ -2022,14 +2023,25 @@ static void do_sound(webview_t, void *arg) {
     if (req->target.empty()) {
       NSBeep();
     } else {
+      // Both branches must hand back an AUTORELEASED sound, so the single
+      // retain below is the only reference we hold. initWithContentsOfFile:
+      // is +1 and soundNamed: is +0, and storing the +0 one straight into
+      // g_sound was a use-after-free: this pool drains when do_sound returns,
+      // freeing the sound, and the NEXT play's [g_sound stop] messaged dead
+      // memory. It only aborted once that memory had been reused, so it read
+      // as an intermittent crash on the second play rather than a leak.
       NSSound *snd =
           req->target[0] == '/'
-              ? [[NSSound alloc] initWithContentsOfFile:ns(req->target)
-                                            byReference:YES]
+              ? [[[NSSound alloc] initWithContentsOfFile:ns(req->target)
+                                             byReference:YES] autorelease]
               : [NSSound soundNamed:ns(req->target)];
       ok = snd != nil;
       if (snd) {
+        // Retain first: replaying the same named sound gives back the same
+        // cached instance, and releasing before retaining could free it.
+        [snd retain];
         [g_sound stop];
+        [g_sound release];
         g_sound = snd;
         [snd play];
       }

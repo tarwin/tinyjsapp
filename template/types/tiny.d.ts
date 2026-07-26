@@ -62,6 +62,12 @@ declare interface TinyChromeOptions {
  *  (incl. most fullscreen apps); 'desktop' pins behind normal windows. */
 declare type TinyWindowLevel = 'normal' | 'floating' | 'overlay' | 'desktop';
 
+/** The portable sound names for app.playSound(). Every OS ships alert sounds
+ *  but none agree on their names, so these four ask for a meaning and get the
+ *  platform's nearest equivalent. Platform names and file paths also work —
+ *  they're just not portable. */
+declare type TinySoundName = 'info' | 'success' | 'alert' | 'error';
+
 /** On-device LLM (Apple FoundationModels). 'available' = ready; 'unavailable'
  *  = Apple Intelligence off / model not downloaded; 'unsupported' = older
  *  macOS, or a stock build (tiny.ai ships only in TINYJS_AI builds). */
@@ -721,10 +727,13 @@ declare interface Tiny {
     spotlight(query: string): Promise<string[]>;
     /** on-device LLM (FoundationModels; TINYJS_AI builds on macOS 26) */
     ai: TinyAi;
+    /** the system alert beep — the one portable sound */
     beep(): Promise<boolean>;
-    /** a system sound name ('Ping', 'Glass', …) or an audio file path;
-     *  false if it didn't load */
-    playSound(target: string): Promise<boolean>;
+    /** 'info' | 'success' | 'alert' | 'error' (portable — mapped to each OS's
+     *  nearest sound), a platform sound name ('Glass' macOS, 'SystemHand'
+     *  Windows, 'complete' Linux — these do NOT port), or an audio file path.
+     *  Resolves false if the name/file didn't load. */
+    playSound(target: TinySoundName | (string & {})): Promise<boolean>;
     /** screenshot a display (id from screens(); default primary) — png in
      *  the temp dir, caller owns the file; needs the 'screen' permission
      *  and macOS 14+, rejects with the reason otherwise */
@@ -928,10 +937,13 @@ declare interface TinyApp {
   spotlight(query: string): Promise<string[]>;
   /** on-device LLM (FoundationModels; TINYJS_AI builds on macOS 26) */
   ai: TinyAi;
+  /** the system alert beep — the one portable sound */
   beep(): Promise<boolean>;
-  /** a system sound name ('Ping', 'Glass', …) or an audio file path;
-   *  false if it didn't load */
-  playSound(target: string): Promise<boolean>;
+  /** 'info' | 'success' | 'alert' | 'error' (portable — mapped to each OS's
+   *  nearest sound), a platform sound name ('Glass' macOS, 'SystemHand'
+   *  Windows, 'complete' Linux — these do NOT port), or an audio file path.
+   *  Resolves false if the name/file didn't load. */
+  playSound(target: TinySoundName | (string & {})): Promise<boolean>;
   /** seconds since the user's last input, session-wide */
   idleTime(): Promise<number>;
   /** screenshot a display (id from screens(); default primary) — png in

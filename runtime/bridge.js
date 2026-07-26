@@ -341,6 +341,19 @@ const FILTER_LABELS = {
   gain: 'linear',
 };
 
+// app.playSound: four portable names, because every OS ships alert sounds but
+// none of them agree on what they're called — 'Ping' is macOS-only, Windows
+// wants a registry alias, Linux a freedesktop sound-theme name. Asking for a
+// MEANING works everywhere; anything else is passed straight through, so a
+// real OS sound name or an audio file path still does exactly what it says.
+const SOUND_ALIASES = {
+  macos: { info: 'Ping', success: 'Glass', alert: 'Funk', error: 'Basso' },
+  windows: { info: 'SystemAsterisk', success: 'SystemNotification',
+             alert: 'SystemExclamation', error: 'SystemHand' },
+  linux: { info: 'dialog-information', success: 'complete',
+           alert: 'dialog-warning', error: 'dialog-error' },
+};
+
 // chrome.windowControls accepts true | false | ['close','minimize'] | [].
 // The wire carries a token rather than a bit so the array form survives:
 // '' = leave unchanged, 'all', 'none', or a comma list. 'zoom' is accepted
@@ -987,10 +1000,16 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       if (!r?.ok) throw new Error(r?.error ?? 'move failed');
       return true;
     },
-    // System beep / a sound: system sound name ('Ping', 'Glass', …) or an
-    // audio file path. Resolve false if the name/file didn't load.
+    // System beep / a sound. `target` is one of the four portable names
+    // ('info' | 'success' | 'alert' | 'error'), a platform sound name
+    // ('Ping' on macOS, 'SystemHand' on Windows, 'bell' on Linux) or an audio
+    // file path. Resolves false if the name/file didn't load — a name from the
+    // wrong platform is a false, not a throw and not silence.
     async beep() { return (await ask('SOUND'))?.ok === true; },
-    async playSound(target) { return (await ask('SOUND', esc(target)))?.ok === true; },
+    async playSound(target) {
+      const name = SOUND_ALIASES[OS]?.[target] ?? target;
+      return (await ask('SOUND', esc(name)))?.ok === true;
+    },
     // Now Playing (Control Center / lock screen) + hardware media keys.
     // set({ title, artist, album, duration, elapsed, playing }) also arms
     // the media keys — presses arrive as the 'media-key' event / onMediaKey

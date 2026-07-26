@@ -80,8 +80,22 @@ deprecated.
   rather than an `XDG_CURRENT_DESKTOP` guess, which was wrong in both
   directions.
 
+- **`app.playSound` gained four portable names** — `'info'`, `'success'`,
+  `'alert'`, `'error'`. Every OS ships alert sounds and none agree on what
+  they're called, so these ask for a meaning and get the platform's nearest
+  equivalent (Ping/Glass/Funk/Basso on macOS, the `SystemAsterisk` family on
+  Windows, the freedesktop sound theme on Linux). Platform names and file
+  paths still pass through untouched; a name from the wrong platform resolves
+  `false`, as before.
+
 **Fixed**
 
+- **`app.playSound` crashed the app on macOS**, intermittently, usually on the
+  second play. `[NSSound soundNamed:]` returns an autoreleased sound and the
+  launcher stored it in a global without retaining it, so it was freed as soon
+  as the handler's pool drained; the next play's `[g_sound stop]` messaged dead
+  memory and aborted once that memory had been reused. Whether it died was a
+  race, which is why it looked like a bad sound name rather than a leak.
 - **Linux `app.icon` had never worked, on any session.** GDK only publishes
   `_NET_WM_ICON` — the property shells actually read — while the image fits
   X11's per-request limit; 256×256 lands, 512×512 is dropped. Every tinyjs app
