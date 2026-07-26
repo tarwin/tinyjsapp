@@ -338,17 +338,17 @@ const FILTER_LABELS = {
 };
 
 const DIALOG_OPS = {
-  'win.openFile': { op: 'open', args: () => [] },
-  'win.openFiles': { op: 'openmulti', args: () => [] },
-  'win.pickFolder': { op: 'dir', args: () => [] },
-  'win.saveFile': { op: 'save', args: () => [] },
+  'dialog.openFile': { op: 'open', args: () => [] },
+  'dialog.openFiles': { op: 'openmulti', args: () => [] },
+  'dialog.pickFolder': { op: 'dir', args: () => [] },
+  'dialog.saveFile': { op: 'save', args: () => [] },
   // A dialog's detail is the one field where line breaks earn their keep — a
   // list of what's missing, or a command on a line of its own. The wire is
   // newline-delimited, so they ride across escaped and the launcher puts them
   // back; everything else still gets flattened by one().
-  'win.alert': { op: 'alert', args: (p) => [one(p.message), lines(p.detail), one(p.ok)] },
-  'win.confirm': { op: 'confirm', args: (p) => [one(p.message), lines(p.detail), one(p.ok), one(p.cancel)] },
-  'win.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
+  'dialog.alert': { op: 'alert', args: (p) => [one(p.message), lines(p.detail), one(p.ok)] },
+  'dialog.confirm': { op: 'confirm', args: (p) => [one(p.message), lines(p.detail), one(p.ok), one(p.cancel)] },
+  'dialog.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
 };
 
 // Per-app data root: ~/Library/Application Support/<id> (macOS),

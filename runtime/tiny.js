@@ -286,13 +286,6 @@
       // Native share sheet ({ text?, url?, paths?, x?, y? }) — anchor it at
       // the click: tiny.win.share({ url, x: e.clientX, y: e.clientY }).
       share: (opts) => call('win.share', opts ?? {}),
-      openFile: () => call('win.openFile'),                 // path | null
-      openFiles: () => call('win.openFiles'),               // paths[] | null
-      pickFolder: () => call('win.pickFolder'),             // path | null
-      saveFile: () => call('win.saveFile'),                 // path | null
-      alert: (message, detail) => call('win.alert', { message, detail }),
-      confirm: (message, opts = {}) => call('win.confirm', { message, ...opts }),   // true | false
-      prompt: (message, opts = {}) => call('win.prompt', { message, ...opts }),     // string | null
     },
 
     menu: {
@@ -432,6 +425,20 @@
       // Trackpad haptic feedback: 'generic'|'alignment'|'level'. Needs a
       // Force Touch trackpad.
       haptic: (pattern) => call('macos.haptic', { pattern }),
+    },
+
+    // Native dialogs, run by the launcher — NSOpenPanel / NSAlert on macOS,
+    // the common item dialog + MessageBox on Windows, GTK's chooser and
+    // message dialogs on Linux. They're application-modal rather than
+    // attached to a window, which is why they aren't on tiny.win.
+    dialog: {
+      openFile: () => call('dialog.openFile'),               // path | null
+      openFiles: () => call('dialog.openFiles'),             // paths[] | null
+      pickFolder: () => call('dialog.pickFolder'),           // path | null
+      saveFile: () => call('dialog.saveFile'),               // path | null
+      alert: (message, detail) => call('dialog.alert', { message, detail }),
+      confirm: (message, opts = {}) => call('dialog.confirm', { message, ...opts }), // true | false
+      prompt: (message, opts = {}) => call('dialog.prompt', { message, ...opts }),   // string | null
     },
 
     // System theme; also 'sleep'/'wake' events via tiny.api.on.

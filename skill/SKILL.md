@@ -229,13 +229,13 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
 // silent; a built .app owns its own grant. Denial surfaces as silent chunks.
 
 tiny.win.setTitle(t); tiny.win.setSize(w, h);
-await tiny.win.openFile();                  // path | null (native panel)
-await tiny.win.openFiles();                 // paths[] | null
-await tiny.win.pickFolder();                // path | null
-await tiny.win.saveFile();                  // path | null
-await tiny.win.alert(message, detail);      // native alert, resolves true
-await tiny.win.confirm(message, { detail, ok, cancel });  // true | false
-await tiny.win.prompt(message, { default, ok, cancel });  // string | null
+await tiny.dialog.openFile();                  // path | null (native panel)
+await tiny.dialog.openFiles();                 // paths[] | null
+await tiny.dialog.pickFolder();                // path | null
+await tiny.dialog.saveFile();                  // path | null
+await tiny.dialog.alert(message, detail);      // native alert, resolves true
+await tiny.dialog.confirm(message, { detail, ok, cancel });  // true | false
+await tiny.dialog.prompt(message, { default, ok, cancel });  // string | null
 
 tiny.menu.set([{ title: 'Actions', items: [
   { id: 'open', label: 'Open…', key: 'o' },   // key = cmd+<key>

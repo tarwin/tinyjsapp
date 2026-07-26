@@ -564,13 +564,13 @@ await <b>tiny.win.windows</b>();     <i>// ['main', 'settings', …]</i>
 
   <section id="dialogs">
     <h2>dialogs <span class="tag">native panels, run by the launcher</span></h2>
-    <pre>await <b>tiny.win.openFile</b>();      <i>// path | null</i>
-await <b>tiny.win.openFiles</b>();     <i>// paths[] | null</i>
-await <b>tiny.win.pickFolder</b>();    <i>// path | null</i>
-await <b>tiny.win.saveFile</b>();      <i>// path | null</i>
-await <b>tiny.win.alert</b>(message, detail);
-await <b>tiny.win.confirm</b>(message, { detail, ok, cancel });   <i>// true | false</i>
-await <b>tiny.win.prompt</b>(message, { default, ok, cancel });   <i>// string | null</i></pre>
+    <pre>await <b>tiny.dialog.openFile</b>();      <i>// path | null</i>
+await <b>tiny.dialog.openFiles</b>();     <i>// paths[] | null</i>
+await <b>tiny.dialog.pickFolder</b>();    <i>// path | null</i>
+await <b>tiny.dialog.saveFile</b>();      <i>// path | null</i>
+await <b>tiny.dialog.alert</b>(message, detail);
+await <b>tiny.dialog.confirm</b>(message, { detail, ok, cancel });   <i>// true | false</i>
+await <b>tiny.dialog.prompt</b>(message, { default, ok, cancel });   <i>// string | null</i></pre>
   </section>
 
   <section id="menus">
@@ -926,7 +926,7 @@ if (available) await <b>tiny.api.call</b>('update.install');
 <i>// (or "daily"); packaged apps get an 'update-available' event with</i>
 <i>// { current, latest, notes } (notes from `tinyjs publish --notes "…"`)</i>
 <b>tiny.api.on</b>('update-available', async ({ latest, notes }) =&gt; {
-  if (await <b>tiny.win.confirm</b>(`Update to ${latest}?`, { detail: notes ?? '' }))
+  if (await <b>tiny.dialog.confirm</b>(`Update to ${latest}?`, { detail: notes ?? '' }))
     await <b>tiny.api.call</b>('update.install');
 });
 <i>// backend twin: export function onUpdateAvailable(info, app) { … }</i></pre>

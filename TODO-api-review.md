@@ -4,7 +4,13 @@ Questions raised 2026-07-26. Researched, not acted on: these are naming and
 placement calls that want a human. Each has a recommendation and the evidence
 behind it.
 
-## 1. `ocr` / `share` / `wifi` / `authenticate` — should some be `tiny.system.*`?
+## 1. ~~`ocr` / `share` / `wifi` / `authenticate`~~ — DECIDED 2026-07-26
+
+**Done:** `wifi` moved to `tiny.system.*`, and `battery` + `idleTime` moved
+with it (they're the same kind of thing — leaving them behind would have made
+the rule incoherent). `ocr`, `share` and `authenticate` stay on `tiny.app`.
+The reasoning below is kept because it's the rule everything else gets
+measured against.
 
 First, the dividing line, because without one this keeps coming back:
 
@@ -31,7 +37,12 @@ rule incoherent. That's the real scope of this change: three calls, not one.
 **Cost:** small. `battery` and `wifi` are used by menu-bar monitor examples;
 `idleTime` by till. All three are one-line call sites.
 
-## 2. `tiny.win.openFile()` → `tiny.system.openFile()`?
+## 2. ~~`tiny.win.openFile()` → ?~~ — DECIDED 2026-07-26
+
+**Done:** moved to `tiny.dialog.*` (all seven: the four pickers plus
+alert/confirm/prompt). Native dialogs kept on all three platforms; macOS
+sheets stay possible later as an implementation change behind the same call,
+not another rename.
 
 **Recommendation: rename, but to `tiny.dialog.*`, not `tiny.system.*`.**
 

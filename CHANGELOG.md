@@ -33,6 +33,16 @@ deprecated.
   `wifi`, `authenticate`, `recorder`, `ai`, `spotlight` — stay on `tiny.app`
   answering `'unsupported'`, so building them later isn't another rename.
   Calling `tiny.macos.*` off macOS throws with the reason instead of no-oping.
+- **`battery`, `wifi` and `idleTime` move to `tiny.system.*`.** They're facts
+  about the machine, not things the app does — the same line that decided the
+  app surface belongs on `tiny.app`. Mirrored on the backend as
+  `app.system.*`. (`tiny.system` also gained TypeScript definitions, which it
+  never had at all.)
+- **Native dialogs move to `tiny.dialog.*`** — `openFile`, `openFiles`,
+  `pickFolder`, `saveFile`, `alert`, `confirm`, `prompt`. They were on
+  `tiny.win.*`, but nothing about them is window-scoped: the launcher runs
+  them application-modally, so a dialog from a satellite behaved exactly like
+  one from main. All three platforms use their real native dialogs.
 - **Per-OS config blocks.** Root keys in `tinyjs.json` apply everywhere; an
   optional `macos` / `windows` / `linux` block merges on top for that platform,
   so only the keys that genuinely differ get repeated. Plain objects merge,

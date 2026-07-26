@@ -538,13 +538,6 @@ declare interface Tiny {
 
     /** native share sheet — anchor at the click's clientX/clientY */
     share(opts?: TinyShareOptions): Promise<any>;
-    openFile(): Promise<string | null>;
-    openFiles(): Promise<string[] | null>;
-    pickFolder(): Promise<string | null>;
-    saveFile(): Promise<string | null>;
-    alert(message: string, detail?: string): Promise<true>;
-    confirm(message: string, opts?: { detail?: string; ok?: string; cancel?: string }): Promise<boolean>;
-    prompt(message: string, opts?: { default?: string; ok?: string; cancel?: string }): Promise<string | null>;
   };
 
   menu: {
@@ -630,6 +623,20 @@ declare interface Tiny {
     unwatch(): Promise<any>;
     /** after watch(); self = our own write() caused the change */
     onChange(fn: (info: { changeCount: number; self: boolean }) => void): void;
+  };
+
+  /** Native dialogs, run by the launcher — NSOpenPanel / NSAlert on macOS,
+   *  the common item dialog + MessageBox on Windows, GTK's chooser and
+   *  message dialogs on Linux. Application-modal rather than attached to a
+   *  window, which is why they aren't on `win`. */
+  dialog: {
+    openFile(): Promise<string | null>;
+    openFiles(): Promise<string[] | null>;
+    pickFolder(): Promise<string | null>;
+    saveFile(): Promise<string | null>;
+    alert(message: string, detail?: string): Promise<true>;
+    confirm(message: string, opts?: { detail?: string; ok?: string; cancel?: string }): Promise<boolean>;
+    prompt(message: string, opts?: { default?: string; ok?: string; cancel?: string }): Promise<string | null>;
   };
 
   /** The machine: what it is, what it can do, and its live state. Facts,

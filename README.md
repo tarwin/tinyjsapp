@@ -615,15 +615,15 @@ if (await tiny.app.ai.availability() === 'available') {
 }
 
 // native file dialogs (NSOpenPanel/NSSavePanel, run by the launcher)
-const file  = await tiny.win.openFile();     // path | null
-const files = await tiny.win.openFiles();    // paths[] | null
-const dir   = await tiny.win.pickFolder();   // path | null
-const dest  = await tiny.win.saveFile();     // path | null
+const file  = await tiny.dialog.openFile();     // path | null
+const files = await tiny.dialog.openFiles();    // paths[] | null
+const dir   = await tiny.dialog.pickFolder();   // path | null
+const dest  = await tiny.dialog.saveFile();     // path | null
 
 // native system dialogs (NSAlert)
-await tiny.win.alert('Heads up', 'optional detail');
-const ok   = await tiny.win.confirm('Delete everything?', { detail: '…', ok: 'Delete', cancel: 'Keep' });
-const name = await tiny.win.prompt('Your name?', { default: 'world' });  // string | null
+await tiny.dialog.alert('Heads up', 'optional detail');
+const ok   = await tiny.dialog.confirm('Delete everything?', { detail: '…', ok: 'Delete', cancel: 'Keep' });
+const name = await tiny.dialog.prompt('Your name?', { default: 'world' });  // string | null
 ```
 
 ### Menus
@@ -982,7 +982,7 @@ export with `{ current, latest, notes }` — show your own prompt, then
 
 ```js
 tiny.api.on('update-available', async ({ latest, notes }) => {
-  if (await tiny.win.confirm(`Update to ${latest}?`, { detail: notes ?? '' }))
+  if (await tiny.dialog.confirm(`Update to ${latest}?`, { detail: notes ?? '' }))
     await tiny.api.call('update.install');
 });
 ```
