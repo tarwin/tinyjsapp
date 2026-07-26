@@ -303,11 +303,61 @@ async function cmdUninstall() {
   tjs.exit(0);
 }
 
+// Per-OS config: root keys apply everywhere, and an optional "macos" /
+// "windows" / "linux" block is merged on top for that platform only. Block
+// names match tiny.system.os() so the config vocabulary matches the runtime's.
+// Plain objects merge (so "macos": { chrome: { vibrancy } } keeps a root
+// chrome.frame); scalars and arrays replace outright.
+const OS_KEYS = ['macos', 'windows', 'linux'];
+const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+function mergeConfig(base, over) {
+  const out = { ...base };
+  for (const [k, v] of Object.entries(over ?? {})) {
+    out[k] = isPlainObject(v) && isPlainObject(base[k]) ? mergeConfig(base[k], v) : v;
+  }
+  return out;
+}
+
+// Env vars OVERRIDE the file — but never silently: a value exported in a shell
+// quietly changing how a project signs is exactly the failure worth shouting
+// about, so an override that displaces a real config value announces itself.
+// [cfg path, env var] pairs; the path is dotted.
+const ENV_OVERRIDES = [
+  ['signIdentity', 'TINYJS_SIGN_IDENTITY'],
+  ['notarize.profile', 'TINYJS_NOTARY_PROFILE'],
+];
+
+function applyEnvOverrides(cfg) {
+  for (const [path, envName] of ENV_OVERRIDES) {
+    const val = tjs.env[envName];
+    if (!val) continue;
+    const parts = path.split('.');
+    let node = cfg;
+    for (const p of parts.slice(0, -1)) {
+      if (!isPlainObject(node[p])) node[p] = {};
+      node = node[p];
+    }
+    const leaf = parts[parts.length - 1];
+    const had = node[leaf];
+    node[leaf] = val;
+    if (had !== undefined && had !== val) {
+      console.log(`==> ${path} from ${envName} (overriding tinyjs.json)`);
+    }
+  }
+  return cfg;
+}
+
 async function loadConfig() {
   if (!(await exists('tinyjs.json'))) {
     fail('no tinyjs.json here — run this from a tinyjs project (or `tinyjs new <dir>` to create one)');
   }
-  const cfg = JSON.parse(dec.decode(await tjs.readFile('tinyjs.json')));
+  const raw = JSON.parse(dec.decode(await tjs.readFile('tinyjs.json')));
+  // Resolve the platform ONCE here, so every existing cfg.* read downstream
+  // sees the merged value and no call site has to know about OS blocks.
+  const osKey = IS_WIN ? 'windows' : IS_LINUX ? 'linux' : 'macos';
+  const cfg = applyEnvOverrides(mergeConfig(raw, raw[osKey]));
+  for (const k of OS_KEYS) delete cfg[k]; // the blocks themselves aren't config
   if (!cfg.name) fail('tinyjs.json needs a "name"');
   if (cfg.activation && !['regular', 'accessory'].includes(cfg.activation)) {
     fail('tinyjs.json "activation" must be "regular" or "accessory"');
@@ -944,7 +994,9 @@ async function cmdBuild() {
   // re-signed — txiki appends the bundled app after the Mach-O, which
   // codesign rejects ("failed strict validation"). It runs locally on its
   // original linker signature; use the .app for distribution.
-  const identity = cfg.signIdentity || tjs.env.TINYJS_SIGN_IDENTITY || '-';
+  // loadConfig() has already folded TINYJS_SIGN_IDENTITY in (and announced
+  // it if it displaced a config value), so this is just the resolved value.
+  const identity = cfg.signIdentity || '-';
   console.log('==> codesigning' + (identity === '-' ? ' (ad-hoc)' : ' as ' + identity));
   // A real identity gets the hardened runtime + a secure timestamp — both
   // required by notarization. QuickJS interprets (no JIT/executable memory)
@@ -998,12 +1050,12 @@ async function cmdNotarize() {
   const cfg = await loadConfig();
   const APP = 'dist/' + cfg.title + '.app';
   if (!(await exists(APP))) fail(`${APP} not found — run \`tinyjs build\` first`);
-  const identity = cfg.signIdentity || tjs.env.TINYJS_SIGN_IDENTITY;
+  const identity = cfg.signIdentity;
   if (!identity || identity === '-') {
     fail('notarization needs a real Developer ID — set "signIdentity" in tinyjs.json ' +
          'or export TINYJS_SIGN_IDENTITY, then rebuild');
   }
-  const profile = cfg.notarize?.profile || tjs.env.TINYJS_NOTARY_PROFILE;
+  const profile = cfg.notarize?.profile;
   if (!profile) {
     fail('no notarytool profile — set tinyjs.json "notarize": { "profile": "…" } or TINYJS_NOTARY_PROFILE');
   }
