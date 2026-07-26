@@ -1006,26 +1006,45 @@ static std::vector<WUN::IToastNotification *> g_live_toasts;
 // carrying it, or CreateToastNotifier fails. Done once, lazily, on first toast.
 static std::wstring g_aumid;
 
-// What an existing .lnk currently points at ("" if it can't be read).
-static std::wstring shortcut_target(const std::wstring &lnk) {
+// What an existing .lnk points at, and the AppUserModelID it carries (both
+// empty if it can't be read). The AUMID matters as much as the target: a
+// shortcut written by something that can't set it — shelf uses WScript.Shell,
+// which has no way to — looks right but won't serve as toast identity.
+struct LnkInfo {
+  std::wstring target;
+  std::wstring aumid;
+};
+
+static LnkInfo read_shortcut(const std::wstring &lnk) {
+  LnkInfo info;
   IShellLinkW *link = nullptr;
   if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
                               IID_IShellLinkW, (void **)&link)) ||
       !link)
-    return L"";
-  std::wstring out;
+    return info;
   IPersistFile *pf = nullptr;
   if (SUCCEEDED(link->QueryInterface(IID_IPersistFile, (void **)&pf)) && pf) {
     if (SUCCEEDED(pf->Load(lnk.c_str(), STGM_READ))) {
       wchar_t buf[MAX_PATH] = {0};
       // SLGP_RAWPATH: we want what was stored, not a resolved/relocated guess
       if (SUCCEEDED(link->GetPath(buf, MAX_PATH, nullptr, SLGP_RAWPATH)))
-        out = buf;
+        info.target = buf;
+      IPropertyStore *store = nullptr;
+      if (SUCCEEDED(link->QueryInterface(IID_IPropertyStore, (void **)&store)) &&
+          store) {
+        PROPVARIANT pv;
+        PropVariantInit(&pv);
+        if (SUCCEEDED(store->GetValue(kPKEY_AppUserModel_ID, &pv)) &&
+            pv.vt == VT_LPWSTR && pv.pwszVal)
+          info.aumid = pv.pwszVal;
+        PropVariantClear(&pv);
+        store->Release();
+      }
     }
     pf->Release();
   }
   link->Release();
-  return out;
+  return info;
 }
 
 static void create_start_menu_shortcut(const std::wstring &aumid,
@@ -1041,14 +1060,23 @@ static void create_start_menu_shortcut(const std::wstring &aumid,
   wchar_t self[MAX_PATH];
   GetModuleFileNameW(nullptr, self, MAX_PATH);
   std::wstring exe = app_exe_env().empty() ? std::wstring(self) : app_exe_env();
-  // An existing shortcut is NOT reason enough to bail. A `tinyjs dev` run has
-  // no TINYJS_APP_EXE, so it stamps one pointing at launcher-win.exe — dead,
-  // since that can't start alone — and bailing on "file exists" would freeze
-  // that forever, so a later real install could never correct it (observed:
-  // four such shortcuts on a dev box). Rewrite whenever the target differs.
-  if (GetFileAttributesW(lnk.c_str()) != INVALID_FILE_ATTRIBUTES &&
-      _wcsicmp(shortcut_target(lnk).c_str(), exe.c_str()) == 0)
-    return; // already points where we want; leave it alone
+  // An existing shortcut is NOT reason enough to bail. Two ways one can be
+  // there but wrong:
+  //   - a `tinyjs dev` run has no TINYJS_APP_EXE, so it stamps one pointing at
+  //     launcher-win.exe, which can't start alone (four such were found on a
+  //     dev box); bailing on "file exists" froze that forever, so a later real
+  //     install could never correct it;
+  //   - an installer wrote a plain shortcut with no AUMID — shelf does exactly
+  //     this, since WScript.Shell can't set one — which looks fine in Start but
+  //     is useless as toast identity.
+  // So rewrite unless BOTH the target and the AUMID already match; an
+  // untouched correct shortcut is left alone so this doesn't churn on every
+  // toast or clobber a user's own edits.
+  if (GetFileAttributesW(lnk.c_str()) != INVALID_FILE_ATTRIBUTES) {
+    LnkInfo cur = read_shortcut(lnk);
+    if (_wcsicmp(cur.target.c_str(), exe.c_str()) == 0 && cur.aumid == aumid)
+      return;
+  }
   IShellLinkW *link = nullptr;
   if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
                               IID_IShellLinkW, (void **)&link)) ||
@@ -5336,6 +5364,16 @@ static int run(int argc, char **argv) {
   g_orig_wndproc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC,
                                               (LONG_PTR)tiny_wndproc);
   apply_relaunch_props(g_hwnd);
+  // Built apps get their Start-Menu shortcut on FIRST RUN, not on a first
+  // toast that may never arrive. That shortcut is what makes an app findable
+  // in Start/search and is what a taskbar pin resolves through, so tying it to
+  // notifications left apps that never notify unpinnable. Dev spawns are
+  // skipped: with no TINYJS_APP_EXE there is no app exe worth pointing at, and
+  // stamping one anyway is what littered Start with dead launcher shortcuts.
+  if (!app_exe_env().empty()) {
+    std::wstring aumid = tinyjs_aumid();
+    create_start_menu_shortcut(aumid, aumid.substr(7)); // strip "tinyjs."
+  }
 
   // Page RPC + injected client library (document-start, every navigation).
   webview_bind(g_w, "__invoke", on_invoke, nullptr);

@@ -67,19 +67,29 @@ names refer to the protocol table in the README; Windows handlers live in
       child gets associated with it, while one launched via explorer is a child
       of the shell instead. That association, not the window property store, is
       what the pin followed.
-      Still open underneath: `create_start_menu_shortcut()` only runs lazily
-      from `ensure_toast_identity()`, so an app that has never shown a toast has
-      no AUMID-carrying shortcut at all — on this box `Programs\` had hello /
-      Presto / Shelf / TinyDeck / tinyjs-demo but no amp.lnk. Creating it at
-      install or first run would be sturdier than relying on launch parentage.
-      Shelf's own new shortcuts (`Programs\tinyjs\`) deliberately do NOT carry
-      the AUMID: WScript.Shell can't set it, and a plain .lnk at the launcher's
-      own path would make it skip its own and downgrade toasts to tray balloons.
-      Setting it needs IPropertyStore on IShellLink — tried and abandoned from
-      Windows PowerShell 5.1, which won't cast the ShellLink coclass to the
-      interfaces. A `launcher.exe --make-shortcut` mode would reuse the real
-      code, but installed apps carry the launcher they were built with, so shelf
-      would need a fallback for older installs.
+      The weak spot underneath is now fixed too: `create_start_menu_shortcut()`
+      only ran lazily from `ensure_toast_identity()`, so an app that had never
+      notified had no AUMID-carrying shortcut at all (on this box `Programs\`
+      held hello / Presto / Shelf / TinyDeck / tinyjs-demo but no amp.lnk — and
+      amp was exactly the app that mis-pinned). Built apps now stamp it on
+      **first run**; dev spawns still skip it, having no app exe worth pointing
+      at. It also rewrites when the target OR the AUMID doesn't match, so a
+      plain shortcut written by an installer gets upgraded in place rather than
+      blocking the real one — shelf writes exactly that, at the same canonical
+      path, since WScript.Shell cannot set an AUMID (doing it from Windows
+      PowerShell 5.1 was tried and abandoned: it won't cast the ShellLink
+      coclass to IShellLink/IPropertyStore).
+      Verified against a real installed app with the new launcher swapped in:
+      first run creates target=amp.exe + aumid=tinyjs.amp with no toast; a
+      fresh plain shortcut gains the AUMID on next run; an already-correct one
+      is not rewritten (mtime unchanged). Watch the redo trap — WScript.Shell's
+      CreateShortcut on an EXISTING file preserves its properties, so a "plain"
+      shortcut planted over a good one still carries the old AUMID and the test
+      silently passes for the wrong reason. Delete first.
+      Caveat: shelf derives the .lnk name from the catalog title and the
+      launcher from the app's own name, both stripped to [alnum . - _]. They
+      match today; an app whose internal name differs from its catalog title
+      would get two shortcuts.
 - [ ] **Examples: Windows builds for shelf installs** — publish per-app
       Windows zips (+ `winUrl` in catalog.json) and a zip install path in
       shelf so it's a real store on Windows, not just a filtered list.
