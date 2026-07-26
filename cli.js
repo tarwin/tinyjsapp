@@ -630,11 +630,19 @@ async function cmdNew() {
 // hacking on tinyjs itself never runs a stale binary. Installed copies
 // (VERSION file present) never rebuild.
 async function ensureLauncherFresh() {
-  if ((!IS_WIN && !IS_LINUX) || (await toolVersion()) !== 'dev') return;
-  const exe = TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : 'launcher-linux');
+  // macOS was excluded here, and it was the only platform where editing
+  // runtime/tiny.js left `tinyjs dev` silently running the PREVIOUS client —
+  // the page then gets an API that predates the app's own code, which
+  // surfaces as an unexplained TypeError rather than anything pointing at a
+  // stale binary. Same rule everywhere now.
+  if ((await toolVersion()) !== 'dev') return;
+  const exe = TOOL_DIR + 'native/' +
+    (IS_WIN ? 'launcher-win.exe' : IS_LINUX ? 'launcher-linux' : 'launcher-macos');
   const srcs = IS_WIN
     ? ['native/launcher-win.cc', 'runtime/tiny.js']
-    : ['native/launcher-linux.cc', 'runtime/tiny.js'];
+    : IS_LINUX
+      ? ['native/launcher-linux.cc', 'runtime/tiny.js']
+      : ['native/launcher-macos.cc', 'runtime/tiny.js'];
   const mtime = async (p) => {
     try { return (await tjs.stat(p)).mtim.getTime(); } catch { return null; }
   };

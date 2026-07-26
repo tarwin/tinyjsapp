@@ -856,7 +856,7 @@ await <b>tiny.macos.applescript</b>('tell application "Music" to playpause');
 const { text, blocks } = await <b>tiny.app.ocr</b>('/path/scan.png');
 <i>// blocks: [{ text, confidence, box }] — box normalized 0..1, top-left</i>
 
-await <b>tiny.app.share</b>({ url });        <i>// the native share sheet</i>
+await <b>tiny.win.share</b>({ url });        <i>// native share sheet, anchored in the window</i>
 await <b>tiny.app.recorder.start</b>({ path }); <i>// screen recording to .mp4</i>
 await <b>tiny.app.selectedText</b>();        <i>// text selected in the front app</i></pre>
   </section>
