@@ -776,12 +776,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Replace the app icon from a png (render a canvas → live tiles). ''
     // resets to the bundle icon. macOS Dock tile / Linux window icon.
     icon(pngPath) { send('APPICON ' + esc(pngPath ?? '')); return true; },
-    // Battery: { percent, charging, plugged, minutesRemaining } | null (on
-    // desktops without a battery).
-    battery: () => query('battery'),
-    // Current Wi-Fi: { ssid, bssid, rssi, noise, txRate } | null. ssid/bssid
-    // are null without the Location permission on macOS 14+.
-    wifi: () => query('wifi'),
     // Find files by name or content (Spotlight/NSMetadataQuery, home scope)
     // -> up to 100 absolute paths.
     async spotlight(queryText) {
@@ -998,9 +992,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // 'premium' }]. Enhanced/premium need a one-time download in System
     // Settings > Accessibility > Spoken Content.
     async voices() { return (await ask('VOICES'))?.voices ?? []; },
-    // Seconds since the user's last input, session-wide — pause polling /
-    // dim UI when they walk away.
-    idleTime: async () => (await query('idle'))?.seconds ?? 0,
     // Screenshot a display (id from screens(); default primary) ->
     // { path (png in the temp dir — the caller owns it), width, height }.
     // Needs the 'screen' permission and macOS 14+; throws with the reason
@@ -1078,6 +1069,19 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       },
     },
     // Run AppleScript in-process (no osascript spawn) — Apple Events hit
+    // Machine state rather than things this app does — mirrors
+    // tiny.system.* in the page, same names both sides.
+    system: {
+      // { percent, charging, plugged, minutesRemaining } | null (on desktops
+      // without a battery).
+      battery: () => query('battery'),
+      // { ssid, bssid, rssi, noise, txRate } | null. ssid/bssid are null
+      // without the Location permission on macOS 14+.
+      wifi: () => query('wifi'),
+      // Seconds since the user's last input, session-wide — pause polling /
+      // dim UI when they walk away.
+      idleTime: async () => (await query('idle'))?.seconds ?? 0,
+    },
     // macOS-only: concepts the other OSes don't have at all, so they live in
     // their own namespace instead of pretending to be portable. Same shape
     // and same names as tiny.macos.* in the page.
@@ -1359,8 +1363,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // another OS stays on app.* and answers 'unsupported' instead.
     'macos.haptic': async ({ pattern }) => (macosOnly('haptic'), app.macos.haptic(pattern)),
     'app.icon': async ({ path }) => app.icon(path),
-    'app.battery': async () => app.battery(),
-    'app.wifi': async () => app.wifi(),
+    'system.battery': async () => app.system.battery(),
+    'system.wifi': async () => app.system.wifi(),
     'app.spotlight': async ({ query: q }) => app.spotlight(q),
     'ai.availability': async () => app.ai.availability(),
     'ai.generate': async ({ prompt, instructions }) => app.ai.generate(prompt, { instructions }),
@@ -1470,7 +1474,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.frontmost': async () => app.frontmostApp(),
     'sound.play': async ({ target }) => (target ? app.playSound(target) : app.beep()),
     'win.share': async (p, _a, m) => forWin(m).share(p),
-    'app.idleTime': async () => app.idleTime(),
+    'system.idleTime': async () => app.system.idleTime(),
     'macos.quickLook': async ({ paths }) => (macosOnly('quickLook'), app.macos.quickLook(paths)),
     'app.captureScreen': async ({ screenId }) => app.captureScreen(screenId),
     'app.pickColor': async () => app.pickColor(),

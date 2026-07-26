@@ -505,7 +505,7 @@ btn.addEventListener('click', (e) =>
                    paths: ['/tmp/report.pdf'], x: e.clientX, y: e.clientY }));
 
 // seconds since the user's last input (pause polling when they're away)
-const idle = await tiny.app.idleTime();
+const idle = await tiny.system.idleTime();
 
 // Quick Look — the Finder-spacebar preview panel (no qlmanage spawn);
 // an array pages with the arrow keys, no args closes it
@@ -599,9 +599,9 @@ tiny.macos.haptic('generic');                // 'generic'|'alignment'|'level'
 tiny.app.icon(canvasPngPath);                // '' resets to the bundle icon
 
 // battery + Wi-Fi for menu-bar monitors
-const bat = await tiny.app.battery();        // { percent, charging, plugged,
+const bat = await tiny.system.battery();        // { percent, charging, plugged,
                                              //   minutesRemaining } | null
-const net = await tiny.app.wifi();           // { ssid, bssid, rssi, txRate }
+const net = await tiny.system.wifi();           // { ssid, bssid, rssi, txRate }
                                              //   (ssid needs Location) | null
 
 // find files by name or content (Spotlight, no mdfind spawn) — 100 paths max

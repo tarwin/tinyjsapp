@@ -786,7 +786,7 @@ btn.addEventListener('click', (e) =&gt;
   <b>tiny.win.share</b>({ url, text, paths, x: e.clientX, y: e.clientY }));
 
 <i>// seconds since the user's last input — pause polling when they're away</i>
-await <b>tiny.app.idleTime</b>();
+await <b>tiny.system.idleTime</b>();
 
 <i>// Quick Look — the Finder-spacebar preview panel (no qlmanage spawn)</i>
 <b>tiny.macos.quickLook</b>('/path/photo.heic'); <i>// array pages with arrow keys</i>
@@ -884,8 +884,8 @@ const { path } = await <b>tiny.win.printToPDF</b>('/tmp/report.pdf');
 <b>tiny.app.icon</b>(canvasPngPath);      <i>// '' resets to the bundle icon</i>
 
 <i>// battery + Wi-Fi for menu-bar monitors</i>
-const bat = await <b>tiny.app.battery</b>();  <i>// { percent, charging, plugged, minutesRemaining } | null</i>
-const net = await <b>tiny.app.wifi</b>();     <i>// { ssid, bssid, rssi, txRate } | null (ssid needs Location)</i>
+const bat = await <b>tiny.system.battery</b>();  <i>// { percent, charging, plugged, minutesRemaining } | null</i>
+const net = await <b>tiny.system.wifi</b>();     <i>// { ssid, bssid, rssi, txRate } | null (ssid needs Location)</i>
 
 <i>// find files by name/content (Spotlight, no mdfind spawn) — 100 paths max</i>
 const docs = await <b>tiny.app.spotlight</b>('quarterly report');

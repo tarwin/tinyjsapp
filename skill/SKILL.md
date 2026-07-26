@@ -405,7 +405,7 @@ await tiny.app.playSound('Ping');        // system sound name or audio file
 // native share sheet — anchor at the click's clientX/clientY
 tiny.win.share({ text, url, paths, x: e.clientX, y: e.clientY });
 
-await tiny.app.idleTime();      // seconds since the user's last input
+await tiny.system.idleTime();   // seconds since the user's last input
 tiny.macos.quickLook(pathOrArray); tiny.macos.quickLook();  // preview / close
 await tiny.app.captureScreen(screenId?);  // -> { path (png, yours), width,
                                 // height }; needs 'screen' perm + macOS 14,
@@ -456,8 +456,8 @@ await tiny.tray.position();       // { x,y,width,height }|null (anchor dropdowns
 await tiny.win.printToPDF(path);  // -> { path } (vector PDF; invoices/reports)
 tiny.macos.haptic('generic');     // 'generic'|'alignment'|'level' (Force Touch)
 tiny.app.icon(pngPath);           // '' resets (render a canvas for live tiles)
-await tiny.app.battery();         // { percent, charging, plugged, minutesRemaining }|null
-await tiny.app.wifi();            // { ssid, bssid, rssi, noise, txRate }|null (ssid→Location)
+await tiny.system.battery();      // { percent, charging, plugged, minutesRemaining }|null
+await tiny.system.wifi();         // { ssid, bssid, rssi, noise, txRate }|null (ssid→Location)
 await tiny.app.spotlight(query);  // find files by name/content -> up to 100 paths
 // on-device LLM (Apple FoundationModels; offline, no key). Ships only in a
 // TINYJS_AI build on macOS 26 — always guard on availability().

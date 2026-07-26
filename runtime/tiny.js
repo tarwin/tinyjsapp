@@ -140,6 +140,16 @@
       // quietly does nothing (Wayland, for instance, ignores setPosition).
       capabilities: () => call('system.capabilities'),
 
+      // --- machine state -------------------------------------------------
+      // Facts about the machine rather than things this app does, which is
+      // why these live here and not on tiny.app.
+      // { percent, charging, plugged, minutesRemaining } | null (desktops).
+      battery: () => call('system.battery'),
+      // { ssid, bssid, rssi, noise, txRate } | null (ssid needs Location).
+      wifi: () => call('system.wifi'),
+      // Seconds since the user's last input — pause polling when idle.
+      idleTime: () => call('system.idleTime'),
+
       // What this machine is MISSING for a feature, and how to fix it. Linux
       // ships its media stack in pieces (AAC and H.264 live in optional
       // GStreamer plugin sets), so a feature can be absent on one box and
@@ -512,10 +522,6 @@
       },
       // The active app right now: { name, bundleId, pid } | null.
       frontmostApp: () => call('app.frontmost'),
-      // { percent, charging, plugged, minutesRemaining } | null.
-      battery: () => call('app.battery'),
-      // { ssid, bssid, rssi, noise, txRate } | null (ssid needs Location).
-      wifi: () => call('app.wifi'),
       // Find files by name/content (Spotlight) -> up to 100 paths.
       spotlight: (query) => call('app.spotlight', { query }),
       // On-device LLM (FoundationModels; offline, no key). Only in TINYJS_AI
@@ -537,8 +543,6 @@
       // file path -> false if the name/file didn't load.
       beep: () => call('sound.play', {}),
       playSound: (target) => call('sound.play', { target }),
-      // Seconds since the user's last input (pause polling when idle).
-      idleTime: () => call('app.idleTime'),
       // Screenshot a display (id from screens(); default primary) ->
       // { path (png temp file — copy to keep), width, height }. Needs the
       // 'screen' permission + macOS 14; rejects with the reason otherwise.

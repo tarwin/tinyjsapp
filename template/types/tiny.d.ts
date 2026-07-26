@@ -632,6 +632,25 @@ declare interface Tiny {
     onChange(fn: (info: { changeCount: number; self: boolean }) => void): void;
   };
 
+  /** The machine: what it is, what it can do, and its live state. Facts,
+   *  not actions — anything the APP does lives on `app`. */
+  system: {
+    /** synchronous and safe during page setup (the webview's UA is decisive) */
+    os(): 'macos' | 'windows' | 'linux';
+    isMacOS(): boolean;
+    isWindows(): boolean;
+    isLinux(): boolean;
+    info(): Promise<{ os: string; arch: string; session: string | null; desktop: string | null }>;
+    architecture(): Promise<string>;
+    /** what this machine can actually do — anything ABSENT is supported */
+    capabilities(): Promise<Record<string, boolean | string>>;
+    requirements(ids?: string[] | null, opts?: { refresh?: boolean }): Promise<any[]>;
+    missing(ids?: string[] | null): Promise<any[]>;
+    promptMissing(ids?: string[] | null, opts?: object): Promise<boolean>;
+    /** live machine state */
+        /** seconds since the user's last input, session-wide */
+    };
+
   /** macOS-only: concepts the other OSes have no equivalent for at all.
    *  These reject on Windows and Linux — guard with tiny.system.isMacOS().
    *  Anything that COULD exist elsewhere stays on `app` and answers
@@ -688,8 +707,6 @@ declare interface Tiny {
     icon(path: string): Promise<any>;
     /** progress bar on the app icon / taskbar button: 0..1, null clears */
     progress(value: number | null): Promise<any>;
-    battery(): Promise<TinyBattery | null>;
-    wifi(): Promise<TinyWifi | null>;
     /** find files by name/content (Spotlight) — up to 100 paths */
     spotlight(query: string): Promise<string[]>;
     /** on-device LLM (FoundationModels; TINYJS_AI builds on macOS 26) */
@@ -698,8 +715,6 @@ declare interface Tiny {
     /** a system sound name ('Ping', 'Glass', …) or an audio file path;
      *  false if it didn't load */
     playSound(target: string): Promise<boolean>;
-    /** seconds since the user's last input, session-wide */
-    idleTime(): Promise<number>;
     /** screenshot a display (id from screens(); default primary) — png in
      *  the temp dir, caller owns the file; needs the 'screen' permission
      *  and macOS 14+, rejects with the reason otherwise */
@@ -884,6 +899,12 @@ declare interface TinyApp {
   icon(path: string): boolean;
   /** macOS-only — same shape and names as tiny.macos.* in the page. These
    *  reject on Windows and Linux. */
+  /** machine state — mirrors tiny.system.* in the page */
+  system: {
+    battery(): Promise<TinyBattery | null>;
+    wifi(): Promise<TinyWifi | null>;
+    idleTime(): Promise<number>;
+  };
   macos: {
     applescript(source: string): Promise<string | null>;
     quickLook(paths?: string | string[] | null): boolean;
