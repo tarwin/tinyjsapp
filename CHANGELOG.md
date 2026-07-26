@@ -4,6 +4,95 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.30.0 — upcoming
+
+**Breaking.** The Dock/taskbar/launcher calls are renamed, and three
+macOS-only calls move to their own namespace. Old names are gone rather than
+deprecated.
+
+- **The app surface is verbs named for intent, not macOS furniture.** The Dock,
+  the Windows taskbar and the Linux launcher are surfaces the OS owns and an
+  app decorates — there is no shared object to hang a namespace off:
+
+  | before | after |
+  | --- | --- |
+  | `app.dock.setBadge(t)` | `app.badge(t)` |
+  | `app.dock.bounce(o)` | `app.attention(o)` |
+  | `app.dockIcon(p)` | `app.icon(p)` |
+  | `app.setDockVisible(v)` | `app.presence('normal' \| 'menubar')` |
+
+  Same names on both sides of the bridge, so `main.js` and the page agree.
+- **`app.progress(0..1)`** — new. A determinate bar on the app icon; `null`
+  clears. macOS draws it into the Dock tile, Windows uses `ITaskbarList3`,
+  Linux emits the Unity `LauncherEntry` signal (KDE Plasma, Ubuntu Dock and
+  Dash-to-Dock listen; vanilla GNOME Shell doesn't). On macOS it composes with
+  `app.icon()` — a custom Dock tile keeps its icon while the bar is up.
+- **`tiny.macos.*`** — `applescript`, `quickLook` and `haptic` move here (and
+  `app.macos.*` on the backend). The rule is deliberately strict: only concepts
+  no other OS has. Things that *could* exist elsewhere — `ocr`, `share`,
+  `wifi`, `authenticate`, `recorder`, `ai`, `spotlight` — stay on `tiny.app`
+  answering `'unsupported'`, so building them later isn't another rename.
+  Calling `tiny.macos.*` off macOS throws with the reason instead of no-oping.
+- **Per-OS config blocks.** Root keys in `tinyjs.json` apply everywhere; an
+  optional `macos` / `windows` / `linux` block merges on top for that platform,
+  so only the keys that genuinely differ get repeated. Plain objects merge,
+  scalars and arrays replace. Block names match `tiny.system.os()`.
+- **`TINYJS_SIGN_IDENTITY` / `TINYJS_NOTARY_PROFILE` now override
+  `tinyjs.json`** rather than only filling a gap — but never silently: if one
+  displaces a value that was really in the file, the build says so. Resolution
+  order is root → OS block → env.
+- **`capabilities()` stopped over-claiming**, on two platforms. Windows
+  declared none of the app-surface keys while silently no-opping them, which
+  under the table's "absent = true" rule claimed support that never existed.
+  On Linux, `app.icon`, `app.attention` and `app.presence` emit *zero bytes* of
+  Wayland protocol — GTK3's Wayland backend has nowhere to put a window icon,
+  an urgency bit or a skip-taskbar hint — so all three are now gated on X11 and
+  report honestly per session. Badge/progress detection is a bus-name probe
+  rather than an `XDG_CURRENT_DESKTOP` guess, which was wrong in both
+  directions.
+
+**Fixed**
+
+- **Linux `app.icon` had never worked, on any session.** GDK only publishes
+  `_NET_WM_ICON` — the property shells actually read — while the image fits
+  X11's per-request limit; 256×256 lands, 512×512 is dropped. Every tinyjs app
+  ships a 1024×1024 `icon.png`, so this silently swallowed both `app.icon()`
+  *and the startup window icon* for every app ever shipped, while returning
+  success. The launcher now scales to an icon list (256/128/64/48/32, never
+  upscaling).
+- **Linux `attention()` latched forever** — nothing cleared the urgency hint
+  and Mutter doesn't clear it on focus, so one call left the window demanding
+  attention for the rest of the run. A focus handler now drops it.
+- **`win.setSize` → `getState` round-trips.** Both the Windows main window and
+  macOS *titled satellites* reported a frame size while setting a content size,
+  so any read-modify-write ratcheted up by the title bar every pass (measured on
+  macOS: 600×400 → 432 → 464 → 496). Borderless windows never showed it, which
+  is why it hid for so long. Window creation still takes a content size — no
+  feedback loop there.
+- **Windows `app.icon` accepts png** (the one format every tinyjs app actually
+  ships — it silently no-op'd on its own `icon.png` before), and `icon('')`
+  restores the startup icon instead of falling through to the window class.
+- **Windows `setZoom`, `setMinSize` and `startResize` implemented**;
+  `startDrag` now honours the per-window `DRAGWIN@<id>` form, so a satellite's
+  drag handle works. Frameless windows get the size they asked for.
+- **Windows stopped claiming `nowPlaying` and `haptic`**, which were no-ops.
+- **`tinyjs build` refreshes a stale launcher** the way `dev` already did, so a
+  dev checkout can't ship a launcher predating its own sources — or silently
+  skip the app icon, since `--embed-icon` is run *by* that binary.
+
+**Also**
+
+- `test/appsurface.html` — a self-driving page that steps through the whole app
+  surface, holding each state long enough to see, and prints what
+  `capabilities()` claims for the machine.
+- `TODO-verify.md` — what's been built on one OS but not yet watched run on
+  another. A fire-and-forget op reaching a shell that ignores it looks exactly
+  like one that was never implemented, so "nothing appeared" needs a written
+  home.
+- The docs site is now one page at [tinyjs.app/docs](https://tinyjs.app/docs)
+  (was /api): install, the full API, and how-it-works / portability / gotchas,
+  with a section rail on wide screens.
+
 ## 0.29.0 — 2026-07-23
 
 - **Linux support (beta).** tinyjs apps now run on Linux: a third native

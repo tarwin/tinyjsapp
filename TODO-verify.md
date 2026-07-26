@@ -154,24 +154,24 @@ there is nothing to detect and no error when nobody is listening. Both the
 detection and the `.desktop` id worry are settled — see the Linux notes under
 the table above.
 
-## macOS — does `setSize` → `getState` round-trip on a TITLED window?
+## macOS — `setSize` → `getState` on a TITLED window: **was broken, fixed**
 
-Unverified suspicion, found while fixing the Windows twin (2026-07-25). The
-contract is stated in launcher-macos.cc: "width/height are frame size — the
-same units setSize uses, so set → get round-trips". But `getState` reports
-`win.frame` while the size op calls `[win setContentSize:]`, and those differ
-by the title bar. On Windows the identical mismatch (GetWindowRect vs
-AdjustWindowRect) made any read-modify-write of the size ratchet up by the
-frame on every pass — a window grew 13px wider and 36px taller each time, and
-amp's windowshade guard walked off the right of the screen.
+Answered 2026-07-26. The suspicion was right, but only for **satellites**.
 
-It has never bitten on macOS because tinyjs windows there are usually
-borderless, where content == frame and the drift is exactly zero. A **titled**
-window should drift. To check: `setSize(w, h)` on a titled window, read
-`getState()` back, and see whether height comes back `h` or `h + titlebar`; then
-feed it back a few times and watch for a ratchet. If it drifts, the fix is the
-one applied on Windows — set the FRAME size, and leave window creation taking a
-content/client size (no feedback loop there).
+- **Main window: no drift.** It goes through `webview_set_size`, which speaks
+  frame units, and `getState` reports `win.frame` — so 600×400 came back
+  600×400 and stayed there over three read-modify-write passes.
+- **Titled satellite: +32px per pass.** `win.open` windows took the other
+  branch, `[win setContentSize:]`, against the same frame-reporting
+  `getState`. Measured: asked 600×400 → reported 600×432 → 464 → 496 → 528,
+  i.e. exactly the title bar each time. Borderless windows are unaffected
+  (content == frame), which is why it never bit.
+
+Fixed the way the Windows twin was: the satellite branch sets the FRAME size
+(anchoring the top-left, as users expect), and window *creation* still takes a
+content size — no feedback loop there, so nothing to ratchet. Re-measured
+after the fix: `setSize 600x400 -> 600x400`, 0px drift over three passes.
+Creation still reports 600×432 by design, matching Windows.
 
 ## Windows — `win.startDrag` / `win.startResize` gestures need a real mouse
 
@@ -195,10 +195,19 @@ right edge moves (a wrong `HT*` mapping resizes the opposite side).
 
 ## Windows-only
 
-- [ ] `app.badge` isn't implemented at all — needs an overlay HICON rendered
-      at runtime. Notes in the task list / [TODO-windows.md]. Until then
-      `capabilities().badge === false` on Windows, which is honest. Confirmed
-      2026-07-25: `badge('3')` resolves `true`, draws nothing.
+- [ ] `app.badge` — **written 2026-07-26 on macOS, never run on Windows.**
+      `do_badge` renders an overlay HICON (`badge_icon()`) and hands it to
+      `ITaskbarList3::SetOverlayIcon`. `capabilities()` deliberately still
+      reports `badge:false`; flip that only once the badge has been SEEN, not
+      merely compiled.
+      The trap it works around: GDI writes RGB but leaves the alpha byte of a
+      32bpp DIB alone, so text drawn the obvious way is fully transparent. It
+      paints a disc + up to two glyphs in colours that are never pure black,
+      then sets alpha for every pixel that got written. Plausible failure
+      modes to look for: an invisible badge (alpha fix not doing its job), a
+      black square (mask/`CreateIconIndirect` wrong), or nothing at all
+      (`SetOverlayIcon` needing a taskbar button that a dev spawn may not
+      have). Longer text collapses to a bullet — 16px fits 1–2 glyphs.
 - [x] ~~`app.icon` only took `.ico`~~ — fixed 2026-07-25. `do_appicon` still
       tries `LoadImage` first (it picks the right sub-image per size, which
       GDI+ can't), then falls back to `icon_from_png()` — the decoder the
