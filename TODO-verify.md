@@ -117,7 +117,12 @@ showing something wrong.
 Windows column checked 2026-07-25 on Windows 11 Pro 26200, launcher rebuilt
 from current source first — the checked-in `launcher-win.exe` was three days
 stale and predated the intent-verb rename, so testing it would have proved
-nothing. `capabilities()` reported `badge=false icon=true presence=true
+nothing. `tinyjs build` now runs the same `ensureLauncherFresh()` guard `dev`
+had (2026-07-26), so a dev checkout can no longer ship a stale `launcher.exe`
+— or, worse, silently skip the app icon, since `--embed-icon` is executed *by*
+that binary and a copy predating the flag just exits non-zero. That failure is
+no longer swallowed: the build warns and passes the launcher's own reason
+through. `capabilities()` reported `badge=false icon=true presence=true
 progress=true`, and no badge was drawn — honest degradation, as intended.
 
 **Windows `presence` was the highest-risk item — it is fine.** The handler

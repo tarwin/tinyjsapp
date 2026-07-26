@@ -703,6 +703,12 @@ async function makeDmg(cfg, APP) {
 
 async function cmdBuild() {
   const cfg = await loadConfig();
+  // Same staleness guard `dev` has, and it matters more here: a build SHIPS
+  // the launcher (dist/launcher.exe) and, on Windows, shells out to it to
+  // stamp the app icon — so a stale binary doesn't just run old code, it goes
+  // out in the release and can silently predate the --embed-icon flag it is
+  // being asked for. No-op unless this is a dev checkout.
+  await ensureLauncherFresh();
   await generateBuild(cfg);
   const cwd = tjs.cwd;
 
@@ -731,8 +737,19 @@ async function cmdBuild() {
       await copyFile(winIcon, '.build/app/icon.png');
       compiler = cwd + '/.build/tjs-icon.exe';
       await copyFile(tjs.exePath, compiler);
-      await tryRun([TOOL_DIR + 'native/launcher-win.exe', '--embed-icon',
-                    compiler, cwd + '/' + winIcon]);
+      // Don't let this fail quietly: the exe still builds and runs without a
+      // PE icon, it just shows Explorer's generic one, so a swallowed failure
+      // reads as "Windows lost my icon" days later. A launcher-win.exe older
+      // than the --embed-icon flag exits non-zero here, as does an unreadable
+      // png or a resource update blocked by AV / an open handle.
+      // stderr inherited: embed_icon says nothing on success and names the
+      // actual reason on failure, which beats guessing from a generic warning.
+      if (!(await tryRun([TOOL_DIR + 'native/launcher-win.exe', '--embed-icon',
+                          compiler, cwd + '/' + winIcon], { stderr: 'inherit' }))) {
+        console.log('    WARNING: could not embed ' + winIcon + ' into ' + cfg.name +
+                    '.exe — it will show the default Windows icon.');
+        console.log('    (rebuild the launcher with setup.ps1 if it predates --embed-icon)');
+      }
     }
   }
   await run([compiler, 'app', 'compile', cwd + '/dist/' + cfg.name], { cwd: cwd + '/.build' });
@@ -768,8 +785,11 @@ async function cmdBuild() {
     // the app icon.
     const winIcon = cfg.icon || 'icon.png';
     if (await exists(winIcon)) {
-      await tryRun([TOOL_DIR + 'native/launcher-win.exe', '--embed-icon',
-                    tjs.cwd + '/dist/launcher.exe', tjs.cwd + '/' + winIcon]);
+      if (!(await tryRun([TOOL_DIR + 'native/launcher-win.exe', '--embed-icon',
+                          tjs.cwd + '/dist/launcher.exe', tjs.cwd + '/' + winIcon],
+                         { stderr: 'inherit' }))) {
+        console.log('    WARNING: could not embed ' + winIcon + ' into launcher.exe.');
+      }
     }
     console.log('==> done');
     console.log(`run it:  .\\dist\\${cfg.name}.exe`);
