@@ -80,6 +80,21 @@ deprecated.
   rather than an `XDG_CURRENT_DESKTOP` guess, which was wrong in both
   directions.
 
+- **`tiny.audio.filters` works on macOS** (14.2+), not just Linux — so an app
+  can ask for an EQ once instead of branching. There's no driver and no system
+  install: a Core Audio process tap over the app's own WebKit audio processes
+  is *muted* and fed back through an aggregate device wrapping the real output,
+  with our IOProc filtering in between. The biquads are the same RBJ cookbook
+  PipeWire's `bq_*` builtins use, so the same numbers give the same curve on
+  both platforms (Apple's own N-Band EQ AudioUnit would not have). Windows
+  still reports `false`.
+
+  Muting is **earned, never assumed**: an unauthorized tap doesn't fail, it
+  succeeds and returns silence, and muting on that would take the app silent
+  entirely. So a chain starts unmuted and inaudible, and only promotes itself
+  to muted-and-filtering once it has seen a real sample. If that never happens
+  — `tinyjs dev` has no bundle identity to hold the audio-capture permission —
+  the app keeps playing unfiltered rather than going quiet.
 - **`app.playSound` gained four portable names** — `'info'`, `'success'`,
   `'alert'`, `'error'`. Every OS ships alert sounds and none agree on what
   they're called, so these ask for a meaning and get the platform's nearest

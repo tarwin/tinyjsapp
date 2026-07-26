@@ -208,6 +208,17 @@ function macosOnly(name) {
 const UNITY_LAUNCHER_GUESS = IS_LINUX &&
   /kde|plasma|unity|ubuntu|pantheon|lxqt/.test((tjs.env.XDG_CURRENT_DESKTOP || '').toLowerCase());
 
+// audio.filters on macOS rides on Core Audio process taps, which are 14.2+
+// while tinyjs's floor is 14.0 — so there is a real window where everything
+// else works and this doesn't. Ask the launcher rather than parsing a version
+// string: it answers from the same @available the code path itself is behind.
+let macFilters = null;
+async function hasMacAudioFilters(query) {
+  if (OS !== 'macos' || !query) return false;
+  if (macFilters === null) macFilters = (await query('audiofilters'))?.available === true;
+  return macFilters;
+}
+
 let unityLauncher = null;
 async function hasUnityLauncher() {
   // The table below is built on every OS, so answer without spawning anything
@@ -220,7 +231,9 @@ async function hasUnityLauncher() {
   return unityLauncher;
 }
 
-async function systemCapabilities() {
+// `query` is the launcher read-back, handed in because it lives in the app
+// factory's scope — only macOS needs it (see hasMacAudioFilters).
+async function systemCapabilities(query) {
   const linux = {
     // Wayland forbids a client placing its own toplevels, reading the global
     // pointer, seeing other windows, or synthesising input. X11 allows all of
@@ -294,7 +307,9 @@ async function systemCapabilities() {
     nowPlaying: false, haptic: false,
   };
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
-    audioFilters: false };
+    // Native DSP on our own output, via a muted Core Audio process tap fed
+    // back through an aggregate device. 14.2+, so the launcher answers.
+    audioFilters: await hasMacAudioFilters(query) };
   const table = IS_LINUX ? linux : IS_WIN ? windows : macos;
   return { os: OS, ...table };
 }
@@ -1496,7 +1511,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'theme.get': async () => lastTheme,
     'app.info': async () => app.info,
     'system.info': async () => systemInfo(),
-    'system.capabilities': async () => systemCapabilities(),
+    'system.capabilities': async () => systemCapabilities(query),
     'system.requirements': async ({ ids, refresh } = {}) => systemRequirements(ids, refresh),
     'app.screens': async () => app.screens(),
     'app.paths': async () => app.paths,

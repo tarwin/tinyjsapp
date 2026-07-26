@@ -275,6 +275,7 @@
 #include <map>
 
 #include <cstdio>
+#include <atomic> // audio.filters: handing coefficients to the IOProc thread
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
@@ -3080,6 +3081,10 @@ static void do_menu_update(webview_t, void *arg) {
 static std::string battery_json();
 static std::string wifi_json();
 
+// Defined with the rest of tiny.audio.filters, far below — do_get only needs
+// to be able to ask.
+static std::string eq_state_json();
+
 static void do_get(webview_t w, void *arg) {
   GetReq *req = static_cast<GetReq *>(arg);
   std::string json = "null";
@@ -3331,6 +3336,12 @@ static void do_get(webview_t w, void *arg) {
       } else {
         json = "{\"exists\":false}";
       }
+    } else if (req->what == "audiofilters") {
+      // capabilities().audioFilters, answered by the code that would run
+      // rather than inferred from a version string. Core Audio process taps
+      // are 14.2+, and tinyjs's floor is 14.0, so there IS a window where the
+      // rest of the launcher works and this doesn't.
+      json = eq_state_json();
     }
   }
   sock_write_line("GOT " + req->qid + " " + json);
@@ -4333,6 +4344,555 @@ static void do_audiotap(webview_t, void *arg) {
   } else {
     if (req->scope != "__stop__")
       sock_write_line("GOT " + req->qid + " {\"ok\":false,\"code\":\"unsupported\"}");
+  }
+}
+
+// ========================== tiny.audio.filters =============================
+// Native DSP on the app's own output: an EQ that applies to audio the page
+// never gets samples for (native HLS, a CORS-tainted <audio>), survives a
+// reload, and is one call rather than a Web Audio graph the app has to build.
+//
+// The whole graph is Core Audio — no driver, no system install (macOS 14.2+):
+//
+//   WebKit audio processes --[process tap, MUTED]--> our IOProc --> aggregate
+//                                                        |          device
+//                                                     biquads    (wraps the real
+//                                                                default output)
+//
+// Muting the tap takes the page's audio off the speakers, so the only way out
+// is through our IOProc, which filters and writes it to an aggregate device
+// wrapping the real output. Apple ships an EQ AudioUnit
+// (kAudioUnitSubType_NBandEQ) that could sit in the middle instead, but the
+// biquads are computed here from the same RBJ cookbook PipeWire's `bq_*`
+// builtins use, so { type:'peaking', freq:60, q:1.1, gain:4 } is the same
+// curve on macOS and Linux. One API that sounds different per platform would
+// not be worth having.
+//
+// This launcher's OWN pid is deliberately left out of the tap: the IOProc's
+// output comes from this process, so tapping ourselves would feed our output
+// back into our input. The cost is that app.playSound (NSSound, in this
+// process) goes out unfiltered — the page's audio is what the API is for.
+//
+// Muting is EARNED, never assumed. An unauthorized tap does not fail — it
+// succeeds and delivers zeroed buffers (measured: audioTap has the same
+// behaviour, 39 chunks of silence from a playing 440 Hz tone). Mute on that
+// and the app goes completely silent, which is far worse than having no EQ.
+//
+// So a new chain starts in PROBATION: the tap is unmuted and the IOProc writes
+// silence, i.e. audio plays normally down its usual path and we only listen.
+// The moment a non-zero sample arrives — proof the tap really can hear us —
+// the graph rebuilds muted and starts filtering. If that sample never comes,
+// nothing is ever muted and the user keeps their audio, unfiltered. The failure
+// mode is "the EQ didn't apply", not "my app went silent".
+
+struct EqFilter {
+  std::string label;                      // bq_peaking, linear, …
+  double freq = 1000, q = 1, gain = 0;    // dB for bq_*, a multiplier for linear
+  double gainR = 0;                       // right channel; equals gain unless split
+  bool split = false;
+};
+
+// One filter, compiled for one channel. `linear` is a plain multiplier (see
+// the Linux note: PipeWire's `gain` builtin is unusable, so `linear` does that
+// job there too, and the wire carries the same label).
+struct EqBand {
+  bool linear = false;
+  float mult = 1;
+  float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
+  float x1 = 0, x2 = 0, y1 = 0, y2 = 0;   // per-channel history
+};
+
+static AudioObjectID g_eq_tap = 0;
+static AudioObjectID g_eq_agg = 0;
+static AudioDeviceIOProcID g_eq_proc = nullptr;
+static bool g_eq_active = false;
+static bool g_eq_listeners = false;
+static bool g_eq_muted = false;           // false = probation (see the note above)
+static std::atomic<bool> g_eq_heard{false};   // the IOProc has seen a real sample
+static std::atomic<bool> g_eq_arming{false};  // one rebuild in flight, not many
+static std::vector<EqFilter> g_eq;        // the chain as asked for (empty = off)
+static double g_eq_balance = 0;           // -1..1
+static double g_eq_sr = 48000;
+static std::vector<EqBand> g_eq_bands[2]; // compiled, [0] = L, [1] = R
+static float g_eq_gain[2] = {1, 1};       // balance, folded per channel
+
+// capabilities().audioFilters, plus what the chain is actually doing. `state`
+// is the honest one: a chain can be set and not filtering, because it has to
+// hear a real sample before it is allowed to mute the source. 'waiting' means
+// an app asked for an EQ and either nothing has played yet, or the tap isn't
+// permitted to hear us (see the probation note above).
+static std::string eq_state_json() {
+  if (@available(macOS 14.2, *)) {
+    const char *state = !g_eq_active ? "off" : (g_eq_muted ? "active" : "waiting");
+    return std::string("{\"available\":true,\"state\":\"") + state +
+           "\",\"filters\":" + std::to_string(g_eq.size()) + ",\"heard\":" +
+           (g_eq_heard.load(std::memory_order_relaxed) ? "true" : "false") + "}";
+  }
+  return "{\"available\":false,\"state\":\"unsupported\"}";
+}
+
+// A chain longer than this is a page bug, not a request. Unlike Linux (where
+// the ceiling is PipeWire's filter-chain segfault) nothing here breaks, but an
+// unbounded chain is unbounded work on a realtime thread.
+static const size_t EQ_MAX = 32;
+
+// The IOProc runs on a realtime thread and must never block. The main thread
+// spins to publish new coefficients; the IOProc only ever TRIES, and passes
+// audio through unfiltered for the one buffer it loses the race on. That is
+// ~10 ms of flat response while a slider moves, which beats a priority
+// inversion on the audio thread.
+static std::atomic_flag g_eq_busy = ATOMIC_FLAG_INIT;
+
+// RBJ cookbook, matching PipeWire's builtin biquads so both platforms give the
+// same curve for the same numbers.
+static void eq_compile(EqBand &b, const std::string &label, double freq,
+                       double q, double gain, double sr) {
+  b = EqBand{};
+  if (label == "linear") { b.linear = true; b.mult = (float)gain; return; }
+  if (q <= 0.0001) q = 0.0001;
+  if (freq < 1) freq = 1;
+  if (freq > sr * 0.49) freq = sr * 0.49;   // keep it below Nyquist
+  const double A = pow(10.0, gain / 40.0);  // amplitude, for peaking/shelves
+  const double w0 = 2.0 * M_PI * freq / sr;
+  const double cw = cos(w0), sw = sin(w0);
+  const double alpha = sw / (2.0 * q);
+  const double sqA = sqrt(A > 0 ? A : 0);
+  double b0, b1, b2, a0, a1, a2;
+  if (label == "bq_lowshelf") {
+    b0 = A * ((A + 1) - (A - 1) * cw + 2 * sqA * alpha);
+    b1 = 2 * A * ((A - 1) - (A + 1) * cw);
+    b2 = A * ((A + 1) - (A - 1) * cw - 2 * sqA * alpha);
+    a0 = (A + 1) + (A - 1) * cw + 2 * sqA * alpha;
+    a1 = -2 * ((A - 1) + (A + 1) * cw);
+    a2 = (A + 1) + (A - 1) * cw - 2 * sqA * alpha;
+  } else if (label == "bq_highshelf") {
+    b0 = A * ((A + 1) + (A - 1) * cw + 2 * sqA * alpha);
+    b1 = -2 * A * ((A - 1) + (A + 1) * cw);
+    b2 = A * ((A + 1) + (A - 1) * cw - 2 * sqA * alpha);
+    a0 = (A + 1) - (A - 1) * cw + 2 * sqA * alpha;
+    a1 = 2 * ((A - 1) - (A + 1) * cw);
+    a2 = (A + 1) - (A - 1) * cw - 2 * sqA * alpha;
+  } else if (label == "bq_lowpass") {
+    b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = (1 - cw) / 2;
+    a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
+  } else if (label == "bq_highpass") {
+    b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = (1 + cw) / 2;
+    a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
+  } else if (label == "bq_bandpass") {
+    b0 = alpha; b1 = 0; b2 = -alpha;          // constant 0 dB peak gain
+    a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
+  } else if (label == "bq_notch") {
+    b0 = 1; b1 = -2 * cw; b2 = 1;
+    a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
+  } else if (label == "bq_allpass") {
+    b0 = 1 - alpha; b1 = -2 * cw; b2 = 1 + alpha;
+    a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
+  } else { // bq_peaking, and the default for anything unrecognised
+    b0 = 1 + alpha * A; b1 = -2 * cw; b2 = 1 - alpha * A;
+    a0 = 1 + alpha / A; a1 = -2 * cw; a2 = 1 - alpha / A;
+  }
+  if (a0 == 0) a0 = 1;
+  b.b0 = (float)(b0 / a0); b.b1 = (float)(b1 / a0); b.b2 = (float)(b2 / a0);
+  b.a1 = (float)(a1 / a0); b.a2 = (float)(a2 / a0);
+}
+
+// Rebuild both channels from g_eq. `keepState` preserves the filter histories
+// across a retune so moving a slider doesn't click; a shape change resets them.
+static void eq_publish(bool keepState) {
+  std::vector<EqBand> next[2];
+  for (int ch = 0; ch < 2; ch++) {
+    next[ch].resize(g_eq.size());
+    for (size_t i = 0; i < g_eq.size(); i++) {
+      const EqFilter &f = g_eq[i];
+      double g = (ch == 1 && f.split) ? f.gainR : f.gain;
+      eq_compile(next[ch][i], f.label, f.freq, f.q, g, g_eq_sr);
+      if (keepState && i < g_eq_bands[ch].size()) {
+        next[ch][i].x1 = g_eq_bands[ch][i].x1; next[ch][i].x2 = g_eq_bands[ch][i].x2;
+        next[ch][i].y1 = g_eq_bands[ch][i].y1; next[ch][i].y2 = g_eq_bands[ch][i].y2;
+      }
+    }
+  }
+  // -1 = hard left, +1 = hard right; the quiet side is attenuated, so balance
+  // never makes the app louder than it was.
+  double bal = g_eq_balance < -1 ? -1 : (g_eq_balance > 1 ? 1 : g_eq_balance);
+  while (g_eq_busy.test_and_set(std::memory_order_acquire)) { /* spin: main thread */ }
+  g_eq_bands[0].swap(next[0]);
+  g_eq_bands[1].swap(next[1]);
+  g_eq_gain[0] = (float)(bal > 0 ? 1.0 - bal : 1.0);
+  g_eq_gain[1] = (float)(bal < 0 ? 1.0 + bal : 1.0);
+  g_eq_busy.clear(std::memory_order_release);
+}
+
+static inline float eq_run(std::vector<EqBand> &bands, float in) {
+  float v = in;
+  for (EqBand &b : bands) {
+    if (b.linear) { v *= b.mult; continue; }
+    float out = b.b0 * v + b.b1 * b.x1 + b.b2 * b.x2 - b.a1 * b.y1 - b.a2 * b.y2;
+    b.x2 = b.x1; b.x1 = v;
+    b.y2 = b.y1; b.y1 = out;
+    v = out;
+  }
+  return v;
+}
+
+// Our app's audio process objects, minus this process (see the feedback note
+// above). Empty is a real answer: WebKit only spawns its audio process once
+// something plays, so a chain armed before playback has nothing to tap yet —
+// eq_procs_changed re-arms when it appears.
+API_AVAILABLE(macos(14.2))
+static NSArray<NSNumber *> *tiny_eq_process_objects() {
+  NSMutableArray *out = [NSMutableArray array];
+  for (NSNumber *n in tiny_app_process_objects()) {
+    pid_t pid = 0; UInt32 s = sizeof(pid);
+    AudioObjectPropertyAddress pa = { kAudioProcessPropertyPID,
+        kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+    if (AudioObjectGetPropertyData([n unsignedIntValue], &pa, 0, NULL, &s, &pid) != noErr)
+      continue;
+    if (pid != getpid()) [out addObject:n];
+  }
+  return out;
+}
+
+API_AVAILABLE(macos(14.2))
+static void tiny_eq_teardown() {
+  if (g_eq_agg && g_eq_proc) {
+    AudioDeviceStop(g_eq_agg, g_eq_proc);
+    AudioDeviceDestroyIOProcID(g_eq_agg, g_eq_proc);
+  }
+  g_eq_proc = nullptr;
+  if (g_eq_agg) { AudioHardwareDestroyAggregateDevice(g_eq_agg); g_eq_agg = 0; }
+  // Destroying the tap is what un-mutes the app: while it exists the tapped
+  // processes are silent on their own, so this must run on EVERY failure path.
+  if (g_eq_tap) { AudioHardwareDestroyProcessTap(g_eq_tap); g_eq_tap = 0; }
+}
+
+API_AVAILABLE(macos(14.2))
+static OSStatus tiny_eq_build(bool muted) {
+  NSArray *incl = tiny_eq_process_objects();
+#ifdef TINY_EQ_PROBE
+  {
+    fprintf(stderr, "[eq] build: %lu process objects to tap (self=%d resp=%d)\n",
+            (unsigned long)incl.count, (int)getpid(),
+            (int)responsibility_get_pid_responsible_for_pid(getpid()));
+    for (NSNumber *n in incl) {
+      pid_t pid = 0; UInt32 sz = sizeof(pid);
+      AudioObjectPropertyAddress pa = { kAudioProcessPropertyPID,
+          kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+      AudioObjectGetPropertyData([n unsignedIntValue], &pa, 0, NULL, &sz, &pid);
+      CFStringRef bid = NULL; sz = sizeof(bid);
+      AudioObjectPropertyAddress ba = { kAudioProcessPropertyBundleID,
+          kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+      AudioObjectGetPropertyData([n unsignedIntValue], &ba, 0, NULL, &sz, &bid);
+      UInt32 running = 0; sz = sizeof(running);
+      AudioObjectPropertyAddress ra = { kAudioProcessPropertyIsRunningOutput,
+          kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+      AudioObjectGetPropertyData([n unsignedIntValue], &ra, 0, NULL, &sz, &running);
+      fprintf(stderr, "[eq]   obj=%u pid=%d out=%u bundle=%s\n",
+              [n unsignedIntValue], (int)pid, (unsigned)running,
+              bid ? [(__bridge NSString *)bid UTF8String] : "-");
+      if (bid) CFRelease(bid);
+    }
+  }
+#endif
+  if (incl.count == 0) return kAudioHardwareBadObjectError;
+
+  CATapDescription *desc = [[CATapDescription alloc] initStereoMixdownOfProcesses:incl];
+  desc.name = @"tinyjs-eq";
+  desc.privateTap = YES;
+  // Probation taps stay UNMUTED: the app keeps playing down its normal path
+  // while we check whether we can hear it at all.
+  desc.muteBehavior = muted ? CATapMuted : CATapUnmuted;
+  g_eq_muted = muted;
+  if (!muted) g_eq_heard.store(false, std::memory_order_relaxed);
+  OSStatus st = AudioHardwareCreateProcessTap(desc, &g_eq_tap);
+  [desc release];
+#ifdef TINY_EQ_PROBE
+  fprintf(stderr, "[eq] CreateProcessTap -> %d (tap=%u)\n", (int)st, (unsigned)g_eq_tap);
+#endif
+  if (st != noErr) { g_eq_tap = 0; return st; }
+
+  CFStringRef tapUID = NULL; UInt32 s = sizeof(tapUID);
+  AudioObjectPropertyAddress ua = { kAudioTapPropertyUID,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+  AudioObjectGetPropertyData(g_eq_tap, &ua, 0, NULL, &s, &tapUID);
+  AudioStreamBasicDescription fmt = {}; s = sizeof(fmt);
+  AudioObjectPropertyAddress fa = { kAudioTapPropertyFormat,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+  AudioObjectGetPropertyData(g_eq_tap, &fa, 0, NULL, &s, &fmt);
+  g_eq_sr = fmt.mSampleRate > 0 ? fmt.mSampleRate : 48000;
+
+  // The aggregate wraps the CURRENT default output, so the processed audio
+  // comes out where the user expects. eq_dev_changed rebuilds on a switch.
+  AudioObjectID outDev = 0; s = sizeof(outDev);
+  AudioObjectGetPropertyData(kAudioObjectSystemObject, &kDefaultOutAddr, 0, NULL, &s, &outDev);
+  CFStringRef outUID = NULL; s = sizeof(outUID);
+  AudioObjectPropertyAddress da = { kAudioDevicePropertyDeviceUID,
+      kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+  if (!outDev ||
+      AudioObjectGetPropertyData(outDev, &da, 0, NULL, &s, &outUID) != noErr || !outUID) {
+    if (tapUID) CFRelease(tapUID);
+    tiny_eq_teardown();
+    return kAudioHardwareBadDeviceError;
+  }
+
+  NSDictionary *aggd = @{
+    @"name": @"tinyjs-eq-agg",
+    @"uid": [[NSUUID UUID] UUIDString],
+    @"private": @1,
+    @"stacked": @0,
+    @"tapautostart": @1,
+    @"master": (__bridge NSString *)outUID,
+    @"subdevices": @[ @{ @"uid": (__bridge NSString *)outUID } ],
+    @"taps": @[ @{ @"uid": (tapUID ? (__bridge NSString *)tapUID : @""), @"drift": @1 } ],
+  };
+  st = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)aggd, &g_eq_agg);
+#ifdef TINY_EQ_PROBE
+  fprintf(stderr, "[eq] CreateAggregateDevice -> %d (agg=%u) sr=%.0f\n",
+          (int)st, (unsigned)g_eq_agg, g_eq_sr);
+#endif
+  if (tapUID) CFRelease(tapUID);
+  CFRelease(outUID);
+  if (st != noErr) { g_eq_agg = 0; tiny_eq_teardown(); return st; }
+
+  eq_publish(false);
+
+  st = AudioDeviceCreateIOProcIDWithBlock(&g_eq_proc, g_eq_agg, NULL,
+      ^(const AudioTimeStamp *, const AudioBufferList *in, const AudioTimeStamp *,
+        AudioBufferList *out, const AudioTimeStamp *) {
+        if (!out) return;
+        // Channel n of a buffer list is either its own mono buffer
+        // (non-interleaved, what taps and most devices give) or interleaved
+        // inside one buffer. Handle both rather than assuming.
+        auto pick = [](const AudioBufferList *l, int ch, float **base,
+                       int *stride, UInt32 *frames) -> bool {
+          if (!l || l->mNumberBuffers == 0) return false;
+          if (l->mNumberBuffers > 1) {
+            UInt32 i = (UInt32)ch < l->mNumberBuffers ? (UInt32)ch : 0;
+            const AudioBuffer &b = l->mBuffers[i];
+            if (!b.mData) return false;
+            *base = (float *)b.mData; *stride = 1;
+            *frames = b.mDataByteSize / sizeof(float);
+            return true;
+          }
+          const AudioBuffer &b = l->mBuffers[0];
+          if (!b.mData) return false;
+          int nch = b.mNumberChannels > 0 ? (int)b.mNumberChannels : 1;
+          *base = (float *)b.mData + (ch < nch ? ch : 0);
+          *stride = nch;
+          *frames = b.mDataByteSize / sizeof(float) / nch;
+          return true;
+        };
+        const bool muted = g_eq_muted;
+        bool locked = muted && !g_eq_busy.test_and_set(std::memory_order_acquire);
+        bool heard = false;
+#ifdef TINY_EQ_PROBE
+        static float pin = 0, pout = 0; static int pn = 0;
+#endif
+        for (int ch = 0; ch < 2; ch++) {
+          float *op = nullptr, *ip = nullptr;
+          int os = 1, is = 1;
+          UInt32 of = 0, inf = 0;
+          if (!pick(out, ch, &op, &os, &of)) continue;
+          bool haveIn = pick(in, ch, &ip, &is, &inf);
+          UInt32 n = haveIn && inf < of ? inf : of;
+          for (UInt32 i = 0; i < n; i++) {
+            float v = haveIn ? ip[i * is] : 0.0f;
+#ifdef TINY_EQ_PROBE
+            if (ch == 0 && fabsf(v) > pin) pin = fabsf(v);
+#endif
+            if (v != 0.0f) heard = true;
+            // Probation: listen, emit nothing. The source is unmuted, so
+            // writing the signal here would play it twice.
+            if (!muted) { op[i * os] = 0.0f; continue; }
+            if (locked) v = eq_run(g_eq_bands[ch], v) * g_eq_gain[ch];
+            op[i * os] = v;
+#ifdef TINY_EQ_PROBE
+            if (ch == 0 && fabsf(v) > pout) pout = fabsf(v);
+#endif
+          }
+          for (UInt32 i = n; i < of; i++) op[i * os] = 0.0f;  // no input: silence
+        }
+        // Anything past stereo (a 5.1 device) gets silence rather than noise.
+        if (out->mNumberBuffers > 2)
+          for (UInt32 b = 2; b < out->mNumberBuffers; b++)
+            if (out->mBuffers[b].mData)
+              memset(out->mBuffers[b].mData, 0, out->mBuffers[b].mDataByteSize);
+#ifdef TINY_EQ_PROBE
+        if (++pn >= 100) {
+          fprintf(stderr, "[eq] bands=%zu peakIn=%.4f peakOut=%.4f locked=%d "
+                  "inBufs=%u inCh=%u inBytes=%u outBufs=%u outCh=%u outBytes=%u\n",
+                  g_eq_bands[0].size(), pin, pout, (int)locked,
+                  in ? (unsigned)in->mNumberBuffers : 9999u,
+                  (in && in->mNumberBuffers) ? (unsigned)in->mBuffers[0].mNumberChannels : 0u,
+                  (in && in->mNumberBuffers) ? (unsigned)in->mBuffers[0].mDataByteSize : 0u,
+                  (unsigned)out->mNumberBuffers,
+                  out->mNumberBuffers ? (unsigned)out->mBuffers[0].mNumberChannels : 0u,
+                  out->mNumberBuffers ? (unsigned)out->mBuffers[0].mDataByteSize : 0u);
+          pn = 0; pin = 0; pout = 0;
+        }
+#endif
+        if (locked) g_eq_busy.clear(std::memory_order_release);
+        // Proof the tap can hear us — promote to a muted, filtering graph.
+        // exchange() so a burst of callbacks queues exactly one rebuild.
+        if (heard && !muted && !g_eq_arming.exchange(true)) {
+          g_eq_heard.store(true, std::memory_order_relaxed);
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (g_eq_active && !g_eq_muted) {
+              tiny_eq_teardown();
+              if (tiny_eq_build(true) != noErr) tiny_eq_teardown();
+            }
+            g_eq_arming.store(false);
+          });
+        }
+      });
+#ifdef TINY_EQ_PROBE
+  fprintf(stderr, "[eq] CreateIOProcID -> %d\n", (int)st);
+#endif
+  if (st != noErr) { g_eq_proc = nullptr; tiny_eq_teardown(); return st; }
+
+  st = AudioDeviceStart(g_eq_agg, g_eq_proc);
+#ifdef TINY_EQ_PROBE
+  fprintf(stderr, "[eq] AudioDeviceStart -> %d\n", (int)st);
+#endif
+  if (st != noErr) { tiny_eq_teardown(); return st; }
+  return noErr;
+}
+
+API_AVAILABLE(macos(14.2))
+static void tiny_eq_rearm(void) {
+  if (!g_eq_active) return;
+  tiny_eq_teardown();
+  // Always re-enter probation: a new output device or process set has to
+  // re-prove itself before anything is muted again.
+  if (tiny_eq_build(false) != noErr) tiny_eq_teardown();
+}
+
+// The default output changed (headphones in), or our app's set of audio
+// processes changed. The second matters more than it looks: WebKit spawns its
+// audio process lazily, so a chain set before anything plays has nothing to
+// tap until this fires.
+API_AVAILABLE(macos(14.2))
+static OSStatus tiny_eq_dev_changed(AudioObjectID, UInt32,
+                                    const AudioObjectPropertyAddress *, void *) {
+  if (!g_eq_active) return noErr;
+  dispatch_async(dispatch_get_main_queue(), ^{ tiny_eq_rearm(); });
+  return noErr;
+}
+
+static const AudioObjectPropertyAddress kProcListAddr = {
+    kAudioHardwarePropertyProcessObjectList,
+    kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain };
+
+API_AVAILABLE(macos(14.2))
+static OSStatus tiny_eq_procs_changed(AudioObjectID, UInt32,
+                                      const AudioObjectPropertyAddress *, void *) {
+  if (!g_eq_active) return noErr;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (!g_eq_active) return;
+    // Only re-arm when the tap can't be running but could be, or is running
+    // against a set that has since changed. Rebuilding on every process
+    // change would gap audio whenever any app started playing.
+    NSArray *now = tiny_eq_process_objects();
+    if (now.count == 0) return;
+    if (!g_eq_tap) { tiny_eq_rearm(); return; }
+  });
+  return noErr;
+}
+
+API_AVAILABLE(macos(14.2))
+static void tiny_eq_stop() {
+  if (!g_eq_active) return;
+  g_eq_active = false;
+  if (g_eq_listeners) {
+    AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &kDefaultOutAddr,
+                                      tiny_eq_dev_changed, NULL);
+    AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &kProcListAddr,
+                                      tiny_eq_procs_changed, NULL);
+    g_eq_listeners = false;
+  }
+  tiny_eq_teardown();
+  g_eq.clear();
+  while (g_eq_busy.test_and_set(std::memory_order_acquire)) { }
+  g_eq_bands[0].clear();
+  g_eq_bands[1].clear();
+  g_eq_busy.clear(std::memory_order_release);
+}
+
+// AUDIOFILTERS <label,freq,q,gain[,gainR]>\t… — replace the chain, empty
+// clears it. Same wire and same semantics as the Linux launcher.
+static void do_audiofilters(const std::string &rest) {
+  if (@available(macOS 14.2, *)) {
+    std::vector<EqFilter> prev = g_eq;
+    g_eq.clear();
+    for (const std::string &f : split_tabs(rest)) {
+      if (f.empty()) continue;
+      std::vector<std::string> p;
+      size_t start = 0;
+      for (;;) {
+        size_t c = f.find(',', start);
+        p.push_back(f.substr(start, c == std::string::npos ? c : c - start));
+        if (c == std::string::npos) break;
+        start = c + 1;
+      }
+      if (p.size() < 4) continue;
+      EqFilter e;
+      e.label = p[0];
+      e.freq = atof(p[1].c_str());
+      e.q = atof(p[2].c_str());
+      e.gain = atof(p[3].c_str());
+      e.gainR = e.gain;
+      if (p.size() >= 5 && !p[4].empty()) { e.gainR = atof(p[4].c_str()); e.split = true; }
+      g_eq.push_back(e);
+    }
+    if (g_eq.size() > EQ_MAX) g_eq.resize(EQ_MAX);
+    if (g_eq.empty()) { tiny_eq_stop(); return; }
+
+    // Same filters in the same order = a retune, not a rebuild: publish new
+    // coefficients and keep the graph (and the filter histories) running.
+    bool sameShape = g_eq_active && prev.size() == g_eq.size();
+    for (size_t i = 0; sameShape && i < prev.size(); i++)
+      if (prev[i].label != g_eq[i].label || prev[i].split != g_eq[i].split)
+        sameShape = false;
+    if (sameShape) { eq_publish(true); return; }
+
+    if (g_eq_active) tiny_eq_teardown();
+    g_eq_active = true;
+    if (!g_eq_listeners) {
+      AudioObjectAddPropertyListener(kAudioObjectSystemObject, &kDefaultOutAddr,
+                                     tiny_eq_dev_changed, NULL);
+      AudioObjectAddPropertyListener(kAudioObjectSystemObject, &kProcListAddr,
+                                     tiny_eq_procs_changed, NULL);
+      g_eq_listeners = true;
+    }
+    // A failed build is not fatal: the listeners stay armed, so the chain
+    // comes up as soon as the app actually has an audio process to tap.
+    OSStatus bst = tiny_eq_build(false);
+#ifdef TINY_EQ_PROBE
+    fprintf(stderr, "[eq] do_audiofilters: %zu filters, build -> %d\n", g_eq.size(), (int)bst);
+#endif
+    if (bst != noErr) tiny_eq_teardown();
+  }
+}
+
+// AUDIOFILTERSET <index>\t<freq>\t<q>\t<gain> — retune one, no rebuild.
+static void do_audiofilterset(const std::string &rest) {
+  if (@available(macOS 14.2, *)) {
+    std::vector<std::string> f = split_tabs(rest);
+    if (f.size() < 4) return;
+    size_t i = (size_t)atoi(f[0].c_str());
+    if (i >= g_eq.size()) return;
+    g_eq[i].freq = atof(f[1].c_str());
+    g_eq[i].q = atof(f[2].c_str());
+    g_eq[i].gain = atof(f[3].c_str());
+    if (!g_eq[i].split) g_eq[i].gainR = g_eq[i].gain;
+    eq_publish(true);
+  }
+}
+
+static void do_audiobalance(const std::string &rest) {
+  if (@available(macOS 14.2, *)) {
+    g_eq_balance = atof(rest.c_str());
+    eq_publish(true);
   }
 }
 
@@ -5484,6 +6044,22 @@ static void sock_read_loop() {
                          new AudioTapReq{qid, p.size() > 0 ? p[0] : "app",
                                          p.size() > 1 && p[1] == "1",
                                          p.size() > 2 ? atoi(p[2].c_str()) : 80});
+      } else if (line.rfind("AUDIOFILTERSET ", 0) == 0) {
+        webview_dispatch(g_w, [](webview_t, void *a) {
+          std::unique_ptr<std::string> s((std::string *)a);
+          do_audiofilterset(*s);
+        }, new std::string(line.substr(15)));
+      } else if (line.rfind("AUDIOFILTERS", 0) == 0 &&
+                 (line.size() == 12 || line[12] == ' ')) {
+        webview_dispatch(g_w, [](webview_t, void *a) {
+          std::unique_ptr<std::string> s((std::string *)a);
+          do_audiofilters(*s);
+        }, new std::string(line.size() > 13 ? line.substr(13) : ""));
+      } else if (line.rfind("AUDIOBALANCE", 0) == 0) {
+        webview_dispatch(g_w, [](webview_t, void *a) {
+          std::unique_ptr<std::string> s((std::string *)a);
+          do_audiobalance(*s);
+        }, new std::string(line.size() > 13 ? line.substr(13) : "0"));
       } else if (line.rfind("MENUUPD ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(8));
         MenuUpdReq *req = new MenuUpdReq;

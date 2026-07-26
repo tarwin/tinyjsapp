@@ -334,13 +334,19 @@
     // Native DSP on this app's OWN output — a graphic EQ, headphone
     // correction, a crossover — applied below the browser.
     //
-    // Web Audio's BiquadFilterNode is the obvious tool and is the right one on
-    // macOS and Windows. It is NOT usable on Linux: WebKitGTK renders the Web
-    // Audio graph on a normal-priority thread while its media threads get
-    // real-time priority, so anything reaching ctx.destination crackles however
-    // it's fed. These filters run in PipeWire instead, which also means they
-    // apply to audio the page never sees — raw radio, native HLS — and survive
-    // a reload. Check before using:
+    // Web Audio's BiquadFilterNode is the obvious tool, and on macOS and Windows
+    // it works — reach for it when the page owns the samples anyway. These
+    // filters exist for what it can't do: they apply to audio the page never
+    // sees (raw radio, native HLS, a CORS-tainted <audio>), survive a reload,
+    // and are one call instead of a graph. On Linux they're the ONLY option:
+    // WebKitGTK renders the Web Audio graph on a normal-priority thread while
+    // its media threads get real-time priority, so anything reaching
+    // ctx.destination crackles however it's fed.
+    //
+    // Linux runs them in PipeWire; macOS (14.2+) in a muted Core Audio process
+    // tap fed back through an aggregate device, with the same biquad maths, so
+    // the same numbers give the same curve on both. Windows has no equivalent
+    // yet and reports false. Check before using:
     //
     //   const can = await tiny.system.capabilities();
     //   if (can.audioFilters) await tiny.audio.filters(bands);
@@ -358,7 +364,15 @@
     // At most 28 filters (15 if any filter uses gainR — per-channel gains
     // double the node count): PipeWire's filter-chain crashes above its node
     // ceiling, so the list is truncated rather than allowed to take the audio
-    // server down.
+    // server down. macOS caps at 32 for the same "a page shouldn't be able to
+    // ask for unbounded work on the audio thread" reason.
+    //
+    // macOS only: taking audio off the speakers to filter it needs the
+    // system-audio-capture permission, which is granted to a PACKAGED app on
+    // first use (`tinyjs dev` has no bundle identity to grant it to). Until
+    // that lands the chain is armed but idle — audio keeps playing unfiltered
+    // rather than going silent, which is the one outcome worth designing
+    // against here.
     // Replacing the chain rebuilds it (a brief gap) while changing only VALUES
     // retunes in place — so if a slider drives it, keep the shape stable and
     // vary the numbers.

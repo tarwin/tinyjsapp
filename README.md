@@ -795,7 +795,7 @@ if (!can.windowPosition) useDragInstead();   // e.g. tiny.win.startDrag()
 `capabilities()` reports what this machine can actually do, so an app can
 degrade on purpose instead of calling something that quietly does nothing.
 
-### Filtering your own audio (Linux)
+### Filtering your own audio
 
 `tiny.audio.filters` runs a DSP chain on **this app's own output** — a graphic
 EQ, headphone correction, a crossover — below the browser:
@@ -823,17 +823,35 @@ Why this exists rather than "just use Web Audio": on Linux you can't. WebKitGTK
 renders the Web Audio graph on a normal-priority thread while its media threads
 get real-time priority, so **anything reaching `ctx.destination` crackles** —
 on an idle machine, at any `latencyHint`, from an element or a decoded buffer.
-Filtering in PipeWire sidesteps that, and picks up two things Web Audio never
-had: it applies to audio the page doesn't own (raw radio streams, native HLS),
-and it survives a page reload.
+Filtering below the browser sidesteps that, and picks up two things Web Audio
+never had: it applies to audio the page doesn't own (raw radio streams, native
+HLS, a CORS-tainted `<audio>`), and it survives a page reload.
 
-Two limits worth knowing:
+How it's built, per platform:
 
-- **`capabilities().audioFilters` is Linux-only for now.** macOS and Windows
-  report `false` and should use Web Audio, which works properly there. See
-  `TODO-audio-filters.md` for what native support would take.
-- **15 filters maximum.** PipeWire's filter-chain crashes above that, so
-  tinyjs truncates rather than letting a page take the audio server down.
+- **Linux** — a `libpipewire-module-filter-chain` sink the app's stream is
+  routed through.
+- **macOS 14.2+** — a Core Audio process tap over the app's own WebKit audio
+  processes, *muted*, fed back through an aggregate device wrapping the real
+  output, with the biquads applied in between. No driver, no system install.
+  The maths is the same RBJ cookbook PipeWire's builtins use, so the same
+  numbers give the same curve on both.
+- **Windows** — not yet; reports `false`. Use Web Audio, which works properly
+  there. See `TODO-audio-filters.md`.
+
+Three limits worth knowing:
+
+- **Filter count.** 15 on Linux (PipeWire's filter-chain crashes above that, so
+  tinyjs truncates rather than letting a page take the audio server down), 32
+  on macOS.
+- **macOS needs the audio-capture permission**, which is granted per bundle id
+  on first use — so this only engages in a **packaged** app, not `tinyjs dev`.
+  Until it does, the chain sits armed but idle.
+- **A chain that can't engage leaves audio alone.** It never half-applies and
+  never mutes: on macOS the tap starts unmuted and silent, and only takes over
+  once it has proven it can actually hear the app. An unauthorized tap returns
+  success and silence rather than an error, so trusting it would mute the app
+  outright — the one failure mode genuinely worth designing against.
 
 Replacing the chain rebuilds it (a brief gap); changing only *values* retunes
 in place. Keep the shape stable if you're driving it from a slider — pass the
