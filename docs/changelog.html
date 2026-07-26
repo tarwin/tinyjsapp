@@ -28,6 +28,8 @@
   header { padding: 72px 0 0; position: relative; z-index: 1; }
   .brand { font: 700 15px var(--mono); letter-spacing: .08em; color: var(--accent); }
   .brand a { color: var(--muted); text-decoration: none; font-weight: 400; float: right; }
+  .brand a.home { float: none; color: var(--accent); font-weight: 700; }
+  .brand a.home:hover { color: var(--text); }
   .brand a:hover { color: var(--text); }
   h1 { font: 700 clamp(34px, 7vw, 52px)/1.05 var(--mono); letter-spacing: -.04em; margin: 36px 0 0; }
   h1 em { font-style: normal; color: var(--accent); }
@@ -61,7 +63,7 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="brand">▸_ tinyjs <a href="/">← home</a></div>
+    <div class="brand"><a class="home" href="./index.html">▸_ tinyjs</a> <a href="./index.html">← home</a></div>
     <h1>change<em>log</em></h1>
     <p class="sub">Every release is a git tag; <code>tinyjs update</code> gets you the latest.</p>
   </header>
@@ -488,8 +490,8 @@
   </section>
 
   <footer>
-    <a href="/">home</a>
-    <a href="/api">api</a>
+    <a href="./index.html">home</a>
+    <a href="./docs.html">docs</a>
     <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
     <a href="https://github.com/tarwin/tinyjsapp/blob/main/CHANGELOG.md">CHANGELOG.md</a>
   </footer>

@@ -66,6 +66,10 @@
   html[data-os="win"] [data-os-panel="linux"] { display: none !important; }
   html[data-os="linux"] [data-os-panel="mac"],
   html[data-os="linux"] [data-os-panel="win"] { display: none !important; }
+  /* Showing a display:none element restarts its CSS animation, so every tab
+     switch replayed the entrance fade+rise. The panel still animates in on
+     first paint; after that, switches are instant. */
+  html[data-ready] [data-os-panel] .r { animation: none; }
 
   .install {
     margin: 12px 0 0; display: flex; align-items: stretch;
@@ -177,7 +181,7 @@
 
 <div class="wrap">
   <header>
-    <div class="brand r r1">▸_ tinyjs <span class="links"><a href="/api">api</a><a href="/changelog">changelog</a><a href="https://github.com/tarwin/tinyjsapp-examples">examples ↗</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span></div>
+    <div class="brand r r1">▸_ tinyjs <span class="links"><a href="./docs.html">docs</a><a href="./changelog.html">changelog</a><a href="https://github.com/tarwin/tinyjsapp-examples">examples ↗</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span></div>
     <h1 class="r r2">Desktop apps<br>in <em>~6&hairsp;MB</em>.</h1>
     <p class="sub r r3">A <strong>JavaScript backend</strong> with full system access, a
     <strong>native webview window</strong> (WebKit on macOS, WebView2 on
@@ -321,8 +325,8 @@ tiny.menu.set([…]);
     <a href="https://github.com/tarwin/tinyjsapp">source</a>
     <a href="https://github.com/tarwin/tinyjsapp-examples">examples</a>
     <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
-    <a href="/api">api</a>
-    <a href="/changelog">changelog</a>
+    <a href="./docs.html">docs</a>
+    <a href="./changelog.html">changelog</a>
     <a href="https://github.com/tarwin/tinyjsapp#readme">readme</a>
     <span class="flex">this page: one file, no js frameworks, no external requests</span>
   </footer>
@@ -331,11 +335,17 @@ tiny.menu.set([…]);
 <script>
 // macOS / Windows tabs: every strip is synced; the default comes from OS
 // sniffing, a click is remembered for return visits.
+var osBooted = false;
 function setOS(os) {
   document.documentElement.dataset.os = os;
   document.querySelectorAll('.os-tab').forEach(function (t) {
     t.classList.toggle('on', t.dataset.os === os);
   });
+  // The first call is the boot-time default, which should animate in with the
+  // rest of the page. Every call after it is a user switching tabs — mark the
+  // page ready so the panels swap without replaying their entrance.
+  if (osBooted) document.documentElement.setAttribute('data-ready', '');
+  osBooted = true;
   try { localStorage.setItem('tinyjs-os', os); } catch (e) {}
 }
 function copyCmd(btn) {
