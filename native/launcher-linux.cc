@@ -594,6 +594,31 @@ static void apply_transparent(GtkWindow* win, WebKitWebView* wv, bool on) {
   gtk_widget_set_app_paintable(GTK_WIDGET(win), on);
 }
 
+// _MOTIF_WM_HINTS is the only portable-ish way to ask an X11 WM to drop
+// individual titlebar buttons. Mutter and KWin both read it; plenty of WMs
+// don't, which is why this is a request rather than a guarantee.
+// flags bit 1 = functions, and the function bits are
+// ALL=1 RESIZE=2 MOVE=4 MINIMIZE=8 MAXIMIZE=16 CLOSE=32.
+static void set_mwm_buttons(GtkWindow* w, bool close_on, bool min_on,
+                            bool max_on) {
+#ifdef GDK_WINDOWING_X11
+  GdkWindow* gw = gtk_widget_get_window(GTK_WIDGET(w));
+  if (!gw || !GDK_IS_X11_WINDOW(gw)) return;
+  Display* dpy = GDK_DISPLAY_XDISPLAY(gdk_window_get_display(gw));
+  Atom prop = XInternAtom(dpy, "_MOTIF_WM_HINTS", False);
+  long hints[5] = {0, 0, 0, 0, 0};
+  hints[0] = 1L << 0;              // MWM_HINTS_FUNCTIONS
+  hints[1] = (1L << 1) | (1L << 2); // keep resize + move
+  if (min_on) hints[1] |= (1L << 3);
+  if (max_on) hints[1] |= (1L << 4);
+  if (close_on) hints[1] |= (1L << 5);
+  XChangeProperty(dpy, GDK_WINDOW_XID(gw), prop, prop, 32, PropModeReplace,
+                  (unsigned char*)hints, 5);
+#else
+  (void)w; (void)close_on; (void)min_on; (void)max_on;
+#endif
+}
+
 // fields: frame, traffic, transparent, vibrancy, square, firstMouse ('' = keep)
 static void apply_chrome(const std::string& winid, const std::vector<std::string>& f) {
   GtkWindow* win = win_for(winid);
@@ -613,7 +638,23 @@ static void apply_chrome(const std::string& winid, const std::vector<std::string
     if (main_win) g_chrome_frame = on; else if (sec) sec->frame = on;
     apply_fixed(winid);   // decoration decides whether "fixed" is enforceable
   }
-  if (!traffic.empty() && main_win) g_chrome_traffic = traffic == "1";
+  if (!traffic.empty()) {
+    // windowControls: '' keep · 'all' · 'none' · comma list of
+    // close/minimize/maximize. UNTESTED on Linux (written on macOS).
+    // GTK can hide the CLOSE button portably; minimize/maximize are only
+    // requestable through _MOTIF_WM_HINTS, which the WM may ignore — so this
+    // is best-effort by design, and capabilities() says windowControls is
+    // X11-only.
+    const bool all = traffic == "all", none = traffic == "none";
+    auto want = [&](const char *nm) {
+      return all ? true : none ? false : traffic.find(nm) != std::string::npos;
+    };
+    const bool close_on = want("close"), min_on = want("minimize"),
+               max_on = want("maximize");
+    gtk_window_set_deletable(win, close_on ? TRUE : FALSE);
+    set_mwm_buttons(win, close_on, min_on, max_on);
+    if (main_win) g_chrome_traffic = close_on || min_on || max_on;
+  }
   if (!transp.empty()) {
     bool on = transp == "1";
     apply_transparent(win, wv, on);
@@ -1421,9 +1462,11 @@ static std::string win_state_json(const std::string& winid) {
 
   bool frame = main_win ? g_chrome_frame : (sec ? sec->frame : true);
   // GTK has no per-window control of the WM's min/max/close buttons, so the
-  // trafficLights bit is stored but never acted on. Reporting the stored bit
-  // told an app its request had worked — report the truth instead.
+  // windowControls is applied through gtk_window_set_deletable and the MWM
+  // hint above; neither can be read back, so getState reports null rather
+  // than echoing the request as though the WM had honoured it.
   bool traffic = true;
+  (void)traffic;
   bool transparent = main_win ? g_chrome_transparent : (sec ? sec->transparent : false);
   std::string vib = main_win ? g_chrome_vibrancy : (sec ? sec->vibrancy : "");
   bool square = main_win ? g_chrome_square : (sec ? sec->square : false);
@@ -1440,7 +1483,10 @@ static std::string win_state_json(const std::string& winid) {
     ",\"alwaysOnTop\":" + b(ontop) + ",\"resizable\":" + b(resizable) +
     ",\"clickThrough\":" + b(clickthrough) + ",\"level\":" + json_escape(level) +
     ",\"allSpaces\":" + b(main_win ? g_all_spaces : (st & GDK_WINDOW_STATE_STICKY)) +
-    ",\"chrome\":{\"frame\":" + b(frame) + ",\"trafficLights\":" + b(traffic) +
+    ",\"chrome\":{\"frame\":" + b(frame) + // Unlike macOS we cannot read the buttons back: the WM owns them and may
+  // have ignored the MWM hint entirely. Reporting the request would be the
+  // same lie this key had before, so report "unknown".
+  ",\"windowControls\":null" +
     ",\"transparent\":" + b(transparent) +
     ",\"vibrancy\":" + (vib.empty() ? "null" : json_escape(vib)) +
     ",\"squareCorners\":" + b(square) + ",\"acceptsFirstMouse\":" + b(first) + "}" +

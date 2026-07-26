@@ -3088,14 +3088,29 @@ static void do_get(webview_t w, void *arg) {
         NSScreen *scr = win.screen ?: [NSScreen mainScreen];
         CGFloat top = NSMaxY([[NSScreen screens][0] frame]);
         bool fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
-        char buf[512];
+        // windowControls reports what is ACTUALLY visible, read off the
+        // buttons themselves, so set -> get round-trips per button.
+        std::string controls = "[";
+        if (win.styleMask & NSWindowStyleMaskTitled) {
+          const struct { NSWindowButton b; const char *name; } kBtns[] = {
+              {NSWindowCloseButton, "close"},
+              {NSWindowMiniaturizeButton, "minimize"},
+              {NSWindowZoomButton, "maximize"}};
+          for (auto &e : kBtns) {
+            NSButton *btn = [win standardWindowButton:e.b];
+            if (btn && !btn.hidden)
+              controls += (controls.size() > 1 ? ",\"" : "\"") + std::string(e.name) + "\"";
+          }
+        }
+        controls += "]";
+        char buf[768];
         std::snprintf(
             buf, sizeof(buf),
             "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
             "\"fullscreen\":%s,\"minimized\":%s,\"visible\":%s,\"focused\":%s,"
             "\"alwaysOnTop\":%s,\"resizable\":%s,"
             "\"clickThrough\":%s,\"level\":\"%s\",\"allSpaces\":%s,"
-            "\"chrome\":{\"frame\":%s,\"trafficLights\":%s,"
+            "\"chrome\":{\"frame\":%s,\"windowControls\":%s,"
             "\"transparent\":%s,\"vibrancy\":%s,\"squareCorners\":%s,"
             "\"acceptsFirstMouse\":%s},"
             "\"screen\":{\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
@@ -3122,11 +3137,7 @@ static void do_get(webview_t w, void *arg) {
               win.titlebarAppearsTransparent))
                 ? "false"
                 : "true",
-            (!(win.styleMask & NSWindowStyleMaskTitled) ||
-             [win standardWindowButton:NSWindowCloseButton].hidden)
-                ? "false"
-                : "true",
-            win.opaque ? "false" : "true",
+            controls.c_str(), win.opaque ? "false" : "true",
             // vibrancy name is tracked for main only; secondary → null.
             (wid == "main" && !g_chrome_vibrancy.empty())
                 ? json_escape(g_chrome_vibrancy).c_str()
@@ -4359,12 +4370,23 @@ static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
       [win setFrame:keep display:YES];
     }
     if (!req->traffic.empty()) {
-      bool show = req->traffic == "1";
+      // '' keep · 'all' · 'none' · a comma list of close/minimize/maximize.
+      // macOS is the one platform that can hide these individually.
+      const std::string &c = req->traffic;
+      bool all = c == "all";
+      bool none = c == "none";
+      auto want = [&](const char *name) {
+        if (all) return true;
+        if (none) return false;
+        return c.find(name) != std::string::npos;
+      };
+      bool close_on = want("close"), min_on = want("minimize"),
+           zoom_on = want("maximize");
       if (is_main)
-        g_chrome_traffic = show;
-      [win standardWindowButton:NSWindowCloseButton].hidden = !show;
-      [win standardWindowButton:NSWindowMiniaturizeButton].hidden = !show;
-      [win standardWindowButton:NSWindowZoomButton].hidden = !show;
+        g_chrome_traffic = close_on || min_on || zoom_on;
+      [win standardWindowButton:NSWindowCloseButton].hidden = !close_on;
+      [win standardWindowButton:NSWindowMiniaturizeButton].hidden = !min_on;
+      [win standardWindowButton:NSWindowZoomButton].hidden = !zoom_on;
     }
     if (!req->transparent.empty()) {
       bool tr = req->transparent == "1";
@@ -4378,7 +4400,7 @@ static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
     }
     if (!req->frame.empty() || !req->traffic.empty()) {
       // Main tracks state globally; secondary windows derive from this
-      // request (set frame+trafficLights together for those).
+      // request (set frame+windowControls together for those).
       bool hide_bar = is_main ? (g_chrome_frameless && !g_chrome_traffic)
                               : (req_frameless && req_traffic_off);
       set_titlebar_hidden(win, hide_bar);

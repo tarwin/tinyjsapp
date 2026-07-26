@@ -265,8 +265,12 @@
       //   alwaysOnTop, resizable, screen: { width, height, scale } }
       getState: () => call('win.getState'),
       setHideOnClose: (enabled) => call('win.setHideOnClose', { enabled }),
-      // { frame?, trafficLights?, transparent?, vibrancy? } — frameless windows
-      // keep native resize/focus; mark your own titlebar with data-tiny-drag.
+      // { frame?, windowControls?, transparent?, vibrancy? } — frameless
+      // windows keep native resize/focus; mark your own titlebar with
+      // data-tiny-drag. windowControls is the close/minimize/maximize group
+      // (macOS's "traffic lights"): true | false | a subset array such as
+      // ['close'] | [] for none. What each OS can honour differs — ask
+      // tiny.system.capabilities().windowControls.
       setChrome: (opts) => call('win.setChrome', opts),
       // No args: drag the window (frameless chrome). With { files: [path…],
       // image? }: drag real files OUT of the app (into Finder, Slack, …) —

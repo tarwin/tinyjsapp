@@ -43,6 +43,18 @@ deprecated.
   `tiny.win.*`, but nothing about them is window-scoped: the launcher runs
   them application-modally, so a dialog from a satellite behaved exactly like
   one from main. All three platforms use their real native dialogs.
+- **Breaking: `chrome.trafficLights` → `chrome.windowControls`, and it's
+  cross-platform now.** The macOS nickname described a group every OS has, so
+  the key is named for the thing rather than the Mac's word for it. It takes
+  `true`, `false`, a subset array like `['close', 'minimize']`, or `[]` for
+  none — macOS hides each button individually, Windows maps them onto
+  `WS_SYSMENU`/`WS_MINIMIZEBOX`/`WS_MAXIMIZEBOX`, Linux uses
+  `gtk_window_set_deletable` plus an `_MOTIF_WM_HINTS` request the WM may
+  ignore. `getState().chrome.windowControls` reports the array that is
+  actually shown (read off the buttons on macOS and the styles on Windows),
+  and `null` on Linux, where the WM owns the decision and won't say.
+  Previously the bit was macOS-only in effect but stored and echoed back on
+  Linux, so an app that set it and read it back was told it had worked.
 - **Per-OS config blocks.** Root keys in `tinyjs.json` apply everywhere; an
   optional `macos` / `windows` / `linux` block merges on top for that platform,
   so only the keys that genuinely differ get repeated. Plain objects merge,

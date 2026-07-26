@@ -36,7 +36,9 @@ declare interface TinyMenuItemState {
 declare interface TinyChromeOptions {
   /** false: hide the titlebar; the page extends to the top edge */
   frame?: boolean;
-  trafficLights?: boolean;
+  /** the close/minimize/maximize group (macOS's "traffic lights"):
+   *  true | false | a subset such as ['close'] | [] for none */
+  windowControls?: boolean | Array<'close' | 'minimize' | 'maximize'>;
   transparent?: boolean;
   /** material name ('sidebar' | 'hud' | 'menu' | 'popover' | 'window' |
    *  'content' | 'header' | 'sheet' | 'tooltip' | 'fullscreen' |
@@ -120,7 +122,8 @@ declare interface TinyWinState {
   allSpaces: boolean;
   chrome: {
     frame: boolean;
-    trafficLights: boolean;
+    /** what is actually shown; null where the OS won't say (Linux) */
+    windowControls: Array<'close' | 'minimize' | 'maximize'> | null;
     transparent: boolean;
     vibrancy: string | null;
     squareCorners: boolean;

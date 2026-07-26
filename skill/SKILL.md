@@ -125,7 +125,7 @@ tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        permissions?: { microphone?: "why", camera?: "why" },
                        audioTap?: "app" | "system",   // enable tiny.audioTap
                        contextMenu?: false,           // suppress WebKit's default right-click menu (default true)
-                       chrome?: { frame, trafficLights, transparent, vibrancy, squareCorners, acceptsFirstMouse },
+                       chrome?: { frame, windowControls, transparent, vibrancy, squareCorners, acceptsFirstMouse },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build: "npm run build", dist: "dist",
                                     dev: "npm run dev", devUrl: "http://127.0.0.1:5173" } }
@@ -258,7 +258,7 @@ tiny.win.fullscreen(); tiny.win.setFullscreen(bool);   // toggle / absolute
 await tiny.win.getState();  // { x, y, width, height, fullscreen, minimized,
                             //   visible, focused, alwaysOnTop, resizable, screen }
 tiny.win.setPosition(x, y);                 // top-left origin
-tiny.win.setChrome({ frame: false, trafficLights: false,
+tiny.win.setChrome({ frame: false, windowControls: false,
                      transparent: false, vibrancy: 'hud' });  // frameless etc.
 // squareCorners: true drops macOS's rounded corners → BORDERLESS window
 // (square, no titlebar/traffic lights; no native titlebar drag — use

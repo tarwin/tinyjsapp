@@ -1665,6 +1665,25 @@ static void do_chrome(webview_t, void *arg) {
       g_frameless = frameless;
     set_style_bits_keep_client(hwnd, WS_CAPTION, !frameless);
   }
+  if (!req->traffic.empty()) {
+    // windowControls: '' keep · 'all' · 'none' · comma list of
+    // close/minimize/maximize. UNTESTED — written on macOS.
+    // Win32 is coarser than macOS here: the min/max boxes REQUIRE WS_SYSMENU,
+    // and dropping WS_SYSMENU removes the close button with them. So
+    // "minimize without close" isn't expressible; asking for it gets close
+    // too, which is why capabilities() flags this as approximate.
+    const std::string &c = req->traffic;
+    const bool all = c == "all", none = c == "none";
+    auto want = [&](const char *nm) {
+      return all ? true : none ? false : c.find(nm) != std::string::npos;
+    };
+    const bool close_on = want("close"), min_on = want("minimize"),
+               max_on = want("maximize");
+    const bool any = close_on || min_on || max_on;
+    set_style_bits_keep_client(hwnd, WS_SYSMENU, any);
+    set_style_bits_keep_client(hwnd, WS_MINIMIZEBOX, any && min_on);
+    set_style_bits_keep_client(hwnd, WS_MAXIMIZEBOX, any && max_on);
+  }
   if (!req->square.empty()) {
     bool square = req->square == "1";
     if (main)
@@ -3523,13 +3542,22 @@ static std::string win_state_json(HWND hwnd) {
   LONG ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
   bool frameless = main ? (g_frameless || g_square) : !(style & WS_CAPTION);
   char buf[640];
+  // Read the styles back so set -> get round-trips. WS_MINIMIZEBOX and
+  // WS_MAXIMIZEBOX only mean anything while WS_SYSMENU is present.
+  std::string controls = "[";
+  if (style & WS_SYSMENU) {
+    controls += "\"close\"";
+    if (style & WS_MINIMIZEBOX) controls += ",\"minimize\"";
+    if (style & WS_MAXIMIZEBOX) controls += ",\"maximize\"";
+  }
+  controls += "]";
   std::snprintf(
       buf, sizeof(buf),
       "{\"x\":%ld,\"y\":%ld,\"width\":%ld,\"height\":%ld,"
       "\"fullscreen\":%s,\"minimized\":%s,\"visible\":%s,\"focused\":%s,"
       "\"alwaysOnTop\":%s,\"resizable\":%s,"
       "\"clickThrough\":%s,\"level\":\"%s\",\"allSpaces\":false,"
-      "\"chrome\":{\"frame\":%s,\"trafficLights\":%s,\"transparent\":false,"
+      "\"chrome\":{\"frame\":%s,\"windowControls\":%s,\"transparent\":false,"
       "\"vibrancy\":null,\"squareCorners\":%s,\"acceptsFirstMouse\":true},"
       "\"screen\":{\"width\":%ld,\"height\":%ld,\"scale\":%.2f}}",
       L(r.left), L(r.top), L(r.right - r.left), L(r.bottom - r.top),
@@ -3541,7 +3569,7 @@ static std::string win_state_json(HWND hwnd) {
       (style & WS_THICKFRAME) ? "true" : "false",
       (main && g_click_through) ? "true" : "false",
       main ? g_level.c_str() : "normal",
-      frameless ? "false" : "true", frameless ? "false" : "true",
+      frameless ? "false" : "true", controls.c_str(),
       (main && g_square) ? "true" : "false",
       L(mi.rcMonitor.right - mi.rcMonitor.left),
       L(mi.rcMonitor.bottom - mi.rcMonitor.top), monitor_scale(mon));

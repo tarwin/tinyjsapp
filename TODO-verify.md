@@ -246,6 +246,18 @@ right edge moves (a wrong `HT*` mapping resizes the opposite side).
       reports the truth, and `capabilities().trafficLights` is `false` on both
       Windows and Linux. Worth confirming nothing depended on the old lie.
 
+- [ ] **`chrome.windowControls` on Windows** — `WS_SYSMENU` /
+      `WS_MINIMIZEBOX` / `WS_MAXIMIZEBOX`. Win32 is coarser than macOS: the
+      min/max boxes require `WS_SYSMENU`, so "minimize without close" isn't
+      expressible and asking for it gets close too. Check that `['close']`
+      leaves only close, that `false` removes the group, and that `getState`
+      round-trips what you set.
+- [ ] **`chrome.windowControls` on Linux** — `gtk_window_set_deletable` for
+      close, `_MOTIF_WM_HINTS` for minimize/maximize. Mutter and KWin read the
+      hint; many WMs don't, so treat a no-op as "this WM ignores MWM", not a
+      bug. `getState` deliberately reports `null` here rather than echoing the
+      request.
+
 ## Driving these checks headlessly on Windows
 
 No clicking needed, and worth reusing — the decorations live outside the app

@@ -282,7 +282,7 @@ const { x, y, window, screen } = await tiny.app.mousePosition();
 // screen = the display the cursor is on: { x, y, width, height, scale }
 
 // frameless / transparent / vibrancy windows (native resize + focus kept)
-tiny.win.setChrome({ frame: false, trafficLights: false, vibrancy: 'hud' });
+tiny.win.setChrome({ frame: false, windowControls: false, vibrancy: 'hud' });
 // mark your own titlebar: <header data-tiny-drag>…</header> — drag moves the
 // window, double-click zooms; interactive children are excluded automatically
 // (or opt out with data-tiny-nodrag). Also in tinyjs.json as "chrome": {…}
@@ -315,7 +315,7 @@ tiny.win.setChrome({ acceptsFirstMouse: true });
 // read the window back
 const s = await tiny.win.getState();
 // { x, y, width, height, fullscreen, minimized, visible, focused,
-//   alwaysOnTop, resizable, chrome: { frame, trafficLights, transparent,
+//   alwaysOnTop, resizable, chrome: { frame, windowControls, transparent,
 //   vibrancy, squareCorners, acceptsFirstMouse },
 //   screen: { width, height, scale } }
 
@@ -673,7 +673,7 @@ await tiny.win.windows();          // ['main', 'settings', ...]
 // panel never flashes its titlebar, and it opens where you asked (not
 // center-then-jump):
 tiny.win.open('hud', { page: 'hud.html', size: '300x120', x: 40, y: 40,
-                       chrome: { frame: false, trafficLights: false, vibrancy: 'hud' } });
+                       chrome: { frame: false, windowControls: false, vibrancy: 'hud' } });
 ```
 
 Every window runs the full `tiny.*` bridge, and `tiny.win.*` calls from a

@@ -254,10 +254,10 @@ async function systemCapabilities() {
     icon: ON_X11,
     attention: ON_X11,
     presence: ON_X11,
-    // chrome.trafficLights hides the window buttons. GTK can't do it per
-    // window, and the bit was being stored and echoed back by getState — so
-    // an app that asked for it was told it had worked.
-    trafficLights: false,
+    // chrome.windowControls: GTK can only hide the CLOSE button portably
+    // (gtk_window_set_deletable); minimize/maximize go out as _MOTIF_WM_HINTS,
+    // which the WM is free to ignore. So: partial, not false.
+    windowControls: ON_X11,
     // present, with the caveats in the README
     globalHotkeys: true, tray: true, notifications: true,
     notificationActions: true, notificationReply: false,
@@ -340,6 +340,22 @@ const FILTER_LABELS = {
   // multiplies by the same factor and does load.
   gain: 'linear',
 };
+
+// chrome.windowControls accepts true | false | ['close','minimize'] | [].
+// The wire carries a token rather than a bit so the array form survives:
+// '' = leave unchanged, 'all', 'none', or a comma list. 'zoom' is accepted
+// as a macOS-flavoured alias for 'maximize'.
+const CONTROL_NAMES = { close: 'close', minimize: 'minimize', maximize: 'maximize', zoom: 'maximize' };
+function controlsWire(v) {
+  if (v === undefined) return '';
+  if (v === true) return 'all';
+  if (v === false) return 'none';
+  if (Array.isArray(v)) {
+    const names = v.map((n) => CONTROL_NAMES[String(n).toLowerCase()]).filter(Boolean);
+    return names.length ? [...new Set(names)].join(',') : 'none';
+  }
+  return '';
+}
 
 const DIALOG_OPS = {
   'dialog.openFile': { op: 'open', args: () => [] },
@@ -799,7 +815,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         return r.text;
       },
     },
-    // Window chrome: { frame?, trafficLights?, transparent?, vibrancy?,
+    // Window chrome: { frame?, windowControls?, transparent?, vibrancy?,
     // squareCorners?, acceptsFirstMouse? }. frame:false hides the titlebar
     // (content extends under it; keep your own drag region via data-tiny-drag).
     // vibrancy: material name or null. squareCorners:true drops macOS's rounded
@@ -816,7 +832,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       const vib = opts.vibrancy === undefined ? ''
                 : opts.vibrancy === null || opts.vibrancy === false ? 'none'
                 : String(opts.vibrancy);
-      send('CHROME ' + [bit(opts.frame), bit(opts.trafficLights),
+      send('CHROME ' + [bit(opts.frame), controlsWire(opts.windowControls),
                         bit(opts.transparent), one(vib), bit(opts.squareCorners),
                         bit(opts.acceptsFirstMouse)].join('\t'));
     },
@@ -1169,7 +1185,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Open (or focus) a secondary window. `page` is an html file in your
     // frontend dir (e.g. 'settings.html') or an absolute path. Each window
     // runs the same tiny.* bridge; win.* calls from its page target itself.
-    // chrome ({ frame?, trafficLights?, transparent?, vibrancy?,
+    // chrome ({ frame?, windowControls?, transparent?, vibrancy?,
     // squareCorners?, acceptsFirstMouse? }) and position ({ x, y }) are applied
     // BEFORE the window paints — no titlebar flash for frameless panels, no
     // jump from center.
@@ -1186,7 +1202,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                 : String(c.vibrancy);
       const hasPos = x != null && y != null;
       send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400'),
-                         bit(c.frame), bit(c.trafficLights), bit(c.transparent), one(vib),
+                         bit(c.frame), controlsWire(c.windowControls), bit(c.transparent), one(vib),
                          bit(c.squareCorners), bit(c.acceptsFirstMouse),
                          hasPos ? (x | 0) : '', hasPos ? (y | 0) : ''].join('\t'));
       // minSize: "WxH" — a floor under user resizes, so a layout with a
@@ -1230,7 +1246,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           const vib = opts.vibrancy === undefined ? ''
                     : opts.vibrancy === null || opts.vibrancy === false ? 'none'
                     : String(opts.vibrancy);
-          t('CHROME', [bit(opts.frame), bit(opts.trafficLights),
+          t('CHROME', [bit(opts.frame), controlsWire(opts.windowControls),
                        bit(opts.transparent), one(vib), bit(opts.squareCorners),
                        bit(opts.acceptsFirstMouse)].join('\t'));
         },

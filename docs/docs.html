@@ -526,7 +526,7 @@ const screens = await <b>tiny.app.screens</b>();
 <b>tiny.win.onDrop</b>((paths) =&gt; …);
 
 <i>// frameless / transparent / vibrancy (native resize + focus kept)</i>
-<b>tiny.win.setChrome</b>({ frame: false, trafficLights: false, vibrancy: 'hud' });
+<b>tiny.win.setChrome</b>({ frame: false, windowControls: false, vibrancy: 'hud' });
 <i>// squareCorners: true → BORDERLESS (square, no titlebar/traffic lights;</i>
 <i>// no native titlebar drag — use data-tiny-drag; resize/shadow/focus kept).</i>
 <i>// Put it in tinyjs.json "chrome" to apply before first paint.</i>
@@ -558,7 +558,7 @@ await <b>tiny.win.windows</b>();     <i>// ['main', 'settings', …]</i>
 
 <i>// chrome + x/y apply BEFORE first paint — no titlebar flash, no center-jump</i>
 <b>tiny.win.open</b>('hud', { page: 'hud.html', x: 40, y: 40,
-                     chrome: { frame: false, trafficLights: false, vibrancy: 'hud' } });
+                     chrome: { frame: false, windowControls: false, vibrancy: 'hud' } });
 
 <i>// every window runs the full tiny.* bridge; win.* targets its own window.</i>
 <i>// backend: app.openWindow(id, opts), app.window(id).setTitle/push/close/…,</i>
