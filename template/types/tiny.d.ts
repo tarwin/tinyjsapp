@@ -632,10 +632,24 @@ declare interface Tiny {
     onChange(fn: (info: { changeCount: number; self: boolean }) => void): void;
   };
 
+  /** macOS-only: concepts the other OSes have no equivalent for at all.
+   *  These reject on Windows and Linux — guard with tiny.system.isMacOS().
+   *  Anything that COULD exist elsewhere stays on `app` and answers
+   *  'unsupported' until it does. */
+  macos: {
+    /** run AppleScript in-process (no osascript spawn; 'automation' TCC);
+     *  resolves the result as a string, null if it isn't text; rejects
+     *  with the script error message */
+    applescript(source: string): Promise<string | null>;
+    /** Quick Look panel for the path(s); no args closes it */
+    quickLook(paths?: string | string[] | null): Promise<any>;
+    /** trackpad haptic feedback (no-op without a Force Touch trackpad) */
+    haptic(pattern?: 'generic' | 'alignment' | 'level'): Promise<any>;
+  };
   app: {
     info(): Promise<TinyAppInfo>;
-    /** false: menu-bar-only app (no Dock icon) */
-    setDockVisible(visible: boolean): Promise<any>;
+    /** 'menubar': no Dock icon / taskbar button / app switcher entry */
+    presence(mode: 'normal' | 'menubar'): Promise<any>;
     onOpenUrl(fn: (url: string) => void): void;
     onOpenFiles(fn: (paths: string[]) => void): void;
     onNotificationClick(fn: (id: string) => void): void;
@@ -656,12 +670,11 @@ declare interface Tiny {
     paths(): Promise<TinyPaths>;
     shell: TinyShell;
     launchAtLogin: TinyLaunchAtLogin;
-    dock: {
-      /** '' clears the badge */
-      setBadge(text: string): Promise<any>;
-      /** bounce until activated; critical: until the user acts */
-      bounce(opts?: { critical?: boolean }): Promise<any>;
-    };
+    /** '' clears the badge */
+    badge(text: string): Promise<any>;
+    /** bounce / flash / urgency-hint until activated; critical: until the
+     * user acts */
+    attention(opts?: { critical?: boolean }): Promise<any>;
     power: TinyPower;
     /** the active app right now (who focus returns to after win.hide()) */
     frontmostApp(): Promise<TinyFrontmostApp | null>;
@@ -671,10 +684,10 @@ declare interface Tiny {
     otherWindows(): Promise<TinyOtherWindow[] | null>;
     /** move/resize another app's frontmost window (pid from otherWindows) */
     moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
-    /** trackpad haptic feedback (no-op without a Force Touch trackpad) */
-    haptic(pattern?: 'generic' | 'alignment' | 'level'): Promise<any>;
-    /** replace the Dock icon from a png ('' resets to the bundle icon) */
-    dockIcon(path: string): Promise<any>;
+    /** replace the app icon from a png ('' resets to the bundle icon) */
+    icon(path: string): Promise<any>;
+    /** progress bar on the app icon / taskbar button: 0..1, null clears */
+    progress(value: number | null): Promise<any>;
     battery(): Promise<TinyBattery | null>;
     wifi(): Promise<TinyWifi | null>;
     /** find files by name/content (Spotlight) — up to 100 paths */
@@ -687,8 +700,6 @@ declare interface Tiny {
     playSound(target: string): Promise<boolean>;
     /** seconds since the user's last input, session-wide */
     idleTime(): Promise<number>;
-    /** Quick Look panel for the path(s); no args closes it */
-    quickLook(paths?: string | string[] | null): Promise<any>;
     /** screenshot a display (id from screens(); default primary) — png in
      *  the temp dir, caller owns the file; needs the 'screen' permission
      *  and macOS 14+, rejects with the reason otherwise */
@@ -704,10 +715,6 @@ declare interface Tiny {
     secrets: TinySecrets;
     /** Touch ID (or the account-password sheet); false covers cancel */
     authenticate(reason?: string): Promise<boolean>;
-    /** run AppleScript in-process (no osascript spawn; 'automation' TCC);
-     *  resolves the result as a string, null if it isn't text; rejects
-     *  with the script error message */
-    applescript(source: string): Promise<string | null>;
     onNotificationClick(fn: (id: string) => void): void;
     /** action button / reply field on a notification was used */
     onNotificationAction(fn: (info: TinyNotificationAction) => void): void;
@@ -804,7 +811,7 @@ declare interface TinyApp {
   setLevel(level: TinyWindowLevel): void;
   setAllSpaces(enabled: boolean): void;
   setHideOnClose(enabled: boolean): void;
-  setDockVisible(visible: boolean): void;
+  presence(mode: 'normal' | 'menubar'): void;
   print(): void;
   /** render the page to a PDF file (vector) */
   printToPDF(path: string): Promise<{ path: string }>;
@@ -859,12 +866,11 @@ declare interface TinyApp {
   paths: TinyPaths;
   shell: TinyShell;
   launchAtLogin: TinyLaunchAtLogin;
-  dock: {
-    /** '' clears the badge */
-    setBadge(text: string): boolean;
-    /** bounce until activated; critical: until the user acts */
-    bounce(opts?: { critical?: boolean }): boolean;
-  };
+  /** '' clears the badge */
+  badge(text: string): boolean;
+  /** bounce / flash / urgency-hint until activated; critical: until the user
+   * acts */
+  attention(opts?: { critical?: boolean }): boolean;
   power: TinyPower;
   /** the active app right now (who focus returns to after hide()) */
   frontmostApp(): Promise<TinyFrontmostApp | null>;
@@ -874,10 +880,17 @@ declare interface TinyApp {
   otherWindows(): Promise<TinyOtherWindow[] | null>;
   /** move/resize another app's frontmost window (pid from otherWindows) */
   moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
-  /** trackpad haptic feedback (no-op without a Force Touch trackpad) */
-  haptic(pattern?: 'generic' | 'alignment' | 'level'): boolean;
-  /** replace the Dock icon from a png ('' resets to the bundle icon) */
-  dockIcon(path: string): boolean;
+  /** replace the app icon from a png ('' resets to the bundle icon) */
+  icon(path: string): boolean;
+  /** macOS-only — same shape and names as tiny.macos.* in the page. These
+   *  reject on Windows and Linux. */
+  macos: {
+    applescript(source: string): Promise<string | null>;
+    quickLook(paths?: string | string[] | null): boolean;
+    haptic(pattern?: 'generic' | 'alignment' | 'level'): boolean;
+  };
+  /** progress bar on the app icon / taskbar button: 0..1, null clears */
+  progress(value: number | null): boolean;
   battery(): Promise<TinyBattery | null>;
   wifi(): Promise<TinyWifi | null>;
   /** find files by name/content (Spotlight) — up to 100 paths */
@@ -890,8 +903,6 @@ declare interface TinyApp {
   playSound(target: string): Promise<boolean>;
   /** seconds since the user's last input, session-wide */
   idleTime(): Promise<number>;
-  /** Quick Look panel for the path(s); no args closes it */
-  quickLook(paths?: string | string[] | null): boolean;
   /** screenshot a display (id from screens(); default primary) — png in
    *  the temp dir, caller owns the file; needs the 'screen' permission
    *  and macOS 14+, rejects with the reason otherwise */
@@ -907,10 +918,6 @@ declare interface TinyApp {
   secrets: TinySecrets;
   /** Touch ID (or the account-password sheet); false covers cancel */
   authenticate(reason?: string): Promise<boolean>;
-  /** run AppleScript in-process (no osascript spawn; 'automation' TCC);
-   *  resolves the result as a string, null if it isn't text; rejects
-   *  with the script error message */
-  applescript(source: string): Promise<string | null>;
   nowPlaying: {
     /** also arms the media keys */
     set(info: TinyNowPlaying): boolean;

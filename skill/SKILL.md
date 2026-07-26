@@ -53,7 +53,7 @@ transparent MAIN window on Windows must be declared in tinyjs.json
 `"chrome"` (or `win.open` options for secondaries), not just via a late
 `setChrome`, and transparency + a Win32 menu bar are mutually exclusive
 there; linux accepts frameless/transparent chrome too but `vibrancy` is a
-no-op), `dock.bounce` (taskbar flash on win, urgency hint on linux), sqlite.
+no-op), `app.attention` (taskbar flash on win, urgency hint on linux), sqlite.
 
 Windows-specific: drag & drop with real paths BOTH ways (`win.onDrop`,
 `startDrag({ files })`); tray + `notify` work (balloon notifications, no
@@ -78,12 +78,12 @@ proxy, deep links / file associations / single instance, `permissions.*`
 TCC flow (Windows answers 'granted'), `quickLook`, `recorder`, `pickColor`,
 `ocr`, `authenticate`, `applescript`, `nowPlaying`/media keys,
 `selectedText`/`otherWindows`/`moveWindow`, `share`, `haptic`,
-`dock.setBadge`/`dockIcon`, `setAllSpaces`, `wifi`, `spotlight`,
+`app.badge`/`app.icon`/`app.presence`, `setAllSpaces`, `wifi`, `spotlight`,
 `tiny.app.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
 Not supported on Linux (reject or answer `'unsupported'`/`null` — always
-feature-detect): `recorder`, `ocr`, `quickLook`, `applescript`,
-`haptic`, Dock badge/`bounce({critical: true})`/`dockIcon`,
+feature-detect): `recorder`, `ocr`, `app.badge` (`app.icon`/`app.presence`
+do work), the whole `tiny.macos.*` namespace,
 `share`, `wifi`, `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
 `authenticate`, `tiny.app.ai`, `setAllSpaces` (maps to sticky windows
 instead of true per-Space follow). These fail cleanly — capability calls
@@ -151,17 +151,18 @@ export function init(app) {
   app.setTitle(t); app.setSize(w, h); app.setMenu(menus); app.quit();
   // also: notify({title, body}), hide()/show()/center()/minimize()/
   // fullscreen(), setPosition(x, y), setAlwaysOnTop(v), setResizable(v),
-  // setHideOnClose(v), setDockVisible(v), print(), tray.set/remove,
+  // setHideOnClose(v), presence(mode), print(), tray.set/remove,
   // store.get/set/delete/all, hotkey.register/unregister,
   // setContextMenu(items), update.check()/update.install(),
   // clipboard.read/write/changeCount/watch/unwatch, keystroke(combo),
   // paste(), permissions.check/request, mousePosition(), screens(),
   // paths, shell.open/reveal/trash, launchAtLogin.get/set,
-  // dock.setBadge/bounce, power.preventSleep/allowSleep, frontmostApp(),
+  // badge/attention/icon, power.preventSleep/allowSleep, frontmostApp(),
   // beep()/playSound(target), window(id).share(opts), idleTime(),
-  // quickLook(paths), captureScreen(screenId), pickColor(), ocr(path),
+  // captureScreen(screenId), pickColor(), ocr(path),
   // thumbnail(path, size), secrets.get/set/delete, authenticate(reason),
-  // applescript(source), nowPlaying.set/clear, say(text, opts), voices(),
+  // macos.applescript/quickLook/haptic,
+  // nowPlaying.set/clear, say(text, opts), voices(),
   // stopSpeaking(), show({ activate: false })
 }
 
@@ -292,11 +293,11 @@ tiny.tray.set({ title, icon, tooltip, menu: [{ id, label }, { separator: true }]
 // Linux: AppIndicator/StatusNotifier, menu-based — a bare icon click (no menu
 // set) is emulated via a synthetic menu entry, and tray.position() -> null
 tiny.tray.on((id) => ...); tiny.tray.onClick(fn); tiny.tray.remove();
-tiny.app.setDockVisible(false);             // menu-bar-only app
+tiny.app.presence('menubar');               // menu-bar-only app ('normal' back)
 // tray-app recipe: tinyjs.json { "activation": "accessory" } (launches with no
 // Dock icon and window hidden — no flash) + tray.set + win.setHideOnClose(true);
 // tiny.win.show() when needed. Without the config flag: tray.set +
-// win.setHideOnClose(true) + app.setDockVisible(false) in init().
+// win.setHideOnClose(true) + app.presence('menubar') in init().
 
 // auto-update (needs tinyjs.json "update".url; ships via `tinyjs publish`)
 const { available, latest } = await tiny.api.call('update.check');
@@ -387,8 +388,8 @@ await tiny.app.launchAtLogin.get();         // 'enabled'|'disabled'|
 await tiny.app.launchAtLogin.set(true);     //  'requires-approval'|'unsupported'
 // 'requires-approval' = user must allow in System Settings > Login Items
 
-tiny.app.dock.setBadge('3');                // '' clears
-tiny.app.dock.bounce({ critical: false });  // bounce until activated
+tiny.app.badge('3');                        // '' clears
+tiny.app.attention({ critical: false });    // bounce/flash until activated
 
 // keep the system awake (replaces caffeinate; auto-released on exit/crash)
 await tiny.app.power.preventSleep('reason', { display: false });
@@ -405,7 +406,7 @@ await tiny.app.playSound('Ping');        // system sound name or audio file
 tiny.win.share({ text, url, paths, x: e.clientX, y: e.clientY });
 
 await tiny.app.idleTime();      // seconds since the user's last input
-tiny.app.quickLook(pathOrArray); tiny.app.quickLook();  // preview / close
+tiny.macos.quickLook(pathOrArray); tiny.macos.quickLook();  // preview / close
 await tiny.app.captureScreen(screenId?);  // -> { path (png, yours), width,
                                 // height }; needs 'screen' perm + macOS 14,
                                 // rejects with the reason otherwise
@@ -421,7 +422,7 @@ await tiny.app.secrets.set(key, value); // here, NEVER in tiny.store;
 await tiny.app.secrets.delete(key);     // get -> string | null
 await tiny.app.authenticate(reason);    // Touch ID / password sheet ->
                                         // true | false (false = cancel)
-await tiny.app.applescript(src);        // in-process, no osascript spawn;
+await tiny.macos.applescript(src);      // in-process, no osascript spawn;
                                 // 'automation' TCC; -> result string | null,
                                 // rejects with the script error
 
@@ -453,8 +454,8 @@ await tiny.app.moveWindow(pid, { x, y, width, height });  // resolves true/throw
 await tiny.tray.position();       // { x,y,width,height }|null (anchor dropdowns)
 // deep-Mac citizen
 await tiny.win.printToPDF(path);  // -> { path } (vector PDF; invoices/reports)
-tiny.app.haptic('generic');       // 'generic'|'alignment'|'level' (Force Touch)
-tiny.app.dockIcon(pngPath);       // '' resets (render a canvas for badges)
+tiny.macos.haptic('generic');     // 'generic'|'alignment'|'level' (Force Touch)
+tiny.app.icon(pngPath);           // '' resets (render a canvas for live tiles)
 await tiny.app.battery();         // { percent, charging, plugged, minutesRemaining }|null
 await tiny.app.wifi();            // { ssid, bssid, rssi, noise, txRate }|null (ssid→Location)
 await tiny.app.spotlight(query);  // find files by name/content -> up to 100 paths

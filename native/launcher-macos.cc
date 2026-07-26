@@ -57,7 +57,8 @@
 //                                                    fullscreen [0|1], restore,
 //                                                    ontop 0|1,
 //                                                    resizable 0|1, pos <x> <y>,
-//                                                    dock 0|1 (Dock icon),
+//                                                    presence 0|1 (0 = no
+//                                                    Dock icon / menu-bar app),
 //                                                    hideonclose 0|1
 //                         CTXBEGIN / ITEM / SEP /
 //                         CTXEND / CTXCLEAR          replace or restore the
@@ -142,7 +143,9 @@
 //                                                    answers GOT <qid>
 //                                                    {status, ok, error}
 //                         BADGE <text>               Dock badge ('' clears)
-//                         BOUNCE <critical01>        bounce the Dock icon
+//                         ATTENTION <critical01>     bounce the Dock icon
+//                         PROGRESS <0..1|-1>         progress bar on the Dock
+//                                                    tile (-1 clears)
 //                         POWER <qid> on\t<display01>\t<reason> / off
 //                                                    prevent/allow idle sleep
 //                                                    (IOPMAssertion — dies
@@ -188,7 +191,7 @@
 //                                                    GOT {ok, path, error}
 //                         HAPTIC <pattern>           trackpad haptic feedback
 //                                                    (generic|alignment|level)
-//                         DOCKICON <path>            set the Dock icon from a
+//                         APPICON <path>             set the app icon from a
 //                                                    png ('' = reset)
 //                         SPOTLIGHT <qid> <query>    find files by content
 //                                                    (NSMetadataQuery); GOT
@@ -902,14 +905,15 @@ static void apply_tray(webview_t, void *arg) {
 
 // --- window ops (macOS) --------------------------------------------------------
 // WINOP hide | show | center | minimize | fullscreen | ontop 0|1 |
-//       resizable 0|1 | pos <x> <y> | dock 0|1 | hideonclose 0|1
+//       resizable 0|1 | pos <x> <y> | presence 0|1 | hideonclose 0|1
 
 static bool g_hide_on_close = false;
 
 // Accessory activation ("activation": "accessory" — menu-bar agents): while
 // set, attempts to make the app Regular are coerced back to Accessory and the
 // startup order-front is swallowed, so neither a Dock icon nor a window ever
-// flashes. Installed in install_accessory_mode() below; WINOP dock 1 lifts it.
+// flashes. Installed in install_accessory_mode() below; WINOP presence 1
+// lifts it.
 static bool g_accessory = false;
 static bool g_suppress_order_front = false;
 
@@ -971,10 +975,10 @@ static void do_winop(webview_t w, void *arg) {
       // NSWindowStyleMaskNonactivatingPanel — not what webview creates.)
       [NSApp unhideWithoutActivation];
       [win orderFrontRegardless];
-    } else if (*op == "dock 0") {
+    } else if (*op == "presence 0") {
       if (is_main)
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
-    } else if (*op == "dock 1" && is_main) {
+    } else if (*op == "presence 1" && is_main) {
       g_accessory = false; // lift the accessory-mode coercion, if any
       [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
       [NSApp activateIgnoringOtherApps:YES];
@@ -1133,7 +1137,7 @@ static void install_drop_hook() {
 // unconditionally, so both are swizzled and neutered while the flags are set.
 // The order-front suppression only spans webview_create (cleared in main
 // before the socket loop starts, so WINOP show works normally); the policy
-// coercion stays until the backend calls setDockVisible(true).
+// coercion stays until the backend calls app.presence('normal').
 
 typedef BOOL (*SetPolicyIMP)(id, SEL, NSInteger);
 static SetPolicyIMP g_orig_setActivationPolicy = nullptr;
@@ -1810,7 +1814,7 @@ static void install_media_capture_hook() {
 // SHELL wraps the NSWorkspace verbs apps otherwise spawn `open` for; trash
 // uses NSFileManager so the file is recoverable (vs tjs.remove). LOGIN wraps
 // SMAppService (macOS 13+, needs a real bundle identity — dev-mode's bare
-// launcher answers "unsupported"). BADGE/BOUNCE are Dock-tile fire-and-forget.
+// launcher answers "unsupported"). BADGE/ATTENTION are fire-and-forget.
 
 struct ShellReq {
   std::string qid, op, target;
@@ -1924,7 +1928,7 @@ static void do_badge(webview_t, void *arg) {
   delete text;
 }
 
-static void do_bounce(webview_t, void *arg) {
+static void do_attention(webview_t, void *arg) {
   int *critical = static_cast<int *>(arg);
   [NSApp requestUserAttention:*critical ? NSCriticalRequest
                                         : NSInformationalRequest];
@@ -1944,7 +1948,7 @@ static void do_login(webview_t, void *arg) {
   delete req;
 }
 static void do_badge(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
-static void do_bounce(webview_t, void *arg) { delete static_cast<int *>(arg); }
+static void do_attention(webview_t, void *arg) { delete static_cast<int *>(arg); }
 #endif
 
 // --- power, sound, share (macOS) ----------------------------------------------------
@@ -4859,18 +4863,99 @@ static void do_haptic(webview_t, void *arg) {
   delete pat;
 }
 
-static void do_dockicon(webview_t, void *arg) {
+// --- dock tile: the app icon and the progress bar share one surface ---------
+// badgeLabel is drawn by the system over whatever the tile renders, so badge()
+// composes for free. A custom contentView is different: it REPLACES the tile's
+// own drawing, so as soon as progress needs a bar this view has to paint the
+// icon too — otherwise setting progress would blank a custom icon, and setting
+// an icon would wipe the bar. One renderer owns both pieces of state and
+// redraws on either change; with both cleared the tile drops back to
+// contentView = nil so the system draws the real bundle icon again.
+static NSImage *g_dock_icon = nil;    // APPICON ('' clears)
+static double g_dock_progress = -1.0; // PROGRESS (<0 = no bar)
+
+@interface TinyDockTile : NSView
+@end
+
+@implementation TinyDockTile
+- (void)drawRect:(NSRect)dirty {
+  (void)dirty;
+  NSRect b = [self bounds];
+  NSImage *icon = g_dock_icon ? g_dock_icon
+                              : [NSImage imageNamed:@"NSApplicationIcon"];
+  [icon drawInRect:b
+          fromRect:NSZeroRect
+         operation:NSCompositingOperationSourceOver
+          fraction:1.0];
+  if (g_dock_progress < 0.0) return;
+
+  double p = g_dock_progress > 1.0 ? 1.0 : g_dock_progress;
+  CGFloat h = b.size.height * 0.12;
+  CGFloat pad = b.size.width * 0.09;
+  NSRect track = NSMakeRect(b.origin.x + pad, b.origin.y + h * 0.55,
+                            b.size.width - pad * 2.0, h);
+  NSBezierPath *tp = [NSBezierPath bezierPathWithRoundedRect:track
+                                                     xRadius:h / 2.0
+                                                     yRadius:h / 2.0];
+  [[NSColor colorWithWhite:0.0 alpha:0.55] setFill];
+  [tp fill];
+  [[NSColor whiteColor] setStroke];
+  [tp setLineWidth:1.5];
+  [tp stroke];
+
+  NSRect bar = NSInsetRect(track, 2.0, 2.0);
+  bar.size.width *= p;
+  if (bar.size.width > 0.5) {
+    // a rounded cap can't be wider than the bar itself at low percentages
+    CGFloat r = bar.size.width < bar.size.height ? bar.size.width / 2.0
+                                                 : bar.size.height / 2.0;
+    NSBezierPath *fp = [NSBezierPath bezierPathWithRoundedRect:bar
+                                                       xRadius:r
+                                                       yRadius:r];
+    [[NSColor systemBlueColor] setFill];
+    [fp fill];
+  }
+}
+@end
+
+static void dock_tile_refresh(void) {
+  NSDockTile *tile = [NSApp dockTile];
+  if (!g_dock_icon && g_dock_progress < 0.0) {
+    [tile setContentView:nil];
+    [NSApp setApplicationIconImage:nil]; // back to the bundle icon
+    [tile display];
+    return;
+  }
+  if (![[tile contentView] isKindOfClass:[TinyDockTile class]])
+    [tile setContentView:[[[TinyDockTile alloc] init] autorelease]];
+  [tile display];
+}
+
+static void do_appicon(webview_t, void *arg) {
   std::string *path = static_cast<std::string *>(arg);
   @autoreleasepool {
-    if (path->empty()) {
-      [NSApp setApplicationIconImage:nil]; // reset to the bundle icon
-    } else {
-      NSImage *img = [[NSImage alloc] initWithContentsOfFile:ns(*path)];
-      if (img)
-        [NSApp setApplicationIconImage:img];
+    NSImage *next = nil;
+    if (!path->empty()) {
+      next = [[NSImage alloc] initWithContentsOfFile:ns(*path)];
+      if (!next) { // unreadable png — leave the tile as it was
+        delete path;
+        return;
+      }
     }
+    if (g_dock_icon) [g_dock_icon release];
+    g_dock_icon = next; // owns the +1 from alloc; nil when clearing
+    dock_tile_refresh();
   }
   delete path;
+}
+
+static void do_progress(webview_t, void *arg) {
+  double *v = static_cast<double *>(arg);
+  @autoreleasepool {
+    g_dock_progress = *v;
+    dock_tile_refresh();
+  }
+  delete v;
 }
 
 static std::string battery_json() {
@@ -4987,7 +5072,8 @@ static void do_pdf(webview_t, void *arg) {
   delete r;
 }
 static void do_haptic(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
-static void do_dockicon(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
+static void do_appicon(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
+static void do_progress(webview_t, void *arg) { delete static_cast<double *>(arg); }
 static std::string battery_json() { return "null"; }
 static std::string wifi_json() { return "null"; }
 static void do_spotlight(webview_t, void *arg) {
@@ -5611,10 +5697,15 @@ static void sock_read_loop() {
                          new std::string(
                              line.size() > 6 ? wire_unescape(line.substr(6))
                                              : ""));
-      } else if (line.rfind("BOUNCE", 0) == 0) {
-        webview_dispatch(g_w, do_bounce,
-                         new int(line.size() > 7 ? std::atoi(line.c_str() + 7)
-                                                 : 0));
+      } else if (line.rfind("ATTENTION", 0) == 0) {
+        webview_dispatch(g_w, do_attention,
+                         new int(line.size() > 10 ? std::atoi(line.c_str() + 10)
+                                                  : 0));
+      } else if (line.rfind("PROGRESS", 0) == 0) {
+        webview_dispatch(g_w, do_progress,
+                         new double(line.size() > 9
+                                        ? std::atof(line.c_str() + 9)
+                                        : -1.0));
       } else if (line.rfind("PDF ", 0) == 0) {
         size_t sp = line.find(' ', 4);
         if (sp == std::string::npos) continue;
@@ -5623,10 +5714,10 @@ static void sock_read_loop() {
                                     wire_unescape(line.substr(sp + 1))});
       } else if (line.rfind("HAPTIC ", 0) == 0) {
         webview_dispatch(g_w, do_haptic, new std::string(line.substr(7)));
-      } else if (line == "DOCKICON" || line.rfind("DOCKICON ", 0) == 0) {
-        webview_dispatch(g_w, do_dockicon,
-                         new std::string(line.size() > 9
-                                             ? wire_unescape(line.substr(9))
+      } else if (line == "APPICON" || line.rfind("APPICON ", 0) == 0) {
+        webview_dispatch(g_w, do_appicon,
+                         new std::string(line.size() > 8
+                                             ? wire_unescape(line.substr(8))
                                              : ""));
       } else if (line.rfind("SPOTLIGHT ", 0) == 0) {
         size_t sp = line.find(' ', 10);

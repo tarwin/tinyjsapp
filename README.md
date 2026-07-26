@@ -123,7 +123,7 @@ speakers (macOS/Windows mute it).
 
 See **Portability** below for what's supported on Windows and Linux.
 
-Full API reference: [tinyjs.app/api](https://tinyjs.app/api) · release
+Full docs: [tinyjs.app/docs](https://tinyjs.app/docs) · release
 history: [tinyjs.app/changelog](https://tinyjs.app/changelog).
 
 ## Create and run an app
@@ -177,7 +177,7 @@ export function init(app) {          // window is up
   // app also has: setTitle(t), setSize(w, h), setMenu(menus), eval(js),
   // reload(), quit(), notify({title, body}), hide()/show()/center()/
   // minimize()/fullscreen(), setPosition(x, y), setAlwaysOnTop(v),
-  // setResizable(v), setHideOnClose(v), setDockVisible(v), print(),
+  // setResizable(v), setHideOnClose(v), presence(mode), print(),
   // restore(), setFullscreen(v), getWinState(), setChrome(opts),
   // startDrag(), zoom(), tray.set/remove,
   // updateMenuItem(id, patch), getMenuItem(id), info, store.get/set/delete/all,
@@ -187,17 +187,19 @@ export function init(app) {          // window is up
   // keystroke(combo), paste(), permissions.check(name)/request(name),
   // mousePosition(), screens(), paths, show({ activate: false }),
   // shell.open(target)/reveal(path)/trash(path),
-  // launchAtLogin.get()/set(v), dock.setBadge(text)/bounce(opts),
+  // launchAtLogin.get()/set(v), badge(text), attention(opts),
   // power.preventSleep(reason, opts)/allowSleep(), frontmostApp(),
   // beep(), playSound(target), window(id).share(opts),
-  // idleTime(), quickLook(paths), captureScreen(screenId),
+  // idleTime(), captureScreen(screenId),
   // pickColor(), ocr(path), thumbnail(path, size),
-  // secrets.get/set/delete, authenticate(reason), applescript(source),
+  // secrets.get/set/delete, authenticate(reason),
   // nowPlaying.set/clear, say(text, opts), voices(), stopSpeaking(),
   // recorder.start({ path, screenId })/stop(),
   // selectedText(), otherWindows(), moveWindow(pid, rect),
   // window(id).setClickThrough/setLevel/setAllSpaces, tray.position(),
-  // printToPDF(path), haptic(pattern), dockIcon(png), battery(), wifi(),
+  // printToPDF(path), icon(png), presence(mode),
+  // macos.applescript(source)/quickLook(paths)/haptic(pattern),
+  // battery(), wifi(),
   // spotlight(query)
 }
 
@@ -453,10 +455,11 @@ await tiny.app.launchAtLogin.set(true);   //   'requires-approval' | 'unsupporte
 // 'requires-approval': macOS wants the user to allow it in
 // System Settings > General > Login Items
 
-// Dock tile
-tiny.app.dock.setBadge('3');  tiny.app.dock.setBadge('');  // '' clears
-tiny.app.dock.bounce();                    // until the app is activated
-tiny.app.dock.bounce({ critical: true });  // until the user acts
+// decorate the OS's app surface: Dock (macOS), taskbar (Windows),
+// launcher (Linux) — verbs named for intent, not for furniture
+tiny.app.badge('3');  tiny.app.badge('');  // '' clears
+tiny.app.attention();                      // until the app is activated
+tiny.app.attention({ critical: true });    // until the user acts
 
 // keep the system awake — replaces spawning `caffeinate` (the assertion
 // dies with the app, so a crash never wedges sleep); the reason shows in
@@ -483,8 +486,8 @@ const idle = await tiny.app.idleTime();
 
 // Quick Look — the Finder-spacebar preview panel (no qlmanage spawn);
 // an array pages with the arrow keys, no args closes it
-tiny.app.quickLook('/path/to/photo.heic');
-tiny.app.quickLook([a, b, c]);   tiny.app.quickLook();
+tiny.macos.quickLook('/path/to/photo.heic');
+tiny.macos.quickLook([a, b, c]);   tiny.macos.quickLook();
 
 // screenshot a display (id from screens(); default primary) — png in the
 // temp dir, you own the file. Needs the 'screen' permission + macOS 14;
@@ -514,8 +517,8 @@ if (await tiny.app.authenticate('unlock the vault')) { /* … */ }
 
 // AppleScript in-process — control Music, Spotify, Finder, any scriptable
 // app; no osascript spawn, same 'automation' permission as keystrokes
-await tiny.app.applescript('tell application "Music" to playpause');
-const sum = await tiny.app.applescript('return 2 + 3');   // '5'
+await tiny.macos.applescript('tell application "Music" to playpause');
+const sum = await tiny.macos.applescript('return 2 + 3'); // '5'
 
 // Now Playing — your media app shows in Control Center / the lock screen
 // and the hardware media keys (F7/F8/F9, AirPods) route to you
@@ -568,9 +571,9 @@ const spot = await tiny.tray.position();     // { x, y, width, height } | null
 // render the page to a PDF (vector, WKWebView) — invoices, reports
 const { path } = await tiny.win.printToPDF('/tmp/report.pdf');
 
-// trackpad haptics, a dynamic Dock icon (render a canvas → progress rings)
-tiny.app.haptic('generic');                  // 'generic'|'alignment'|'level'
-tiny.app.dockIcon(canvasPngPath);            // '' resets to the bundle icon
+// trackpad haptics, plus a live app icon (render a canvas → progress rings)
+tiny.macos.haptic('generic');                // 'generic'|'alignment'|'level'
+tiny.app.icon(canvasPngPath);                // '' resets to the bundle icon
 
 // battery + Wi-Fi for menu-bar monitors
 const bat = await tiny.app.battery();        // { percent, charging, plugged,
@@ -706,7 +709,7 @@ tiny.tray.remove();
 
 // the full tray-app recipe:
 tiny.win.setHideOnClose(true);        // closing the window hides it
-tiny.app.setDockVisible(false);       // no Dock icon — menu-bar-only app
+tiny.app.presence('menubar');         // no Dock icon — menu-bar-only app
 ```
 
 With no `menu`, clicking the icon fires `tiny.tray.onClick(fn)` instead —
@@ -730,7 +733,7 @@ things in `init()`:
 
 Packaged apps get `LSUIElement` (the system never shows them in the Dock);
 dev mode behaves the same. The window exists but stays hidden until you call
-`tiny.win.show()` / `app.show()`, and `setDockVisible(true)` turns the app
+`tiny.win.show()` / `app.show()`, and `app.presence('normal')` turns the app
 back into a regular one.
 
 ### Apps that place their own windows
@@ -1278,8 +1281,8 @@ Works:
   `power.preventSleep` (a logind inhibitor), `launchAtLogin` (autostart
   `.desktop`, built apps only), `screens`/`mousePosition`/`getWinState`,
   `battery`, `idleTime` (GNOME), `pickColor` (portal), `thumbnail` (images
-  only), `captureScreen` (X11 sessions only), `dock.bounce` (a taskbar
-  urgency hint).
+  only), `captureScreen` (X11 sessions only), `app.attention` (a taskbar
+  urgency hint), `app.icon` (the window icon), `app.presence`.
 - **Input** — global hotkeys (X11 via XGrabKey; pure Wayland via the
   GlobalShortcuts portal — the compositor prompts to approve them once),
   `keystroke` synthesis (X11/XWayland via XTest — not pure Wayland).
@@ -1299,7 +1302,8 @@ Works:
 Not (yet) supported:
 
 - `recorder`, `ocr`, `quickLook`, `applescript`, `haptic`
-- Dock badge / `bounce({critical: true})` / `dockIcon`, `share`
+- `app.badge` (no freedesktop standard) and `attention({critical: true})`,
+  `share`
 - `wifi`, `selectedText`, `otherWindows`, `moveWindow`, `frontmostApp`
 - `authenticate`, `tiny.app.ai`
 - `setAllSpaces` — maps onto sticky windows rather than true per-Space

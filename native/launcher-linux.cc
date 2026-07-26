@@ -750,8 +750,8 @@ static void do_winop(const std::string& winid, const std::string& op) {
   }
   else if (op == "hideonclose 1") { if (main_win) g_hide_on_close = true; }
   else if (op == "hideonclose 0") { if (main_win) g_hide_on_close = false; }
-  else if (op == "dock 1") { if (main_win) gtk_window_set_skip_taskbar_hint(win, FALSE); }
-  else if (op == "dock 0") { if (main_win) gtk_window_set_skip_taskbar_hint(win, TRUE); }
+  else if (op == "presence 1") { if (main_win) gtk_window_set_skip_taskbar_hint(win, FALSE); }
+  else if (op == "presence 0") { if (main_win) gtk_window_set_skip_taskbar_hint(win, TRUE); }
   else if (op == "allspaces 1") { gtk_window_stick(win); if (main_win) g_all_spaces = true; }
   else if (op == "allspaces 0") { gtk_window_unstick(win); if (main_win) g_all_spaces = false; }
   // unknown verbs: silently ignored
@@ -1550,6 +1550,45 @@ static void answer_get(const std::string& qid, const std::string& what) {
 static GDBusConnection* session_bus() {
   static GDBusConnection* bus = g_bus_get_sync(G_BUS_TYPE_SESSION, nullptr, nullptr);
   return bus;
+}
+
+// ---- Unity LauncherEntry: badge count + progress on the launcher icon ------
+// A session-bus SIGNAL (not a method call), so there is nothing to connect to
+// and nothing to fail: KDE Plasma, Ubuntu's Dock and Dash-to-Dock listen for
+// it, vanilla GNOME Shell doesn't, and where nobody listens the signal is just
+// dropped. Both properties ride the same Update, so they're kept as state here
+// and re-sent together.
+static long g_badge_count = 0;
+static bool g_badge_visible = false;
+static double g_launch_progress = -1.0;  // <0 = no bar
+
+static void unity_launcher_update() {
+  GDBusConnection* bus = session_bus();
+  if (!bus || g_app_id.empty()) return;
+
+  GVariantBuilder props;
+  g_variant_builder_init(&props, G_VARIANT_TYPE("a{sv}"));
+  g_variant_builder_add(&props, "{sv}", "count",
+                        g_variant_new_int64(g_badge_count));
+  g_variant_builder_add(&props, "{sv}", "count-visible",
+                        g_variant_new_boolean(g_badge_visible));
+  g_variant_builder_add(&props, "{sv}", "progress",
+                        g_variant_new_double(g_launch_progress < 0.0
+                                                 ? 0.0
+                                                 : g_launch_progress));
+  g_variant_builder_add(&props, "{sv}", "progress-visible",
+                        g_variant_new_boolean(g_launch_progress >= 0.0));
+
+  // The app is addressed by its .desktop id — the same file the bridge writes
+  // into ~/.local/share/applications on first run.
+  std::string uri = "application://" + g_app_id + ".desktop";
+  // Any stable object path works; deriving it from the id is what Unity did.
+  std::string path = "/com/canonical/unity/launcherentry/" +
+                     std::to_string((unsigned long)g_str_hash(uri.c_str()));
+
+  g_dbus_connection_emit_signal(
+      bus, nullptr, path.c_str(), "com.canonical.Unity.LauncherEntry", "Update",
+      g_variant_new("(sa{sv})", uri.c_str(), &props), nullptr);
 }
 
 static GDBusConnection* system_bus() {
@@ -4142,12 +4181,12 @@ static void handle_line(const std::string& line) {
   }
   if (line.rfind("HKUNREG ", 0) == 0) { hotkey_unregister(line.substr(8)); return; }
 
-  if (line.rfind("BOUNCE", 0) == 0) {
+  if (line.rfind("ATTENTION", 0) == 0) {
     gtk_window_set_urgency_hint(g_win, TRUE);
     return;
   }
-  if (line.rfind("DOCKICON ", 0) == 0) {
-    std::string path = wire_unescape(line.substr(9));
+  if (line.rfind("APPICON ", 0) == 0) {
+    std::string path = wire_unescape(line.substr(8));
     if (path.empty()) {
       const char* icon = getenv("TINYJS_ICON");
       if (icon && *icon) gtk_window_set_icon_from_file(g_win, icon, nullptr);
@@ -4156,7 +4195,26 @@ static void handle_line(const std::string& line) {
     }
     return;
   }
-  // BADGE, SHARE, QUICKLOOK, HAPTIC: silent no-ops (fire-and-forget)
+  if (line.rfind("BADGE", 0) == 0) {
+    std::string t = line.size() > 6 ? wire_unescape(line.substr(6)) : "";
+    // Unity's badge is a COUNT, not free text: macOS takes any string, this
+    // takes a number. A non-numeric badge can't be represented, so it hides
+    // rather than showing something wrong.
+    char* end = nullptr;
+    long n = std::strtol(t.c_str(), &end, 10);
+    g_badge_visible = !t.empty() && end && *end == '\0';
+    g_badge_count = g_badge_visible ? n : 0;
+    unity_launcher_update();
+    return;
+  }
+  if (line.rfind("PROGRESS", 0) == 0) {
+    double v = line.size() > 9 ? std::atof(line.c_str() + 9) : -1.0;
+    g_launch_progress = v > 1.0 ? 1.0 : v;
+    unity_launcher_update();
+    return;
+  }
+  // SHARE, QUICKLOOK, HAPTIC: no Linux equivalent; capabilities() reports
+  // them false so apps can check before calling.
 }
 
 // ------------------------------------------------------- main window close --

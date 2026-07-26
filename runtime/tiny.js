@@ -407,6 +407,23 @@
       onChange(fn) { window.tiny.api.on('clipboard-change', fn); },
     },
 
+    // Calls with no equivalent anywhere else — not "not ported yet", but
+    // concepts the other OSes simply don't have. Anything that COULD exist
+    // elsewhere stays on tiny.app and answers 'unsupported' until it does,
+    // so implementing it later isn't another breaking rename.
+    //
+    // These reject on Windows and Linux. Guard with tiny.system.isMacOS().
+    macos: {
+      // AppleScript in-process (no osascript) -> result string | null;
+      // rejects with the script error. Uses the 'automation' permission.
+      applescript: (source) => call('macos.applescript', { source }),
+      // Quick Look panel for path(s); quickLook() closes it.
+      quickLook: (paths) => call('macos.quickLook', { paths }),
+      // Trackpad haptic feedback: 'generic'|'alignment'|'level'. Needs a
+      // Force Touch trackpad.
+      haptic: (pattern) => call('macos.haptic', { pattern }),
+    },
+
     // System theme; also 'sleep'/'wake' events via tiny.api.on.
     theme: {
       get: () => call('theme.get'),                      // { dark } | null
@@ -416,8 +433,6 @@
     app: {
       // { version: <app>, tinyjs: <framework that built it>, runtime: <txiki> }
       info: () => call('app.info'),
-      // false: menu-bar-only app (no Dock icon); true: normal app.
-      setDockVisible: (visible) => call('app.setDockVisible', { visible }),
       // Deep links + file associations (packaged .app; see tinyjs.json
       // "urlScheme" and "fileExtensions"). Cold-start events are buffered.
       onOpenUrl(fn) { window.tiny.api.on('open-url', ({ url }) => fn(url)); },
@@ -466,12 +481,29 @@
         get: () => call('login.get'),
         set: (enabled) => call('login.set', { enabled }),
       },
-      // Dock tile: setBadge('3') / setBadge('') to clear; bounce() until
-      // activated, bounce({ critical: true }) until the user acts.
-      dock: {
-        setBadge: (text) => call('dock.setBadge', { text }),
-        bounce: (opts) => call('dock.bounce', opts ?? {}),
-      },
+      // --- decorating the OS's app surface ---------------------------------
+      // The Dock (macOS), taskbar (Windows) and launcher (Linux) are surfaces
+      // the OS owns and you decorate — so these are verbs named for intent,
+      // not a namespace named after furniture. Each degrades honestly; ask
+      // tiny.system.capabilities() what this machine can actually show.
+      //
+      // badge('3') shows a count; badge('') clears it.
+      badge: (text) => call('app.badge', { text }),
+      // Ask for the user's attention — bounce (macOS), flash the taskbar
+      // button (Windows), set the urgency hint (Linux). Stops when the app is
+      // activated; { critical: true } keeps going until the user acts.
+      attention: (opts) => call('app.attention', opts ?? {}),
+      // Replace the app icon from a png; '' resets to the bundle icon.
+      // Render a canvas for live tiles. Composes with badge() and progress().
+      icon: (path) => call('app.icon', { path }),
+      // A determinate progress bar on the app icon: 0..1, null clears.
+      // macOS draws it into the Dock tile (over icon(), if you set one);
+      // Windows uses the taskbar button; Linux needs a dock that speaks the
+      // Unity protocol (KDE Plasma, Ubuntu Dock) — capabilities() knows.
+      progress: (value) => call('app.progress', { value }),
+      // 'normal' — a normal app. 'menubar' — tray / menu-bar only: no Dock
+      // icon or taskbar button, and out of the app switcher.
+      presence: (mode) => call('app.presence', { mode }),
       // Keep the system awake (replaces `caffeinate`; released on quit or
       // crash automatically). { display: true } also keeps the screen on.
       power: {
@@ -480,11 +512,6 @@
       },
       // The active app right now: { name, bundleId, pid } | null.
       frontmostApp: () => call('app.frontmost'),
-      // Trackpad haptic feedback: 'generic'|'alignment'|'level'.
-      haptic: (pattern) => call('app.haptic', { pattern }),
-      // Replace the Dock icon from a png ('' resets). Render a canvas for
-      // progress rings / unread badges.
-      dockIcon: (path) => call('app.dockIcon', { path }),
       // { percent, charging, plugged, minutesRemaining } | null.
       battery: () => call('app.battery'),
       // { ssid, bssid, rssi, noise, txRate } | null (ssid needs Location).
@@ -512,8 +539,6 @@
       playSound: (target) => call('sound.play', { target }),
       // Seconds since the user's last input (pause polling when idle).
       idleTime: () => call('app.idleTime'),
-      // Quick Look panel for path(s); quickLook() closes it.
-      quickLook: (paths) => call('app.quickLook', { paths }),
       // Screenshot a display (id from screens(); default primary) ->
       // { path (png temp file — copy to keep), width, height }. Needs the
       // 'screen' permission + macOS 14; rejects with the reason otherwise.
@@ -536,9 +561,6 @@
       },
       // Touch ID / account-password sheet -> true | false (false = cancel).
       authenticate: (reason) => call('app.authenticate', { reason }),
-      // AppleScript in-process (no osascript) -> result string | null;
-      // rejects with the script error. Uses the 'automation' permission.
-      applescript: (source) => call('app.applescript', { source }),
       // Record a display to an .mp4. start({ screenId?, path }) resolves
       // once capturing; stop() -> { path, duration }. Needs the 'screen'
       // permission + macOS 14; rejects otherwise. Video only, one at a time.

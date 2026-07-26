@@ -183,10 +183,28 @@ function systemInfo() {
   };
 }
 
+// tiny.macos.* is the "no equivalent anywhere else" namespace, so calling it
+// off macOS is a bug in the app rather than a missing feature — say so with
+// the real reason instead of a silent no-op.
+function macosOnly(name) {
+  if (OS !== 'macos')
+    throw new Error('tiny.macos.' + name + ' is macOS-only (this is ' + OS +
+                    ') — guard with tiny.system.isMacOS()');
+}
+
 // What this machine can actually do, so an app can degrade on purpose
 // instead of calling something that quietly does nothing. true = works,
 // false = the OS/session has no equivalent. Anything absent from a platform's
 // column below is simply true on that platform.
+// Unity's LauncherEntry DBus protocol carries the launcher badge count and
+// progress bar. It is a desktop-shell feature, not a Linux one: KDE Plasma,
+// Ubuntu's Dock and Dash-to-Dock implement it, vanilla GNOME Shell doesn't.
+// XDG_CURRENT_DESKTOP is a colon-separated list ("ubuntu:GNOME").
+const HAS_UNITY_LAUNCHER = IS_LINUX && (() => {
+  const de = (tjs.env.XDG_CURRENT_DESKTOP || '').toLowerCase();
+  return /kde|plasma|unity|ubuntu|pantheon|lxqt/.test(de);
+})();
+
 function systemCapabilities() {
   const linux = {
     // Wayland forbids a client placing its own toplevels, reading the global
@@ -207,8 +225,14 @@ function systemCapabilities() {
     applescript: false,
     ai: false,
     wifi: false,
-    dockBadge: false,
     authenticate: false,
+    // app.badge / app.progress ride the Unity LauncherEntry DBus protocol,
+    // which KDE Plasma, Ubuntu Dock and Dash-to-Dock implement but vanilla
+    // GNOME Shell does not — so this is per-desktop, not per-OS. app.icon
+    // sets the window icon and app.presence the skip-taskbar hint: both work
+    // everywhere.
+    badge: HAS_UNITY_LAUNCHER,
+    progress: HAS_UNITY_LAUNCHER,
     // present, with the caveats in the README
     globalHotkeys: true, tray: true, notifications: true,
     notificationActions: true, notificationReply: false,
@@ -226,6 +250,12 @@ function systemCapabilities() {
     vibrancy: false, selectedText: false, ocr: false,
     windowPosition: true, mousePosition: true, captureScreen: true,
     keystroke: true, recorder: false,
+    // app.attention (FlashWindowEx) and app.presence (WS_EX_TOOLWINDOW) both
+    // work. app.badge needs an overlay HICON rendered at runtime and isn't
+    // built yet; it was a silent no-op before, and absent from this table,
+    // which under the "absent = true" rule above claimed support that was
+    // never there.
+    badge: false, icon: true, progress: true,
   };
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
     audioFilters: false };
@@ -672,8 +702,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     setAllSpaces(v) { send('WINOP allspaces ' + (v ? 1 : 0)); },
     // Top-left origin in screen points (CSS-style coordinates).
     setPosition(x, y) { send(`WINOP pos ${x | 0} ${y | 0}`); },
-    // false: no Dock icon / no app menu (menu-bar-only app); true: normal app.
-    setDockVisible(v) { send('WINOP dock ' + (v ? 1 : 0)); },
+    // 'menubar': no Dock icon / taskbar button / app-switcher entry;
+    // 'normal': a normal app. Same name on both sides of the bridge.
+    presence(mode) { send('WINOP presence ' + (mode === 'menubar' ? 0 : 1)); },
     // true: the close button hides the window instead of quitting.
     setHideOnClose(v) { send('WINOP hideonclose ' + (v ? 1 : 0)); },
     // spec: { title?, icon?, template?, tooltip?, primaryAction?,
@@ -710,12 +741,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       if (!r?.ok) throw new Error(r?.error ?? 'pdf failed');
       return { path: r.path };
     },
-    // Trackpad haptic feedback: 'generic' | 'alignment' | 'level'. No-op on
-    // Macs without a Force Touch trackpad.
-    haptic(pattern = 'generic') { send('HAPTIC ' + one(pattern)); return true; },
-    // Replace the Dock icon from a png (render a canvas → progress rings,
-    // unread counts). '' resets to the bundle icon.
-    dockIcon(pngPath) { send('DOCKICON ' + esc(pngPath ?? '')); return true; },
+    // Replace the app icon from a png (render a canvas → live tiles). ''
+    // resets to the bundle icon. macOS Dock tile / Linux window icon.
+    icon(pngPath) { send('APPICON ' + esc(pngPath ?? '')); return true; },
     // Battery: { percent, charging, plugged, minutesRemaining } | null (on
     // desktops without a battery).
     battery: () => query('battery'),
@@ -868,12 +896,20 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         return r?.status ?? 'unsupported';
       },
     },
-    // Dock tile. setBadge('3') shows a badge, setBadge('') clears it.
-    // bounce() bounces the icon until the app activates; { critical: true }
-    // keeps bouncing until the user acts.
-    dock: {
-      setBadge(text) { send('BADGE ' + esc(text)); return true; },
-      bounce(opts) { send('BOUNCE ' + (opts?.critical ? 1 : 0)); return true; },
+    // Decorate the OS's app surface (Dock / taskbar / launcher). badge('3')
+    // shows a count, badge('') clears it. attention() bounces the Dock icon /
+    // flashes the taskbar button / sets the urgency hint until the app is
+    // activated; { critical: true } keeps going until the user acts.
+    badge(text) { send('BADGE ' + esc(text ?? '')); return true; },
+    attention(opts) { send('ATTENTION ' + (opts?.critical ? 1 : 0)); return true; },
+    // 0..1 draws a bar on the app icon / taskbar button; null (or anything
+    // non-numeric) clears it. Sent as -1 to mean "no bar" so the wire stays
+    // one plain number.
+    progress(value) {
+      const n = value === null || value === undefined ? -1 : Number(value);
+      const wire = Number.isFinite(n) ? Math.max(-1, Math.min(1, n)) : -1;
+      send('PROGRESS ' + wire);
+      return true;
     },
     // Keep the system awake (one IOPMAssertion, replaced on each call —
     // it dies with the process, so a crashed app never wedges sleep,
@@ -933,13 +969,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Seconds since the user's last input, session-wide — pause polling /
     // dim UI when they walk away.
     idleTime: async () => (await query('idle'))?.seconds ?? 0,
-    // Quick Look (the Finder-spacebar preview panel, no qlmanage spawn).
-    // Path or array of paths (arrow keys page through); quickLook() closes.
-    quickLook(paths) {
-      const list = paths == null ? [] : [].concat(paths);
-      send('QUICKLOOK' + (list.length ? ' ' + list.map(esc).join('\t') : ''));
-      return true;
-    },
     // Screenshot a display (id from screens(); default primary) ->
     // { path (png in the temp dir — the caller owns it), width, height }.
     // Needs the 'screen' permission and macOS 14+; throws with the reason
@@ -1017,13 +1046,29 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       },
     },
     // Run AppleScript in-process (no osascript spawn) — Apple Events hit
-    // the same 'automation' TCC permissions.check('automation:…') covers.
-    // Resolves the script result as a string (null if it isn't text);
-    // throws with the script error message.
-    async applescript(source) {
-      const r = await ask('OSA', esc(source));
-      if (!r?.ok) throw new Error(r?.error ?? 'script error');
-      return r.result ?? null;
+    // macOS-only: concepts the other OSes don't have at all, so they live in
+    // their own namespace instead of pretending to be portable. Same shape
+    // and same names as tiny.macos.* in the page.
+    macos: {
+      // AppleScript in-process (no osascript spawn). Uses the same
+      // 'automation' TCC permission that permissions.check('automation:…')
+      // covers. Resolves the script result as a string (null if it isn't
+      // text); throws with the script error message.
+      async applescript(source) {
+        const r = await ask('OSA', esc(source));
+        if (!r?.ok) throw new Error(r?.error ?? 'script error');
+        return r.result ?? null;
+      },
+      // Quick Look (the Finder-spacebar preview panel, no qlmanage spawn).
+      // Path or array of paths (arrow keys page through); quickLook() closes.
+      quickLook(paths) {
+        const list = paths == null ? [] : [].concat(paths);
+        send('QUICKLOOK' + (list.length ? ' ' + list.map(esc).join('\t') : ''));
+        return true;
+      },
+      // Trackpad haptic feedback: 'generic' | 'alignment' | 'level'. No-op on
+      // Macs without a Force Touch trackpad.
+      haptic(pattern = 'generic') { send('HAPTIC ' + one(pattern)); return true; },
     },
     // Standard per-app directories (data/cache/logs are per app id, not
     // auto-created — tjs.makeDir(..., { recursive: true }) first write).
@@ -1277,8 +1322,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.moveWindow': async ({ pid, ...rect }) => app.moveWindow(pid, rect),
     'tray.position': async () => app.tray.position(),
     'win.printToPDF': async ({ path }) => app.printToPDF(path),
-    'app.haptic': async ({ pattern }) => app.haptic(pattern),
-    'app.dockIcon': async ({ path }) => app.dockIcon(path),
+    // macOS-only namespace: these three have no equivalent concept elsewhere,
+    // so they reject rather than pretending. Anything that COULD exist on
+    // another OS stays on app.* and answers 'unsupported' instead.
+    'macos.haptic': async ({ pattern }) => (macosOnly('haptic'), app.macos.haptic(pattern)),
+    'app.icon': async ({ path }) => app.icon(path),
     'app.battery': async () => app.battery(),
     'app.wifi': async () => app.wifi(),
     'app.spotlight': async ({ query: q }) => app.spotlight(q),
@@ -1295,7 +1343,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.windows': async () => app.windows(),
     'win.setHideOnClose': async ({ enabled }) => (app.setHideOnClose(enabled), true),
     'notify': async (params) => notify(params),
-    'app.setDockVisible': async ({ visible }) => (app.setDockVisible(visible), true),
+    'app.presence': async ({ mode }) => {
+      if (mode !== 'normal' && mode !== 'menubar')
+        throw new Error("app.presence expects 'normal' or 'menubar', got: " + mode);
+      app.presence(mode);
+      return true;
+    },
     'menu.set': async ({ menus }) => (app.setMenu(menus), true),
     'tray.set': async (spec) => (app.tray.set(spec), true),
     'tray.remove': async () => (app.tray.remove(), true),
@@ -1377,15 +1430,16 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'shell.trash': async ({ path }) => app.shell.trash(path),
     'login.get': async () => app.launchAtLogin.get(),
     'login.set': async ({ enabled }) => app.launchAtLogin.set(enabled),
-    'dock.setBadge': async ({ text }) => app.dock.setBadge(text ?? ''),
-    'dock.bounce': async (p) => app.dock.bounce(p),
+    'app.badge': async ({ text }) => app.badge(text ?? ''),
+    'app.attention': async (p) => app.attention(p),
+    'app.progress': async ({ value }) => app.progress(value),
     'power.prevent': async ({ reason, display }) => app.power.preventSleep(reason, { display }),
     'power.allow': async () => app.power.allowSleep(),
     'app.frontmost': async () => app.frontmostApp(),
     'sound.play': async ({ target }) => (target ? app.playSound(target) : app.beep()),
     'win.share': async (p, _a, m) => forWin(m).share(p),
     'app.idleTime': async () => app.idleTime(),
-    'app.quickLook': async ({ paths }) => app.quickLook(paths),
+    'macos.quickLook': async ({ paths }) => (macosOnly('quickLook'), app.macos.quickLook(paths)),
     'app.captureScreen': async ({ screenId }) => app.captureScreen(screenId),
     'app.pickColor': async () => app.pickColor(),
     'app.ocr': async ({ path }) => app.ocr(path),
@@ -1394,7 +1448,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'secrets.set': async ({ key, value }) => app.secrets.set(key, value),
     'secrets.delete': async ({ key }) => app.secrets.delete(key),
     'app.authenticate': async ({ reason }) => app.authenticate(reason),
-    'app.applescript': async ({ source }) => app.applescript(source),
+    'macos.applescript': async ({ source }) => (macosOnly('applescript'), app.macos.applescript(source)),
     'record.start': async (opts) => app.recorder.start(opts),
     'record.stop': async () => app.recorder.stop(),
     'nowplaying.set': async (info) => app.nowPlaying.set(info),

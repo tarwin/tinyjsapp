@@ -23,7 +23,7 @@
 // (open/reveal/trash), SECRET (Credential Manager), POWER
 // (SetThreadExecutionState), SOUND (PlaySound/MessageBeep), NOTIFY (WinRT
 // toast with action buttons / reply fields, falling back to a tray balloon on
-// old Windows or any WinRT failure), BOUNCE (FlashWindowEx), CTX* (custom
+// old Windows or any WinRT failure), ATTENTION (FlashWindowEx), CTX* (custom
 // right-click menu via
 // WebView2 ContextMenuRequested), SYS theme/sleep/wake events, DRAGWIN.
 //
@@ -1525,11 +1525,11 @@ static void do_winop(webview_t, void *arg) {
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
   } else if (starts("hideonclose ") && main) {
     g_hide_on_close = op.substr(12) == "1";
-  } else if (starts("dock ") && main) {
-    // setDockVisible maps to the taskbar button: hidden = tool window (the
+  } else if (starts("presence ") && main) {
+    // app.presence maps to the taskbar button: hidden = tool window (the
     // tray-only app look). Must hide while flipping the style or the shell
     // ignores it.
-    bool show = op.substr(5) == "1";
+    bool show = op.substr(9) == "1";
     bool visible = IsWindowVisible(g_hwnd);
     if (visible)
       ShowWindow(g_hwnd, SW_HIDE);
@@ -4244,7 +4244,84 @@ static void do_reply(webview_t w, void *arg) {
   delete req;
 }
 
-static void do_bounce(webview_t, void *arg) {
+// ---- taskbar button: progress bar (ITaskbarList3) --------------------------
+// Windows gives this to us natively — unlike macOS, where the bar has to be
+// drawn into the Dock tile by hand. The UI thread is already an STA, so the
+// interface can be created lazily here and reused.
+static ITaskbarList3 *taskbar_list() {
+  static ITaskbarList3 *tb = nullptr;
+  static bool tried = false;
+  if (!tried) {
+    tried = true;
+    // explicit IID rather than IID_PPV_ARGS, matching CoCreateInstance use
+    // elsewhere in this file (MinGW headers, not the MSVC SDK)
+    if (SUCCEEDED(CoCreateInstance(CLSID_TaskbarList, nullptr,
+                                   CLSCTX_INPROC_SERVER, IID_ITaskbarList3,
+                                   (void **)&tb))) {
+      if (FAILED(tb->HrInit())) {
+        tb->Release();
+        tb = nullptr;
+      }
+    }
+  }
+  return tb;
+}
+
+static void do_progress(webview_t, void *arg) {
+  double *v = static_cast<double *>(arg);
+  ITaskbarList3 *tb = taskbar_list();
+  if (tb && g_hwnd) {
+    if (*v < 0.0) {
+      tb->SetProgressState(g_hwnd, TBPF_NOPROGRESS);
+    } else {
+      double p = *v > 1.0 ? 1.0 : *v;
+      tb->SetProgressState(g_hwnd, TBPF_NORMAL);
+      tb->SetProgressValue(g_hwnd, (ULONGLONG)(p * 1000.0), 1000ULL);
+    }
+  }
+  delete v;
+}
+
+// ---- app.icon: the window icon, which is what the taskbar button shows -----
+// LoadImage reads .ico; a .png path won't load, so the call is a no-op rather
+// than clearing the icon. '' restores the icon the launcher started with.
+static HICON g_icon_big = nullptr;
+static HICON g_icon_small = nullptr;
+
+static void do_appicon(webview_t, void *arg) {
+  std::string *path = static_cast<std::string *>(arg);
+  if (g_hwnd) {
+    if (path->empty()) {
+      // back to whatever the window class supplies
+      SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, 0);
+      SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, 0);
+      if (g_icon_big) { DestroyIcon(g_icon_big); g_icon_big = nullptr; }
+      if (g_icon_small) { DestroyIcon(g_icon_small); g_icon_small = nullptr; }
+    } else {
+      std::wstring w = widen(*path);
+      HICON big = (HICON)LoadImageW(nullptr, w.c_str(), IMAGE_ICON,
+                                    GetSystemMetrics(SM_CXICON),
+                                    GetSystemMetrics(SM_CYICON), LR_LOADFROMFILE);
+      HICON small = (HICON)LoadImageW(nullptr, w.c_str(), IMAGE_ICON,
+                                      GetSystemMetrics(SM_CXSMICON),
+                                      GetSystemMetrics(SM_CYSMICON),
+                                      LR_LOADFROMFILE);
+      if (big) {
+        SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)big);
+        if (g_icon_big) DestroyIcon(g_icon_big);
+        g_icon_big = big;
+      }
+      if (small) {
+        SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)small);
+        if (g_icon_small) DestroyIcon(g_icon_small);
+        g_icon_small = small;
+      }
+    }
+  }
+  delete path;
+}
+
+static void do_attention(webview_t, void *arg) {
   int *critical = static_cast<int *>(arg);
   FLASHWINFO fi = {sizeof(fi)};
   fi.hwnd = g_hwnd;
@@ -4810,10 +4887,20 @@ static void pipe_read_loop() {
           continue;
         webview_dispatch(g_w, do_secret,
                          new QReq{line.substr(7, sp - 7), line.substr(sp + 1)});
-      } else if (line.rfind("BOUNCE", 0) == 0) {
-        webview_dispatch(g_w, do_bounce,
-                         new int(line.size() > 7 ? std::atoi(line.c_str() + 7)
-                                                 : 0));
+      } else if (line.rfind("ATTENTION", 0) == 0) {
+        webview_dispatch(g_w, do_attention,
+                         new int(line.size() > 10 ? std::atoi(line.c_str() + 10)
+                                                  : 0));
+      } else if (line.rfind("PROGRESS", 0) == 0) {
+        webview_dispatch(g_w, do_progress,
+                         new double(line.size() > 9
+                                        ? std::atof(line.c_str() + 9)
+                                        : -1.0));
+      } else if (line == "APPICON" || line.rfind("APPICON ", 0) == 0) {
+        webview_dispatch(g_w, do_appicon,
+                         new std::string(line.size() > 8
+                                             ? wire_unescape(line.substr(8))
+                                             : ""));
       } else if (line.rfind("LOGIN ", 0) == 0) {
         size_t sp = line.find(' ', 6);
         if (sp == std::string::npos) {
@@ -4915,8 +5002,9 @@ static void pipe_read_loop() {
       } else if (line == "QUIT") {
         webview_dispatch(g_w, do_terminate, nullptr);
       }
-      // WINCLOSE / SHARE / NOWPLAYING / QUICKLOOK / BADGE / DOCKICON /
-      // HAPTIC: fire-and-forget, no Windows equivalent yet.
+      // WINCLOSE / SHARE / NOWPLAYING / QUICKLOOK / HAPTIC: not wired up
+      // yet. BADGE needs an overlay HICON rendered at runtime — capabilities()
+      // reports badge:false so apps can check instead of hitting a no-op.
     }
   }
   webview_dispatch(g_w, do_terminate, nullptr);
