@@ -337,6 +337,26 @@ features, not bugs.
       repo's history (git filter-repo, 683 MB → 19 MB) — only
       `_builds/<dir>/manifest.json` survives, since shipped apps poll those
       raw URLs. Never commit a payload there again.
+- [ ] **Examples: does closing shelf close the app it launched?** — on Windows
+      it did. `shelf/src/main.js` `openApp()` spawned the app as shelf's own
+      direct child (`tjs.spawn([exe], {stdin/stdout/stderr:'ignore'})`, with a
+      comment claiming ignoring stdio made it "detached-ish" — it does not).
+      Measured 2026-07-25: launching two real installed apps side by side, the
+      direct-spawn one died the instant shelf quit while one launched via
+      `explorer.exe` kept running; `detached: true` did **not** save it either.
+      Fixed on Windows by handing the launch to the shell, the same shape as
+      `open -a` on macOS.
+      **The Linux branch still has the un-fixed shape** — one line above the
+      Windows one, `tjs.spawn(['<LINUX_ROOT>/<folder>/<exe>'], …)` — and was
+      deliberately left alone rather than changed on the strength of a Windows
+      measurement. Check it on a real desktop: install something from shelf,
+      launch it, quit shelf, see whether the app survives. If it dies, the
+      equivalent fix is `gio open` / `xdg-open` on the exe, or a `setsid`
+      double-fork; note that `detached: true` is the *documented* libuv answer
+      and still wasn't enough on Windows, so verify rather than assume.
+      (Careful reading the Windows evidence: the agent shell there runs inside
+      a job object with `KILL_ON_JOB_CLOSE`, so only the within-run A/B is
+      trustworthy, not the absolute mechanism.)
 - [ ] **recorder** — screen recording to a video file. Route: the
       `org.freedesktop.portal.ScreenCast` portal (CreateSession →
       SelectSources → Start → returns a PipeWire node fd), feed the PipeWire

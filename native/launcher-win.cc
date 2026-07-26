@@ -1006,6 +1006,28 @@ static std::vector<WUN::IToastNotification *> g_live_toasts;
 // carrying it, or CreateToastNotifier fails. Done once, lazily, on first toast.
 static std::wstring g_aumid;
 
+// What an existing .lnk currently points at ("" if it can't be read).
+static std::wstring shortcut_target(const std::wstring &lnk) {
+  IShellLinkW *link = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_IShellLinkW, (void **)&link)) ||
+      !link)
+    return L"";
+  std::wstring out;
+  IPersistFile *pf = nullptr;
+  if (SUCCEEDED(link->QueryInterface(IID_IPersistFile, (void **)&pf)) && pf) {
+    if (SUCCEEDED(pf->Load(lnk.c_str(), STGM_READ))) {
+      wchar_t buf[MAX_PATH] = {0};
+      // SLGP_RAWPATH: we want what was stored, not a resolved/relocated guess
+      if (SUCCEEDED(link->GetPath(buf, MAX_PATH, nullptr, SLGP_RAWPATH)))
+        out = buf;
+    }
+    pf->Release();
+  }
+  link->Release();
+  return out;
+}
+
 static void create_start_menu_shortcut(const std::wstring &aumid,
                                        const std::wstring &name) {
   wchar_t appdata[MAX_PATH];
@@ -1014,13 +1036,19 @@ static void create_start_menu_shortcut(const std::wstring &aumid,
   std::wstring dir =
       std::wstring(appdata) + L"\\Microsoft\\Windows\\Start Menu\\Programs";
   std::wstring lnk = dir + L"\\" + name + L".lnk";
-  if (GetFileAttributesW(lnk.c_str()) != INVALID_FILE_ATTRIBUTES)
-    return; // already stamped
   // Point the shortcut at the APP exe when the bridge handed us one (a bare
   // launcher.exe can't start by itself); dev/legacy spawns fall back to us.
   wchar_t self[MAX_PATH];
   GetModuleFileNameW(nullptr, self, MAX_PATH);
   std::wstring exe = app_exe_env().empty() ? std::wstring(self) : app_exe_env();
+  // An existing shortcut is NOT reason enough to bail. A `tinyjs dev` run has
+  // no TINYJS_APP_EXE, so it stamps one pointing at launcher-win.exe — dead,
+  // since that can't start alone — and bailing on "file exists" would freeze
+  // that forever, so a later real install could never correct it (observed:
+  // four such shortcuts on a dev box). Rewrite whenever the target differs.
+  if (GetFileAttributesW(lnk.c_str()) != INVALID_FILE_ATTRIBUTES &&
+      _wcsicmp(shortcut_target(lnk).c_str(), exe.c_str()) == 0)
+    return; // already points where we want; leave it alone
   IShellLinkW *link = nullptr;
   if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
                               IID_IShellLinkW, (void **)&link)) ||
@@ -4282,39 +4310,58 @@ static void do_progress(webview_t, void *arg) {
   delete v;
 }
 
-// ---- app.icon: the window icon, which is what the taskbar button shows -----
-// LoadImage reads .ico; a .png path won't load, so the call is a no-op rather
-// than clearing the icon. '' restores the icon the launcher started with.
+// ---- app.icon: the window icon (title bar + Alt-Tab) ----------------------
+// NOT the taskbar button: measured on Windows 11, WM_SETICON moves the title
+// bar and Alt-Tab entry while the button keeps showing launcher-win.exe's own
+// icon. See TODO-verify.md.
+//
+// .ico goes through LoadImage, which picks the right sub-image per size;
+// everything else (png/jpg/bmp/gif) goes through GDI+, the same decoder the
+// startup icon and tray icons already use. png must work here — icon.png is
+// what every tinyjs app actually ships.
+static HICON g_icon_default = nullptr; // startup icon (TINYJS_ICON), for ''
 static HICON g_icon_big = nullptr;
 static HICON g_icon_small = nullptr;
+
+// Release what app.icon installed. Two traps: the GDI+ path uses ONE HICON for
+// both sizes, so a naive pair of DestroyIcon calls double-frees it; and the
+// startup icon is shared, so destroying it would break a later icon('').
+static void free_app_icons() {
+  if (g_icon_big && g_icon_big != g_icon_default)
+    DestroyIcon(g_icon_big);
+  if (g_icon_small && g_icon_small != g_icon_big &&
+      g_icon_small != g_icon_default)
+    DestroyIcon(g_icon_small);
+  g_icon_big = g_icon_small = nullptr;
+}
 
 static void do_appicon(webview_t, void *arg) {
   std::string *path = static_cast<std::string *>(arg);
   if (g_hwnd) {
     if (path->empty()) {
-      // back to whatever the window class supplies
-      SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, 0);
-      SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, 0);
-      if (g_icon_big) { DestroyIcon(g_icon_big); g_icon_big = nullptr; }
-      if (g_icon_small) { DestroyIcon(g_icon_small); g_icon_small = nullptr; }
+      // Back to the icon the app started with. Sending 0 instead would fall
+      // through to the window class icon and lose icon.png for the session.
+      free_app_icons();
+      SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)g_icon_default);
+      SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)g_icon_default);
     } else {
       std::wstring w = widen(*path);
       HICON big = (HICON)LoadImageW(nullptr, w.c_str(), IMAGE_ICON,
                                     GetSystemMetrics(SM_CXICON),
                                     GetSystemMetrics(SM_CYICON), LR_LOADFROMFILE);
-      HICON small = (HICON)LoadImageW(nullptr, w.c_str(), IMAGE_ICON,
-                                      GetSystemMetrics(SM_CXSMICON),
-                                      GetSystemMetrics(SM_CYSMICON),
-                                      LR_LOADFROMFILE);
+      HICON small = big ? (HICON)LoadImageW(nullptr, w.c_str(), IMAGE_ICON,
+                                            GetSystemMetrics(SM_CXSMICON),
+                                            GetSystemMetrics(SM_CYSMICON),
+                                            LR_LOADFROMFILE)
+                        : nullptr;
+      if (!big) // not an .ico (or an unreadable one) — try it as an image
+        big = small = icon_from_png(*path);
       if (big) {
-        SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)big);
-        if (g_icon_big) DestroyIcon(g_icon_big);
+        free_app_icons(); // only after the new icon is in hand
         g_icon_big = big;
-      }
-      if (small) {
-        SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)small);
-        if (g_icon_small) DestroyIcon(g_icon_small);
-        g_icon_small = small;
+        g_icon_small = small ? small : big;
+        SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)g_icon_big);
+        SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)g_icon_small);
       }
     }
   }
@@ -5335,14 +5382,17 @@ static int run(int argc, char **argv) {
   webview_set_title(g_w, title.c_str());
   webview_set_size(g_w, width, height, WEBVIEW_HINT_NONE);
 
-  // Window/taskbar icon from a png (dev: the project's icon.png via
-  // TINYJS_ICON; built apps: dist/icon.png set by the bridge).
+  // Window icon from a png (dev: the project's icon.png via TINYJS_ICON;
+  // built apps: dist/icon.png set by the bridge). Kept in g_icon_default so
+  // app.icon('') can put it back — the taskbar button is a separate thing the
+  // shell owns, see do_appicon.
   {
     char icon[MAX_PATH];
     DWORD n = GetEnvironmentVariableA("TINYJS_ICON", icon, sizeof(icon));
     if (n > 0 && n < sizeof(icon)) {
       HICON h = icon_from_png(icon);
       if (h) {
+        g_icon_default = h;
         SendMessageW(g_hwnd, WM_SETICON, ICON_BIG, (LPARAM)h);
         SendMessageW(g_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)h);
       }

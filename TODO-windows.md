@@ -49,6 +49,37 @@ names refer to the protocol table in the README; Windows handlers live in
 
 - [ ] **scope:'app' audioTap** — system loopback shipped; per-process
       capture needs the Win10 2004+ process-loopback path.
+- [~] **Taskbar pin used to pin launcher.exe when the app was opened from
+      shelf** — reported 2026-07-25 (pin was dead on relaunch); opening the
+      same app's exe directly and pinning worked. **Appears fixed** by shelf's
+      `openApp` now launching through `explorer.exe` instead of spawning the app
+      as its own child (that change was made for a different bug — closing shelf
+      closed the app). Confirmed by hand the same day: open from shelf → pin →
+      close → reopens correctly. One manual check, not a regression test.
+      Worth understanding before trusting it, because the obvious explanation is
+      wrong: the *window* properties were never the problem. Launched both ways,
+      the windows carry byte-identical, correct values —
+      `AppUserModelID=tinyjs.amp`, `RelaunchCommand="…\amp\amp.exe"`, icon and
+      display name all pointing at the app exe (scratchpad `pincheck.cc` reads
+      them off a live window; use `%ls`, since MinGW's narrow printf truncates a
+      UTF-16 string to one visible char). What differs is at the **process**
+      level: shelf has its own explicit AUMID, and an app spawned as its direct
+      child gets associated with it, while one launched via explorer is a child
+      of the shell instead. That association, not the window property store, is
+      what the pin followed.
+      Still open underneath: `create_start_menu_shortcut()` only runs lazily
+      from `ensure_toast_identity()`, so an app that has never shown a toast has
+      no AUMID-carrying shortcut at all — on this box `Programs\` had hello /
+      Presto / Shelf / TinyDeck / tinyjs-demo but no amp.lnk. Creating it at
+      install or first run would be sturdier than relying on launch parentage.
+      Shelf's own new shortcuts (`Programs\tinyjs\`) deliberately do NOT carry
+      the AUMID: WScript.Shell can't set it, and a plain .lnk at the launcher's
+      own path would make it skip its own and downgrade toasts to tray balloons.
+      Setting it needs IPropertyStore on IShellLink — tried and abandoned from
+      Windows PowerShell 5.1, which won't cast the ShellLink coclass to the
+      interfaces. A `launcher.exe --make-shortcut` mode would reuse the real
+      code, but installed apps carry the launcher they were built with, so shelf
+      would need a fallback for older installs.
 - [ ] **Examples: Windows builds for shelf installs** — publish per-app
       Windows zips (+ `winUrl` in catalog.json) and a zip install path in
       shelf so it's a real store on Windows, not just a filtered list.
@@ -66,7 +97,9 @@ names refer to the protocol table in the README; Windows handlers live in
 - [x] ~~Toast notifications + actions~~ — real WinRT toasts with buttons +
       reply field, AppUserModelID + auto Start-Menu shortcut, balloon
       fallback (`destructive` styling has no ToastGeneric equivalent).
-- [x] ~~App icon~~ — runtime window/taskbar icon from icon.png (carried
+- [x] ~~App icon~~ — runtime window icon (title bar + Alt-Tab, NOT the taskbar
+      button: that keeps showing the exe's own icon, measured — see
+      TODO-verify.md) from icon.png (carried
       inside the TPK); embedded into launcher.exe (`--embed-icon`) AND into
       `dist/<name>.exe` — the output can't be resource-edited (UpdateResource
       destroys the appended txiki bundle), so the build stamps a clean copy
