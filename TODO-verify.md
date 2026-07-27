@@ -350,22 +350,36 @@ driven and is recorded under each card; this is the remainder. Deliberately
       only once capture is live** (it prints the ms), that `stop()` resolves
       `{ path, duration }` with the file **already finalised** (the card stats
       it immediately and says so), and that the mp4 actually plays.
-- [ ] **`app.ai`** — System ▸ Asking the OS. Answers `unsupported` on this
-      stock build, and `generate()` rejects with "not built in (needs macOS 26 +
-      TINYJS_AI=1)" — the fallback path, verified. The real thing needs a
-      `TINYJS_AI=1` build on macOS 26: check `availability()` → `available`, a
-      generation that respects the `instructions`, and how long it takes.
+- [x] ~~**`app.ai`**~~ — done 2026-07-27, **both** paths. On a stock build:
+      `availability()` → `unsupported`, `capabilities().ai` → `false`,
+      `generate()` rejects with "not built in (needs macOS 26 + TINYJS_AI=1)".
+      Then built with `TINYJS_AI=1` on macOS 26.5.2 (SDK 26.5) and run again:
+      `availability()` → **available**, `capabilities().ai` → **true**,
+      and a real completion came back. First generation **2.9 s**, the next
+      **513 ms** — there's a warm-up, which the card now mentions. It treated
+      `instructions` ("three short lines, no preamble") as a hint and answered
+      in one sentence; that's the model, not the binding.
+      The launcher in the checkout was **restored to the stock (non-AI) build**
+      afterwards, since that's what `setup.sh` produces by default. One line to
+      get it back: `TINYJS_AI=1 ./setup.sh`.
 - [ ] **`app.selectedText` with something actually selected** — Desktop ▸
       Reaching other apps. Returns `null` with Accessibility **granted**, which
-      the card correctly reports as "nothing was selected". The three-second
-      button exists so you can go select text in another app first; that path
-      has never returned a string.
-- [ ] **`app.keystroke` posting a real combo** — same card. `{ ok: false,
-      trusted: true }` for a modifier-only combo is measured (Accessibility is
-      granted here); no real keystroke was posted into another app, because
-      doing that unattended is how you find out what was frontmost. Try
-      `cmd+shift+4`, and try `paste()` after `win.hide()` with something on the
-      clipboard — the card reports which app had focus while hidden.
+      the card correctly reports as "nothing was selected". Two attempts, both
+      null: nothing selected anywhere, and — worth knowing — a fully selected
+      text field **inside the deck's own page**, which means a WKWebView does
+      not publish its selection over the AX interface this call reads. So the
+      only way to see a string out of it is a selection in a *different* app;
+      the three-second button exists for exactly that, and that path has never
+      returned one.
+- [x] ~~**`app.keystroke` / `app.paste` posting real events**~~ — done
+      2026-07-27, and self-contained: a scratch input in the deck's own page,
+      with the deck frontmost. `keystroke('h')` then `keystroke('i')` left
+      **hi** in the field; `clipboard.write({text:'PASTED-OK'})` followed by
+      `paste()` returned `{ok:true, trusted:true}` and left **PASTED-OK**;
+      `keystroke('cmd+a')` selected the field. Real CGEvents, delivered, no
+      second app needed to see it. Still unwatched: posting into *another*
+      app after `win.hide()`, which is the actual use case, and the
+      `trusted:false` path (needs Accessibility revoked).
 - [ ] **`app.onNotificationAction`** — Desktop ▸ notify (demoed before tonight,
       still never verified). Needs a click on a real banner, which needs a
       packaged signed app; dev falls back to osascript.
