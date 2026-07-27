@@ -672,7 +672,9 @@ await <b>tiny.store.all</b>();           <i>// { … }</i></pre>
 await <b>tiny.clipboard.changeCount</b>();   <i>// cheap "did it change?" probe</i>
 <b>tiny.clipboard.watch</b>(500);            <i>// launcher-side polling (0 spawns)</i>
 <b>tiny.clipboard.onChange</b>(({ changeCount, self }) =&gt; …);  <i>// self = own write</i>
-<b>tiny.clipboard.unwatch</b>();
+<b>tiny.clipboard.unwatch</b>();             <i>// stops delivery, not the counter —</i>
+<i>// the OS keeps counting, so one changeCount() after a gap (a wake, a window</i>
+<i>// coming back) says whether re-reading is worth it, without touching contents</i>
 <i>// backend: app.clipboard.* is the same api; a createApp onClipboardChange</i>
 <i>// handler auto-starts the watcher</i></pre>
   </section>

@@ -426,6 +426,9 @@ tiny.clipboard.write({ image: pngPathOrBase64, color: '#ff8800' }); // paths…
 await tiny.clipboard.changeCount();          // cheap "did it change?" probe
 tiny.clipboard.watch(500);                   // launcher-side change polling
 tiny.clipboard.onChange(({ changeCount, self }) => ...);  // self = own write
+tiny.clipboard.unwatch();                    // stops delivery, not the counter:
+// the OS keeps counting, so one changeCount() after a gap (a wake, a window
+// coming back) says whether re-reading is worth it — without reading contents
 // backend: same api as app.clipboard.*; a createApp onClipboardChange
 // handler auto-starts the watcher
 
