@@ -371,6 +371,12 @@ await tiny.app.permissions.check('accessibility');  // 'granted'|'denied'|
 await tiny.app.permissions.request('accessibility'); // prompts / opens Settings
 // names: accessibility | screen | notifications | microphone | camera |
 //        automation[:<bundle-id>]
+// speech-to-text: the page's webkitSpeechRecognition (WebKit AND WebView2 have
+// it; it is NOT a tiny.* call) needs BOTH "microphone" and
+// "speechRecognition" usage strings in a BUILT app. Missing the second =
+// `service-not-allowed` with no prompt to accept. Dev has no Info.plist, so it
+// usually fails there — though dev TCC grants attach to the shared launcher
+// binary, so it can work once that's been allowed once.
 // mic/camera: getUserMedia() works in the page (launcher auto-grants WebKit's
 // per-origin prompt; only the system TCC dialog shows). Packaged apps must set
 // "permissions": {"microphone": "why", "camera": "why"} in tinyjs.json —

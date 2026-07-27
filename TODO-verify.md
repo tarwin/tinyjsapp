@@ -416,6 +416,42 @@ elsewhere:
       check exists, so the gate fails closed. The card claims this in prose;
       confirm the button actually says so rather than looking broken.
 
+## The hands-free AI loop — half confirmed by a human
+
+Added 2026-07-27: the deck's AI card can listen, generate and speak back.
+The speech half is the webview's own `webkitSpeechRecognition`, not a `tiny.*`
+call; tinyjs only gained the `speechRecognition` permission key.
+
+Confirmed: the key IS the fix. On an otherwise identical build,
+`service-not-allowed` became `start` + `audiostart` the moment
+`NSSpeechRecognitionUsageDescription` was present — and the machine's owner
+accepted the prompt and saw real transcription, which is the part no script
+here could reach.
+
+- [ ] **A full turn, end to end** — speak a question, watch it transcribed
+      into the prompt box, the model answer, and `say()` read it out, then
+      loop. Each piece is verified alone; the loop as a whole is not. Worth
+      watching for two specific things: whether the next listen picks up the
+      Mac's *own* voice (the code awaits `say()` to finish precisely to avoid
+      that), and whether a long answer makes the recogniser time out.
+- [ ] **The dev path, from a clean TCC state.** Dev has no Info.plist, so the
+      expected answer is `service-not-allowed` with no prompt — but the grant
+      attaches to the SHARED launcher binary, so once it's been allowed for
+      anything, dev runs can work. Both were observed here within an hour,
+      which is why the card reports what happened rather than predicting it.
+      `tccutil reset SpeechRecognition` to see the first case again.
+- [ ] **Whether the transcription is on-device.** The card claims the *model*
+      is local and deliberately does NOT claim it of the speech. WebKit gives
+      no control over `SFSpeechRecognizer`'s `requiresOnDeviceRecognition`, so
+      audio may go to Apple. Testable by pulling the network and seeing if
+      recognition still works — worth knowing before anyone builds a privacy
+      claim on the pair.
+- [ ] **Windows.** WebView2 has `webkitSpeechRecognition` too, and needs no
+      Info.plist — so this may work there with no permission plumbing at all,
+      which would make it the rare feature that's *easier* off macOS. Never
+      tried. (`macos.ai` is macOS-only regardless, so the full loop isn't
+      portable — but dictation into the prompt box would be.)
+
 ## AI in released builds — the one check CI can't make
 
 The release job now links the FoundationModels shim into every macOS

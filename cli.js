@@ -985,6 +985,15 @@ async function cmdBuild() {
   <key>NSMicrophoneUsageDescription</key> <string>${perms.microphone}</string>`;
   if (perms.camera) extraKeys += `
   <key>NSCameraUsageDescription</key>     <string>${perms.camera}</string>`;
+  // Speech-to-text ("permissions": { "speechRecognition": "why" }). The page's
+  // webkitSpeechRecognition needs BOTH this and the microphone string: WebKit
+  // asks SFSpeechRecognizer for authorization, and without the key the OS
+  // refuses the service rather than the mic — the page sees
+  // `error: service-not-allowed` with no prompt and nothing to click.
+  // Measured 2026-07-27: adding this key alone turned that error into
+  // `start` + `audiostart` on an otherwise identical build.
+  if (perms.speechRecognition) extraKeys += `
+  <key>NSSpeechRecognitionUsageDescription</key> <string>${perms.speechRecognition}</string>`;
   // tiny.audioTap ("audioTap": "app" | "system"): Core Audio process taps read
   // rendered output. The usage string is required for the capture TCC; a
   // custom reason via "audioTapReason" overrides the default.
@@ -1043,7 +1052,7 @@ async function cmdBuild() {
   // outright — even with TCC granted — unless the binary carries them.
   const sigFlags = identity === '-' ? [] : ['--options', 'runtime', '--timestamp'];
   const devices = [...new Set(
-    [(perms.microphone || cfg.audioTap) && 'com.apple.security.device.audio-input',
+    [(perms.microphone || cfg.audioTap || perms.speechRecognition) && 'com.apple.security.device.audio-input',
      perms.camera && 'com.apple.security.device.camera'].filter(Boolean))];
   if (identity !== '-' && devices.length) {
     const ENT = '.build/entitlements.plist';

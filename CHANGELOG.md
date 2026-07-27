@@ -143,6 +143,21 @@ are gone rather than deprecated.
   X11 could support all three — nobody has written it, which is a different
   statement from the one the table was making.
 
+- **`"permissions": { "speechRecognition": "why" }`** — a new `tinyjs.json`
+  key, injecting `NSSpeechRecognitionUsageDescription`. Speech-to-text isn't a
+  `tiny.*` call: the page's own `webkitSpeechRecognition` already works (WebKit
+  has it, and so does WebView2), but a bundled app needs that usage string as
+  well as the microphone one, and without it the OS refuses the *service*
+  rather than the mic — the page sees `service-not-allowed` with no prompt to
+  accept and nothing to click. Measured: adding the key alone turned that error
+  into `start` + `audiostart` on an otherwise identical build, and a human
+  accepting the prompt confirmed real transcription. It also implies the
+  `com.apple.security.device.audio-input` entitlement under the hardened
+  runtime, same as `microphone`.
+
+  Pairs with `macos.ai` and `app.say()` for a hands-free loop — listen,
+  generate, speak — which is what the deck's AI card now demonstrates.
+
 - **On-device AI just ships now.** `tiny.app.ai` was previously reachable only
   by people who built tinyjs themselves with an opt-in env var, because the
   release pipeline ran on a `macos-14` runner without the macOS 26 SDK — so
