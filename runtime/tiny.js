@@ -563,9 +563,9 @@
       frontmostApp: () => call('app.frontmost'),
       // Find files by name/content (Spotlight) -> up to 100 paths.
       spotlight: (query) => call('app.spotlight', { query }),
-      // On-device LLM (FoundationModels; offline, no key). In released macOS
-      // builds; a source build needs TINYJS_AI=1. Needs macOS 26 and Apple
-      // Intelligence switched on — check ai.availability() first, always.
+      // On-device LLM (FoundationModels; offline, no key). Needs macOS 26 and
+      // Apple Intelligence switched on — check ai.availability() first,
+      // always; 'unsupported' also covers a launcher built without it.
       ai: {
         // 'available' | 'unavailable' | 'unsupported'
         availability: () => call('ai.availability'),

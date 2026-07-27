@@ -119,14 +119,34 @@ echo "==> compiling launcher"
 FW="-framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -framework AVFoundation -framework ServiceManagement -framework IOKit -framework Quartz -framework Vision -framework QuickLookThumbnailing -framework Security -framework LocalAuthentication -framework MediaPlayer -framework CoreMedia -framework CoreWLAN -framework CoreAudio -framework AudioToolbox"
 MIN_OS="-mmacosx-version-min=14.0"
 
-if [ "${TINYJS_AI:-0}" = "1" ]; then
-  # Opt-in on-device AI (tiny.app.ai) via Apple's FoundationModels. Requires
-  # the macOS 26 SDK + swiftc, but the binary keeps the macOS 14 floor and
-  # weak-links FoundationModels, so it still launches on macOS 14+ (AI just
-  # reports 'unsupported' there). Two-step: compile each object, then link
-  # with swiftc so the Swift runtime is pulled in. swiftc takes the floor via
-  # -target and needs -Xlinker to pass -weak_framework to the linker.
-  echo "==> (TINYJS_AI=1) building with FoundationModels"
+# On-device AI (tiny.app.ai) via Apple's FoundationModels. Built automatically
+# when the toolchain can — released binaries have it, so a source build should
+# match rather than being quietly less capable than the download.
+#
+# Detected, not guessed at from the OS version: swiftc has to exist AND the
+# SDK being compiled against has to carry the framework. Checking the SDK
+# rather than the running system matters — a Mac can run macOS 26 while its
+# Command Line Tools still ship an older SDK, and that combination compiles
+# fine right up until the import.
+#
+# Set TINYJS_AI=0 to force it off (bisecting the Swift path, or reproducing
+# what a machine without the SDK produces).
+SDK_PATH="$(xcrun --show-sdk-path 2>/dev/null || true)"
+AI_BUILD=0
+if [ "${TINYJS_AI:-1}" != "0" ] && command -v swiftc >/dev/null 2>&1 \
+   && [ -n "$SDK_PATH" ] \
+   && [ -d "$SDK_PATH/System/Library/Frameworks/FoundationModels.framework" ]; then
+  AI_BUILD=1
+fi
+
+if [ "$AI_BUILD" = "1" ]; then
+  # The binary keeps the macOS 14 floor and weak-links FoundationModels, so it
+  # still launches on macOS 14+ — AI just reports 'unsupported' there.
+  # Two-step: compile each object, then link with swiftc so the Swift runtime
+  # is pulled in. swiftc takes the floor via -target (ONE target only — it
+  # accepts two and silently keeps the last) and needs -Xlinker to pass
+  # -weak_framework through to the linker.
+  echo "==> compiling with on-device AI (FoundationModels found in the SDK)"
   SWIFT_TARGET="$(uname -m)-apple-macos14.0"
   c++ -std=c++17 -c -x objective-c++ -DTINYJS_AI $MIN_OS -Inative/include \
     native/launcher-macos.cc -o /tmp/tinyjs-launcher.o
@@ -137,6 +157,7 @@ if [ "${TINYJS_AI:-0}" = "1" ]; then
     -Xlinker -weak_framework -Xlinker ScreenCaptureKit \
     -Xlinker -weak_framework -Xlinker FoundationModels -ldl
 else
+  echo "==> compiling without on-device AI (no FoundationModels in this SDK)"
   c++ -std=c++17 -x objective-c++ $MIN_OS -Inative/include native/launcher-macos.cc \
     -o native/launcher-macos $FW -weak_framework ScreenCaptureKit -ldl
 fi

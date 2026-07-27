@@ -858,11 +858,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     async spotlight(queryText) {
       return (await ask('SPOTLIGHT', esc(String(queryText ?? ''))))?.paths ?? [];
     },
-    // On-device LLM (Apple's FoundationModels — offline, no API key). Linked
-    // into released macOS builds; a source build needs TINYJS_AI=1 (it wants
-    // the macOS 26 SDK). Runtime still needs macOS 26 + Apple Intelligence on,
-    // so check availability first — 'unsupported' covers both a build without
-    // it and an OS too old.
+    // On-device LLM (Apple's FoundationModels — offline, no API key). Needs
+    // macOS 26 and Apple Intelligence switched on, so check availability
+    // first: 'unsupported' covers both an OS too old and a launcher built
+    // against an SDK that didn't carry the framework.
     ai: {
       // 'available' | 'unavailable' (Apple Intelligence off / not downloaded)
       // | 'unsupported' (older macOS or a non-AI build).

@@ -352,16 +352,16 @@ driven and is recorded under each card; this is the remainder. Deliberately
       it immediately and says so), and that the mp4 actually plays.
 - [x] ~~**`app.ai`**~~ — done 2026-07-27, **both** paths. On a stock build:
       `availability()` → `unsupported`, `capabilities().ai` → `false`,
-      `generate()` rejects with "not built in (needs macOS 26 + TINYJS_AI=1)".
-      Then built with `TINYJS_AI=1` on macOS 26.5.2 (SDK 26.5) and run again:
+      `generate()` rejects with "not built in". Then built against the macOS
+      26.5 SDK on macOS 26.5.2 and run again:
       `availability()` → **available**, `capabilities().ai` → **true**,
       and a real completion came back. First generation **2.9 s**, the next
       **513 ms** — there's a warm-up, which the card now mentions. It treated
       `instructions` ("three short lines, no preamble") as a hint and answered
       in one sentence; that's the model, not the binding.
-      The launcher in the checkout was **restored to the stock (non-AI) build**
-      afterwards, since that's what `setup.sh` produces by default. One line to
-      get it back: `TINYJS_AI=1 ./setup.sh`.
+      `setup.sh` now links the shim in automatically whenever the SDK carries
+      FoundationModels, so a plain `./setup.sh` on this machine produces an AI
+      build — which is what the checkout has.
 - [ ] **`app.selectedText` with something actually selected** — Desktop ▸
       Reaching other apps. Returns `null` with Accessibility **granted**, which
       the card correctly reports as "nothing was selected". Two attempts, both

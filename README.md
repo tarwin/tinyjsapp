@@ -635,8 +635,8 @@ const net = await tiny.system.wifi();           // { ssid, bssid, rssi, txRate }
 const docs = await tiny.app.spotlight('quarterly report');
 
 // on-device LLM — Apple's FoundationModels (offline, no API key, private).
-// In released macOS builds; source builds need TINYJS_AI=1. Needs macOS 26
-// AND Apple Intelligence on, so ALWAYS check availability() first.
+// Needs macOS 26 AND Apple Intelligence switched on, so ALWAYS check
+// availability() first — three states, and only one of them can generate.
 if (await tiny.app.ai.availability() === 'available') {
   const reply = await tiny.app.ai.generate('Summarise this in one line: ' + text,
     { instructions: 'You are terse.' });   // instructions = a system prompt
@@ -1254,18 +1254,15 @@ no API key, fully private.
 `macos-26` runner with the Swift shim linked in, so `tiny.app.ai` is a
 feature you can ship, not one users have to build for themselves.
 
-Building from source is the case that still needs a flag, because compiling
-the shim needs the macOS 26 SDK + `swiftc` and not every checkout has them:
-
-```sh
-./setup.sh                  # no AI — builds on any supported SDK
-TINYJS_AI=1 ./setup.sh      # with FoundationModels (needs the macOS 26 SDK)
-```
+`./setup.sh` does the same for a source build: it links the shim in when the
+SDK it's compiling against carries FoundationModels, and quietly builds
+without when it doesn't, so an older toolchain still works. It says which it
+did.
 
 Either way the binary keeps the **macOS 14 floor** and weak-links
 FoundationModels, so it still launches on macOS 14+ — `ai.availability()`
-just returns `'unsupported'` below macOS 26, as does a build made without
-the flag. So app code that guards on `availability()` is always safe, and
+just returns `'unsupported'` below macOS 26, as does a launcher compiled
+without the shim. So app code that guards on `availability()` is always safe, and
 guarding is not optional: the honest states are *available*, *unavailable*
 (Apple Intelligence off or still downloading) and *unsupported*, and only
 the first one can generate anything.

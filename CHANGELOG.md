@@ -124,13 +124,21 @@ are gone rather than deprecated.
   X11 could support all three — nobody has written it, which is a different
   statement from the one the table was making.
 
-- **Released macOS builds ship on-device AI.** `tiny.app.ai` was only ever
-  available to people who built tinyjs themselves with `TINYJS_AI=1`, because
-  the release pipeline ran on a `macos-14` runner without the macOS 26 SDK —
-  so for anyone who installed a release, `availability()` was permanently
+- **On-device AI just ships now.** `tiny.app.ai` was previously reachable only
+  by people who built tinyjs themselves with an opt-in env var, because the
+  release pipeline ran on a `macos-14` runner without the macOS 26 SDK — so
+  for anyone who installed a release, `availability()` was permanently
   `'unsupported'`. The release job now builds on `macos-26` with the Swift
-  shim linked in. Source builds still take the flag, since compiling the shim
-  needs that SDK and not every checkout has it.
+  shim linked in, and `setup.sh` detects the toolchain instead of asking: it
+  links the shim when the SDK it compiles against carries FoundationModels,
+  builds without when it doesn't, and says which it did. It checks the *SDK*,
+  not the running OS — a Mac can run macOS 26 while its Command Line Tools
+  still ship an older SDK, and that combination compiles fine right up until
+  the import. (`TINYJS_AI=0` forces it off, for bisecting the Swift path.)
+
+  Runtime requirements are unchanged and still worth guarding: macOS 26 with
+  Apple Intelligence switched on. `availability()` has three answers and only
+  one of them can generate.
 
   Two things made this more than a runner-label change. The workflow never
   passed `-mmacosx-version-min`, so the deployment floor came from the host
@@ -153,9 +161,10 @@ are gone rather than deprecated.
   without pinning the floor was the trap waiting there.
 
 - **`capabilities().ai` reflects the build, not the OS.** `tiny.app.ai` needs
-  the macOS 26 SDK and `swiftc`, so it's opt-in at build time via
-  `TINYJS_AI=1` — and a stock build's `generate()` rejects with "not built in"
-  while the table, by omitting the key, called it supported. It now asks the
+  the macOS 26 SDK and `swiftc` to compile at all, so whether a given launcher
+  has it is a property of the build — and one built without it rejects
+  `generate()` with "not built in" while the table, by omitting the key,
+  called it supported. It now asks the
   launcher (the only party that knows how the binary was compiled) and answers
   `false` on a stock build. The worst-placed over-claim of the set: the
   fallback for "no model here" is usually a whole different feature.
