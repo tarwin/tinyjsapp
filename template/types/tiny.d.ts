@@ -70,13 +70,13 @@ declare type TinySoundName = 'info' | 'success' | 'alert' | 'error';
 
 /** On-device LLM (Apple FoundationModels). 'available' = ready; 'unavailable'
  *  = Apple Intelligence off / model not downloaded; 'unsupported' = older
- *  macOS, or a stock build (tiny.ai ships only in TINYJS_AI builds). */
+ *  macOS, or a launcher compiled without the FoundationModels shim. */
 declare type TinyAiAvailability = 'available' | 'unavailable' | 'unsupported';
 
 declare interface TinyAi {
   availability(): Promise<TinyAiAvailability>;
   /** offline, no API key. opts.instructions = a system prompt. Throws with
-   *  the reason (incl. 'not built in' on stock builds). */
+   *  the reason (incl. 'not built in' where the shim wasn't compiled). */
   generate(prompt: string, opts?: { instructions?: string }): Promise<string>;
 }
 
@@ -687,6 +687,20 @@ declare interface Tiny {
     applescript(source: string): Promise<string | null>;
     /** Quick Look panel for the path(s); no args closes it */
     quickLook(paths?: string | string[] | null): Promise<any>;
+     /** on-device OCR via Vision (accurate mode); box normalized 0..1 */
+    ocr(path: string): Promise<TinyOcrResult>;
+    /** record a display to an .mp4 (macOS 14+, needs the 'screen' permission;
+     *  video only, one at a time) */
+    recorder: TinyRecorder;
+    /** on-device LLM (FoundationModels) — needs macOS 26 with Apple
+     *  Intelligence on; check availability() first, always */
+    ai: TinyAi;
+    /** text selected in the frontmost app (Accessibility); null if none */
+    selectedText(): Promise<string | null>;
+    /** other apps' on-screen windows (Accessibility); null if not granted */
+    otherWindows(): Promise<TinyOtherWindow[] | null>;
+    /** move/resize another app's frontmost window (pid from otherWindows) */
+    moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
   };
   app: {
     info(): Promise<TinyAppInfo>;
@@ -720,20 +734,12 @@ declare interface Tiny {
     power: TinyPower;
     /** the active app right now (who focus returns to after win.hide()) */
     frontmostApp(): Promise<TinyFrontmostApp | null>;
-    /** text selected in the frontmost app (Accessibility); null if none */
-    selectedText(): Promise<string | null>;
-    /** other apps' on-screen windows (Accessibility); null if not granted */
-    otherWindows(): Promise<TinyOtherWindow[] | null>;
-    /** move/resize another app's frontmost window (pid from otherWindows) */
-    moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
     /** replace the app icon from a png ('' resets to the bundle icon) */
     icon(path: string): Promise<any>;
     /** progress bar on the app icon / taskbar button: 0..1, null clears */
     progress(value: number | null): Promise<any>;
     /** find files by name/content (Spotlight) — up to 100 paths */
     spotlight(query: string): Promise<string[]>;
-    /** on-device LLM (FoundationModels; TINYJS_AI builds on macOS 26) */
-    ai: TinyAi;
     /** the system alert beep — the one portable sound */
     beep(): Promise<boolean>;
     /** 'info' | 'success' | 'alert' | 'error' (portable — mapped to each OS's
@@ -748,8 +754,6 @@ declare interface Tiny {
     /** system eyedropper — NO screen-recording permission needed;
      *  '#rrggbb', or null if the user cancels */
     pickColor(): Promise<string | null>;
-    /** on-device OCR (Vision, accurate mode) */
-    ocr(path: string): Promise<TinyOcrResult>;
     /** thumbnail png for ANY path — a content preview where Quick Look has a
      *  renderer (images, video, PDF, source files), the document/app/folder
      *  ICON otherwise, so this never fails on file type alone. size is the
@@ -773,8 +777,6 @@ declare interface Tiny {
     say(text: string, opts?: TinySayOptions): Promise<boolean>;
     stopSpeaking(): Promise<any>;
     voices(): Promise<TinyVoice[]>;
-    /** record a display to an .mp4 (video only, one at a time) */
-    recorder: TinyRecorder;
   };
 
   tray: {
@@ -919,12 +921,6 @@ declare interface TinyApp {
   power: TinyPower;
   /** the active app right now (who focus returns to after hide()) */
   frontmostApp(): Promise<TinyFrontmostApp | null>;
-  /** text selected in the frontmost app (Accessibility); null if none */
-  selectedText(): Promise<string | null>;
-  /** other apps' on-screen windows (Accessibility); null if not granted */
-  otherWindows(): Promise<TinyOtherWindow[] | null>;
-  /** move/resize another app's frontmost window (pid from otherWindows) */
-  moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
   /** replace the app icon from a png ('' resets to the bundle icon) */
   icon(path: string): boolean;
   /** macOS-only — same shape and names as tiny.macos.* in the page. These
@@ -938,6 +934,20 @@ declare interface TinyApp {
   macos: {
     applescript(source: string): Promise<string | null>;
     quickLook(paths?: string | string[] | null): boolean;
+    /** on-device OCR via Vision (accurate mode); box normalized 0..1 */
+    ocr(path: string): Promise<TinyOcrResult>;
+    /** record a display to an .mp4 (macOS 14+, needs the 'screen' permission;
+     *  video only, one at a time) */
+    recorder: TinyRecorder;
+    /** on-device LLM (FoundationModels) — needs macOS 26 with Apple
+     *  Intelligence on; check availability() first, always */
+    ai: TinyAi;
+    /** text selected in the frontmost app (Accessibility); null if none */
+    selectedText(): Promise<string | null>;
+    /** other apps' on-screen windows (Accessibility); null if not granted */
+    otherWindows(): Promise<TinyOtherWindow[] | null>;
+    /** move/resize another app's frontmost window (pid from otherWindows) */
+    moveWindow(pid: number, rect: { x: number; y: number; width: number; height: number }): Promise<true>;
   };
   /** progress bar on the app icon / taskbar button: 0..1, null clears */
   progress(value: number | null): boolean;
@@ -945,8 +955,6 @@ declare interface TinyApp {
   wifi(): Promise<TinyWifi | null>;
   /** find files by name/content (Spotlight) — up to 100 paths */
   spotlight(query: string): Promise<string[]>;
-  /** on-device LLM (FoundationModels; TINYJS_AI builds on macOS 26) */
-  ai: TinyAi;
   /** the system alert beep — the one portable sound */
   beep(): Promise<boolean>;
   /** 'info' | 'success' | 'alert' | 'error' (portable — mapped to each OS's
@@ -963,8 +971,6 @@ declare interface TinyApp {
   /** system eyedropper — NO screen-recording permission needed;
    *  '#rrggbb', or null if the user cancels */
   pickColor(): Promise<string | null>;
-  /** on-device OCR (Vision, accurate mode) */
-  ocr(path: string): Promise<TinyOcrResult>;
   /** thumbnail png for ANY file type Quick Look understands; size is the
    *  bounding box in points (rendered @2x) */
   thumbnail(path: string, size?: number): Promise<TinyThumbnail>;
@@ -980,8 +986,6 @@ declare interface TinyApp {
   say(text: string, opts?: TinySayOptions): Promise<boolean>;
   stopSpeaking(): boolean;
   voices(): Promise<TinyVoice[]>;
-  /** record a display to an .mp4 (video only, one at a time) */
-  recorder: TinyRecorder;
   update: {
     /** notes = release notes from the manifest ("tinyjs publish --notes") */
     check(): Promise<{ available: boolean; current: string; latest: string | null; notes: string | null }>;

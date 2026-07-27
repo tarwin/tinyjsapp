@@ -27,12 +27,31 @@ are gone rather than deprecated.
   Linux emits the Unity `LauncherEntry` signal (KDE Plasma, Ubuntu Dock and
   Dash-to-Dock listen; vanilla GNOME Shell doesn't). On macOS it composes with
   `app.icon()` — a custom Dock tile keeps its icon while the bar is up.
-- **`tiny.macos.*`** — `applescript` and `quickLook` move here (and
-  `app.macos.*` on the backend). The rule is deliberately strict: only concepts
-  no other OS has. Things that *could* exist elsewhere — `ocr`, `share`,
-  `wifi`, `authenticate`, `recorder`, `ai`, `spotlight` — stay on `tiny.app`
-  answering `'unsupported'`, so building them later isn't another rename.
-  Calling `tiny.macos.*` off macOS throws with the reason instead of no-oping.
+- **`tiny.macos.*` holds everything macOS-only** (and `app.macos.*` on the
+  backend). `applescript` and `quickLook` were joined by `ocr`, `recorder`,
+  `ai`, `selectedText`, `otherWindows` and `moveWindow` — every `tiny.app`
+  call that answers `'unsupported'` on both other platforms. The namespace is
+  now the honest signal it looked like: if it's on `tiny.app`, it does
+  something somewhere other than macOS.
+
+  Calling `tiny.macos.*` off macOS **rejects** with the reason instead of
+  resolving something empty. That's a behaviour change for the moved calls, not
+  just a rename: `otherWindows()` used to answer `null` on Windows and Linux
+  and now throws, so a `if (!wins)` branch becomes a `try`. Deliberate — a call
+  that cannot work on the platform you're running is a bug in the app, and a
+  `null` that means "wrong OS" is indistinguishable from one that means
+  "nothing selected".
+
+  If any of these grows a Windows or Linux implementation it moves back to
+  `tiny.app` with the `tiny.macos` name kept working alongside it for a
+  release or two, so that direction won't break anyone overnight.
+
+  Three stayed put on purpose. `win.share` is **window-scoped** — it anchors
+  the sheet to a specific window, and window-scoped calls belong on `tiny.win`
+  even when they're macOS-only. `authenticate` also works on Windows, and
+  `spotlight`, `pickColor` and `nowPlaying`/media keys also work on Linux —
+  none of those are macOS-only at all, whatever the deck's old grouping
+  implied.
 - **`haptic` is removed** (was `app.haptic`, briefly `tiny.macos.haptic`).
   `NSHapticFeedbackManager` only fires while a finger is resting on a Force
   Touch trackpad and the "Force Click and haptic feedback" setting is on, so

@@ -858,22 +858,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     async spotlight(queryText) {
       return (await ask('SPOTLIGHT', esc(String(queryText ?? ''))))?.paths ?? [];
     },
-    // On-device LLM (Apple's FoundationModels — offline, no API key). Needs
-    // macOS 26 and Apple Intelligence switched on, so check availability
-    // first: 'unsupported' covers both an OS too old and a launcher built
-    // against an SDK that didn't carry the framework.
-    ai: {
-      // 'available' | 'unavailable' (Apple Intelligence off / not downloaded)
-      // | 'unsupported' (older macOS or a non-AI build).
-      async availability() { return (await ask('AI available'))?.status ?? 'unsupported'; },
-      // generate(prompt, { instructions }) -> the completion text; throws
-      // with the reason (incl. 'not built in' on stock builds).
-      async generate(prompt, { instructions } = {}) {
-        const r = await ask('AI generate', esc(String(prompt ?? '')) + '\t' + esc(instructions ?? ''));
-        if (!r?.ok) throw new Error(r?.error ?? 'generation failed');
-        return r.text;
-      },
-    },
     // Window chrome: { frame?, windowControls?, transparent?, vibrancy?,
     // squareCorners?, acceptsFirstMouse? }. frame:false hides the titlebar
     // (content extends under it; keep your own drag region via data-tiny-drag).
@@ -1030,22 +1014,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // The active app right now: { name, bundleId, pid } | null — who focus
     // returns to after hide() (pair with paste()).
     frontmostApp: () => query('frontmost'),
-    // The text currently selected in the frontmost app (PopClip-style
-    // popovers) — needs the Accessibility permission. null if nothing is
-    // selected or the app doesn't expose it.
-    selectedText: () => query('selectedtext'),
-    // Every on-screen window of OTHER apps (Rectangle/Magnet territory):
-    // [{ app, bundleId, pid, title, index, x, y, width, height }] in
-    // top-left screen coords. Needs Accessibility; null if not granted.
-    otherWindows: () => query('otherwindows'),
-    // Move + resize another app's frontmost window (pid from otherWindows()
-    // or frontmostApp()), top-left screen coords. Needs Accessibility;
-    // resolves true or throws.
-    async moveWindow(pid, { x, y, width, height } = {}) {
-      const r = await ask('WINCTRL', [pid | 0, x | 0, y | 0, width | 0, height | 0].join('\t'));
-      if (!r?.ok) throw new Error(r?.error ?? 'move failed');
-      return true;
-    },
     // System beep / a sound. `target` is one of the four portable names
     // ('info' | 'success' | 'alert' | 'error'), a platform sound name
     // ('Ping' on macOS, 'SystemHand' on Windows, 'bell' on Linux) or an audio
@@ -1094,14 +1062,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       if (!r?.ok) throw new Error(r?.error ?? 'unsupported');
       return r.color;
     },
-    // On-device OCR (Vision, accurate mode) -> { text, blocks: [{ text,
-    // confidence, box }] }; box is normalized 0..1, top-left origin.
-    // Pairs with captureScreen() for screenshot-to-text.
-    async ocr(path) {
-      const r = await ask('OCR', esc(path));
-      if (!r?.ok) throw new Error(r?.error ?? 'ocr failed');
-      return { text: r.text, blocks: r.blocks };
-    },
     // A thumbnail png for ANY file type Quick Look understands (PSD, video,
     // 3D models, …) -> { path (temp png, yours), width, height }. size is
     // the bounding box in points (rendered @2x).
@@ -1139,24 +1099,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     async authenticate(reason) {
       return (await ask('AUTH', esc(reason ?? 'authenticate')))?.ok === true;
     },
-    // Record a display to an .mp4 (SCStream → AVAssetWriter). start()
-    // resolves once capture is running; stop() resolves { path, duration }
-    // once the file is finalized. Needs the 'screen' permission + macOS 14;
-    // rejects with the reason. Video only (no audio track yet). One
-    // recording at a time.
-    recorder: {
-      async start({ screenId, path } = {}) {
-        if (!path) throw new Error('recorder.start needs a { path }');
-        const r = await ask('RECORD', 'start ' + (screenId ?? 0) + '\t' + esc(path));
-        if (!r?.ok) throw new Error(r?.error ?? 'record failed');
-        return true;
-      },
-      async stop() {
-        const r = await ask('RECORD', 'stop');
-        if (!r?.ok) throw new Error(r?.error ?? 'record failed');
-        return { path: r.path, duration: r.duration };
-      },
-    },
     // Run AppleScript in-process (no osascript spawn) — Apple Events hit
     // Machine state rather than things this app does — mirrors
     // tiny.system.* in the page, same names both sides.
@@ -1189,6 +1131,64 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       quickLook(paths) {
         const list = paths == null ? [] : [].concat(paths);
         send('QUICKLOOK' + (list.length ? ' ' + list.map(esc).join('\t') : ''));
+        return true;
+      },
+      // On-device OCR (Vision, accurate mode) -> { text, blocks: [{ text,
+      // confidence, box }] }; box is normalized 0..1, top-left origin.
+      // Pairs with captureScreen() for screenshot-to-text.
+      async ocr(path) {
+        const r = await ask('OCR', esc(path));
+        if (!r?.ok) throw new Error(r?.error ?? 'ocr failed');
+        return { text: r.text, blocks: r.blocks };
+      },
+      // Record a display to an .mp4 (SCStream → AVAssetWriter). start()
+      // resolves once capture is running; stop() resolves { path, duration }
+      // once the file is finalized. Needs the 'screen' permission + macOS 14;
+      // rejects with the reason. Video only (no audio track yet). One
+      // recording at a time.
+      recorder: {
+        async start({ screenId, path } = {}) {
+          if (!path) throw new Error('recorder.start needs a { path }');
+          const r = await ask('RECORD', 'start ' + (screenId ?? 0) + '\t' + esc(path));
+          if (!r?.ok) throw new Error(r?.error ?? 'record failed');
+          return true;
+        },
+        async stop() {
+          const r = await ask('RECORD', 'stop');
+          if (!r?.ok) throw new Error(r?.error ?? 'record failed');
+          return { path: r.path, duration: r.duration };
+        },
+      },
+      // On-device LLM (Apple's FoundationModels — offline, no API key). Needs
+      // macOS 26 and Apple Intelligence switched on, so check availability
+      // first: 'unsupported' covers both an OS too old and a launcher built
+      // against an SDK that didn't carry the framework.
+      ai: {
+        // 'available' | 'unavailable' (Apple Intelligence off / not downloaded)
+        // | 'unsupported' (older macOS or a non-AI build).
+        async availability() { return (await ask('AI available'))?.status ?? 'unsupported'; },
+        // generate(prompt, { instructions }) -> the completion text; throws
+        // with the reason (incl. 'not built in' on stock builds).
+        async generate(prompt, { instructions } = {}) {
+          const r = await ask('AI generate', esc(String(prompt ?? '')) + '\t' + esc(instructions ?? ''));
+          if (!r?.ok) throw new Error(r?.error ?? 'generation failed');
+          return r.text;
+        },
+      },
+      // The text currently selected in the frontmost app (PopClip-style
+      // popovers) — needs the Accessibility permission. null if nothing is
+      // selected or the app doesn't expose it.
+      selectedText: () => query('selectedtext'),
+      // Every on-screen window of OTHER apps (Rectangle/Magnet territory):
+      // [{ app, bundleId, pid, title, index, x, y, width, height }] in
+      // top-left screen coords. Needs Accessibility; null if not granted.
+      otherWindows: () => query('otherwindows'),
+      // Move + resize another app's frontmost window (pid from otherWindows()
+      // or frontmostApp()), top-left screen coords. Needs Accessibility;
+      // resolves true or throws.
+      async moveWindow(pid, { x, y, width, height } = {}) {
+        const r = await ask('WINCTRL', [pid | 0, x | 0, y | 0, width | 0, height | 0].join('\t'));
+        if (!r?.ok) throw new Error(r?.error ?? 'move failed');
         return true;
       },
     },
@@ -1441,17 +1441,17 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.setClickThrough': async ({ enabled }, _a, m) => (forWin(m).setClickThrough(enabled), true),
     'win.setLevel': async ({ level }, _a, m) => (forWin(m).setLevel(level), true),
     'win.setAllSpaces': async ({ enabled }, _a, m) => (forWin(m).setAllSpaces(enabled), true),
-    'app.selectedText': async () => app.selectedText(),
-    'app.otherWindows': async () => app.otherWindows(),
-    'app.moveWindow': async ({ pid, ...rect }) => app.moveWindow(pid, rect),
+    'macos.selectedText': async () => (macosOnly('selectedText'), app.macos.selectedText()),
+    'macos.otherWindows': async () => (macosOnly('otherWindows'), app.macos.otherWindows()),
+    'macos.moveWindow': async ({ pid, ...rect }) => (macosOnly('moveWindow'), app.macos.moveWindow(pid, rect)),
     'tray.position': async () => app.tray.position(),
     'win.printToPDF': async ({ path }) => app.printToPDF(path),
     'app.icon': async ({ path }) => app.icon(path),
     'system.battery': async () => app.system.battery(),
     'system.wifi': async () => app.system.wifi(),
     'app.spotlight': async ({ query: q }) => app.spotlight(q),
-    'ai.availability': async () => app.ai.availability(),
-    'ai.generate': async ({ prompt, instructions }) => app.ai.generate(prompt, { instructions }),
+    'macos.ai.availability': async () => (macosOnly('ai.availability'), app.macos.ai.availability()),
+    'macos.ai.generate': async ({ prompt, instructions }) => (macosOnly('ai.generate'), app.macos.ai.generate(prompt, { instructions })),
     'win.setPosition': async ({ x, y }, _a, m) => (forWin(m).setPosition(x, y), true),
     'win.open': async ({ id: wid, ...opts }) => (app.openWindow(wid, opts), true),
     'win.close': async ({ id: wid }, _a, m) => {
@@ -1541,7 +1541,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'theme.get': async () => lastTheme,
     'app.info': async () => app.info,
     'system.info': async () => systemInfo(),
-    'system.capabilities': async () => systemCapabilities(query, () => app.ai.availability()),
+    'system.capabilities': async () => systemCapabilities(query, () => app.macos.ai.availability()),
     'system.requirements': async ({ ids, refresh } = {}) => systemRequirements(ids, refresh),
     'app.screens': async () => app.screens(),
     'app.paths': async () => app.paths,
@@ -1562,15 +1562,15 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'macos.quickLook': async ({ paths }) => (macosOnly('quickLook'), app.macos.quickLook(paths)),
     'app.captureScreen': async ({ screenId }) => app.captureScreen(screenId),
     'app.pickColor': async () => app.pickColor(),
-    'app.ocr': async ({ path }) => app.ocr(path),
+    'macos.ocr': async ({ path }) => (macosOnly('ocr'), app.macos.ocr(path)),
     'app.thumbnail': async ({ path, size }) => app.thumbnail(path, size ?? 256),
     'secrets.get': async ({ key }) => app.secrets.get(key),
     'secrets.set': async ({ key, value }) => app.secrets.set(key, value),
     'secrets.delete': async ({ key }) => app.secrets.delete(key),
     'app.authenticate': async ({ reason }) => app.authenticate(reason),
     'macos.applescript': async ({ source }) => (macosOnly('applescript'), app.macos.applescript(source)),
-    'record.start': async (opts) => app.recorder.start(opts),
-    'record.stop': async () => app.recorder.stop(),
+    'macos.recorder.start': async (opts) => (macosOnly('recorder.start'), app.macos.recorder.start(opts)),
+    'macos.recorder.stop': async () => (macosOnly('recorder.stop'), app.macos.recorder.stop()),
     'nowplaying.set': async (info) => app.nowPlaying.set(info),
     'nowplaying.clear': async () => app.nowPlaying.clear(),
     'app.say': async ({ text, voice, rate }) => app.say(text, { voice, rate }),

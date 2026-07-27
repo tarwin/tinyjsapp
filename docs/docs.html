@@ -875,11 +875,16 @@ if (await <b>tiny.app.authenticate</b>('unlock the vault')) { … }</pre>
 
   <section id="superpowers">
     <h2>macOS only <span class="tag">no equivalent elsewhere</span></h2>
-    <p class="note">Two different kinds of macOS-only live here. The
-    <code>tiny.macos.*</code> namespace is for concepts the other OSes don't
-    have <em>at all</em> — those reject off macOS, deliberately. The rest are
-    ordinary <code>tiny.app</code> calls that simply aren't built elsewhere
-    yet, and answer <code>'unsupported'</code> until they are.</p>
+    <p class="note">Everything macOS-only now lives in
+    <code>tiny.macos.*</code>, and calling any of it off macOS <b>rejects</b>
+    with the reason rather than resolving something empty — a call that can
+    never work there is a bug in the app, not a missing feature. Guard with
+    <code>tiny.system.isMacOS()</code>, or gate on
+    <code>tiny.system.capabilities()</code>.</p>
+    <p class="note">If one of these later grows a Windows or Linux
+    implementation it moves back to <code>tiny.app</code>, keeping the
+    <code>tiny.macos</code> name working alongside it for a release or two —
+    so a rename in that direction won't break anything overnight.</p>
     <pre><i>// AppleScript in-process — control Music, Spotify, Finder, anything</i>
 <i>// scriptable; no osascript spawn, same 'automation' permission</i>
 await <b>tiny.macos.applescript</b>('tell application "Music" to playpause');
@@ -888,14 +893,15 @@ await <b>tiny.macos.applescript</b>('tell application "Music" to playpause');
 <b>tiny.macos.quickLook</b>('/path/photo.heic');
 
 
-<i>// ---- not built elsewhere YET (answer 'unsupported', not reject) ----</i>
 <i>// on-device OCR (Vision) — captureScreen + this = screenshot-to-text</i>
-const { text, blocks } = await <b>tiny.app.ocr</b>('/path/scan.png');
+const { text, blocks } = await <b>tiny.macos.ocr</b>('/path/scan.png');
 <i>// blocks: [{ text, confidence, box }] — box normalized 0..1, top-left</i>
 
+<i>// share stays on tiny.win — it anchors to a specific window, and</i>
+<i>// window-scoped calls belong on the window namespace even when macOS-only</i>
 await <b>tiny.win.share</b>({ url });        <i>// native share sheet, anchored in the window</i>
-await <b>tiny.app.recorder.start</b>({ path }); <i>// screen recording to .mp4</i>
-await <b>tiny.app.selectedText</b>();        <i>// text selected in the front app</i></pre>
+await <b>tiny.macos.recorder.start</b>({ path }); <i>// screen recording to .mp4</i>
+await <b>tiny.macos.selectedText</b>();        <i>// text selected in the front app</i></pre>
   </section>
 
   <section id="media">
@@ -926,8 +932,8 @@ await <b>tiny.app.say</b>('Export finished', { voice: voices[0].id, rate: 0.5 })
 
 <i>// record a display to an .mp4 (SCStream → H.264; video only for now).</i>
 <i>// Needs the 'screen' permission + macOS 14; one recording at a time.</i>
-await <b>tiny.app.recorder.start</b>({ path: '/tmp/demo.mp4' });  <i>// screenId optional</i>
-const { path, duration } = await <b>tiny.app.recorder.stop</b>();  <i>// finalized file</i></pre>
+await <b>tiny.macos.recorder.start</b>({ path: '/tmp/demo.mp4' });  <i>// screenId optional</i>
+const { path, duration } = await <b>tiny.macos.recorder.stop</b>();  <i>// finalized file</i></pre>
   </section>
 
   <section id="windowfx">
@@ -945,11 +951,11 @@ const { path, duration } = await <b>tiny.app.recorder.stop</b>();  <i>// finaliz
 <i>// macOS and X11 only — a no-op on Windows, and Wayland has no equivalent.</i>
 
 <i>// grab the text selected in ANY app — PopClip-style popovers (Accessibility)</i>
-const sel = await <b>tiny.app.selectedText</b>();   <i>// string | null</i>
+const sel = await <b>tiny.macos.selectedText</b>();   <i>// string | null</i>
 
 <i>// arrange other apps' windows — Rectangle/Magnet territory (Accessibility)</i>
-const wins = await <b>tiny.app.otherWindows</b>();  <i>// [{ app, pid, title, x,y,w,h }]</i>
-await <b>tiny.app.moveWindow</b>(wins[0].pid, { x: 0, y: 0, width: 1280, height: 800 });
+const wins = await <b>tiny.macos.otherWindows</b>();  <i>// [{ app, pid, title, x,y,w,h }]</i>
+await <b>tiny.macos.moveWindow</b>(wins[0].pid, { x: 0, y: 0, width: 1280, height: 800 });
 
 <i>// anchor a dropdown window under the tray icon</i>
 const spot = await <b>tiny.tray.position</b>();     <i>// { x, y, width, height } | null</i>
@@ -969,8 +975,8 @@ const docs = await <b>tiny.app.spotlight</b>('quarterly report');
 
 <i>// on-device LLM — Apple's FoundationModels (offline, no API key, private).</i>
 <i>// Needs macOS 26 + Apple Intelligence on; guard on availability().</i>
-if (await <b>tiny.app.ai.availability</b>() === 'available')
-  await <b>tiny.app.ai.generate</b>('Summarise: ' + text, { instructions: 'Be terse.' });</pre>
+if (await <b>tiny.macos.ai.availability</b>() === 'available')
+  await <b>tiny.macos.ai.generate</b>('Summarise: ' + text, { instructions: 'Be terse.' });</pre>
   </section>
 
   <section id="system">

@@ -457,6 +457,32 @@
       applescript: (source) => call('macos.applescript', { source }),
       // Quick Look panel for path(s); quickLook() closes it.
       quickLook: (paths) => call('macos.quickLook', { paths }),
+      // On-device OCR -> { text, blocks: [{ text, confidence, box }] }
+      // (box normalized 0..1, top-left origin).
+      ocr: (path) => call('macos.ocr', { path }),
+      // Record a display to an .mp4. start({ screenId?, path }) resolves
+      // once capturing; stop() -> { path, duration }. Needs the 'screen'
+      // permission + macOS 14; rejects otherwise. Video only, one at a time.
+      recorder: {
+        start: (opts) => call('macos.recorder.start', opts ?? {}),
+        stop: () => call('macos.recorder.stop'),
+      },
+      // On-device LLM (FoundationModels; offline, no key). Needs macOS 26 and
+      // Apple Intelligence switched on — check ai.availability() first,
+      // always; 'unsupported' also covers a launcher built without it.
+      ai: {
+        // 'available' | 'unavailable' | 'unsupported'
+        availability: () => call('macos.ai.availability'),
+        // generate(prompt, { instructions }) -> completion text; throws.
+        generate: (prompt, opts) => call('macos.ai.generate', { prompt, ...(opts ?? {}) }),
+      },
+      // Text selected in the frontmost app (Accessibility) — null if none.
+      selectedText: () => call('macos.selectedText'),
+      // Other apps' on-screen windows (Accessibility): [{ app, bundleId,
+      // pid, title, index, x, y, width, height }] | null if not granted.
+      otherWindows: () => call('macos.otherWindows'),
+      // Move/resize another app's frontmost window (pid from otherWindows()).
+      moveWindow: (pid, rect) => call('macos.moveWindow', { pid, ...(rect ?? {}) }),
     },
 
     // Native dialogs, run by the launcher — NSOpenPanel / NSAlert on macOS,
@@ -563,22 +589,6 @@
       frontmostApp: () => call('app.frontmost'),
       // Find files by name/content (Spotlight) -> up to 100 paths.
       spotlight: (query) => call('app.spotlight', { query }),
-      // On-device LLM (FoundationModels; offline, no key). Needs macOS 26 and
-      // Apple Intelligence switched on — check ai.availability() first,
-      // always; 'unsupported' also covers a launcher built without it.
-      ai: {
-        // 'available' | 'unavailable' | 'unsupported'
-        availability: () => call('ai.availability'),
-        // generate(prompt, { instructions }) -> completion text; throws.
-        generate: (prompt, opts) => call('ai.generate', { prompt, ...(opts ?? {}) }),
-      },
-      // Text selected in the frontmost app (Accessibility) — null if none.
-      selectedText: () => call('app.selectedText'),
-      // Other apps' on-screen windows (Accessibility): [{ app, bundleId,
-      // pid, title, index, x, y, width, height }] | null if not granted.
-      otherWindows: () => call('app.otherWindows'),
-      // Move/resize another app's frontmost window (pid from otherWindows()).
-      moveWindow: (pid, rect) => call('app.moveWindow', { pid, ...(rect ?? {}) }),
       // The system alert beep — the one portable sound, everywhere.
       beep: () => call('sound.play', {}),
       // playSound(target) -> false if the name/file didn't load. `target` is:
@@ -598,9 +608,6 @@
       // System eyedropper (no screen-recording permission!) -> '#rrggbb'
       // or null on cancel.
       pickColor: () => call('app.pickColor'),
-      // On-device OCR -> { text, blocks: [{ text, confidence, box }] }
-      // (box normalized 0..1, top-left origin).
-      ocr: (path) => call('app.ocr', { path }),
       // Thumbnail png for ANY file type -> { path, width, height };
       // size = bounding box in points (rendered @2x).
       thumbnail: (path, size) => call('app.thumbnail', { path, size }),
@@ -613,13 +620,6 @@
       },
       // Touch ID / account-password sheet -> true | false (false = cancel).
       authenticate: (reason) => call('app.authenticate', { reason }),
-      // Record a display to an .mp4. start({ screenId?, path }) resolves
-      // once capturing; stop() -> { path, duration }. Needs the 'screen'
-      // permission + macOS 14; rejects otherwise. Video only, one at a time.
-      recorder: {
-        start: (opts) => call('record.start', opts ?? {}),
-        stop: () => call('record.stop'),
-      },
       // Now Playing (Control Center / lock screen) + media keys. set() arms
       // the keys; presses arrive via onMediaKey.
       nowPlaying: {

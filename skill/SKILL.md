@@ -79,13 +79,13 @@ TCC flow (Windows answers 'granted'), `quickLook`, `recorder`, `pickColor`,
 `ocr`, `authenticate`, `applescript`, `nowPlaying`/media keys,
 `selectedText`/`otherWindows`/`moveWindow`, `share`,
 `app.badge`/`app.icon`/`app.presence`, `setAllSpaces`, `wifi`, `spotlight`,
-`tiny.app.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
+`tiny.macos.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
 Not supported on Linux (reject or answer `'unsupported'`/`null` — always
 feature-detect): `recorder`, `ocr`, `app.badge` (`app.icon`/`app.presence`
 do work), the whole `tiny.macos.*` namespace,
 `share`, `wifi`, `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
-`authenticate`, `tiny.app.ai`, `setAllSpaces` (maps to sticky windows
+`authenticate`, `tiny.macos.ai`, `setAllSpaces` (maps to sticky windows
 instead of true per-Space follow). These fail cleanly — capability calls
 reject with a specific reason, query calls resolve `null`, fire-and-forget
 ones no-op — so nothing hangs. (`spotlight` DOES work: name search via
@@ -427,7 +427,7 @@ await tiny.app.captureScreen(screenId?);  // -> { path (png, yours), width,
 
 await tiny.app.pickColor();     // system eyedropper (NO screen-recording
                                 // perm) -> '#rrggbb' | null on cancel
-await tiny.app.ocr(pngPath);    // on-device Vision OCR -> { text, blocks:
+await tiny.macos.ocr(pngPath);    // on-device Vision OCR -> { text, blocks:
                                 // [{text, confidence, box (0..1 top-left)}] }
 // OCR transcribes, it doesn't photocopy: lookalike glyphs get normalised
 // (a '·' comes back '•'), so don't test with string equality. And give the
@@ -467,17 +467,17 @@ tiny.app.onNotificationAction(({ id, action, reply }) => …);  // reply=text
 // backend exports: onMediaKey(info, app), onNotificationAction(info, app)
 // record a display to .mp4 (SCStream→H.264, video only; 'screen' perm +
 // macOS 14; one at a time)
-await tiny.app.recorder.start({ path, screenId });  // resolves once capturing
-const { path, duration } = await tiny.app.recorder.stop();
+await tiny.macos.recorder.start({ path, screenId });  // resolves once capturing
+const { path, duration } = await tiny.macos.recorder.stop();
 
 // window superpowers (overlays/HUDs/pets/cross-Space palettes)
 tiny.win.setClickThrough(true);   // mouse events pass through
 tiny.win.setLevel('overlay');     // 'normal'|'floating'|'overlay'|'desktop'
 tiny.win.setAllSpaces(true);      // follow across Spaces + over fullscreen
 // AX (Accessibility perm): grab selection anywhere + arrange other windows
-await tiny.app.selectedText();    // string | null (frontmost app's selection)
-await tiny.app.otherWindows();    // [{ app, pid, title, x,y,width,height }]|null
-await tiny.app.moveWindow(pid, { x, y, width, height });  // resolves true/throws
+await tiny.macos.selectedText();    // string | null (frontmost app's selection)
+await tiny.macos.otherWindows();    // [{ app, pid, title, x,y,width,height }]|null
+await tiny.macos.moveWindow(pid, { x, y, width, height });  // resolves true/throws
 await tiny.tray.position();       // { x,y,width,height }|null (anchor dropdowns)
 // deep-Mac citizen
 await tiny.win.printToPDF(path);  // -> { path } (vector PDF; invoices/reports)
@@ -488,8 +488,8 @@ await tiny.app.spotlight(query);  // find files by name/content -> up to 100 pat
 // on-device LLM (Apple FoundationModels; offline, no key). Needs macOS 26 +
 // Apple Intelligence ON at runtime, so ALWAYS guard on availability() —
 // three states, and only 'available' can generate.
-if (await tiny.app.ai.availability() === 'available')   // |'unavailable'|'unsupported'
-  await tiny.app.ai.generate(prompt, { instructions }); // instructions = system prompt
+if (await tiny.macos.ai.availability() === 'available')   // |'unavailable'|'unsupported'
+  await tiny.macos.ai.generate(prompt, { instructions }); // instructions = system prompt
 
 tiny.win.print();                           // native print panel
 

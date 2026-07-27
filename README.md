@@ -542,7 +542,7 @@ const { path, width, height } = await tiny.app.captureScreen();
 const color = await tiny.app.pickColor();
 
 // on-device OCR (Vision) — screenshot-to-text is captureScreen + this
-const { text, blocks } = await tiny.app.ocr('/path/scan.png');
+const { text, blocks } = await tiny.macos.ocr('/path/scan.png');
 // blocks: [{ text, confidence, box }] — box normalized 0..1, top-left
 
 // a thumbnail png for ANY path — file browsers stop caring about formats.
@@ -597,9 +597,9 @@ tiny.app.onNotificationAction(({ id, action, reply }) => {
 
 // record a display to an .mp4 (SCStream → H.264; video only for now).
 // Needs the 'screen' permission + macOS 14; one recording at a time.
-await tiny.app.recorder.start({ path: '/tmp/demo.mp4' });   // screenId optional
+await tiny.macos.recorder.start({ path: '/tmp/demo.mp4' });   // screenId optional
 // … later …
-const { path, duration } = await tiny.app.recorder.stop();  // finalized file
+const { path, duration } = await tiny.macos.recorder.stop();  // finalized file
 
 // window superpowers — overlays, HUDs, desktop pets, palettes that follow
 // you across Spaces. clickThrough lets mouse events pass through the window.
@@ -610,11 +610,11 @@ tiny.win.setAllSpaces(true);                 // follow across every Space
 // (backend: app.setClickThrough/setLevel/setAllSpaces + app.window(id).*)
 
 // grab the text selected in ANY app (PopClip-style popovers; Accessibility)
-const sel = await tiny.app.selectedText();   // string | null
+const sel = await tiny.macos.selectedText();   // string | null
 
 // arrange other apps' windows (Rectangle/Magnet; Accessibility)
-const wins = await tiny.app.otherWindows();  // [{ app, pid, title, x,y,w,h }]
-await tiny.app.moveWindow(wins[0].pid, { x: 0, y: 0, width: 1280, height: 800 });
+const wins = await tiny.macos.otherWindows();  // [{ app, pid, title, x,y,w,h }]
+await tiny.macos.moveWindow(wins[0].pid, { x: 0, y: 0, width: 1280, height: 800 });
 
 // anchor a dropdown under the tray icon
 const spot = await tiny.tray.position();     // { x, y, width, height } | null
@@ -637,8 +637,8 @@ const docs = await tiny.app.spotlight('quarterly report');
 // on-device LLM — Apple's FoundationModels (offline, no API key, private).
 // Needs macOS 26 AND Apple Intelligence switched on, so ALWAYS check
 // availability() first — three states, and only one of them can generate.
-if (await tiny.app.ai.availability() === 'available') {
-  const reply = await tiny.app.ai.generate('Summarise this in one line: ' + text,
+if (await tiny.macos.ai.availability() === 'available') {
+  const reply = await tiny.macos.ai.generate('Summarise this in one line: ' + text,
     { instructions: 'You are terse.' });   // instructions = a system prompt
 }
 
@@ -1245,13 +1245,13 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
   not something to ship. Easy to foot-gun yourself (or a site's users) with;
   reach for it only when you know exactly why.
 
-### On-device AI (`tiny.app.ai`)
+### On-device AI (`tiny.macos.ai`)
 
-`tiny.app.ai.generate()` runs Apple's FoundationModels LLM locally — offline,
+`tiny.macos.ai.generate()` runs Apple's FoundationModels LLM locally — offline,
 no API key, fully private.
 
 **Released macOS tarballs include it.** The release workflow builds on a
-`macos-26` runner with the Swift shim linked in, so `tiny.app.ai` is a
+`macos-26` runner with the Swift shim linked in, so `tiny.macos.ai` is a
 feature you can ship, not one users have to build for themselves.
 
 `./setup.sh` does the same for a source build: it links the shim in when the
@@ -1268,8 +1268,8 @@ guarding is not optional: the honest states are *available*, *unavailable*
 the first one can generate anything.
 
 ```js
-if (await tiny.app.ai.availability() === 'available')
-  await tiny.app.ai.generate(prompt, { instructions });
+if (await tiny.macos.ai.availability() === 'available')
+  await tiny.macos.ai.generate(prompt, { instructions });
 ```
 
 The release build asserts what makes that safe, per architecture, because
@@ -1395,11 +1395,54 @@ Not (yet) supported:
 - `app.badge` (no freedesktop standard) and `attention({critical: true})`,
   `share`
 - `wifi`, `selectedText`, `otherWindows`, `moveWindow`, `frontmostApp`
-- `authenticate`, `tiny.app.ai`
+- `authenticate`, `tiny.macos.ai`
 - `setAllSpaces` — maps onto sticky windows rather than true per-Space
   follow
 
 Burn-down list with implementation notes: [TODO-linux.md](TODO-linux.md).
+
+## Future explorations
+
+Nothing here is planned work — these are directions worth measuring, mostly
+aimed at the same thing: the ~6 MB a shipped app costs today, of which
+`bin/tjs` is 5.6 MB and the launcher ~380 KB.
+
+### A slimmer txiki.js
+
+txiki.js already exposes build flags for the parts we don't all need:
+`BUILD_WITH_WASM=OFF` (~0.4 MB) and `BUILD_WITH_SQLITE=OFF` (~1.5 MB),
+plus `BUILD_WITH_STRIP`/`BUILD_WITH_LTO`/`BUILD_WITH_GC_SECTIONS` and
+`BUILDTYPE=MinSizeRel`, which cut size without dropping features
+([docs](https://txikijs.org/docs/building/#optional-features)). The
+[tjs-lite discussion](https://github.com/saghul/txiki.js/discussions/954)
+reports 6.4 MB → 3.31 MB with WASM/SQLite/TLS out, and ~2.15 MB with the
+optimization flags stacked on top, for a 7–8% faster start.
+
+`setup.sh` can already build from source (`TJS_BUILD=1`), so this is
+mostly a matter of picking flags and re-measuring. The catches: we
+document `tjs:sqlite` as the backend database story, so dropping it is an
+API break rather than a size win; dropping TLS would take `tiny.fetch` to
+https, `proxyURL`, and auto-update with it; and `MinSizeRel` trades
+compute-heavy JS throughput for bytes. A likely first cut is
+WASM-off + strip/LTO/gc-sections, keeping SQLite and TLS — worth building
+and timing against the numbers above rather than assuming they transfer.
+
+### scriptc as a backend
+
+[scriptc](https://github.com/vercel-labs/scriptc) (Vercel Labs) compiles
+TypeScript straight to a native binary with no JS engine bundled: ~170–200 KB
+static, ~2.4 ms startup, 1–4 MB RSS, with an embedded QuickJS (~620 KB)
+available under `--dynamic` for the parts that need real dynamic
+evaluation. It covers a useful slice of Node's surface (fs, path, process,
+crypto, child_process, net/http/https/tls, dgram, dns, fetch).
+
+For tinyjs that would mean a `bridge.js` rewritten in TypeScript against
+scriptc's APIs, shipping a launcher plus a sub-megabyte backend. The
+unknowns are whether tjs-specific pieces (`tjs.listen('pipe', …)`, `tjs.spawn`
+stdio, FFI, `tjs app compile` as the packaging step) have equivalents that
+hold up, and what a user's own `src/main.js` becomes — today it's plain JS
+run by a real engine, and static compilation is a different contract. It's a
+research spike, not a port.
 
 ## Credits
 
