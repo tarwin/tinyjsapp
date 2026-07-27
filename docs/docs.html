@@ -858,9 +858,17 @@ await <b>tiny.app.secrets.set</b>('api-token', 'abc123');
 await <b>tiny.app.secrets.get</b>('api-token');     <i>// string | null</i>
 await <b>tiny.app.secrets.delete</b>('api-token');
 
+<i>// set replaces (never duplicates), delete of a key that was never</i>
+<i>// there still resolves true, and an unsaved key reads back as null</i>
+
 <i>// Touch ID / Windows Hello / the account-password sheet</i>
 <i>// (no Linux equivalent yet — capabilities().authenticate says so)</i>
 if (await <b>tiny.app.authenticate</b>('unlock the vault')) { … }</pre>
+    <p class="note">On macOS the keychain's ACL names the <em>binary</em> that
+    wrote the value, so a secret saved while running under
+    <code>tinyjs dev</code> makes the built app prompt the first time it reads
+    it — and rebuilding the app changes its signature, so it prompts again.
+    Real users never see this; you will, while developing.</p>
   </section>
 
   <section id="superpowers">

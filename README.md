@@ -554,8 +554,14 @@ const thumb = await tiny.app.thumbnail('/path/file.psd', 256);
 await tiny.app.secrets.set('api-token', 'abc123');
 const tok = await tiny.app.secrets.get('api-token');   // string | null
 await tiny.app.secrets.delete('api-token');
+// set replaces rather than duplicating; delete of a key that was never
+// there still resolves true. On macOS the keychain ACL names the binary
+// that wrote the value, so a secret saved under `tinyjs dev` makes the
+// BUILT app prompt once when it first reads it (a dev-only annoyance).
 
-// Touch ID (or the account-password sheet) — "the user proved it's them"
+// Touch ID (or the account-password sheet) — "the user proved it's them".
+// false covers cancel AND unavailable, and Linux has no owner check at
+// all, so it answers false there — a gate on this fails closed.
 if (await tiny.app.authenticate('unlock the vault')) { /* … */ }
 
 // AppleScript in-process — control Music, Spotify, Finder, any scriptable

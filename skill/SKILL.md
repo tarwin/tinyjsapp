@@ -425,8 +425,15 @@ await tiny.app.thumbnail(path, size?);  // preview png for ANY file type ->
 await tiny.app.secrets.get(key);        // Keychain (keytar role): tokens go
 await tiny.app.secrets.set(key, value); // here, NEVER in tiny.store;
 await tiny.app.secrets.delete(key);     // get -> string | null
-await tiny.app.authenticate(reason);    // Touch ID / password sheet ->
-                                        // true | false (false = cancel)
+// set replaces (no duplicate items); delete of an absent key -> true; an
+// unsaved key reads null, not a throw. dev gotcha: macOS files the keychain
+// ACL against the BINARY that wrote the value, so a secret saved by
+// `tinyjs dev` prompts once when the built app first reads it.
+await tiny.app.authenticate(reason);    // Touch ID / Windows Hello / password
+                                        // sheet -> true | false. false covers
+// cancel AND unavailable, and Linux has no owner check at all (polkit
+// authorizes actions, not identity) so it answers false there — gate on it and
+// the gate fails closed.
 await tiny.macos.applescript(src);      // in-process, no osascript spawn;
                                 // 'automation' TCC; -> result string | null,
                                 // rejects with the script error

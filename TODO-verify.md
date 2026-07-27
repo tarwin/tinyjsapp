@@ -306,6 +306,54 @@ TODO-linux.md).
       re-placed sixty times a second is still taking mouse events — so it wants
       an eye on it.
 
+- [ ] **`app.authenticate` — the sheet itself** — the deck's System ▸ Secrets &
+      permission *Unlock and reveal the token*. Driven on macOS 2026-07-27 as
+      far as a script can go: `LAContext` accepts the policy even for an
+      **unbundled dev binary**, and the call sits pending with the sheet up
+      rather than resolving. Not verified: that a **pass** resolves `true` and
+      reveals the value, that **cancel** comes back `false` and not a throw,
+      and that the reason string passed in is the line the sheet actually
+      shows. All three need a finger on the sensor.
+- [ ] **`permissions.request('screen')` / `('accessibility')`** — same card.
+      `check()` is fully driven (see below); `request()` is not, because both
+      buttons put system UI on screen. Worth watching for one specific thing:
+      **accessibility can't prompt** once denied, so macOS opens System
+      Settings instead — and the status only changes on the *next launch*, so
+      a re-check right after ticking the box still says `denied`. That is
+      correct behaviour that looks exactly like a bug.
+
+## Secrets & permissions off macOS — never run there
+
+Driven on macOS 2026-07-27 (kitchen-sink, System ▸ Secrets & permission):
+`secrets` set→get→delete→get round-trips, `set` replaces rather than
+duplicating, `delete` of an absent key resolves `true`, an unsaved key reads
+`null`, 4 KB of emoji survives intact, an empty string comes back as `''` (not
+null), and the item lands in the login keychain as a generic password with
+service = the app id. `permissions.check` answered granted/denied/undetermined/
+unsupported across all seven names without a prompt. None of that was run
+elsewhere:
+
+- [ ] **Windows — `secrets` against Credential Manager.** Same round trip. The
+      replace semantics are the ones to watch: macOS gets them from an explicit
+      `SecItemDelete` before `SecItemAdd`, so check Windows doesn't end up with
+      two entries under one key. Also confirm an unsaved key gives `null`
+      rather than an error, since that's the branch every caller writes.
+- [ ] **Windows — `authenticate` via Windows Hello.** `CheckAvailabilityAsync`
+      short-circuits to `false` on a machine with no Hello enrolled — check
+      that path *and* a real verification, and that neither hangs the promise.
+- [ ] **Windows — `permissions.check`.** Expect `granted` for the five known
+      names (there is no TCC) and `unsupported` for anything else, including
+      `automation:*`. The deck's summary line is written to say "nothing here
+      is gated" when everything is unsupported; watch it say the right thing.
+- [ ] **Linux — `secrets` against the Secret Service.** The one with real
+      failure modes: with no keyring daemon running the launcher answers
+      `no secret service`, and the deck should show that as an error rather
+      than an empty value. Check a locked keyring too — GNOME prompts to
+      unlock, and it's worth knowing whether that blocks the call or fails.
+- [ ] **Linux — `authenticate` answers `false`.** Deliberate: no portable owner
+      check exists, so the gate fails closed. The card claims this in prose;
+      confirm the button actually says so rather than looking broken.
+
 ## Window sizes are the page's box now — Windows and Linux unbuilt
 
 The 0.30.0 size contract (`win.open`'s `size`, `setSize`, `setMinSize` and

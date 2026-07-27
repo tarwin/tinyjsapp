@@ -1082,7 +1082,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     },
     // Keychain-backed secrets (generic passwords under the app id) — the
     // keytar/safeStorage role. Values survive reinstalls; never store
-    // tokens in tiny.store when this exists.
+    // tokens in tiny.store when this exists. set() replaces rather than
+    // duplicating; delete() of a key that was never there still resolves
+    // true; an unsaved key reads back null, not an error. macOS files the
+    // ACL against the binary that wrote it, so a value saved by `tinyjs
+    // dev` prompts once when the BUILT app first reads it.
     secrets: {
       async get(key) {
         const r = await ask('SECRET', 'get\t' + esc(id || 'tinyjs-app') + '\t' + esc(key));
