@@ -402,6 +402,15 @@ features, not bugs.
       AT-SPI (for selectedText) on **X11 sessions only**; nothing portable on
       Wayland (by design — apps can't see each other). Low value on a
       Wayland-default desktop. Currently all resolve `null` / reject cleanly.
+- [ ] **`win.dragOut` — no drag source at all.** `DRAGOUT` is unhandled in
+      `launcher-linux.cc`, so dragging files *out* of an app (onto a file
+      manager, a mail compose window) silently does nothing, while `onDrop` —
+      the inbound direction — works. The bridge sends the same line as on the
+      other two platforms; it needs a GTK drag source on the WebView offering
+      `text/uri-list`, started from the page's mousedown via
+      `gtk_drag_begin_with_coordinates`. Portable across X11 and Wayland, so
+      no session split. Surfaced in the kitchen-sink deck (Storage ▸ Files),
+      which says outright that Linux can't do it yet.
 - [ ] **ocr / thumbnail (non-image files) / quickLook** — no clean system
       equivalents. `thumbnail` already scales images via GdkPixbuf; extending
       to arbitrary types could use the `org.freedesktop.thumbnails.Thumbnailer1`

@@ -193,6 +193,37 @@ To check: a frameless window, drag it by a `data-tiny-drag` region and by a
 satellite's own handle; then drag each of the eight edge grips and confirm the
 right edge moves (a wrong `HT*` mapping resizes the opposite side).
 
+## macOS — `win.startResize` needs a real mouse too
+
+Implemented 2026-07-26 (`do_resizewin`), and the *guards* are verified: called
+with no button held it returns in ~1 ms, resizes nothing and leaves the app
+alive (driven through the kitchen-sink deck's App ▸ Frameless handles). What
+is NOT verified is the gesture itself, because AppKit has nothing to hand it
+to — unlike `WM_NCLBUTTONDOWN` and `gtk_window_begin_resize_drag`, the launcher
+runs its own modal tracking loop, so the arithmetic is ours to get wrong.
+
+To check, by hand, on the deck's App ▸ Frameless card: drag the ◢ grip and
+each of the eight edge chips. Watch for (a) the *opposite* edge staying put —
+AppKit's origin is bottom-left, so north moves the height alone while south
+moves origin and height together, and a sign error there drags the window
+across the screen; (b) the clamp at `setMinSize`'s floor holding the anchored
+edge still rather than walking; (c) `setResizable(false)` refusing the gesture
+while the app's own `setSize` keeps working.
+
+`startDrag` on macOS is the AppKit `performWindowDragWithEvent:` path and has
+been in use via `data-tiny-drag` all along; only the `DRAGWIN@<id>` satellite
+form is new and unwatched.
+
+## macOS / Windows — `win.dragOut` needs a real drop
+
+`dragOut` starts a real `NSDraggingSession` (macOS) / OLE drag (Windows) and
+finishes in *another application*, so nothing headless can observe the result.
+The kitchen-sink deck now offers it on Storage ▸ Files (press a file and drag
+it out of the list); the call and its threshold are verified, the drop is not.
+Check that Finder receives the actual file rather than a copy of the bytes,
+and that a multi-file drag cascades its icons. There is no Linux drag source
+at all yet — `DRAGOUT` is unhandled in `launcher-linux.cc`.
+
 ## Windows-only
 
 - [ ] `app.badge` — **written 2026-07-26 on macOS, never run on Windows.**

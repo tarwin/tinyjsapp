@@ -107,8 +107,11 @@
 //                                                    window chrome ('' = keep;
 //                                                    0|1 flags; vibrancy =
 //                                                    material name | none)
-//                         DRAGWIN                    start a native window drag
+//                         DRAGWIN[@win]              start a native window drag
 //                                                    (page drag regions)
+//                         RESIZEWIN[@win] <edge>     start a resize from an
+//                                                    edge (n/ne/e/se/s/sw/w/nw)
+//                                                    for a page-drawn grip
 //                         DRAGOUT[@win] <image>\t<path>… start dragging real
 //                                                    files OUT of the window
 //                                                    (from a page mousedown;
@@ -407,6 +410,7 @@ struct SizeReq {
 static void reapply_window_overrides(webview_t w); // defined with chrome ops
 #ifdef __APPLE__
 static NSWindow *window_for_id(webview_t w, const std::string &id); // below
+static WKWebView *webview_for_id(webview_t w, const std::string &id); // below
 #endif
 
 static void do_size(webview_t w, void *arg) {
@@ -939,7 +943,9 @@ static void apply_tray(webview_t, void *arg) {
 
 // --- window ops (macOS) --------------------------------------------------------
 // WINOP hide | show | center | minimize | fullscreen | ontop 0|1 |
-//       resizable 0|1 | pos <x> <y> | presence 0|1 | hideonclose 0|1
+//       resizable 0|1 | pos <x> <y> | presence 0|1 | hideonclose 0|1 |
+//       clickthrough 0|1 | level <band> | allspaces 0|1 | minsize <W>x<H> |
+//       zoomfactor <f>
 
 static bool g_hide_on_close = false;
 
@@ -1070,6 +1076,35 @@ static void do_winop(webview_t w, void *arg) {
     } else if (*op == "allspaces 0") {
       win.collectionBehavior &= ~(NSWindowCollectionBehaviorCanJoinAllSpaces |
                                   NSWindowCollectionBehaviorFullScreenAuxiliary);
+    } else if (op->rfind("minsize ", 0) == 0) {
+      // win.setMinSize — a floor under user resizes. CONTENT size, not frame:
+      // the page lays out in CSS px and the title bar isn't part of that.
+      // AppKit only applies the floor to the next resize, so a window already
+      // below it would sit there looking like the call did nothing — pull it
+      // up now, keeping the top-left where the user left it.
+      int mw = 0, mh = 0;
+      if (std::sscanf(op->c_str() + 8, "%dx%d", &mw, &mh) == 2 && mw > 0 &&
+          mh > 0) {
+        win.contentMinSize = NSMakeSize(mw, mh);
+        NSSize cur = [win contentRectForFrameRect:win.frame].size;
+        if (cur.width < mw || cur.height < mh) {
+          NSRect want = NSMakeRect(0, 0, std::max((CGFloat)mw, cur.width),
+                                   std::max((CGFloat)mh, cur.height));
+          NSRect f = win.frame;
+          CGFloat top = NSMaxY(f);
+          f.size = [win frameRectForContentRect:want].size;
+          f.origin.y = top - f.size.height;
+          [win setFrame:f display:YES];
+        }
+      }
+    } else if (op->rfind("zoomfactor ", 0) == 0) {
+      // win.setZoom — native page zoom, so a "double size" mode stays crisp
+      // instead of scaling a bitmap. Distinct from the "zoom" op above, which
+      // is the green-button maximize. The page keeps laying out in CSS px.
+      double f = std::atof(op->c_str() + 11);
+      WKWebView *wv = webview_for_id(w, wr->win);
+      if (wv && f >= 0.25 && f <= 5.0)
+        wv.pageZoom = f;
     } else if (op->rfind("pos ", 0) == 0) {
       // Top-left origin in screen points (y grows downward, CSS-style).
       int x = 0, y = 0;
@@ -5087,16 +5122,123 @@ static void reapply_window_overrides(webview_t w) {
   }
 }
 
-static void do_dragwin(webview_t w, void *) {
-  NSWindow *win = (NSWindow *)webview_get_native_handle(
-      w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+static void do_dragwin(webview_t w, void *arg) {
+  std::string *wid = static_cast<std::string *>(arg);
+  NSWindow *win = window_for_id(w, *wid);
   NSEvent *ev = [NSApp currentEvent];
-  if (win && ev)
-    [win performWindowDragWithEvent:ev];
+  // performWindowDragWithEvent: wants a live mouse-down. A startDrag() that
+  // reaches here from anything else (a click handler, a stray call) would
+  // raise rather than no-op, so check before handing it over.
+  bool mouse_ok = ev && (ev.type == NSEventTypeLeftMouseDown ||
+                         ev.type == NSEventTypeLeftMouseDragged);
+  if (win && mouse_ok) {
+    @try {
+      [win performWindowDragWithEvent:ev];
+    } @catch (NSException *) {
+    }
+  }
+  delete wid;
+}
+
+// RESIZEWIN — begin a resize from an edge, for a handle the page drew itself.
+// Windows hands this to WM_NCLBUTTONDOWN and Linux to gtk_window_begin_resize_
+// drag; AppKit has no equivalent to hand it to, so we run the drag ourselves:
+// a modal event loop that reframes the window until the button comes up. It
+// blocks the main runloop exactly as long as the user holds the mouse, which
+// is what performWindowDragWithEvent: does for the drag case.
+struct ResizeReq {
+  std::string win, edge;
+};
+
+static void do_resizewin(webview_t w, void *arg) {
+  ResizeReq *r = static_cast<ResizeReq *>(arg);
+  @autoreleasepool {
+    NSWindow *win = window_for_id(w, r->win);
+    // The loop below waits on mouse events, so it must never start unless a
+    // button is actually held — a stray startResize() from a click handler
+    // would otherwise wait for a drag that never comes and freeze the app.
+    // (Windows' and GTK's begin-resize calls make the same demand; they just
+    // return instead of hanging.)
+    bool held = ([NSEvent pressedMouseButtons] & 1) != 0;
+    // setResizable(false) means the USER can't resize; the app's own setSize
+    // still can. A page-drawn grip is a user resize, so honour the lock.
+    if (held && win && (win.styleMask & NSWindowStyleMaskResizable)) {
+      const std::string &e = r->edge;
+      bool north = e.find('n') != std::string::npos;
+      bool south = e.find('s') != std::string::npos;
+      bool west = e.find('w') != std::string::npos;
+      bool east = e.find('e') != std::string::npos;
+      NSRect from = win.frame;
+      NSPoint anchor = [NSEvent mouseLocation];
+      // The floor set by minsize is a CONTENT size; compare in frame terms.
+      NSSize mc = win.contentMinSize;
+      NSSize floor_ =
+          [win frameRectForContentRect:NSMakeRect(0, 0, mc.width, mc.height)]
+              .size;
+      floor_.width = std::max(floor_.width, (CGFloat)120);
+      floor_.height = std::max(floor_.height, (CGFloat)80);
+      while (true) {
+        // Timed rather than blocking: if the mouse-up is ever missed (another
+        // app steals it, the gesture ends off-screen), a held-button re-check
+        // ends the loop instead of the window staying stuck to the pointer.
+        NSEvent *ev = [win nextEventMatchingMask:(NSEventMaskLeftMouseDragged |
+                                                  NSEventMaskLeftMouseUp)
+                                       untilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]
+                                          inMode:NSEventTrackingRunLoopMode
+                                         dequeue:YES];
+        if (!ev) {
+          if (([NSEvent pressedMouseButtons] & 1) == 0)
+            break;
+          continue;
+        }
+        if (ev.type == NSEventTypeLeftMouseUp)
+          break;
+        NSPoint now = [NSEvent mouseLocation];
+        CGFloat dx = now.x - anchor.x, dy = now.y - anchor.y;
+        // AppKit's origin is the BOTTOM-left, so the north edge moves the
+        // height alone and the south edge moves origin and height together.
+        NSRect f = from;
+        if (east)
+          f.size.width = from.size.width + dx;
+        if (west) {
+          f.origin.x = from.origin.x + dx;
+          f.size.width = from.size.width - dx;
+        }
+        if (north)
+          f.size.height = from.size.height + dy;
+        if (south) {
+          f.origin.y = from.origin.y + dy;
+          f.size.height = from.size.height - dy;
+        }
+        // Clamping has to leave the OPPOSITE edge where it was, or the window
+        // walks across the screen once the pointer passes the floor.
+        if (f.size.width < floor_.width) {
+          f.size.width = floor_.width;
+          if (west)
+            f.origin.x = NSMaxX(from) - floor_.width;
+        }
+        if (f.size.height < floor_.height) {
+          f.size.height = floor_.height;
+          if (south)
+            f.origin.y = NSMaxY(from) - floor_.height;
+        }
+        [win setFrame:f display:YES];
+      }
+    }
+  }
+  delete r;
 }
 #else
 static void do_chrome(webview_t, void *arg) { delete static_cast<ChromeReq *>(arg); }
-static void do_dragwin(webview_t, void *) {}
+static void do_dragwin(webview_t, void *arg) {
+  delete static_cast<std::string *>(arg);
+}
+struct ResizeReq {
+  std::string win, edge;
+};
+static void do_resizewin(webview_t, void *arg) {
+  delete static_cast<ResizeReq *>(arg);
+}
 static void reapply_window_overrides(webview_t) {}
 #endif
 
@@ -6161,8 +6303,26 @@ static void sock_read_loop() {
         req->square = p.size() > 4 ? p[4] : "";
         req->first_mouse = p.size() > 5 ? p[5] : "";
         webview_dispatch(g_w, do_chrome, req);
-      } else if (line == "DRAGWIN") {
-        webview_dispatch(g_w, do_dragwin, nullptr);
+      } else if (line.rfind("DRAGWIN", 0) == 0 &&
+                 (line.size() == 7 || line[7] == '@')) {
+        // DRAGWIN@<id> for satellites — the bare form was all that matched
+        // here, so a second window's own drag region moved nothing.
+        webview_dispatch(g_w, do_dragwin,
+                         new std::string(line.size() > 8 ? line.substr(8)
+                                                         : "main"));
+      } else if (line.rfind("RESIZEWIN", 0) == 0 && line.size() > 9 &&
+                 (line[9] == ' ' || line[9] == '@')) {
+        std::string winid = "main";
+        size_t body = 10;
+        if (line[9] == '@') {
+          size_t sp = line.find(' ', 10);
+          if (sp == std::string::npos)
+            continue;
+          winid = line.substr(10, sp - 10);
+          body = sp + 1;
+        }
+        webview_dispatch(g_w, do_resizewin,
+                         new ResizeReq{winid, line.substr(body)});
       } else if (line.rfind("CLIPWRITE ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(10));
         ClipWriteReq *req = new ClipWriteReq;

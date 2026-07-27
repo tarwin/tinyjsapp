@@ -299,6 +299,12 @@ tiny.win.startResize('se');   // 'n','ne','e','se','s','sw','w','nw' — for you
 tiny.win.setResizable(false);
 // setResizable(false) means the USER can't drag the edges — your own
 // setSize() still works, including shrinking to a titlebar for a shade view.
+tiny.win.setMinSize(900, 640);   // a FLOOR rather than a lock (win.open takes
+// the same as minSize: '900x640'). Same rule as above on macOS and Windows —
+// it binds the user, not your setSize; GTK clamps both.
+tiny.win.setZoom(2);   // native page zoom (0.25–5), rendered by the webview so
+// it stays crisp. The page keeps laying out in CSS px and just has fewer of
+// them — pair with setSize(w*2, h*2) for a real "double size" mode.
 
 // square corners (drop macOS's rounded window corners). This makes the
 // window BORDERLESS — square, no titlebar, no traffic lights — and is

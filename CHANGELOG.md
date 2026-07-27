@@ -146,6 +146,20 @@ deprecated.
 - **Windows `setZoom`, `setMinSize` and `startResize` implemented**;
   `startDrag` now honours the per-window `DRAGWIN@<id>` form, so a satellite's
   drag handle works. Frameless windows get the size they asked for.
+- **macOS `setZoom`, `setMinSize` and `startResize` implemented** — the same
+  three, missing on the other side. All three reached the launcher's op chain,
+  matched nothing and were dropped, so each resolved `true` and did nothing;
+  fire-and-forget window ops look identical whether they're unimplemented or
+  merely ineffective, which is how they stayed hidden while shipping as
+  cross-platform. `setMinSize` also pulls a window that's already under the new
+  floor back up to it, since AppKit otherwise applies `contentMinSize` only to
+  the *next* resize. `startResize` has no AppKit equivalent to hand off to
+  (Windows has `WM_NCLBUTTONDOWN`, GTK `begin_resize_drag`), so the launcher
+  runs the drag itself and refuses to start unless a button is really held —
+  the loop waits on mouse events, and one started without a live gesture would
+  hang the app. macOS `startDrag` likewise honours `DRAGWIN@<id>` now, and
+  checks for a live mouse-down first: `performWindowDragWithEvent:` raises on
+  anything else rather than no-oping.
 - **Windows stopped claiming `nowPlaying` and `haptic`**, which were no-ops.
 - **`tinyjs build` refreshes a stale launcher** the way `dev` already did, so a
   dev checkout can't ship a launcher predating its own sources — or silently

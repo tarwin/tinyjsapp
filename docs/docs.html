@@ -507,6 +507,12 @@ audio.play();</pre>
 <b>tiny.win.minimize</b>();   <b>tiny.win.restore</b>();
 <b>tiny.win.fullscreen</b>();  <b>tiny.win.setFullscreen</b>(bool);  <i>// toggle / absolute</i>
 <b>tiny.win.setAlwaysOnTop</b>(bool);  <b>tiny.win.setResizable</b>(bool);
+<i>// floor under USER resizes (win.open takes the same as minSize: '900x640').</i>
+<i>// Your own setSize still goes under it on macOS and Windows; GTK clamps both.</i>
+<b>tiny.win.setMinSize</b>(900, 640);
+<i>// native page zoom (0.25–5): the page keeps laying out in CSS px and simply</i>
+<i>// has fewer of them — pair with setSize(w*f, h*f) for a crisp "double size"</i>
+<b>tiny.win.setZoom</b>(2);
 <b>tiny.win.hide</b>();  <b>tiny.win.show</b>();
 <i>// hide() hides the APP — focus returns to the previous app on its own, so a</i>
 <i>// palette can hide() then app.paste() with no frontmost-pid bookkeeping</i>
@@ -541,11 +547,18 @@ const screens = await <b>tiny.app.screens</b>();
 <b>tiny.win.setChrome</b>({ acceptsFirstMouse: true });
 <i>// drag regions: &lt;header data-tiny-drag&gt; — drag moves, double-click zooms</i>
 <b>tiny.win.startDrag</b>();  <b>tiny.win.zoom</b>();
+<i>// begin a resize from an edge, for a handle you drew yourself. Frameless</i>
+<i>// windows already get invisible grips on all eight (data-tiny-noresize opts</i>
+<i>// out on Linux). Like startDrag, it hands over a gesture already in progress:</i>
+<i>// call it from mousedown while the button is down — from a click it no-ops.</i>
+grip.addEventListener('mousedown', () =&gt; <b>tiny.win.startResize</b>('se'));
+<i>// 'n','ne','e','se','s','sw','w','nw'</i>
 
 <i>// drag real files OUT of the app (Finder, Slack, …) — call from a</i>
 <i>// mousedown handler while the button is still held; image: optional png</i>
+<i>// drag-image. macOS + Windows; the Linux launcher has no drag source yet.</i>
 row.addEventListener('mousedown', () =&gt;
-  <b>tiny.win.startDrag</b>({ files: ['/tmp/report.pdf'] }));
+  <b>tiny.win.startDrag</b>({ files: ['/tmp/report.pdf'] }));   <i>// = win.dragOut(…)</i>
 
 <i>// read the window back</i>
 const s = await <b>tiny.win.getState</b>();
@@ -902,8 +915,14 @@ const { path, duration } = await <b>tiny.app.recorder.stop</b>();  <i>// finaliz
     <pre><i>// stack + behaviour: draw-on-screen overlays, HUDs over fullscreen apps,</i>
 <i>// desktop pets, palettes that follow you onto every Space</i>
 <b>tiny.win.setClickThrough</b>(true);   <i>// mouse events pass through the window</i>
+<i>// …which means the window can't be clicked to switch it back off. Keep a</i>
+<i>// hotkey or a tray item for that; an in-window button can never be pressed.</i>
 <b>tiny.win.setLevel</b>('overlay');     <i>// 'normal'|'floating'|'overlay'|'desktop'</i>
+<i>// floating = what setAlwaysOnTop(true) sets. overlay clears fullscreen apps</i>
+<i>// and Mission Control on macOS; Windows and Linux have two bands, so overlay</i>
+<i>// lands on the same topmost as floating. desktop drops it onto the wallpaper.</i>
 <b>tiny.win.setAllSpaces</b>(true);      <i>// follow across Spaces + over fullscreen</i>
+<i>// macOS and X11 only — a no-op on Windows, and Wayland has no equivalent.</i>
 
 <i>// grab the text selected in ANY app — PopClip-style popovers (Accessibility)</i>
 const sel = await <b>tiny.app.selectedText</b>();   <i>// string | null</i>
