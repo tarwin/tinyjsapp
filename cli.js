@@ -749,9 +749,12 @@ async function cmdDev() {
     // An explicit TINYJS_LAUNCHER in the environment wins (matches the
     // bridge's own precedence) — useful for testing a different build.
     const devEnv = { ...tjs.env, TINYJS_LAUNCHER: tjs.env.TINYJS_LAUNCHER || (TOOL_DIR + 'native/' + (IS_WIN ? 'launcher-win.exe' : IS_LINUX ? 'launcher-linux' : 'launcher-macos')) };
-    // Windows/Linux: the launcher shows the project icon in the titlebar/taskbar.
+    // Show the project's own icon while developing, on every platform: the
+    // titlebar/taskbar on Windows and Linux, the Dock tile on macOS. Without
+    // it a dev run wears the terminal's icon, which makes it indistinguishable
+    // from every other dev run you have open.
     const iconSrc = cfg.icon || 'icon.png';
-    if ((IS_WIN || IS_LINUX) && (await exists(iconSrc))) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
+    if (await exists(iconSrc)) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
     // Linux: the app id names the WM class (window ↔ .desktop matching).
     if (IS_LINUX) devEnv.TINYJS_APP_ID = cfg.id;
     child = tjs.spawn([tjs.exePath, 'run', entryPath], {

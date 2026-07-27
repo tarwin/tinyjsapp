@@ -95,6 +95,12 @@ deprecated.
   to muted-and-filtering once it has seen a real sample. If that never happens
   — `tinyjs dev` has no bundle identity to hold the audio-capture permission —
   the app keeps playing unfiltered rather than going quiet.
+- **`tinyjs dev` shows your app's icon on macOS too.** Windows and Linux
+  already passed the project's icon to the launcher in dev; macOS didn't, so a
+  dev run wore the terminal's icon and every app you had open looked identical
+  in the Dock and the ⌘-tab switcher. It now uses `icon` from `tinyjs.json`
+  (or `icon.png`), and `app.icon('')` resets to that rather than to nothing —
+  the closest equivalent to a packaged app resetting to its bundle icon.
 - **`app.playSound` gained four portable names** — `'info'`, `'success'`,
   `'alert'`, `'error'`. Every OS ships alert sounds and none agree on what
   they're called, so these ask for a meaning and get the platform's nearest

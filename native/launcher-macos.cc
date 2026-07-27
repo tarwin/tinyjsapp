@@ -3106,6 +3106,8 @@ static std::string wifi_json();
 // Defined with the rest of tiny.audio.filters, far below — do_get only needs
 // to be able to ask.
 static std::string eq_state_json();
+// Likewise for the Dock tile, which lives with the app-surface code below.
+static std::string dock_icon_json();
 
 static void do_get(webview_t w, void *arg) {
   GetReq *req = static_cast<GetReq *>(arg);
@@ -3358,6 +3360,8 @@ static void do_get(webview_t w, void *arg) {
       } else {
         json = "{\"exists\":false}";
       }
+    } else if (req->what == "debug:icon") {
+      json = dock_icon_json();
     } else if (req->what == "audiofilters") {
       // capabilities().audioFilters, answered by the code that would run
       // rather than inferred from a version string. Core Audio process taps
@@ -5554,6 +5558,39 @@ static void dock_tile_refresh(void) {
   [tile display];
 }
 
+// `tinyjs dev` has no bundle, so the Dock shows the terminal's icon unless we
+// put the project's there. TINYJS_ICON (set by the CLI, dev only) is that
+// icon, and it becomes what app.icon('') resets to — a packaged app resets to
+// its bundle icon, and this is the closest equivalent when there isn't one.
+static NSImage *g_dock_icon_default = nil;
+
+// The Dock tile is system-hosted and invisible to a screenshot — the same
+// problem debug:tray has — so tests read its wiring here instead.
+static std::string dock_icon_json() {
+  NSImage *img = g_dock_icon;
+  const char *env = getenv("TINYJS_ICON");
+  return std::string("{\"set\":") + (img ? "true" : "false") +
+         ",\"width\":" + std::to_string(img ? (int)img.size.width : 0) +
+         ",\"height\":" + std::to_string(img ? (int)img.size.height : 0) +
+         ",\"hasDevDefault\":" + (g_dock_icon_default ? "true" : "false") +
+         ",\"env\":" + json_escape(env ? env : "") + "}";
+}
+
+static void apply_dev_icon(void) {
+  const char *p = getenv("TINYJS_ICON");
+  if (!p || !*p)
+    return;
+  @autoreleasepool {
+    NSImage *img = [[NSImage alloc] initWithContentsOfFile:
+                        [NSString stringWithUTF8String:p]];
+    if (!img)
+      return;
+    g_dock_icon_default = img;             // +1, held for the process lifetime
+    if (!g_dock_icon) g_dock_icon = [img retain];
+    dock_tile_refresh();
+  }
+}
+
 static void do_appicon(webview_t, void *arg) {
   std::string *path = static_cast<std::string *>(arg);
   @autoreleasepool {
@@ -5564,9 +5601,11 @@ static void do_appicon(webview_t, void *arg) {
         delete path;
         return;
       }
+    } else if (g_dock_icon_default) {
+      next = [g_dock_icon_default retain];  // '' in dev: back to the project icon
     }
     if (g_dock_icon) [g_dock_icon release];
-    g_dock_icon = next; // owns the +1 from alloc; nil when clearing
+    g_dock_icon = next; // owns the +1 from alloc/retain; nil when clearing
     dock_tile_refresh();
   }
   delete path;
@@ -6692,6 +6731,7 @@ int main(int argc, char *argv[]) {
   }
 
 #ifdef __APPLE__
+  apply_dev_icon();   // dev only: TINYJS_ICON -> the Dock tile
   enable_webgpu(g_w);
   install_close_hook(g_w);
   install_drop_hook();
