@@ -77,6 +77,51 @@ names refer to the protocol table in the README; Windows handlers live in
       empty strings on a user's. All of the above is read off Microsoft's API
       docs — none of it has been run.
 
+- [ ] **`pickColor` via the browser's `EyeDropper`** — `PICKCOLOR` reaches
+      `got_unsupported`, so `capabilities().pickColor` is `false`. Windows has
+      no system eyedropper to call the way macOS has `NSColorSampler` and
+      Linux has the portal — but WebView2 *is* Chromium, and Chromium has
+      shipped the `EyeDropper` API since 95. Worth chasing; it would close the
+      gap without writing any colour-picking code at all.
+
+      Windows-only, though. Measured 2026-07-27: `typeof window.EyeDropper` is
+      **`undefined`** in the macOS WKWebView (WebKit has never implemented it),
+      so this is a fallback for the Chromium webview specifically, not a
+      portable "just use the browser" answer. macOS keeps NSColorSampler,
+      Linux keeps the portal.
+
+      Two routes, and the second is the better design if it works:
+      * **In the page** (`runtime/tiny.js`): `if (window.EyeDropper)` →
+        `new EyeDropper().open()` → `sRGBHex`, which is already the
+        `'#rrggbb'` the API promises. Ten lines, and feature-detection makes
+        it safe to add blind. But it only fixes the *page* half — see below.
+      * **In the launcher**, via WebView2 `ExecuteScript`, answering the
+        existing `PICKCOLOR` wire op. This preserves the whole architecture:
+        the backend's `app.pickColor()` keeps working, `capabilities()` can
+        honestly say `true`, and neither side of the API changes shape.
+        Unknown: whether script run through `ExecuteScript` carries the
+        **transient user activation** `EyeDropper.open()` requires.
+
+      Three differences from the macOS contract, each needing a real Windows
+      machine before any of this is claimed as done:
+      1. **Screen scope.** `NSColorSampler` works *across every app and
+         screen*, which is the whole point of the feature. Does Chromium's
+         eyedropper inside an embedded WebView2 sample the entire desktop, or
+         only the WebView2's own bounds? If it's window-only it is a
+         materially weaker feature, and quietly giving it the same name would
+         be exactly the over-claim this file keeps closing.
+      2. **User activation.** `EyeDropper.open()` needs a transient user
+         gesture: fine from a click handler, `NotAllowedError` from a timer or
+         from anything the backend initiates. `NSColorSampler` has no such
+         rule, so the same code would work on macOS and reject on Windows.
+      3. **Page-only asymmetry.** `pickColor` exists on the backend too
+         (`app.pickColor()`), and a backend has no DOM. `capabilities()` is
+         *also* computed on the backend, so it cannot feature-detect the
+         page's `EyeDropper` — a page-side fix would leave `pickColor: false`
+         while the page-side call works, which under-claims (the safe
+         direction, but still wrong). This would be the first API where the
+         page can do something the backend can't.
+
 - [ ] **scope:'app' audioTap** — system loopback shipped; per-process
       capture needs the Win10 2004+ process-loopback path.
 - [ ] **nowPlaying** — `NOWPLAYING` reaches the launcher, matches nothing in the

@@ -304,7 +304,11 @@ async function systemCapabilities(query, aiStatus) {
     // otherwindows/debug:* -> null"); WINCTRL, PICKCOLOR and SPOTLIGHT each
     // reach got_unsupported. All four claimed support by omission.
     otherWindows: false, moveOtherWindows: false,
-    pickColor: false, spotlight: false,
+    spotlight: false,
+    // No system eyedropper to call, but WebView2 is Chromium and Chromium has
+    // the EyeDropper API — a real route, unlike the two above. Route and the
+    // three things that differ from NSColorSampler in TODO-windows.md.
+    pickColor: false,
     // No media-key path at all: nothing in launcher-win.cc ever writes a
     // MEDIAKEY line, so onMediaKey could never fire. The keys themselves want
     // the same SystemMediaTransportControls nowPlaying does — one job, not two.
