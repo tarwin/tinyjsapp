@@ -47,6 +47,36 @@ names refer to the protocol table in the README; Windows handlers live in
 
 ## Still open
 
+- [ ] **`tiny.system.wifi`** — the launcher answers `null` for a `wifi` query
+      unconditionally, so `capabilities().wifi` is declared `false`. It's
+      genuinely portable in principle, unlike `ocr`/`recorder`, which is why it
+      stays on `tiny.system` rather than moving to `tiny.macos`.
+
+      Route: the native WLAN API in `wlanapi.dll` — `WlanOpenHandle` →
+      `WlanEnumInterfaces` → `WlanQueryInterface(wlan_intf_opcode_current_connection)`,
+      giving `WLAN_CONNECTION_ATTRIBUTES.wlanAssociationAttributes`. Load it
+      dynamically like the combase/WinRT paths already do rather than adding a
+      link-time dependency.
+
+      It cannot fill the macOS shape exactly, and the gaps are the design
+      question, not the coding:
+      * `ssid` ← `dot11Ssid`, `bssid` ← `dot11Bssid` — direct.
+      * `txRate` ← `ulTxRate`, in **Kbps**; macOS reports Mbps, so divide.
+      * `rssi` — **not available as dBm.** The API gives
+        `wlanSignalQuality`, 0–100, documented as linear from -100 dBm (0) to
+        -50 dBm (100), so `rssi ≈ quality / 2 - 100`. Derivable, lossy, and
+        the value will not agree with what other Windows tools show.
+      * `noise` — **not exposed at all.** `null` is the honest answer, which
+        makes it the first field in this API that's per-platform nullable for
+        a reason other than permissions.
+
+      Unverified and worth checking first: Windows 11 gates SSID/BSSID behind
+      the **Location** permission for some APIs, and whether that applies to
+      an unpackaged Win32 process calling `WlanQueryInterface` directly is
+      exactly the sort of thing that looks fine on the dev box and returns
+      empty strings on a user's. All of the above is read off Microsoft's API
+      docs — none of it has been run.
+
 - [ ] **scope:'app' audioTap** — system loopback shipped; per-process
       capture needs the Win10 2004+ process-loopback path.
 - [ ] **nowPlaying** — `NOWPLAYING` reaches the launcher, matches nothing in the

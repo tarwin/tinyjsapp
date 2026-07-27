@@ -324,6 +324,34 @@ currently fail cleanly (reject with a specific message, or resolve
 null/empty) so nothing here is a correctness hazard — they're missing
 features, not bugs.
 
+- [ ] **`tiny.system.wifi`** — declared `false`; the launcher has no `wifi`
+      arm at all, so a query falls through `GET` to `null`. Portable in
+      principle (unlike `ocr`/`recorder`), which is why it stays on
+      `tiny.system` rather than moving to `tiny.macos`.
+
+      Linux is the only platform other than macOS that can fill the shape
+      **completely** — including `noise`, which Windows cannot supply at all.
+      Two sources, and the cheap one is a plain file read:
+      * `/proc/net/wireless` — per-interface link quality, **signal level in
+        dBm** and **noise level in dBm**. No dependency, no D-Bus, no
+        permission, no spawn. That's `rssi` and `noise` done.
+      * `ssid` / `bssid` / `txRate` — NetworkManager over D-Bus is the
+        cheapest route given the launcher already speaks it for MPRIS, the
+        Secret Service and notifications: `org.freedesktop.NetworkManager`,
+        the device's `ActiveAccessPoint` → `Ssid` (ay), `HwAddress`,
+        `MaxBitrate`. Caveat worth knowing before writing it: **MaxBitrate is
+        the AP's maximum, not the current transmit rate**, so it is not the
+        same number macOS reports. The honest current rate needs nl80211 via
+        libnl (what `iw dev … link` reads), which is another dependency and a
+        lot more code.
+
+      Not session-dependent — unlike most of this file, nothing here cares
+      about X11 vs Wayland. Machines without NetworkManager (a bare
+      wpa_supplicant setup) would get `ssid: null` with the signal fields
+      still populated, which the API's existing nullability already covers.
+      All of the above is from documentation and prior knowledge of these
+      interfaces; none of it has been run on the VM.
+
 - [~] **Examples: Linux builds for shelf installs** — BUILT AND VERIFIED
       LOCALLY, not yet published. In `../tinyjsapp-examples` (all uncommitted,
       for review):

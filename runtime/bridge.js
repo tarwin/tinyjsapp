@@ -259,6 +259,10 @@ async function systemCapabilities(query, aiStatus) {
     share: false,
     applescript: false,
     ai: false,
+    // Portable in principle, so it stays on tiny.system: /proc/net/wireless
+    // has rssi AND noise in dBm with no dependency at all, and NetworkManager
+    // over D-Bus (which the launcher already speaks) has ssid/bssid. Route
+    // and caveats in TODO-linux.md.
     wifi: false,
     authenticate: false,
     // app.badge / app.progress ride the Unity LauncherEntry DBus protocol,
@@ -307,7 +311,11 @@ async function systemCapabilities(query, aiStatus) {
     mediaKeys: false,
     // The launcher answers null for a wifi query unconditionally, so claiming
     // it (by omission, under the "absent = true" rule) was another instance of
-    // the same over-claim nowPlaying had.
+    // the same over-claim nowPlaying had. NOT macOS-only in principle, which
+    // is why it stays on tiny.system rather than moving to tiny.macos: the
+    // WLAN API can supply ssid/bssid/txRate, though `noise` has no equivalent
+    // there at all and `rssi` only as a 0-100 quality percentage. Route and
+    // caveats in TODO-windows.md.
     wifi: false,
     // app.attention (FlashWindowEx) and app.presence (WS_EX_TOOLWINDOW) both
     // work. app.badge needs an overlay HICON rendered at runtime and isn't
