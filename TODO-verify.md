@@ -278,6 +278,24 @@ TODO-linux.md).
       bug. `getState` deliberately reports `null` here rather than echoing the
       request.
 
+## Needs a hand on the mouse — kitchen-sink, 2026-07-26
+
+- [ ] **`dialog.openFiles`** — the deck's Storage ▸ Files "Open many…" button.
+      A native panel can't be driven from the page, so only the wiring either
+      side of it is checked: multi-select on, an array back, `null` for a
+      cancel. NSOpenPanel, the Windows common item dialog and GTK's chooser
+      each need their own look, because "multi-select on" is a different flag
+      in all three and a panel that quietly allows only one file returns a
+      one-element array that looks entirely correct.
+- [ ] **`macos.applescript` under the Automation permission** — the deck's
+      *frontmost app* and *Finder window* samples. Verified by driving:
+      arithmetic returns `42`, and a broken script comes back with
+      AppleScript's own message ("Can't make "hello" into type number."). Not
+      verified: the TCC prompt on first cross-app script, and that a **denied**
+      prompt rejects with the reason instead of hanging. Both need a human to
+      answer the dialog, and the answer is remembered per target app — reset
+      with `tccutil reset AppleEvents` to see the prompt again.
+
 ## Driving these checks headlessly on Windows
 
 No clicking needed, and worth reusing — the decorations live outside the app

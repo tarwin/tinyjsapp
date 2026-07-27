@@ -678,8 +678,6 @@ declare interface Tiny {
     applescript(source: string): Promise<string | null>;
     /** Quick Look panel for the path(s); no args closes it */
     quickLook(paths?: string | string[] | null): Promise<any>;
-    /** trackpad haptic feedback (no-op without a Force Touch trackpad) */
-    haptic(pattern?: 'generic' | 'alignment' | 'level'): Promise<any>;
   };
   app: {
     info(): Promise<TinyAppInfo>;
@@ -927,7 +925,6 @@ declare interface TinyApp {
   macos: {
     applescript(source: string): Promise<string | null>;
     quickLook(paths?: string | string[] | null): boolean;
-    haptic(pattern?: 'generic' | 'alignment' | 'level'): boolean;
   };
   /** progress bar on the app icon / taskbar button: 0..1, null clears */
   progress(value: number | null): boolean;

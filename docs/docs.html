@@ -867,8 +867,6 @@ await <b>tiny.macos.applescript</b>('tell application "Music" to playpause');
 <i>// the Finder-spacebar preview panel; no args closes it</i>
 <b>tiny.macos.quickLook</b>('/path/photo.heic');
 
-<i>// Force Touch trackpad feedback</i>
-<b>tiny.macos.haptic</b>('generic');   <i>// 'generic' | 'alignment' | 'level'</i>
 
 <i>// ---- not built elsewhere YET (answer 'unsupported', not reject) ----</i>
 <i>// on-device OCR (Vision) — captureScreen + this = screenshot-to-text</i>
@@ -939,8 +937,7 @@ const spot = await <b>tiny.tray.position</b>();     <i>// { x, y, width, height 
 <i>// render the page to a vector PDF (WKWebView) — invoices, reports</i>
 const { path } = await <b>tiny.win.printToPDF</b>('/tmp/report.pdf');
 
-<i>// trackpad haptics + a live app icon (render a canvas → progress rings)</i>
-<b>tiny.macos.haptic</b>('generic');     <i>// 'generic'|'alignment'|'level'</i>
+<i>// a live app icon (render a canvas → progress rings)</i>
 <b>tiny.app.icon</b>(canvasPngPath);      <i>// '' resets to the bundle icon</i>
 
 <i>// battery + Wi-Fi for menu-bar monitors</i>
@@ -1050,7 +1047,7 @@ await <b>tiny.system.architecture</b>();   <i>// 'arm64' | 'x86_64'</i>
 <i>// requirements() filtered to the ones that failed — [] on macOS/Windows</i>
 const gaps = await <b>tiny.system.missing</b>();  <i>// [{ id, feature, detail, install }]</i></pre>
     <p class="note">Some things are not "not ported yet" but concepts the other
-    OSes don't have — AppleScript, Quick Look, trackpad haptics. Those live in
+    OSes don't have — AppleScript, Quick Look. Those live in
     <code>tiny.macos.*</code> and reject elsewhere, so the split is visible in
     the call itself. Everything that <em>could</em> exist on another OS stays
     on <code>tiny.app</code> and answers <code>'unsupported'</code> until it

@@ -289,8 +289,8 @@ async function systemCapabilities(query) {
     windowPosition: true, mousePosition: true, captureScreen: true,
     keystroke: true, recorder: false,
     // The launcher answers null for a wifi query unconditionally, so claiming
-    // it (by omission, under the "absent = true" rule) was a third instance of
-    // the same over-claim that nowPlaying/haptic had.
+    // it (by omission, under the "absent = true" rule) was another instance of
+    // the same over-claim nowPlaying had.
     wifi: false,
     // app.attention (FlashWindowEx) and app.presence (WS_EX_TOOLWINDOW) both
     // work. app.badge needs an overlay HICON rendered at runtime and isn't
@@ -299,12 +299,11 @@ async function systemCapabilities(query) {
     // never there.
     badge: false, icon: true, progress: true,
     // Same trap as badge, found by auditing every wire op the bridge can send
-    // against what launcher-win.cc actually dispatches (2026-07-25): both of
-    // these reach the launcher's else-if chain, match nothing and are dropped,
-    // so they resolved true while doing nothing. nowPlaying wants the WinRT
-    // SystemMediaTransportControls (see TODO-windows.md); haptic has no
-    // Windows equivalent at all.
-    nowPlaying: false, haptic: false,
+    // against what launcher-win.cc actually dispatches (2026-07-25): NOWPLAYING
+    // reaches the launcher's else-if chain, matches nothing and is dropped, so
+    // it resolved true while doing nothing. It wants the WinRT
+    // SystemMediaTransportControls — see TODO-windows.md.
+    nowPlaying: false,
   };
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
     // Native DSP on our own output, via a muted Core Audio process tap fed
@@ -1156,9 +1155,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         send('QUICKLOOK' + (list.length ? ' ' + list.map(esc).join('\t') : ''));
         return true;
       },
-      // Trackpad haptic feedback: 'generic' | 'alignment' | 'level'. No-op on
-      // Macs without a Force Touch trackpad.
-      haptic(pattern = 'generic') { send('HAPTIC ' + one(pattern)); return true; },
     },
     // Standard per-app directories (data/cache/logs are per app id, not
     // auto-created — tjs.makeDir(..., { recursive: true }) first write).
@@ -1412,10 +1408,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'app.moveWindow': async ({ pid, ...rect }) => app.moveWindow(pid, rect),
     'tray.position': async () => app.tray.position(),
     'win.printToPDF': async ({ path }) => app.printToPDF(path),
-    // macOS-only namespace: these three have no equivalent concept elsewhere,
-    // so they reject rather than pretending. Anything that COULD exist on
-    // another OS stays on app.* and answers 'unsupported' instead.
-    'macos.haptic': async ({ pattern }) => (macosOnly('haptic'), app.macos.haptic(pattern)),
     'app.icon': async ({ path }) => app.icon(path),
     'system.battery': async () => app.system.battery(),
     'system.wifi': async () => app.system.wifi(),

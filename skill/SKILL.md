@@ -77,7 +77,7 @@ feature-detect): notification action buttons, `audioTap`, `proxyURL` media
 proxy, deep links / file associations / single instance, `permissions.*`
 TCC flow (Windows answers 'granted'), `quickLook`, `recorder`, `pickColor`,
 `ocr`, `authenticate`, `applescript`, `nowPlaying`/media keys,
-`selectedText`/`otherWindows`/`moveWindow`, `share`, `haptic`,
+`selectedText`/`otherWindows`/`moveWindow`, `share`,
 `app.badge`/`app.icon`/`app.presence`, `setAllSpaces`, `wifi`, `spotlight`,
 `tiny.app.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
@@ -163,7 +163,7 @@ export function init(app) {
   // beep()/playSound(target), window(id).share(opts), idleTime(),
   // captureScreen(screenId), pickColor(), ocr(path),
   // thumbnail(path, size), secrets.get/set/delete, authenticate(reason),
-  // macos.applescript/quickLook/haptic,
+  // macos.applescript/quickLook,
   // nowPlaying.set/clear, say(text, opts), voices(),
   // stopSpeaking(), show({ activate: false })
 }
@@ -456,7 +456,6 @@ await tiny.app.moveWindow(pid, { x, y, width, height });  // resolves true/throw
 await tiny.tray.position();       // { x,y,width,height }|null (anchor dropdowns)
 // deep-Mac citizen
 await tiny.win.printToPDF(path);  // -> { path } (vector PDF; invoices/reports)
-tiny.macos.haptic('generic');     // 'generic'|'alignment'|'level' (Force Touch)
 tiny.app.icon(pngPath);           // '' resets (render a canvas for live tiles)
 await tiny.system.battery();      // { percent, charging, plugged, minutesRemaining }|null
 await tiny.system.wifi();         // { ssid, bssid, rssi, noise, txRate }|null (ssid→Location)

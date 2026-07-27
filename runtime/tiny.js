@@ -447,9 +447,6 @@
       applescript: (source) => call('macos.applescript', { source }),
       // Quick Look panel for path(s); quickLook() closes it.
       quickLook: (paths) => call('macos.quickLook', { paths }),
-      // Trackpad haptic feedback: 'generic'|'alignment'|'level'. Needs a
-      // Force Touch trackpad.
-      haptic: (pattern) => call('macos.haptic', { pattern }),
     },
 
     // Native dialogs, run by the launcher — NSOpenPanel / NSAlert on macOS,

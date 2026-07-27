@@ -192,8 +192,6 @@
 //                         PRINT                      native print panel
 //                         PDF <qid> <path>           render the page to a PDF;
 //                                                    GOT {ok, path, error}
-//                         HAPTIC <pattern>           trackpad haptic feedback
-//                                                    (generic|alignment|level)
 //                         APPICON <path>             set the app icon from a
 //                                                    png ('' = reset)
 //                         SPOTLIGHT <qid> <query>    find files by content
@@ -5583,7 +5581,7 @@ static void do_print(webview_t w, void *) {
 #endif
 }
 
-// --- deep-Mac citizen: PDF, haptics, dock icon, battery, wifi, spotlight ------------
+// --- deep-Mac citizen: PDF, dock icon, battery, wifi, spotlight -------------
 // The small native niceties apps otherwise shell out (or give up) for.
 
 struct PdfReq {
@@ -5618,18 +5616,6 @@ static void do_pdf(webview_t w, void *arg) {
                  sock_write_line("GOT " + qid + " {\"ok\":true,\"path\":" +
                                  json_escape(path) + ",\"error\":null}");
                }];
-}
-
-static void do_haptic(webview_t, void *arg) {
-  std::string *pat = static_cast<std::string *>(arg);
-  NSHapticFeedbackPattern p =
-      *pat == "alignment" ? NSHapticFeedbackPatternAlignment
-      : *pat == "level"   ? NSHapticFeedbackPatternLevelChange
-                          : NSHapticFeedbackPatternGeneric;
-  [[NSHapticFeedbackManager defaultPerformer]
-      performFeedbackPattern:p
-             performanceTime:NSHapticFeedbackPerformanceTimeDefault];
-  delete pat;
 }
 
 // --- dock tile: the app icon and the progress bar share one surface ---------
@@ -5875,7 +5861,6 @@ static void do_pdf(webview_t, void *arg) {
   sock_write_line("GOT " + r->qid + " {\"ok\":false,\"error\":\"unsupported\"}");
   delete r;
 }
-static void do_haptic(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
 static void do_appicon(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
 static void do_progress(webview_t, void *arg) { delete static_cast<double *>(arg); }
 static std::string battery_json() { return "null"; }
@@ -6550,8 +6535,6 @@ static void sock_read_loop() {
         webview_dispatch(g_w, do_pdf,
                          new PdfReq{line.substr(4, sp - 4),
                                     wire_unescape(line.substr(sp + 1))});
-      } else if (line.rfind("HAPTIC ", 0) == 0) {
-        webview_dispatch(g_w, do_haptic, new std::string(line.substr(7)));
       } else if (line == "APPICON" || line.rfind("APPICON ", 0) == 0) {
         webview_dispatch(g_w, do_appicon,
                          new std::string(line.size() > 8

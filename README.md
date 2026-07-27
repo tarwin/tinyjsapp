@@ -222,7 +222,7 @@ export function init(app) {          // window is up
   // selectedText(), otherWindows(), moveWindow(pid, rect),
   // window(id).setClickThrough/setLevel/setAllSpaces, tray.position(),
   // printToPDF(path), icon(png), presence(mode),
-  // macos.applescript(source)/quickLook(paths)/haptic(pattern),
+  // macos.applescript(source)/quickLook(paths),
   // battery(), wifi(),
   // spotlight(query)
 }
@@ -604,8 +604,7 @@ const spot = await tiny.tray.position();     // { x, y, width, height } | null
 // render the page to a PDF (vector, WKWebView) — invoices, reports
 const { path } = await tiny.win.printToPDF('/tmp/report.pdf');
 
-// trackpad haptics, plus a live app icon (render a canvas → progress rings)
-tiny.macos.haptic('generic');                // 'generic'|'alignment'|'level'
+// a live app icon (render a canvas → progress rings)
 tiny.app.icon(canvasPngPath);                // '' resets to the bundle icon
 
 // battery + Wi-Fi for menu-bar monitors
@@ -1365,7 +1364,7 @@ Works:
 
 Not (yet) supported:
 
-- `recorder`, `ocr`, `quickLook`, `applescript`, `haptic`
+- `recorder`, `ocr`, `quickLook`, `applescript`
 - `app.badge` (no freedesktop standard) and `attention({critical: true})`,
   `share`
 - `wifi`, `selectedText`, `otherWindows`, `moveWindow`, `frontmostApp`

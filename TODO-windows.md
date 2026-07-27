@@ -57,10 +57,9 @@ names refer to the protocol table in the README; Windows handlers live in
       via `ISystemMediaTransportControlsInterop::GetForWindow`) — set
       DisplayUpdater properties + PlaybackStatus, and its button events are
       also the natural home for Windows media-key handling.
-- [ ] **haptic** — same drop, same false claim, now `haptic: false`. Unlike the
-      rest of this list there is no Windows equivalent to implement: it's a
-      macOS trackpad feature (`NSHapticFeedbackManager`). Honest degradation is
-      the end state, not a stepping stone.
+- [x] **haptic** — same drop, same false claim. Closed the other way on
+      2026-07-26: `tiny.macos.haptic` was removed from tinyjs altogether, so
+      there is no longer a capability to declare or a Windows gap to fill.
 - [~] **Taskbar pin used to pin launcher.exe when the app was opened from
       shelf** — reported 2026-07-25 (pin was dead on relaunch); opening the
       same app's exe directly and pinning worked. **Appears fixed** by shelf's
@@ -140,7 +139,7 @@ names refer to the protocol table in the README; Windows handlers live in
 
 ## Not planned / no OS equivalent
 
-`quickLook`, `ocr` (Windows.Media.Ocr someday), `applescript`, `haptic`,
+`quickLook`, `ocr` (Windows.Media.Ocr someday), `applescript`,
 `dock.setBadge`/`dockIcon` (could map to `ITaskbarList3` overlays),
 `setAllSpaces`, `spotlight`, `tiny.app.ai`, `wifi`, `selectedText` /
 `otherWindows` / `moveWindow` (UIA could do it — revisit if asked),

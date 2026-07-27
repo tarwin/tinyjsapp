@@ -251,7 +251,7 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
       with a specific reason (e.g. "screen recording isn't supported on
       Linux yet"); query-style ones (`wifi`, `frontmostApp`, `selectedText`,
       `otherWindows`, `tray.position`) resolve `null`; fire-and-forget ones
-      (`haptic`, Dock badge, `share`, `quickLook`) are silent no-ops.
+      (Dock badge, `share`, `quickLook`) are silent no-ops.
       Nothing hangs — verified by an audit smoke that probes them all.
 - [x] **captureScreen** (X11 sessions only) and **thumbnail** (images
       only, via GdkPixbuf).
@@ -420,7 +420,7 @@ features, not bugs.
 
 ## Not planned / no OS equivalent
 
-`applescript`, `haptic`, `dock.setBadge`/`dockIcon` (the Unity launcher API
+`applescript`, `dock.setBadge`/`dockIcon` (the Unity launcher API
 is dead — `dock.bounce` now works via an urgency hint, but badges/custom
 icons have no equivalent; could revisit via LauncherEntry), `setAllSpaces`
 (sticky windows exist on X11 only), `tiny.app.ai`, `wifi` (NetworkManager

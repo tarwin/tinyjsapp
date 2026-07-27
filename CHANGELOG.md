@@ -6,9 +6,9 @@ https://tinyjs.app/changelog.
 
 ## 0.30.0 — upcoming
 
-**Breaking.** The Dock/taskbar/launcher calls are renamed, and three
-macOS-only calls move to their own namespace. Old names are gone rather than
-deprecated.
+**Breaking.** The Dock/taskbar/launcher calls are renamed, two macOS-only
+calls move to their own namespace, and `haptic` is removed outright. Old names
+are gone rather than deprecated.
 
 - **The app surface is verbs named for intent, not macOS furniture.** The Dock,
   the Windows taskbar and the Linux launcher are surfaces the OS owns and an
@@ -27,12 +27,22 @@ deprecated.
   Linux emits the Unity `LauncherEntry` signal (KDE Plasma, Ubuntu Dock and
   Dash-to-Dock listen; vanilla GNOME Shell doesn't). On macOS it composes with
   `app.icon()` — a custom Dock tile keeps its icon while the bar is up.
-- **`tiny.macos.*`** — `applescript`, `quickLook` and `haptic` move here (and
+- **`tiny.macos.*`** — `applescript` and `quickLook` move here (and
   `app.macos.*` on the backend). The rule is deliberately strict: only concepts
   no other OS has. Things that *could* exist elsewhere — `ocr`, `share`,
   `wifi`, `authenticate`, `recorder`, `ai`, `spotlight` — stay on `tiny.app`
   answering `'unsupported'`, so building them later isn't another rename.
   Calling `tiny.macos.*` off macOS throws with the reason instead of no-oping.
+- **`haptic` is removed** (was `app.haptic`, briefly `tiny.macos.haptic`).
+  `NSHapticFeedbackManager` only fires while a finger is resting on a Force
+  Touch trackpad and the "Force Click and haptic feedback" setting is on, so
+  the honest description of the call is that most presses of it — every one
+  driven by a mouse, and every one on a desktop Mac — do nothing at all. An API
+  whose normal outcome is silence is indistinguishable from an unimplemented
+  one, which is the exact confusion this release spent its time removing
+  elsewhere. Nothing replaces it; `tiny.app.playSound()` is the portable way to
+  acknowledge an action.
+
 - **`battery`, `wifi` and `idleTime` move to `tiny.system.*`.** They're facts
   about the machine, not things the app does — the same line that decided the
   app surface belongs on `tiny.app`. Mirrored on the backend as

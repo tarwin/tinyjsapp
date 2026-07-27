@@ -4294,8 +4294,8 @@ static void handle_line(const std::string& line) {
     unity_launcher_update();
     return;
   }
-  // SHARE, QUICKLOOK, HAPTIC: no Linux equivalent; capabilities() reports
-  // them false so apps can check before calling.
+  // SHARE, QUICKLOOK: no Linux equivalent; capabilities() reports them false
+  // so apps can check before calling.
 }
 
 // ------------------------------------------------------- main window close --
