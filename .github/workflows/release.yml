@@ -143,7 +143,11 @@ jobs:
           path: out/*
 
   release:
-    runs-on: macos-14
+    # macos-14 is deprecated in GitHub's runner images, so this had to move
+    # regardless. See the deployment-target note on the build step below: the
+    # runner version and the floor tinyjs ships are NOT the same number, and
+    # they were only ever equal here by accident.
+    runs-on: macos-26
     needs: [windows, linux]
     steps:
       - uses: actions/checkout@v4
@@ -151,10 +155,26 @@ jobs:
       - name: Build universal launcher
         run: |
           ./native/gen-client.sh
-          c++ -std=c++17 -x objective-c++ -Inative/include native/launcher-macos.cc \
+          # -mmacosx-version-min is REQUIRED, not decoration. Without it clang
+          # takes the deployment target from the host SDK, which on the old
+          # macos-14 runner silently produced the floor we wanted — so nothing
+          # looked wrong. On a macos-26 runner the same omission would ship a
+          # binary that refuses to launch on anything below macOS 26, with no
+          # error at build time. setup.sh has always passed this (MIN_OS);
+          # this workflow never did.
+          c++ -std=c++17 -x objective-c++ -mmacosx-version-min=14.0 -Inative/include native/launcher-macos.cc \
             -o native/launcher-macos -framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -framework AVFoundation -framework ServiceManagement -framework IOKit -framework Quartz -weak_framework ScreenCaptureKit -framework Vision -framework QuickLookThumbnailing -framework Security -framework LocalAuthentication -framework MediaPlayer -framework CoreMedia -framework CoreWLAN -framework CoreAudio -framework AudioToolbox -ldl \
             -arch arm64 -arch x86_64
           codesign --force --sign - native/launcher-macos
+          # Prove the floor rather than trusting the flag: every slice must say
+          # minos 14.0. A release that raises this is unlaunchable for users on
+          # older macOS, and nothing downstream would catch it.
+          vtool -show-build native/launcher-macos
+          for ARCH in arm64 x86_64; do
+            vtool -arch $ARCH -show-build native/launcher-macos | grep -q "minos 14.0" \
+              || { echo "::error::$ARCH slice is not built for the macOS 14 floor"; exit 1; }
+          done
+          lipo -info native/launcher-macos
 
       - name: Stamp version
         run: echo "${GITHUB_REF_NAME}" > VERSION
