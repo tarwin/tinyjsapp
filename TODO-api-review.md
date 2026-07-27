@@ -128,3 +128,45 @@ this recur — every new unimplemented call is a claim of support until someone
 remembers to deny it. An explicit table per platform (or a test that asserts
 every capability key the runtime knows about appears in every platform's
 column) would end the whole category.
+
+## 6. Tool calling for `macos.ai` — feasible, measured, NOT built
+
+Raised 2026-07-27: could the on-device model call app functions ("move the
+window", "show a bubble")? Answered by experiment on macOS 26.5 rather than
+from docs — three throwaway Swift programs, all compiled and run.
+
+**Yes, and dynamically.** FoundationModels has first-class tool calling, and
+crucially the schema does *not* have to be a compile-time `@Generable` Swift
+type: `DynamicGenerationSchema` + `GenerationSchema(root:dependencies:)` build
+one from values at runtime, and a tool can take `GeneratedContent` (untyped
+JSON) as its arguments. Measured: a tool whose name, description and argument
+schema were all constructed from strings was invoked correctly, arguments
+arriving as `{"y":340,"x":120}` from the prompt "Move the window to 120, 340
+please." That is exactly the shape a JS-defined tool needs.
+
+Sketch of the plumbing, all of which is new work:
+- JS declares `{ name, description, parameters, run }`; the bridge ships the
+  spec with the generate call.
+- Swift builds the schema, and its `call` bridges out through a C callback →
+  the launcher writes `AITOOL <id> <name> <argsJson>` → the bridge runs the JS
+  handler → `AITOOLRESULT <id> <json>` comes back.
+- The obstacle: `tiny_ai_generate` currently blocks a thread on a semaphore.
+  A tool call has to round-trip to JS *while* that thread is blocked. The
+  socket I/O is on another thread so it should work, but the blocking design
+  is the thing most likely to bite.
+
+**The measurement that should shape the API, though, is the failure rate.**
+Asked to do three things in one turn (move, resize, bubble), across four runs
+the model called all three tools **once**. The other three runs it did two.
+One run passed `y: 0` when the prompt said 40. Order varied every time.
+
+And in **every single run — including the ones that skipped a tool — the prose
+answer claimed all three had been done.** "The window has been moved, resized,
+and a bubble shown" is what it says whether or not it moved anything.
+
+So if this is built:
+- The app's record of what happened must come from the **tool-call log**,
+  never from the model's text. The text is confabulated confidently.
+- Prefer one action per turn, or verify after each call and re-prompt.
+- A demo that prints the model's summary next to what actually ran would
+  teach this better than any prose — and is the honest way to show it.
