@@ -3383,10 +3383,15 @@ static void do_capture(const std::string& qid, const std::string&) {
                 ",\"height\":" + std::to_string(ph) + "}");
 }
 
-static void do_pdf(const std::string& qid, const std::string& rest) {
+// winid empty = the main window; a secondary window prints ITS page (a
+// multi-window app's ⌘P belongs to the document window, not the main one).
+static void do_pdf(const std::string& qid, const std::string& rest,
+                   const std::string& winid) {
   std::string path = wire_unescape(rest);
   if (path.empty()) { send_got(qid, "{\"ok\":false,\"error\":\"no path\"}"); return; }
-  WebKitPrintOperation* op = webkit_print_operation_new(g_wv);
+  WebKitWebView* target = wv_for(winid);
+  if (!target) { send_got(qid, "{\"ok\":false,\"error\":\"no such window\"}"); return; }
+  WebKitPrintOperation* op = webkit_print_operation_new(target);
   GtkPrintSettings* settings = gtk_print_settings_new();
   gtk_print_settings_set(settings, GTK_PRINT_SETTINGS_PRINTER, "Print to File");
   gtk_print_settings_set(settings, GTK_PRINT_SETTINGS_OUTPUT_FILE_FORMAT, "pdf");
@@ -3972,6 +3977,13 @@ static void handle_line(const std::string& line) {
         g_build_stack.push_back(&g_build_menubar.back().items);
         return;
       }
+      // A standard-menu slot (MENUROLE edit, macOS's Edit menu). GTK has no
+      // launcher-owned menu to place, so the slot is skipped and the bar
+      // keeps the order the app declared for its own menus.
+      if (line.rfind("MENUROLE ", 0) == 0) {
+        g_build_stack.clear();
+        return;
+      }
       if (line == "MENUEND") {
         g_build_mode = 0;
         g_build_stack.clear();
@@ -4029,9 +4041,14 @@ static void handle_line(const std::string& line) {
 
   if (line == "QUIT") { g_quitting = true; gtk_main_quit(); return; }
   if (line == "RELOAD") { webkit_web_view_reload_bypass_cache(g_wv); return; }
-  if (line == "PRINT") {
-    WebKitPrintOperation* op = webkit_print_operation_new(g_wv);
-    webkit_print_operation_run_dialog(op, g_win);
+  // PRINT | PRINT@<winid> — the asking window is the one that prints.
+  if (line == "PRINT" || line.rfind("PRINT@", 0) == 0) {
+    std::string wid = line.size() > 6 ? line.substr(6) : "";
+    WebKitWebView* target = wv_for(wid);
+    GtkWindow* parent = win_for(wid);
+    if (!target) return;
+    WebKitPrintOperation* op = webkit_print_operation_new(target);
+    webkit_print_operation_run_dialog(op, parent);
     g_object_unref(op);
     return;
   }
@@ -4242,7 +4259,16 @@ static void handle_line(const std::string& line) {
   if (qid_op("SOUND", qid, body)) { do_sound(qid, body); return; }
   if (qid_op("SECRET", qid, body)) { do_secret(qid, body); return; }
   if (qid_op("CAPTURE", qid, body)) { do_capture(qid, body); return; }
-  if (qid_op("PDF", qid, body)) { do_pdf(qid, body); return; }
+  if (qid_op("PDF", qid, body)) { do_pdf(qid, body, ""); return; }
+  if (line.rfind("PDF@", 0) == 0) {                  // PDF@<winid> <qid> <path>
+    size_t sp0 = line.find(' ', 4);
+    size_t sp1 = sp0 == std::string::npos ? sp0 : line.find(' ', sp0 + 1);
+    if (sp1 != std::string::npos) {
+      do_pdf(line.substr(sp0 + 1, sp1 - sp0 - 1), line.substr(sp1 + 1),
+             line.substr(4, sp0 - 4));
+    }
+    return;
+  }
   if (qid_op("THUMB", qid, body)) { do_thumb(qid, body); return; }
   // No portable "prove it's the user" gate on Linux (polkit authorizes
   // specific actions, not identity). Fail closed — an app gating a sensitive

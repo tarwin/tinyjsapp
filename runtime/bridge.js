@@ -183,6 +183,12 @@ function systemInfo() {
   };
 }
 
+// Tools offered to the on-device model for the CURRENT generate() call, plus
+// the log of what it actually invoked. One generation at a time (the launcher
+// serialises them on one queue), so a map and an array are enough.
+const aiTools = new Map();
+const aiToolCalls = [];
+
 // tiny.macos.* is the "no equivalent anywhere else" namespace, so calling it
 // off macOS is a bug in the app rather than a missing feature — say so with
 // the real reason instead of a silent no-op.
@@ -777,9 +783,17 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     },
     // menus: [{ title, items: [{ id, label, key? } | { separator: true }] }]
     // Clicks arrive as a 'menu' page event and via the onMenu option.
+    //
+    // { role: 'edit' } is a placeholder for the standard Edit menu (Undo,
+    // Cut, Copy, Paste, Select All) — put it wherever you want it in the bar.
+    // macOS installs that menu whether you ask or not, because the webview
+    // needs its key equivalents to have working ⌘C/⌘V, so declaring the role
+    // is the only way to say "and NOT first". Windows and Linux have no such
+    // menu, and skip the entry.
     setMenu(menus) {
       send('MENUBEGIN');
       for (const m of menus ?? []) {
+        if (m?.role) { send('MENUROLE ' + one(m.role)); continue; }
         send('MENU ' + one(m.title));
         sendItems(m.items);
       }
@@ -1179,12 +1193,41 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         // 'available' | 'unavailable' (Apple Intelligence off / not downloaded)
         // | 'unsupported' (older macOS or a non-AI build).
         async availability() { return (await ask('AI available'))?.status ?? 'unsupported'; },
-        // generate(prompt, { instructions }) -> the completion text; throws
-        // with the reason (incl. 'not built in' on stock builds).
-        async generate(prompt, { instructions } = {}) {
-          const r = await ask('AI generate', esc(String(prompt ?? '')) + '\t' + esc(instructions ?? ''));
+        // generate(prompt, { instructions, tools }) -> the completion text;
+        // throws with the reason (incl. 'not built in' where the shim wasn't
+        // compiled).
+        //
+        // tools: [{ name, description, parameters, run }] — the model decides
+        // whether and when to call them; run(args) is your function and its
+        // return value goes back to the model (objects are JSON'd). Backend
+        // tools only for now: run is a real function, so it can't cross the
+        // bridge from a page.
+        //   parameters: { x: 'integer',
+        //                 label: { type: 'string', description: 'why' } }
+        //
+        // With tools this resolves { text, calls } instead of a bare string,
+        // and `calls` is the record to trust. Measured on macOS 26.5: asked
+        // for three tool calls in one turn, the model made all three in ONE
+        // run out of four — and claimed all three in its prose EVERY time,
+        // including the runs where it silently skipped one.
+        async generate(prompt, { instructions, tools } = {}) {
+          aiTools.clear();
+          aiToolCalls.length = 0;
+          const specs = [];
+          for (const t of tools ?? []) {
+            if (!t?.name || typeof t.run !== 'function') continue;
+            aiTools.set(t.name, t);
+            specs.push({ name: t.name, description: t.description ?? t.name,
+                         parameters: t.parameters ?? {} });
+          }
+          const r = await ask('AI generate',
+            esc(String(prompt ?? '')) + '\t' + esc(instructions ?? '') +
+            (specs.length ? '\t' + esc(JSON.stringify(specs)) : ''));
+          const calls = aiToolCalls.slice();
+          aiTools.clear();
+          aiToolCalls.length = 0;
           if (!r?.ok) throw new Error(r?.error ?? 'generation failed');
-          return r.text;
+          return specs.length ? { text: r.text, calls } : r.text;
         },
       },
       // The text currently selected in the frontmost app (PopClip-style
@@ -1331,6 +1374,16 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                        bit(opts.acceptsFirstMouse)].join('\t'));
         },
         getState: () => query(id === 'main' ? 'win' : 'win:' + id),
+        // This window's own page, on paper or as a PDF file — the print
+        // panel is modal to it, and the PDF is of its document, not the
+        // main window's. tiny.win.print()/printToPDF() in a page land here
+        // for the window that called them.
+        print: () => t('PRINT'),
+        async printToPDF(path) {
+          const r = await ask(id === 'main' ? 'PDF' : 'PDF@' + id, esc(path));
+          if (!r?.ok) throw new Error(r?.error ?? 'pdf failed');
+          return { path: r.path };
+        },
         // Native share sheet ({ text?, url?, paths? }) anchored at page
         // coordinates (pass the click's clientX/clientY; 0,0 otherwise).
         share({ text, url, paths, x, y } = {}) {
@@ -1457,12 +1510,15 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'macos.otherWindows': async () => (macosOnly('otherWindows'), app.macos.otherWindows()),
     'macos.moveWindow': async ({ pid, ...rect }) => (macosOnly('moveWindow'), app.macos.moveWindow(pid, rect)),
     'tray.position': async () => app.tray.position(),
-    'win.printToPDF': async ({ path }) => app.printToPDF(path),
+    'win.printToPDF': async ({ path }, _a, m) => forWin(m).printToPDF(path),
     'app.icon': async ({ path }) => app.icon(path),
     'system.battery': async () => app.system.battery(),
     'system.wifi': async () => app.system.wifi(),
     'app.spotlight': async ({ query: q }) => app.spotlight(q),
     'macos.ai.availability': async () => (macosOnly('ai.availability'), app.macos.ai.availability()),
+    // No `tools` here on purpose: a tool's run() is a real function and can't
+    // cross the bridge from a page. Backend code calls app.macos.ai.generate
+    // directly and keeps its handlers in scope.
     'macos.ai.generate': async ({ prompt, instructions }) => (macosOnly('ai.generate'), app.macos.ai.generate(prompt, { instructions })),
     'win.setPosition': async ({ x, y }, _a, m) => (forWin(m).setPosition(x, y), true),
     'win.open': async ({ id: wid, ...opts }) => (app.openWindow(wid, opts), true),
@@ -1489,7 +1545,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       return { available, current, latest, notes };
     },
     'update.install': async () => app.update.install(),
-    'win.print': async () => (app.print(), true),
+    'win.print': async (_p, _a, m) => (forWin(m).print(), true),
     'store.get': async ({ key }) => app.store.get(key),
     'store.set': async ({ key, value }) => app.store.set(key, value),
     'store.delete': async ({ key }) => app.store.delete(key),
@@ -1676,6 +1732,30 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
             push(kind, {}); // 'sleep' | 'wake'
           }
           if (onSystem) onSystem(kind, value ?? null, app);
+        } else if (line.startsWith('AITOOL ')) {
+          // The model wants a tool run. The launcher thread that asked is
+          // BLOCKED until we answer, so answer on every path — including a
+          // handler that throws or a name we don't know.
+          const sp = line.indexOf(' ', 7);
+          const id = line.slice(7, sp);
+          const [rawName, rawArgs] = line.slice(sp + 1).split('\t');
+          const name = unesc(rawName);
+          let args = {};
+          try { args = JSON.parse(unesc(rawArgs ?? '{}')); } catch {}
+          (async () => {
+            const tool = aiTools.get(name);
+            let result;
+            try {
+              result = tool ? await tool.run(args) : { error: 'no such tool: ' + name };
+            } catch (e) {
+              // The model copes with an error string far better than with a
+              // silence, and it sometimes recovers by calling something else.
+              result = { error: String(e?.message ?? e) };
+            }
+            aiToolCalls.push({ name, args, result });
+            send('AITOOLRESULT ' + id + ' ' +
+                 esc(typeof result === 'string' ? result : JSON.stringify(result ?? null)));
+          })();
         } else if (line.startsWith('GOT ')) {
           const sp = line.indexOf(' ', 4);
           const resolve = pendingGets.get(line.slice(4, sp));

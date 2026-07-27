@@ -150,6 +150,9 @@ static HWND hwnd_for_win(const std::string &id);
 static void route_ret(webview_t w, const std::string &composite, int status,
                       const std::string &json);
 static void secwin_eval(const std::string &id, const std::string &js);
+// '' / "main" = the main webview; otherwise that secondary window's, so
+// print and printToPDF capture the page that asked for them.
+static ICoreWebView2 *wv2_for_id(const std::string &id);
 
 // ---------------------------------------------------------------------------
 // small helpers
@@ -2227,6 +2230,7 @@ static void do_hotkey(webview_t, void *arg) {
 
 struct QReq {
   std::string qid, rest;
+  std::string win;   // window-targeted ops (PDF@<id>); '' = the main window
 };
 
 static void got(const std::string &qid, const std::string &json) {
@@ -2498,9 +2502,10 @@ struct PdfHandler : public ICoreWebView2PrintToPdfCompletedHandler {
 static void do_pdf(webview_t, void *arg) {
   QReq *req = static_cast<QReq *>(arg);
   std::string path = wire_unescape(req->rest);
+  ICoreWebView2 *wv2 = wv2_for_id(req->win);
   ICoreWebView2_7 *wv7 = nullptr;
-  if (g_wv2 &&
-      SUCCEEDED(g_wv2->QueryInterface(IID_ICoreWebView2_7, (void **)&wv7)) &&
+  if (wv2 &&
+      SUCCEEDED(wv2->QueryInterface(IID_ICoreWebView2_7, (void **)&wv7)) &&
       wv7) {
     PdfHandler *h = new PdfHandler();
     h->qid = req->qid;
@@ -3857,6 +3862,12 @@ static TinyWin *win_for_id(const std::string &id) {
   return it == g_windows.end() ? nullptr : it->second;
 }
 
+static ICoreWebView2 *wv2_for_id(const std::string &id) {
+  if (id.empty() || id == "main") return g_wv2;
+  TinyWin *tw = win_for_id(id);
+  return tw ? tw->wv : nullptr;
+}
+
 static void set_min_size(const std::string &id, int w, int h) {
   if (id.empty() || id == "main") {
     g_min_w = w;
@@ -5074,6 +5085,11 @@ static void pipe_read_loop() {
         flush_root();
         pending_menus.push_back(MenuSpec{line.substr(5), {}});
         build_stack.assign(1, {});
+      } else if (in_menu_block && line.rfind("MENUROLE ", 0) == 0) {
+        // a standard-menu slot (MENUROLE edit, macOS's Edit menu). Win32 has
+        // no launcher-owned menu to place, so the slot is skipped.
+        flush_root();
+        build_stack.assign(1, {});
       } else if ((in_menu_block || in_tray_block || in_ctx_block) &&
                  line.rfind("ITEM ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(5));
@@ -5325,7 +5341,18 @@ static void pipe_read_loop() {
         if (sp == std::string::npos)
           continue;
         webview_dispatch(g_w, do_pdf,
-                         new QReq{line.substr(4, sp - 4), line.substr(sp + 1)});
+                         new QReq{line.substr(4, sp - 4), line.substr(sp + 1), ""});
+      } else if (line.rfind("PDF@", 0) == 0) {
+        // PDF@<winid> <qid> <path>
+        size_t sp0 = line.find(' ', 4);
+        if (sp0 == std::string::npos)
+          continue;
+        size_t sp = line.find(' ', sp0 + 1);
+        if (sp == std::string::npos)
+          continue;
+        webview_dispatch(g_w, do_pdf,
+                         new QReq{line.substr(sp0 + 1, sp - sp0 - 1),
+                                  line.substr(sp + 1), line.substr(4, sp0 - 4)});
       } else if (line.rfind("CAPTURE ", 0) == 0) {
         size_t sp = line.find(' ', 8);
         std::string qid = sp == std::string::npos ? line.substr(8)
@@ -5398,6 +5425,10 @@ static void pipe_read_loop() {
             p.size() > 2 ? atoi(p[2].c_str()) : 80});
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_eval, new std::string("window.print()"));
+      } else if (line.rfind("PRINT@", 0) == 0) {
+        // the asking window prints its own page
+        webview_dispatch(g_w, do_eval_win,
+                         new EvalReq{line.substr(6), "window.print()"});
       } else if (line == "RELOAD") {
         webview_dispatch(g_w, do_reload, nullptr);
       } else if (line == "QUIT") {

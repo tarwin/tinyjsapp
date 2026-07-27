@@ -106,6 +106,20 @@ are gone rather than deprecated.
   cannot work it out alone — `window.outerWidth`/`outerHeight` are `0` in a
   WKWebView. On Linux it comes from the WM's frame extents, so under Wayland,
   which has no server-side frame to ask about, expect it to equal the page box.
+- **`{ role: 'edit' }` places the standard Edit menu.** macOS installs an Edit
+  menu whether an app declares one or not — the webview needs its key
+  equivalents for ⌘C/⌘V to work at all — and it always went first, so a custom
+  File menu was stuck sitting *after* Edit, which no Mac app does. Put
+  `{ role: 'edit' }` in the `setMenu` array and the standard menu takes that
+  slot instead:
+
+  ```js
+  app.setMenu([{ title: 'File', items: [...] }, { role: 'edit' },
+               { title: 'View', items: [...] }]);
+  ```
+
+  Omit it and nothing changes. Windows and Linux have no launcher-owned menu,
+  so they skip the entry and keep the order the app declared.
 - **`minTinyjsVersion` in `tinyjs.json`.** Optional: the oldest tinyjs an app
   works with. Running it on an older one now fails with
   `myapp needs tinyjs 0.30.0 or newer — you have 0.28.3` instead of the app
@@ -121,6 +135,13 @@ are gone rather than deprecated.
   `tinyjs.json`** rather than only filling a gap — but never silently: if one
   displaces a value that was really in the file, the build says so. Resolution
   order is root → OS block → env.
+- **`tiny.win.print()` and `tiny.win.printToPDF()` print the window that
+  called them.** Both went straight to the main window, whichever page asked —
+  so in a multi-window app the document window's ⌘P printed the launcher
+  screen, and Save as PDF wrote a PDF of it. They now route by calling window
+  like every other `win.*` call (`PRINT@<id>` / `PDF@<id>` on the wire), on all
+  three platforms, and `app.window(id).print()` / `.printToPDF(path)` expose
+  the same thing to the backend. Single-window apps see no change.
 - **`capabilities()` stopped over-claiming**, on two platforms. Windows
   declared none of the app-surface keys while silently no-opping them, which
   under the table's "absent = true" rule claimed support that never existed.
@@ -157,6 +178,27 @@ are gone rather than deprecated.
 
   Pairs with `macos.ai` and `app.say()` for a hands-free loop — listen,
   generate, speak — which is what the deck's AI card now demonstrates.
+
+- **`macos.ai.generate` can call your functions.** Pass
+  `tools: [{ name, description, parameters, run }]` and the on-device model
+  decides which to invoke; `run(args)` is ordinary JavaScript and whatever it
+  returns goes back to the model. Backend only — a tool's `run` is a real
+  function, so it can't cross the bridge from a page.
+
+  Tools are declared in JS, not Swift, which needed the schema to be built at
+  *runtime*: `DynamicGenerationSchema` + an untyped `GeneratedContent`
+  argument, rather than the compile-time `@Generable` struct the framework's
+  examples use. The call round-trips Swift → a blocking C hop → the socket →
+  your handler → back, with a 20s deadline so a handler that never answers
+  can't wedge generation.
+
+  **With tools it resolves `{ text, calls }`, and `calls` is the record.**
+  This matters more than the plumbing: asked for three tool calls in one turn,
+  the model made all three in **one run out of four** — and its prose claimed
+  all three **every** time, including the runs where it silently skipped one.
+  It passed a wrong argument once too. Never read completion off `text`, and
+  put anything irreversible behind a confirmation rather than a hopeful read
+  of a sentence.
 
 - **On-device AI just ships now.** `tiny.app.ai` was previously reachable only
   by people who built tinyjs themselves with an opt-in env var, because the

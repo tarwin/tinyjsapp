@@ -452,6 +452,28 @@ here could reach.
       tried. (`macos.ai` is macOS-only regardless, so the full loop isn't
       portable — but dictation into the prompt box would be.)
 
+## Tool calling — built and driven, but only on this Mac
+
+Added 2026-07-27. The full round trip is verified end to end in the deck:
+4 tools offered, the model called `moveWindow({x:200,y:120})` and
+`showBadge({count:4})`, the window actually moved (314,117 → 200,120) and the
+restore button put it back exactly.
+
+- [ ] **A handler that throws, and one that never returns.** Both paths are
+      written — a throw becomes `{error}` handed to the model, and a silent
+      handler hits a 20s timeout in the launcher — and neither has been run.
+      The timeout matters most: it's the difference between a slow tool and a
+      permanently wedged generation, and it blocks a launcher thread while it
+      waits.
+- [ ] **Several tool calls in one generation, repeatedly.** The reliability
+      numbers in the docs come from a standalone Swift harness, not from the
+      deck. Worth re-measuring through the real path, since that's what the
+      card claims.
+- [ ] **A tool called during a `Talk to it` turn.** Speech → generate-with-
+      tools → speak has never been run as one sequence; the blocking C hop and
+      the speech recogniser have no reason to conflict, which is exactly the
+      kind of assumption that turns out wrong.
+
 ## AI in released builds — the one check CI can't make
 
 The release job now links the FoundationModels shim into every macOS

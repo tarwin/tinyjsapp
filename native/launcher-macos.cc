@@ -29,10 +29,13 @@
 //                         MENUBEGIN / MENU <title> /
 //                         ITEM <id>\t<label>\t<key>\t<flags c|d> /
 //                         SUB <id>\t<label> … SUBEND /
-//                         SEP / MENUEND              declare custom menu bar
+//                         SEP / MENUROLE <role> /
+//                         MENUEND                    declare custom menu bar
 //                                                    menus (applied on MENUEND;
 //                                                    flags: c=checked,
-//                                                    d=disabled; SUB nests)
+//                                                    d=disabled; SUB nests;
+//                                                    MENUROLE edit places the
+//                                                    standard Edit menu)
 //                         MENUUPD <id>\t<label>\t<checked>\t<enabled>
 //                                                    patch a live item ('' =
 //                                                    leave unchanged)
@@ -199,7 +202,10 @@
 //                                                    {ok, paths}
 //                                                    Reads: GET battery, wifi.
 //                         AI available <qid> /
-//                         AI generate <qid> <prompt>\t<instructions>
+//                         AI generate <qid> <prompt>\t<instructions>\t<toolsJson>
+//                         AITOOLRESULT <id> <json>   answer a tool call.
+//                         Out: AITOOL <id> <name>\t<argsJson> — the model
+//                         wants a tool run; the backend replies with the above.
 //                                                    on-device LLM
 //                                                    (FoundationModels; only
 //                                                    when built TINYJS_AI=1 on
@@ -282,8 +288,11 @@
 #include <cerrno>
 #include <cmath> // lrintf (audioTap float->int16)
 #include <ctime> // clock_gettime_nsec_np (audioTap chunk timestamps)
+#include <condition_variable>
 #include <fstream>
+#include <map>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -647,6 +656,10 @@ static void do_dialog(webview_t w, void *arg) {
 // A default app menu (About + Quit) is always installed; MENUBEGIN…MENUEND
 // declares additional custom menus. Item clicks are reported to the backend
 // as `MENU <id>` lines.
+//
+// The standard Edit menu is installed too — the webview needs its key
+// equivalents for ⌘C/⌘V to work — and it goes first unless a MENUROLE edit
+// line says where it belongs instead ({ role: 'edit' } in setMenu).
 
 struct MenuItemSpec {
   std::string id, label, key;
@@ -658,6 +671,7 @@ struct MenuItemSpec {
 struct MenuSpec {
   std::string title;
   std::vector<MenuItemSpec> items;
+  std::string role;       // MENUROLE line: a standard menu, built by us
 };
 
 #ifdef __APPLE__
@@ -803,26 +817,46 @@ static void apply_menus(webview_t, void *arg) {
     [appMenu addItem:quit];
     appItem.submenu = appMenu;
 
-    // Standard Edit menu so cmd-C/V/X/A work in the webview.
-    NSMenuItem *editItem = [[NSMenuItem alloc] init];
-    [bar addItem:editItem];
-    NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
-    [editMenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
-    [editMenu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
-    [editMenu addItem:[NSMenuItem separatorItem]];
-    [editMenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
-    [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
-    [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
-    [editMenu addItemWithTitle:@"Select All"
-                        action:@selector(selectAll:)
-                 keyEquivalent:@"a"];
-    editItem.submenu = editMenu;
+    // Standard Edit menu so cmd-C/V/X/A work in the webview. It is not
+    // optional — without it the webview has no key equivalents — but WHERE it
+    // sits is: a `MENUROLE edit` slot puts it between custom menus, so an app
+    // can have File before Edit. No slot declared: straight after the app
+    // menu, as it always was.
+    bool edit_placed = false;
+    auto add_edit_menu = [&]() {
+      if (edit_placed) return;
+      edit_placed = true;
+      NSMenuItem *editItem = [[NSMenuItem alloc] init];
+      [bar addItem:editItem];
+      NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+      [editMenu addItemWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"];
+      [editMenu addItemWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"];
+      [editMenu addItem:[NSMenuItem separatorItem]];
+      [editMenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+      [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+      [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+      [editMenu addItemWithTitle:@"Select All"
+                          action:@selector(selectAll:)
+                   keyEquivalent:@"a"];
+      editItem.submenu = editMenu;
+    };
+
+    bool has_edit_slot = false;
+    if (menus) {
+      for (const MenuSpec &m : *menus)
+        if (m.role == "edit") has_edit_slot = true;
+    }
+    if (!has_edit_slot) add_edit_menu();
 
     // Custom menus from the backend.
     [g_reg_menu release];
     g_reg_menu = [[NSMutableDictionary alloc] init];
     if (menus) {
       for (const MenuSpec &m : *menus) {
+        if (!m.role.empty()) {
+          if (m.role == "edit") add_edit_menu();
+          continue;                          // unknown roles are ignored
+        }
         NSMenuItem *holder = [[NSMenuItem alloc] init];
         [bar addItem:holder];
         NSMenu *menu = [[NSMenu alloc] initWithTitle:ns(m.title)];
@@ -5611,13 +5645,16 @@ static void do_title_win(webview_t, void *arg) { delete static_cast<EvalReq *>(a
 
 // --- print (macOS) ---------------------------------------------------------------
 
-static void do_print(webview_t w, void *) {
+// PRINT / PRINT@<id>: whichever window asked is the one that prints. A
+// multi-window app's ⌘P lives in the document window, not the main one.
+static void do_print(webview_t w, void *arg) {
+  std::string id = arg ? *static_cast<std::string *>(arg) : std::string();
+  delete static_cast<std::string *>(arg);
+  (void)w;
 #ifdef __APPLE__
   @autoreleasepool {
-    WKWebView *wv = (WKWebView *)webview_get_native_handle(
-        w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
-    NSWindow *win = (NSWindow *)webview_get_native_handle(
-        w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+    WKWebView *wv = webview_for_id(w, id);
+    NSWindow *win = window_for_id(w, id);
     if (!wv || !win)
       return;
     NSPrintInfo *pi = [NSPrintInfo sharedPrintInfo];
@@ -5641,6 +5678,7 @@ static void do_print(webview_t w, void *) {
 
 struct PdfReq {
   std::string qid, path;
+  std::string win;        // PDF@<id>: capture that window, not the main one
 };
 struct SpotlightReq {
   std::string qid, query;
@@ -5649,10 +5687,9 @@ struct SpotlightReq {
 #ifdef __APPLE__
 static void do_pdf(webview_t w, void *arg) {
   PdfReq *req = static_cast<PdfReq *>(arg);
-  std::string qid = req->qid, path = req->path;
+  std::string qid = req->qid, path = req->path, id = req->win;
   delete req;
-  WKWebView *wv = (WKWebView *)webview_get_native_handle(
-      w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
+  WKWebView *wv = webview_for_id(w, id);
   if (!wv) {
     sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":\"no webview\"}");
     return;
@@ -5933,22 +5970,70 @@ static void do_spotlight(webview_t, void *arg) {
 // never the UI thread. Without the flag every call answers "unsupported".
 
 struct AiReq {
-  std::string qid, op, prompt, instructions;
+  std::string qid, op, prompt, instructions, tools;
 };
 
 #if defined(__APPLE__) && defined(TINYJS_AI)
 extern "C" int tiny_ai_available();
 extern "C" char *tiny_ai_generate(const char *prompt, const char *instructions,
                                   char **errOut);
+extern "C" char *tiny_ai_generate_tools(
+    const char *prompt, const char *instructions, const char *toolsJson,
+    char *(*invoke)(const char *name, const char *argsJson), char **errOut);
 
 static dispatch_queue_t g_ai_queue = nullptr;
+
+// --- the tool round trip -----------------------------------------------------
+// Swift calls ai_tool_invoke on a background queue; it writes AITOOL down the
+// socket and BLOCKS until the backend answers with AITOOLRESULT. Blocking is
+// fine here (never the UI thread, never the Swift cooperative pool — see the
+// dispatch in TinyDynamicTool.call) and it keeps the Swift side a plain
+// function call instead of another async protocol.
+static std::mutex g_tool_mu;
+static std::condition_variable g_tool_cv;
+static std::map<long, std::string> g_tool_results;
+static std::set<long> g_tool_pending;
+static long g_tool_seq = 0;
+
+// Called from the socket reader when the backend answers.
+static void ai_tool_result(long id, const std::string &json) {
+  {
+    std::lock_guard<std::mutex> lk(g_tool_mu);
+    if (!g_tool_pending.count(id)) return;   // late or unknown — drop it
+    g_tool_results[id] = json;
+  }
+  g_tool_cv.notify_all();
+}
+
+static char *ai_tool_invoke(const char *name, const char *argsJson) {
+  long id;
+  {
+    std::lock_guard<std::mutex> lk(g_tool_mu);
+    id = ++g_tool_seq;
+    g_tool_pending.insert(id);
+  }
+  sock_write_line("AITOOL " + std::to_string(id) + " " +
+                  wire_escape(name ? name : "") + "\t" +
+                  wire_escape(argsJson ? argsJson : "{}"));
+  std::unique_lock<std::mutex> lk(g_tool_mu);
+  // A handler that never answers must not wedge generation for ever: time out
+  // and let the model see an error string, which it handles far better than a
+  // hang the user can only kill.
+  bool ok = g_tool_cv.wait_for(lk, std::chrono::seconds(20), [&] {
+    return g_tool_results.count(id) > 0;
+  });
+  std::string out = ok ? g_tool_results[id] : "{\"error\":\"tool timed out\"}";
+  g_tool_results.erase(id);
+  g_tool_pending.erase(id);
+  return strdup(out.c_str());
+}
 
 static void do_ai(webview_t, void *arg) {
   AiReq *req = static_cast<AiReq *>(arg);
   if (!g_ai_queue)
     g_ai_queue = dispatch_queue_create("app.tinyjs.ai", DISPATCH_QUEUE_SERIAL);
   std::string qid = req->qid, op = req->op, prompt = req->prompt,
-              instr = req->instructions;
+              instr = req->instructions, tools = req->tools;
   delete req;
   dispatch_async(g_ai_queue, ^{
     if (op == "available") {
@@ -5958,8 +6043,12 @@ static void do_ai(webview_t, void *arg) {
       return;
     }
     char *err = nullptr;
-    char *out = tiny_ai_generate(prompt.c_str(),
-                                 instr.empty() ? nullptr : instr.c_str(), &err);
+    char *out = tools.empty()
+        ? tiny_ai_generate(prompt.c_str(),
+                           instr.empty() ? nullptr : instr.c_str(), &err)
+        : tiny_ai_generate_tools(prompt.c_str(),
+                                 instr.empty() ? nullptr : instr.c_str(),
+                                 tools.c_str(), ai_tool_invoke, &err);
     if (out) {
       sock_write_line("GOT " + qid + " {\"ok\":true,\"text\":" +
                       json_escape(out) + "}");
@@ -6184,7 +6273,12 @@ static void sock_read_loop() {
         in_menu_block = true;
       } else if (in_menu_block && line.rfind("MENU ", 0) == 0) {
         flush_root(); // previous menu's items (if any)
-        pending_menus.push_back(MenuSpec{line.substr(5), {}});
+        pending_menus.push_back(MenuSpec{line.substr(5), {}, ""});
+        build_stack.assign(1, {});
+      } else if (in_menu_block && line.rfind("MENUROLE ", 0) == 0) {
+        // a standard menu (only "edit"), claiming this slot in the bar
+        flush_root();
+        pending_menus.push_back(MenuSpec{"", {}, line.substr(9)});
         build_stack.assign(1, {});
       } else if ((in_menu_block || in_tray_block || in_ctx_block) &&
                  line.rfind("ITEM ", 0) == 0) {
@@ -6584,12 +6678,21 @@ static void sock_read_loop() {
                          new double(line.size() > 9
                                         ? std::atof(line.c_str() + 9)
                                         : -1.0));
-      } else if (line.rfind("PDF ", 0) == 0) {
-        size_t sp = line.find(' ', 4);
+      } else if (line.rfind("PDF ", 0) == 0 || line.rfind("PDF@", 0) == 0) {
+        // PDF <qid> <path> | PDF@<winid> <qid> <path>
+        std::string win;
+        size_t head = 4;
+        if (line[3] == '@') {
+          size_t sp0 = line.find(' ', 4);
+          if (sp0 == std::string::npos) continue;
+          win = line.substr(4, sp0 - 4);
+          head = sp0 + 1;
+        }
+        size_t sp = line.find(' ', head);
         if (sp == std::string::npos) continue;
         webview_dispatch(g_w, do_pdf,
-                         new PdfReq{line.substr(4, sp - 4),
-                                    wire_unescape(line.substr(sp + 1))});
+                         new PdfReq{line.substr(head, sp - head),
+                                    wire_unescape(line.substr(sp + 1)), win});
       } else if (line == "APPICON" || line.rfind("APPICON ", 0) == 0) {
         webview_dispatch(g_w, do_appicon,
                          new std::string(line.size() > 8
@@ -6616,10 +6719,26 @@ static void sock_read_loop() {
           std::vector<std::string> p = split_tabs(line.substr(q + 1));
           req->prompt = p.size() > 0 ? wire_unescape(p[0]) : "";
           req->instructions = p.size() > 1 ? wire_unescape(p[1]) : "";
+          req->tools = p.size() > 2 ? wire_unescape(p[2]) : "";
         }
         webview_dispatch(g_w, do_ai, req);
+      } else if (line.rfind("AITOOLRESULT ", 0) == 0) {
+        // The backend answering a tool call. Handled right here on the reader
+        // thread rather than dispatched: the thread waiting on it is blocked in
+        // ai_tool_invoke, and hopping to the UI thread would only add latency
+        // to something with a 20s deadline.
+        size_t sp = line.find(' ', 13);
+        if (sp == std::string::npos) continue;
+        long id = std::atol(line.substr(13, sp - 13).c_str());
+#if defined(__APPLE__) && defined(TINYJS_AI)
+        ai_tool_result(id, wire_unescape(line.substr(sp + 1)));
+#else
+        (void)id;
+#endif
       } else if (line == "PRINT") {
         webview_dispatch(g_w, do_print, nullptr);
+      } else if (line.rfind("PRINT@", 0) == 0) {
+        webview_dispatch(g_w, do_print, new std::string(line.substr(6)));
       } else if (line == "RELOAD") {
         webview_dispatch(g_w, do_reload, nullptr);
       } else if (line == "QUIT") {

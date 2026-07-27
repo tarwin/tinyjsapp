@@ -642,6 +642,24 @@ const docs = await tiny.app.spotlight('quarterly report');
 // on-device LLM — Apple's FoundationModels (offline, no API key, private).
 // Needs macOS 26 AND Apple Intelligence switched on, so ALWAYS check
 // availability() first — three states, and only one of them can generate.
+// TOOL CALLING (backend only — a tool's run() is a real function, so it
+// can't cross the bridge from a page). The model decides what to call:
+const { text, calls } = await app.macos.ai.generate('Move the window to 200, 120', {
+  instructions: 'You control a desktop app window. Use the tools.',
+  tools: [{
+    name: 'moveWindow',
+    description: 'Move the application window to a position on screen.',
+    parameters: { x: { type: 'integer', description: 'x in points' },
+                  y: { type: 'integer', description: 'y in points' } },
+    run: ({ x, y }) => { app.window('main').setPosition(x, y); return 'moved'; },
+  }],
+});
+// `calls` is the RECORD; `text` is a summary that may be fiction. Measured on
+// macOS 26.5: asked for three tool calls in one turn, this model made all
+// three in one run out of four — and claimed all three in its prose every
+// time, including the runs where it silently skipped one. Put anything
+// irreversible behind a confirmation, not behind a hopeful read of `text`.
+
 if (await tiny.macos.ai.availability() === 'available') {
   const reply = await tiny.macos.ai.generate('Summarise this in one line: ' + text,
     { instructions: 'You are terse.' });   // instructions = a system prompt
@@ -687,6 +705,22 @@ const { exists, label, checked, enabled } = await tiny.menu.get('mute');
 
 The same item shape (checked / enabled / submenu) works in tray and context
 menus, and `menu.update` / `menu.get` reach those too.
+
+On macOS that Edit menu isn't optional — the webview needs its key equivalents
+— but where it sits is. `{ role: 'edit' }` in the array gives it that slot
+instead of the first one, which is how a **File** menu gets to come before it,
+the way every Mac app has it:
+
+```js
+tiny.menu.set([
+  { title: 'File', items: [...] },
+  { role: 'edit' },                 // Undo / Cut / Copy / Paste / Select All
+  { title: 'View', items: [...] },
+]);
+```
+
+Windows and Linux have no launcher-owned menu, so they skip the entry and keep
+the order you declared.
 
 The dialogs and menus are native: the backend hands the work to the launcher,
 which runs panels/menus on the UI thread and answers the page's promise

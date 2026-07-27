@@ -978,7 +978,23 @@ const docs = await <b>tiny.app.spotlight</b>('quarterly report');
 <i>// on-device LLM — Apple's FoundationModels (offline, no API key, private).</i>
 <i>// Needs macOS 26 + Apple Intelligence on; guard on availability().</i>
 if (await <b>tiny.macos.ai.availability</b>() === 'available')
-  await <b>tiny.macos.ai.generate</b>('Summarise: ' + text, { instructions: 'Be terse.' });</pre>
+  await <b>tiny.macos.ai.generate</b>('Summarise: ' + text, { instructions: 'Be terse.' });
+
+<i>// tool calling — BACKEND only (run() is a real function, it can't cross</i>
+<i>// the bridge from a page). The schema is built at runtime from parameters.</i>
+const { text, calls } = await <b>app.macos.ai.generate</b>('Move the window to 200, 120', {
+  instructions: 'You control a desktop app window. Use the tools.',
+  tools: [{ name: 'moveWindow', description: 'Move the window on screen.',
+            parameters: { x: { type: 'integer', description: 'x in points' },
+                          y: { type: 'integer', description: 'y in points' } },
+            run: ({ x, y }) =&gt; { app.window('main').setPosition(x, y); return 'moved'; } }],
+});</pre>
+    <p class="note"><b>Read <code>calls</code>, not <code>text</code>.</b> Measured on
+    macOS 26.5: asked for three tool calls in one turn, the model made all three in
+    <em>one run out of four</em> — and its prose claimed all three <em>every</em> time,
+    including the runs where it silently skipped one. It also passed a wrong argument
+    once. <code>calls</code> is what happened; the sentence is a summary that may be
+    fiction. Put anything irreversible behind a confirmation.</p>
   </section>
 
   <section id="system">

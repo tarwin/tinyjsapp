@@ -496,6 +496,16 @@ await tiny.app.spotlight(query);  // find files by name/content -> up to 100 pat
 // three states, and only 'available' can generate.
 if (await tiny.macos.ai.availability() === 'available')   // |'unavailable'|'unsupported'
   await tiny.macos.ai.generate(prompt, { instructions }); // instructions = system prompt
+// TOOL CALLING, backend only (run() is a real function — it can't cross the
+// bridge from a page). Schema is built at RUNTIME from `parameters`, so tools
+// are declared in plain JS:
+const { text, calls } = await app.macos.ai.generate(ask, { instructions, tools: [{
+  name: 'moveWindow', description: 'Move the window.',
+  parameters: { x: { type: 'integer', description: 'x in points' } },
+  run: ({ x }) => { app.window('main').setPosition(x, 0); return 'moved'; } }] });
+// READ `calls`, NOT `text`. Measured: asked for 3 tool calls in one turn it
+// made all 3 in ONE run of four, and its prose claimed all 3 EVERY time —
+// including runs where it skipped one. Confirm anything irreversible.
 
 tiny.win.print();                           // native print panel
 

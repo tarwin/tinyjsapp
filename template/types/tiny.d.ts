@@ -22,8 +22,17 @@ declare interface TinyMenuItem {
 }
 
 declare interface TinyMenu {
-  title: string;
-  items: TinyMenuItem[];
+  title?: string;
+  items?: TinyMenuItem[];
+  /**
+   * A standard menu the launcher builds itself, taking this slot in the bar
+   * instead of a menu of your own. 'edit' is macOS's Edit menu (Undo, Cut,
+   * Copy, Paste, Select All): it is always installed — the webview needs its
+   * key equivalents — and goes first unless you say where it belongs, which
+   * is how you get File before Edit. Windows and Linux have no such menu and
+   * skip the entry.
+   */
+  role?: 'edit';
 }
 
 declare interface TinyMenuItemState {
@@ -73,11 +82,41 @@ declare type TinySoundName = 'info' | 'success' | 'alert' | 'error';
  *  macOS, or a launcher compiled without the FoundationModels shim. */
 declare type TinyAiAvailability = 'available' | 'unavailable' | 'unsupported';
 
+/** A tool the on-device model may call. `run` is YOUR function; whatever it
+ *  returns goes back to the model (objects are JSON'd). Backend only — a real
+ *  function can't cross the bridge from a page. */
+declare interface TinyAiTool {
+  name: string;
+  description: string;
+  /** { x: 'integer' } or { x: { type: 'integer', description: 'why' } }.
+   *  Types: string | integer | number | boolean. */
+  parameters?: Record<string, string | { type?: string; description?: string }>;
+  run(args: Record<string, any>): any | Promise<any>;
+}
+
+/** What the model actually invoked — the record to trust, not the prose. */
+declare interface TinyAiCall {
+  name: string;
+  args: Record<string, any>;
+  result: any;
+}
+
 declare interface TinyAi {
   availability(): Promise<TinyAiAvailability>;
   /** offline, no API key. opts.instructions = a system prompt. Throws with
    *  the reason (incl. 'not built in' where the shim wasn't compiled). */
   generate(prompt: string, opts?: { instructions?: string }): Promise<string>;
+}
+
+/** The backend's AI surface: same as TinyAi, plus tool calling. */
+declare interface TinyAiBackend extends TinyAi {
+  generate(prompt: string, opts?: { instructions?: string }): Promise<string>;
+  /** With tools, resolves { text, calls } — and `calls` is what happened.
+   *  The model skips tools it was asked for and its prose says it didn't:
+   *  measured 3-of-3 in one run out of four, with the text claiming all three
+   *  every time. Never read completion off `text`. */
+  generate(prompt: string, opts: { instructions?: string; tools: TinyAiTool[] }):
+    Promise<{ text: string; calls: TinyAiCall[] }>;
 }
 
 declare interface TinyBattery {
@@ -821,6 +860,10 @@ declare interface TinyWindowHandle {
   setAllSpaces(enabled: boolean): void;
   setChrome(opts: TinyChromeOptions): void;
   getState(): Promise<TinyWinState>;
+  /** print THIS window's page (its own print panel) */
+  print(): void;
+  /** render THIS window's page to a PDF file (vector) */
+  printToPDF(path: string): Promise<{ path: string }>;
   /** native share sheet anchored at page coordinates in this window */
   share(opts?: TinyShareOptions): boolean;
 }
@@ -941,7 +984,7 @@ declare interface TinyApp {
     recorder: TinyRecorder;
     /** on-device LLM (FoundationModels) — needs macOS 26 with Apple
      *  Intelligence on; check availability() first, always */
-    ai: TinyAi;
+    ai: TinyAiBackend;
     /** text selected in the frontmost app (Accessibility); null if none */
     selectedText(): Promise<string | null>;
     /** other apps' on-screen windows (Accessibility); null if not granted */
