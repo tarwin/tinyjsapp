@@ -253,6 +253,9 @@ const greeting = await tiny.api.call('hello', { name: 'world' });  // request/re
 tiny.api.on('tick', (t) => ...);                                   // backend push
 
 tiny.log('debug msg');  tiny.quit();
+// tiny.log prints from the BACKEND, tagged [web] — so the page's lines and
+// the backend's interleave in one terminal, in the order they happened.
+// Objects arrive as objects; it resolves true once the backend has the line.
 tiny.notify('Done', 'Your export finished');   // desktop notification
 // packaged apps get REAL Notification Center banners (your app's icon,
 // permission prompt on first use) when built with a signing identity —
