@@ -296,6 +296,30 @@ TODO-linux.md).
       answer the dialog, and the answer is remembered per target app — reset
       with `tccutil reset AppleEvents` to see the prompt again.
 
+- [ ] **the bouncing ball — hover and click** — the deck's App ▸ Window ops
+      *Set a ball loose*. Driven on macOS 2026-07-27: the window really moves
+      (its `getState().x/y` tracks the page's own numbers frame by frame), it
+      reports `chrome: { frame: false, transparent: true }`, `alwaysOnTop:
+      true`, it turns at the visible-rect edges and closes itself at zero. Not
+      driven, because it needs a cursor: **hover holds it** and **click pops
+      it**. That pair is the actual claim on the card — that a window being
+      re-placed sixty times a second is still taking mouse events — so it wants
+      an eye on it.
+
+## The ball on Windows and Linux — never run there
+
+- [ ] **Windows** — per-frame `win.setPosition` on a second window: is a
+      `SetWindowPos` per frame smooth, or does it stutter/trail? And does
+      `chrome: { transparent: true }` on a WebView2 child window give a real
+      circle, or a black square behind it?
+- [ ] **Linux/X11** — same two questions through GTK, plus: WebKitGTK needs an
+      RGBA visual for a transparent window, and the ball is the first place a
+      *secondary* window asks for one.
+- [ ] **Linux/Wayland** — the honest-failure path: `getState().canPosition` is
+      false there, and ball.html is supposed to show `✋ no setPosition` and
+      close after six seconds rather than sit still counting down. Written
+      blind; never seen.
+
 ## Driving these checks headlessly on Windows
 
 No clicking needed, and worth reusing — the decorations live outside the app
