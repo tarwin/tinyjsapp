@@ -413,29 +413,34 @@ static WKWebView *webview_for_id(webview_t w, const std::string &id); // below
 
 static void do_size(webview_t w, void *arg) {
   SizeReq *s = static_cast<SizeReq *>(arg);
+#ifdef __APPLE__
+  // CONTENT size — the page's own box, which is what win.open's `size` and
+  // setMinSize have always meant and what getState now reports back. Sizes
+  // round-trip: read getState, hand width/height straight back to setSize,
+  // and nothing moves. (They used to disagree by the title bar, and a window
+  // that re-asserted its own size ratcheted 32pt taller every pass; the fix
+  // then was to make BOTH ends frame units, which left creation — content —
+  // as the odd one out and macOS 32pt shorter than Windows and Linux for the
+  // same declared size.)
+  //
+  // Main goes through the same path as every satellite. webview_set_size sets
+  // the FRAME, rewrites the styleMask wholesale (wiping frameless chrome) and
+  // re-centers the window, none of which belongs in a resize.
+  NSWindow *win = window_for_id(w, s->win);
+  if (win && s->width > 0 && s->height > 0) {
+    NSRect f = win.frame;
+    CGFloat top = NSMaxY(f); // keep the top-left anchored, as users expect
+    f.size =
+        [win frameRectForContentRect:NSMakeRect(0, 0, s->width, s->height)].size;
+    f.origin.y = top - f.size.height;
+    [win setFrame:f display:YES];
+  }
+#else
   if (s->win == "main") {
     webview_set_size(w, s->width, s->height, WEBVIEW_HINT_NONE);
-    // The webview library's set_size rewrites the styleMask wholesale,
-    // wiping frameless chrome and resizable overrides — restore them.
     reapply_window_overrides(w);
-  } else {
-#ifdef __APPLE__
-    NSWindow *win = window_for_id(w, s->win);
-    if (win) {
-      // FRAME size, not content size: getState reports win.frame, so any
-      // read-modify-write of a TITLED satellite ratcheted up by the title bar
-      // every pass (measured: 600x400 -> 600x432 -> 464 -> 496…). Borderless
-      // windows never showed it because content == frame there. Same fix as
-      // the Windows twin. Window CREATION still takes a content size — it has
-      // no feedback loop to ratchet.
-      NSRect f = win.frame;
-      CGFloat top = NSMaxY(f); // keep the top-left anchored, as users expect
-      f.size = NSMakeSize(s->width, s->height);
-      f.origin.y = top - s->height;
-      [win setFrame:f display:YES];
-    }
-#endif
   }
+#endif
   delete s;
 }
 
@@ -3157,8 +3162,15 @@ static void do_get(webview_t w, void *arg) {
       WKWebView *gwv = webview_for_id(w, wid);
       if (win) {
         NSRect f = win.frame;
-        // width/height are frame size — the same units setSize uses, so
-        // set → get round-trips.
+        // width/height are the CONTENT size — the page's box, the same units
+        // win.open's `size`, setSize and setMinSize speak, so set → get
+        // round-trips on every platform. x/y stay the frame's top-left,
+        // because that is what setPosition takes. `outer` is the footprint
+        // the screen sees, decorations included: the difference between the
+        // two is the title bar, and a window that has to keep itself inside a
+        // screen rect needs the outer number (window.outerWidth/outerHeight
+        // are 0 in a WKWebView, so the page cannot work it out alone).
+        NSRect cr = [win contentRectForFrameRect:f];
         NSScreen *scr = win.screen ?: [NSScreen mainScreen];
         CGFloat top = NSMaxY([[NSScreen screens][0] frame]);
         bool fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
@@ -3177,10 +3189,11 @@ static void do_get(webview_t w, void *arg) {
           }
         }
         controls += "]";
-        char buf[768];
+        char buf[1024]; // truncation here would emit half a JSON object
         std::snprintf(
             buf, sizeof(buf),
             "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d,"
+            "\"outer\":{\"width\":%d,\"height\":%d},"
             "\"fullscreen\":%s,\"minimized\":%s,\"visible\":%s,\"focused\":%s,"
             "\"alwaysOnTop\":%s,\"resizable\":%s,"
             "\"clickThrough\":%s,\"level\":\"%s\",\"allSpaces\":%s,"
@@ -3188,8 +3201,9 @@ static void do_get(webview_t w, void *arg) {
             "\"transparent\":%s,\"vibrancy\":%s,\"squareCorners\":%s,"
             "\"acceptsFirstMouse\":%s},"
             "\"screen\":{\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
-            (int)f.origin.x, (int)(top - NSMaxY(f)), (int)f.size.width,
-            (int)f.size.height, fs ? "true" : "false",
+            (int)f.origin.x, (int)(top - NSMaxY(f)), (int)cr.size.width,
+            (int)cr.size.height, (int)f.size.width, (int)f.size.height,
+            fs ? "true" : "false",
             win.miniaturized ? "true" : "false", win.visible ? "true" : "false",
             win.keyWindow ? "true" : "false",
             win.level != NSNormalWindowLevel ? "true" : "false",
@@ -4960,18 +4974,26 @@ static void do_audiobalance(const std::string &rest) {
 // owns every pixel and moves the window via data-tiny-drag, exactly like
 // frameless. This is the ONLY way to lose macOS's window corner radius.
 static void apply_square(NSWindow *win, bool square) {
-  NSRect keep = win.frame;
+  // The page's box survives the swap, not the frame — same rule as the
+  // frameless toggle, so a squareCorners app is the same size in dev (chrome
+  // applied after the window exists) as packaged (applied from the plist).
+  NSSize keep_content = [win contentRectForFrameRect:win.frame].size;
   if (square) {
     ensure_window_can_key(object_getClass(win));
     win.styleMask = NSWindowStyleMaskResizable; // no Titled bit → square
     win.hasShadow = YES;
-    [win setFrame:keep display:YES];
-    [win makeKeyAndOrderFront:nil]; // re-key after the styleMask swap
   } else {
     win.styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                     NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
-    [win setFrame:keep display:YES];
   }
+  NSRect f = win.frame;
+  CGFloat top = NSMaxY(f);
+  f.size = [win frameRectForContentRect:NSMakeRect(0, 0, keep_content.width,
+                                                   keep_content.height)].size;
+  f.origin.y = top - f.size.height;
+  [win setFrame:f display:YES];
+  if (square)
+    [win makeKeyAndOrderFront:nil]; // re-key after the styleMask swap
 }
 
 // The chrome-application core, factored out so do_winopen can apply chrome
@@ -4985,10 +5007,16 @@ static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
       bool frameless = req_frameless;
       if (is_main)
         g_chrome_frameless = frameless;
-      // AppKit preserves the CONTENT rect across a styleMask change and
-      // resizes the frame; pin the frame instead so the window keeps its
-      // size and the page absorbs (or returns) the titlebar strip.
-      NSRect keep = win.frame;
+      // Keep the PAGE's box across the change; the frame gives up (or takes
+      // back) the title bar strip around it. That's the contract everywhere
+      // else — `size`, setSize, setMinSize and getState all mean the content
+      // box — and it's what makes a frameless app the same size in dev, where
+      // the bridge calls setChrome after the window exists, as in a packaged
+      // build, where the plist applies it before first paint. Toggling
+      // FullSizeContentView does NOT get AppKit's usual content-preserving
+      // treatment (it keeps the frame and hands the strip to the page), so
+      // this has to be explicit.
+      NSSize keep_content = [win contentRectForFrameRect:win.frame].size;
       if (frameless) {
         win.styleMask |= NSWindowStyleMaskFullSizeContentView;
         win.titlebarAppearsTransparent = YES;
@@ -4998,7 +5026,14 @@ static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
         win.titlebarAppearsTransparent = NO;
         win.titleVisibility = NSWindowTitleVisible;
       }
-      [win setFrame:keep display:YES];
+      {
+        NSRect f = win.frame;
+        CGFloat top = NSMaxY(f); // top-left anchored, like every other resize
+        f.size = [win frameRectForContentRect:NSMakeRect(0, 0, keep_content.width,
+                                                         keep_content.height)].size;
+        f.origin.y = top - f.size.height;
+        [win setFrame:f display:YES];
+      }
     }
     if (!req->traffic.empty()) {
       // '' keep · 'all' · 'none' · a comma list of close/minimize/maximize.
@@ -5483,6 +5518,9 @@ static void do_winopen(webview_t w, void *arg) {
       NSVisualEffectView **effect = effect_slot_for(req->id);
       if (effect)
         apply_chrome_fields(win, wv, effect, false, &cr);
+      // No size correction needed here: apply_chrome_fields preserves the
+      // content box, and the window was created with initWithContentRect, so
+      // `size` is already the page's box whatever chrome lands on it.
     }
     if (req->hasPos) {
       CGFloat screenTop = NSMaxY([[NSScreen screens][0] frame]);
@@ -6906,6 +6944,26 @@ int main(int argc, char *argv[]) {
   webview_set_title(g_w, title.c_str());
   webview_set_size(g_w, width, height, WEBVIEW_HINT_NONE);
 #ifdef __APPLE__
+  // …and then say what we actually meant. webview_set_size treats those
+  // numbers as the FRAME, so the page came out title-bar-shorter than the
+  // declared size — the deck asks for 1100x720 and got a 688-tall page on
+  // macOS while Windows and Linux both gave it 720. Correct the frame so the
+  // CONTENT is the declared size, the same as the other two launchers (the
+  // Windows one does this a few lines after its own set_size, for the mirror-
+  // image reason). Left as a correction rather than a replacement because
+  // set_size is also what shows and centers the window at boot.
+  {
+    NSWindow *mw = window_for_id(g_w, "main");
+    if (mw && width > 0 && height > 0) {
+      NSRect f = mw.frame;
+      CGFloat top = NSMaxY(f);
+      f.size =
+          [mw frameRectForContentRect:NSMakeRect(0, 0, width, height)].size;
+      f.origin.y = top - f.size.height;
+      [mw setFrame:f display:YES];
+      [mw center];
+    }
+  }
   // Unified page RPC for every window, the main one included (replaces
   // webview_bind: the shim's __invoke wins because nothing else defines it).
   {

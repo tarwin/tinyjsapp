@@ -720,6 +720,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // `launcher --run` (CREATE_NO_WINDOW). Elsewhere it's plain tjs.spawn.
     spawnHidden(args, opts) { return tjs.spawn(hiddenArgv(args), opts); },
     setTitle(t) { send('TITLE ' + String(t).replace(/\n/g, ' ')); },
+    // Content size — the page's own box, decorations excluded, the same units
+    // tinyjs.json's "size" and getState().width/height use.
     setSize(w, h) { send(`SIZE ${w | 0} ${h | 0}`); },
     // Not JS eval(): sends script to the app's own page via webview_eval,
     // the same channel push() uses. Never receives external input.
@@ -1215,6 +1217,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Open (or focus) a secondary window. `page` is an html file in your
     // frontend dir (e.g. 'settings.html') or an absolute path. Each window
     // runs the same tiny.* bridge; win.* calls from its page target itself.
+    // `size` is the page's box: a frameless window is exactly that big, a
+    // titled one is that plus a title bar.
     // chrome ({ frame?, windowControls?, transparent?, vibrancy?,
     // squareCorners?, acceptsFirstMouse? }) and position ({ x, y }) are applied
     // BEFORE the window paints — no titlebar flash for frameless panels, no

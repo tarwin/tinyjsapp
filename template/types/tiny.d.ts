@@ -113,10 +113,17 @@ declare interface TinyOtherWindow {
 }
 
 declare interface TinyWinState {
+  /** frame top-left in screen coordinates — the units setPosition takes */
   x: number;
   y: number;
+  /** the PAGE's box, decorations excluded — the units win.open's `size`,
+   *  setSize and setMinSize take, so set -> get round-trips */
   width: number;
   height: number;
+  /** the footprint on screen, decorations included. Equals width/height for a
+   *  frameless window. (window.outerWidth/outerHeight are 0 in a WKWebView, so
+   *  a page keeping itself inside a screen rect needs this.) */
+  outer: { width: number; height: number };
   fullscreen: boolean;
   minimized: boolean;
   visible: boolean;
@@ -239,7 +246,7 @@ declare interface TinyOpenWindowOptions {
   /** html file in your frontend dir (e.g. 'settings.html') or absolute path */
   page?: string;
   title?: string;
-  /** 'WxH', e.g. '420x300' */
+  /** 'WxH', e.g. '420x300' — the PAGE's box, decorations excluded */
   size?: string;
   /** applied BEFORE first paint — no titlebar flash for frameless panels */
   chrome?: TinyChromeOptions;
@@ -508,6 +515,8 @@ declare interface Tiny {
     windows(): Promise<string[]>;
 
     setTitle(title: string): Promise<any>;
+    /** resize the PAGE's box (decorations excluded), top-left anchored —
+     *  the same units getState().width/height reports back */
     setSize(width: number, height: number): Promise<any>;
     /** hides the APP (NSApp hide): focus returns to the previous app —
      *  palettes can hide-then-paste with no frontmost tracking */
@@ -789,6 +798,7 @@ declare interface TinyWindowHandle {
   push(event: string, data?: unknown): void;
   close(): void;
   setTitle(title: string): void;
+  /** resize the PAGE's box (decorations excluded), top-left anchored */
   setSize(width: number, height: number): void;
   setPosition(x: number, y: number): void;
   center(): void;

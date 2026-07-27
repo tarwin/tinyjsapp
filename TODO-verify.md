@@ -306,6 +306,34 @@ TODO-linux.md).
       re-placed sixty times a second is still taking mouse events — so it wants
       an eye on it.
 
+## Window sizes are the page's box now — Windows and Linux unbuilt
+
+The 0.30.0 size contract (`win.open`'s `size`, `setSize`, `setMinSize` and
+`getState().width/height` all mean the page's box; `getState().outer` is the
+footprint with decorations). Measured on macOS 2026-07-27 — declared 1100x720
+gives a 1100x720 page and a 1100x752 outer, a titled satellite asked for
+460x420 gets 460x420, a frameless one asked for 150x150 gets 150x150, and
+setSize→getState→setSize holds still over three passes. The other two
+launchers were edited to match but not compiled:
+
+- [ ] **Windows** — `do_size` now measures the live window/client insets and
+      adds them (rather than calling AdjustWindowRect, which would inflate the
+      page on the borderless-client windows this launcher makes); `getState`
+      reports `GetClientRect` for width/height and `GetWindowRect` for `outer`.
+      Only a **titled satellite** can show a difference — main and frameless
+      secondaries answer `WM_NCCALCSIZE` with no non-client area, so client ==
+      frame there. The check that matters is the ratchet the frame-units
+      workaround was fixed for: read `getState()`, hand width/height back to
+      `setSize`, repeat three times, and watch for growth.
+- [ ] **Linux** — already content-units on both ends, so the change is
+      `getState().outer` (from `gdk_window_get_frame_extents`) plus one fix:
+      the menu bar lives inside the toplevel, so the first bar to appear used
+      to eat its own height out of the page. `apply_menus` now gives it back
+      once, on an idle pass, and only while the window is still exactly the
+      size it was born at. Check a menu'd app gets its declared height, that a
+      user resize before the menus land isn't stomped, and what `outer` reports
+      under Wayland (expected: equal to the page box — no server-side frame).
+
 ## The ball on Windows and Linux — never run there
 
 - [ ] **Windows** — per-frame `win.setPosition` on a second window: is a

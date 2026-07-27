@@ -234,10 +234,15 @@
     win: {
       id: window.__TINY_WIN || 'main',   // which window this page lives in
       // Open (or focus) another window; page = html file in your frontend dir.
+      // size: 'WxH' is the page's box — a frameless window gets exactly that,
+      // a titled one gets it plus a title bar.
       open: (id, opts = {}) => call('win.open', { id, ...opts }),
       close: (id) => call('win.close', id ? { id } : {}),  // no id = this window
       windows: () => call('win.windows'),                  // ['main', ...]
       setTitle: (title) => call('win.setTitle', { title }),
+      // The PAGE's box, decorations excluded — the same units win.open's
+      // `size`, setMinSize and getState().width/height speak, so reading the
+      // size and handing it straight back is a no-op. Top-left stays put.
       setSize: (width, height) => call('win.setSize', { width, height }),
       // hide(): hides the APP — focus returns to the previous app (palettes
       // can hide-then-paste with no frontmost tracking). show({ activate:
@@ -268,8 +273,13 @@
       setPosition: (x, y) => call('win.setPosition', { x, y }),
       restore: () => call('win.restore'),
       setFullscreen: (enabled) => call('win.setFullscreen', { enabled }),
-      // { x, y, width, height, fullscreen, minimized, visible, focused,
-      //   alwaysOnTop, resizable, screen: { width, height, scale } }
+      // { x, y, width, height, outer: { width, height }, fullscreen,
+      //   minimized, visible, focused, alwaysOnTop, resizable,
+      //   screen: { width, height, scale } }
+      // width/height are the page's box (what setSize takes); `outer` is the
+      // footprint on screen, decorations in — window.outerWidth/outerHeight
+      // are 0 in a WKWebView, so this is the only way to ask. x/y are the
+      // window's top-left, which is what setPosition takes.
       getState: () => call('win.getState'),
       setHideOnClose: (enabled) => call('win.setHideOnClose', { enabled }),
       // { frame?, windowControls?, transparent?, vibrancy? } — frameless

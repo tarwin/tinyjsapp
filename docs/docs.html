@@ -505,7 +505,9 @@ audio.play();</pre>
 
   <section id="window">
     <h2>tiny.win <span class="tag">window control</span></h2>
-    <pre><b>tiny.win.setTitle</b>(t);  <b>tiny.win.setSize</b>(w, h);
+    <pre><i>// setSize is the PAGE's box (decorations excluded), top-left anchored —</i>
+<i>// the same units tinyjs.json's "size" and win.open's size: 'WxH' take.</i>
+<b>tiny.win.setTitle</b>(t);  <b>tiny.win.setSize</b>(w, h);
 <b>tiny.win.center</b>();     <b>tiny.win.setPosition</b>(x, y);   <i>// top-left origin</i>
 <b>tiny.win.minimize</b>();   <b>tiny.win.restore</b>();
 <b>tiny.win.fullscreen</b>();  <b>tiny.win.setFullscreen</b>(bool);  <i>// toggle / absolute</i>
@@ -565,8 +567,13 @@ row.addEventListener('mousedown', () =&gt;
 
 <i>// read the window back</i>
 const s = await <b>tiny.win.getState</b>();
-<i>// { x, y, width, height, fullscreen, minimized, visible, focused,</i>
-<i>//   alwaysOnTop, resizable, screen: { width, height, scale } }</i></pre>
+<i>// { x, y, width, height, outer: { width, height }, fullscreen, minimized,</i>
+<i>//   visible, focused, alwaysOnTop, resizable, screen: { width, height, scale } }</i>
+<i>// width/height are the PAGE's box — the same units setSize, setMinSize and</i>
+<i>// win.open's size take, so reading the size and handing it back is a no-op.</i>
+<i>// outer is the footprint on screen, decorations in; for a frameless window</i>
+<i>// the two are equal. (window.outerWidth/outerHeight are 0 in a WKWebView.)</i>
+<i>// x/y are the window's top-left — the units setPosition takes.</i></pre>
   </section>
 
   <section id="windows">

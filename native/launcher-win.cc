@@ -3541,7 +3541,7 @@ static std::string win_state_json(HWND hwnd) {
   LONG style = GetWindowLongW(hwnd, GWL_STYLE);
   LONG ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
   bool frameless = main ? (g_frameless || g_square) : !(style & WS_CAPTION);
-  char buf[640];
+  char buf[896]; // truncation here would emit half a JSON object
   // Read the styles back so set -> get round-trips. WS_MINIMIZEBOX and
   // WS_MAXIMIZEBOX only mean anything while WS_SYSMENU is present.
   std::string controls = "[";
@@ -3551,16 +3551,27 @@ static std::string win_state_json(HWND hwnd) {
     if (style & WS_MAXIMIZEBOX) controls += ",\"maximize\"";
   }
   controls += "]";
+  // width/height are the CLIENT area — the page's own box, the same units
+  // CreateWindow, win.setSize and setMinSize speak, so set -> get round-trips.
+  // x/y stay the window rect's top-left, because that is what setPosition
+  // takes. `outer` is the on-screen footprint, border and caption included;
+  // for the main window and frameless satellites the two are identical
+  // (WM_NCCALCSIZE leaves no non-client area), so only a titled satellite
+  // shows a difference.
+  RECT cr;
+  GetClientRect(hwnd, &cr);
   std::snprintf(
       buf, sizeof(buf),
       "{\"x\":%ld,\"y\":%ld,\"width\":%ld,\"height\":%ld,"
+      "\"outer\":{\"width\":%ld,\"height\":%ld},"
       "\"fullscreen\":%s,\"minimized\":%s,\"visible\":%s,\"focused\":%s,"
       "\"alwaysOnTop\":%s,\"resizable\":%s,"
       "\"clickThrough\":%s,\"level\":\"%s\",\"allSpaces\":false,"
       "\"chrome\":{\"frame\":%s,\"windowControls\":%s,\"transparent\":false,"
       "\"vibrancy\":null,\"squareCorners\":%s,\"acceptsFirstMouse\":true},"
       "\"screen\":{\"width\":%ld,\"height\":%ld,\"scale\":%.2f}}",
-      L(r.left), L(r.top), L(r.right - r.left), L(r.bottom - r.top),
+      L(r.left), L(r.top), L(cr.right), L(cr.bottom),
+      L(r.right - r.left), L(r.bottom - r.top),
       (main && g_fullscreen) ? "true" : "false",
       IsIconic(hwnd) ? "true" : "false",
       IsWindowVisible(hwnd) ? "true" : "false",
@@ -4178,12 +4189,12 @@ static void do_winopen(webview_t, void *arg) {
                           : WS_OVERLAPPEDWINDOW;
   double sc = window_scale(g_hwnd); // logical wire units -> physical pixels
   RECT rc = {0, 0, (LONG)lround(wr->width * sc), (LONG)lround(wr->height * sc)};
-  // Frameless secondaries answer WM_NCCALCSIZE with "no non-client area" (see
-  // secwin_proc), exactly as the main window does, so frame == page and there
-  // is nothing for AdjustWindowRect to add. Running it anyway inflated the
-  // page by the resize border and — because win.setSize speaks frame units —
-  // made a windowshaded satellite collapse to about half the bar height it
-  // asked for, while main (already borderless-client) was right.
+  // `size` is the page's box. Frameless secondaries answer WM_NCCALCSIZE with
+  // "no non-client area" (see secwin_proc), exactly as the main window does, so
+  // frame == page and there is nothing for AdjustWindowRect to add. Running it
+  // anyway inflated the page by the resize border, which back when setSize
+  // spoke frame units made a windowshaded satellite collapse to about half the
+  // bar height it asked for, while main (already borderless-client) was right.
   if (!frameless)
     AdjustWindowRect(&rc, style, FALSE);
   int px = wr->hasPos ? (int)lround(wr->x * sc) : CW_USEDEFAULT;
@@ -4433,25 +4444,35 @@ struct SizeReq {
   std::string win = "main";
 };
 
-// win.setSize takes the FRAME size — the same units win.getState() reports, so
+// win.setSize takes the CLIENT size — the page's own box, the same units
+// window CREATION takes and the same units win.getState() now reports back, so
 // set -> get round-trips. That contract matters more than it looks: an app that
 // re-asserts its own size (read getState, hand the width back to setSize) is
-// doing something the API invites, and if these two disagree by the window
-// border the size ratchets up by that border on every pass. It did: both paths
-// here used to set the CLIENT area while getState returns GetWindowRect, so a
-// plain read-modify-write grew a window 13px wider and 36px taller each time
-// (amp's windowshade guard walked off the right of the screen).
-// Do NOT "fix" this by running the size through AdjustWindowRect again.
-// Window CREATION deliberately still takes a client size — it has no feedback
-// loop, and changing it would resize every existing app.
+// doing something the API invites, and if the two ends disagree by the window
+// border the size ratchets up by that border on every pass. It did once, when
+// this set the client area while getState returned GetWindowRect: a plain
+// read-modify-write grew a window 13px wider and 36px taller each time (amp's
+// windowshade guard walked off the right of the screen). That was fixed by
+// moving BOTH ends to frame units, which round-tripped but left creation — a
+// client size — as the odd one out. Both ends are client units now.
+//
+// The insets are measured off the live window rather than computed with
+// AdjustWindowRect: the main window and frameless satellites answer
+// WM_NCCALCSIZE with "no non-client area", so their real insets are zero while
+// AdjustWindowRect would still add a resize border and inflate the page.
 static void do_size(webview_t w, void *arg) {
   SizeReq *s = static_cast<SizeReq *>(arg);
   HWND h = s->win == "main" ? g_hwnd : hwnd_for_win(s->win);
   if (h) {
     double sc = window_scale(h); // wire is logical; SetWindowPos physical
+    RECT o, c;
+    GetWindowRect(h, &o);
+    GetClientRect(h, &c);
+    LONG pad_w = (o.right - o.left) - c.right;   // 0 once borderless-client
+    LONG pad_h = (o.bottom - o.top) - c.bottom;
     g_programmatic_size = true;  // the app's own size beats the user floor
-    SetWindowPos(h, nullptr, 0, 0, (int)lround(s->width * sc),
-                 (int)lround(s->height * sc), SWP_NOMOVE | SWP_NOZORDER);
+    SetWindowPos(h, nullptr, 0, 0, (int)lround(s->width * sc) + pad_w,
+                 (int)lround(s->height * sc) + pad_h, SWP_NOMOVE | SWP_NOZORDER);
     g_programmatic_size = false;
   }
   delete s;

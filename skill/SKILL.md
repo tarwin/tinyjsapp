@@ -257,8 +257,11 @@ tiny.notify(title, body, { id, subtitle, sound });  // desktop notification
 // backend export onNotificationClick(id, app). Ad-hoc/dev: osascript fallback.
 tiny.win.center(); tiny.win.minimize(); tiny.win.restore();
 tiny.win.fullscreen(); tiny.win.setFullscreen(bool);   // toggle / absolute
-await tiny.win.getState();  // { x, y, width, height, fullscreen, minimized,
-                            //   visible, focused, alwaysOnTop, resizable, screen }
+await tiny.win.getState();  // { x, y, width, height, outer: { width, height },
+                            //   fullscreen, minimized, visible, focused,
+                            //   alwaysOnTop, resizable, screen }
+// width/height = the PAGE's box, the same units setSize and win.open's `size`
+// take (set -> get round-trips); outer = footprint on screen, decorations in.
 tiny.win.setPosition(x, y);                 // top-left origin
 tiny.win.setChrome({ frame: false, windowControls: false,
                      transparent: false, vibrancy: 'hud' });  // frameless etc.

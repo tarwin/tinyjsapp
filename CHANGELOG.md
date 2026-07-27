@@ -65,6 +65,28 @@ are gone rather than deprecated.
   and `null` on Linux, where the WM owns the decision and won't say.
   Previously the bit was macOS-only in effect but stored and echoed back on
   Linux, so an app that set it and read it back was told it had worked.
+- **Breaking: a window's size is the page's box, everywhere.** `win.open({
+  size })`, `win.setSize()`, `setMinSize()` and `getState().width/height` used
+  to be up to three different units depending on the platform and the window.
+  Creation took a content size on all three, but `setSize` and `getState`
+  spoke *frame* units on macOS and Windows and content units on Linux. What
+  that looked like: an app declaring `1100x720` got a **688-tall page on
+  macOS** and a 720-tall one on Windows and Linux, the title bar eaten out of
+  the document; `open({ size: '150x150', chrome: { frame: false } })` produced
+  a **150x182** page, because dropping the title bar handed those points to
+  the page; and on Linux the first menu bar to appear took its own height out
+  of the document the same way. All of them now mean the page's own box on all
+  three platforms, so reading a window's size and handing it straight back to
+  `setSize` is a no-op — which is what the old frame-units workaround was
+  chasing, having fixed the round-trip by moving both ends away from the unit
+  creation used.
+- **`getState().outer`** — new: `{ width, height }`, the window's footprint on
+  screen with decorations included. `width`/`height` are the page; `outer` is
+  what the screen sees, and for a frameless window the two are equal. A window
+  that keeps itself inside a screen rect needs the outer number, and the page
+  cannot work it out alone — `window.outerWidth`/`outerHeight` are `0` in a
+  WKWebView. On Linux it comes from the WM's frame extents, so under Wayland,
+  which has no server-side frame to ask about, expect it to equal the page box.
 - **`minTinyjsVersion` in `tinyjs.json`.** Optional: the oldest tinyjs an app
   works with. Running it on an older one now fails with
   `myapp needs tinyjs 0.30.0 or newer — you have 0.28.3` instead of the app

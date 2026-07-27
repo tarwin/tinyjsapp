@@ -954,6 +954,27 @@ static void apply_menus() {
   }
   if (g_build_menubar.empty()) gtk_widget_hide(g_menubar);
   else gtk_widget_show_all(g_menubar);
+
+  // The menu bar lives INSIDE the toplevel, and gtk_window_set_default_size
+  // took the declared size as the whole window — so the first bar to appear
+  // ate itself out of the page, and an app that asked for 1100x720 got a
+  // 720-minus-a-bar-tall document on Linux only. `size` means the page's box
+  // (same as win.setSize and getState), so hand it back.
+  //
+  // Once, and only while the window is still exactly the size it was born at:
+  // after the user has dragged an edge the size is theirs, not ours. Deferred
+  // to an idle pass because the bar has no allocation to measure until GTK has
+  // laid it out.
+  static bool menubar_room_given = false;
+  if (!menubar_room_given && !g_build_menubar.empty()) {
+    menubar_room_given = true;
+    g_idle_add([](gpointer) -> gboolean {
+      int w = 0, h = 0;
+      gtk_window_get_size(g_win, &w, &h);
+      if (w == g_width && h == g_height) set_content_size("main", g_width, g_height);
+      return G_SOURCE_REMOVE;
+    }, nullptr);
+  }
 }
 
 static void menu_update(const std::string& rest) {
@@ -1443,7 +1464,22 @@ static std::string win_state_json(const std::string& winid) {
     GdkWindow* gwin = gtk_widget_get_window(GTK_WIDGET(win));
     if (gwin) gdk_window_get_origin(gwin, &x, &y);
   }
+  // width/height are the CONTENT box — the webview, menu bar excluded — which
+  // is what win.open's `size` and win.setSize mean, so set -> get round-trips.
+  // x/y stay the toplevel's origin, because that is what setPosition takes.
+  // `outer` is the footprint on screen: WM decorations (and the menu bar) in.
+  // Frame extents come from the WM, so on Wayland — where there is no server-
+  // side frame to ask about — expect it to equal the toplevel rect.
   gtk_window_get_size(win, &w, &h);
+  int outer_w = w, outer_h = h;
+  {
+    GdkWindow* gwin = gtk_widget_get_window(GTK_WIDGET(win));
+    GdkRectangle ext = {0, 0, 0, 0};
+    if (gwin) {
+      gdk_window_get_frame_extents(gwin, &ext);
+      if (ext.width > 0 && ext.height > 0) { outer_w = ext.width; outer_h = ext.height; }
+    }
+  }
   if (main_win) h -= menubar_height();
   GdkWindowState st = g_winstate.count(win) ? g_winstate[win] : (GdkWindowState)0;
   bool fullscreen = st & GDK_WINDOW_STATE_FULLSCREEN;
@@ -1478,6 +1514,8 @@ static std::string win_state_json(const std::string& winid) {
   return std::string("{") +
     "\"x\":" + std::to_string(x) + ",\"y\":" + std::to_string(y) +
     ",\"width\":" + std::to_string(w) + ",\"height\":" + std::to_string(h) +
+    ",\"outer\":{\"width\":" + std::to_string(outer_w) +
+    ",\"height\":" + std::to_string(outer_h) + "}" +
     ",\"fullscreen\":" + b(fullscreen) + ",\"minimized\":" + b(minimized) +
     ",\"visible\":" + b(visible) + ",\"focused\":" + b(focused) +
     ",\"alwaysOnTop\":" + b(ontop) + ",\"resizable\":" + b(resizable) +

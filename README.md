@@ -265,6 +265,8 @@ tiny.app.onNotificationClick((id) => ...);  // backend: export onNotificationCli
 await tiny.app.info();  // { version: <app>, tinyjs: <built with>, runtime: <txiki> }
 
 // window control
+// setSize/size are the PAGE's box (decorations excluded) — 1200x800 of
+// document on every OS, whatever the title bar adds around it.
 tiny.win.setTitle('My App');  tiny.win.setSize(1200, 800);
 tiny.win.center();  tiny.win.setPosition(100, 80);      // top-left origin
 tiny.win.minimize();  tiny.win.restore();
@@ -324,10 +326,15 @@ tiny.win.setChrome({ acceptsFirstMouse: true });
 
 // read the window back
 const s = await tiny.win.getState();
-// { x, y, width, height, fullscreen, minimized, visible, focused,
+// { x, y, width, height, outer: { width, height },
+//   fullscreen, minimized, visible, focused,
 //   alwaysOnTop, resizable, chrome: { frame, windowControls, transparent,
 //   vibrancy, squareCorners, acceptsFirstMouse },
 //   screen: { width, height, scale } }
+// width/height are the page's box — hand them straight back to setSize and
+// nothing moves. outer is the footprint on screen, decorations in (the page
+// can't work that out itself: window.outerWidth is 0 in a WKWebView).
+// x/y are the window's top-left, the units setPosition takes.
 
 // files dragged onto the window arrive with REAL filesystem paths
 tiny.win.onDrop((paths) => tiny.log(paths.join(', ')));
