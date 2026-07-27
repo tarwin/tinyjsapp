@@ -119,6 +119,21 @@ declare interface TinyAiBackend extends TinyAi {
     Promise<{ text: string; calls: TinyAiCall[] }>;
 }
 
+/** The user's language preferences and time zone, read from the OS. */
+declare interface TinyLocale {
+  /** best match for what the app should render, e.g. 'en-AU' */
+  language: string;
+  /** preference order, FILTERED to what the app bundle declares it speaks */
+  languages: string[];
+  /** the raw system preference, whether or not this app speaks it — differs
+   *  from `languages` for an English-only app on a French Mac */
+  system: string[];
+  /** ISO country code from the current locale, e.g. 'US'; null if unset */
+  region: string | null;
+  /** IANA name, e.g. 'America/Los_Angeles' */
+  timeZone: string;
+}
+
 declare interface TinyBattery {
   percent: number;
   charging: boolean;
@@ -708,6 +723,11 @@ declare interface Tiny {
     architecture(): Promise<string>;
     /** what this machine can actually do — anything ABSENT is supported */
     capabilities(): Promise<Record<string, boolean | string>>;
+    /** the user's languages + time zone, read from the OS. A page already has
+     *  navigator.language(s), Intl and the 'languagechange' event; reach for
+     *  this on the BACKEND (txiki has no Intl at all), or when you want the
+     *  SYSTEM preference rather than what this app declares it speaks. */
+    locale(): Promise<TinyLocale>;
     requirements(ids?: string[] | null, opts?: { refresh?: boolean }): Promise<any[]>;
     missing(ids?: string[] | null): Promise<any[]>;
     promptMissing(ids?: string[] | null, opts?: object): Promise<boolean>;

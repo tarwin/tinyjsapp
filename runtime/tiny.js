@@ -146,6 +146,17 @@
       // so an app can degrade deliberately instead of calling something that
       // quietly does nothing (Wayland, for instance, ignores setPosition).
       capabilities: () => call('system.capabilities'),
+      // The user's language preferences + time zone, from the OS:
+      // { language, languages, system, region, timeZone }.
+      //
+      // A page usually doesn't need this — navigator.language, navigator.
+      // languages and the whole of Intl already work here, and the
+      // 'languagechange' event fires on window. Reach for it when you want
+      // what the SYSTEM prefers rather than what this app declares it speaks:
+      // on macOS navigator.language is filtered to the app's bundle
+      // localizations, so an English-only app reports 'en' on a French Mac
+      // while locale().system still says fr-FR.
+      locale: () => call('system.locale'),
 
       // --- machine state -------------------------------------------------
       // Facts about the machine rather than things this app does, which is

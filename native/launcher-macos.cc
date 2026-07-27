@@ -219,6 +219,9 @@
 //                         HOTKEY <id>                a global hotkey fired
 //                         AUDIOTAP <b64>\t<sr>\t<ch>\t<frames>\t<t>
 //                                                    a tap PCM chunk
+//                         SYSLOCALE <json>           language/region changed.
+//                         GET locale                 -> { language, languages,
+//                         system, region, timeZone }.
 //                         SYS theme dark|light /
 //                         SYS sleep / SYS wake       system events (theme also
 //                                                    sent once at startup)
@@ -1384,7 +1387,59 @@ static void send_theme() {
   sock_write_line(std::string("SYS theme ") + (dark ? "dark" : "light"));
 }
 
+// GET locale -> the user's language preferences and time zone, read from the
+// OS rather than from environment variables (there is no LANG on Windows, and
+// an inherited one says what the PARENT process had, not what the user wants).
+//
+// Two lists, because they answer different questions and can disagree:
+//   languages  — NSLocale.preferredLanguages, FILTERED to the localizations
+//                the app bundle declares. What the app should render.
+//   system     — the raw AppleLanguages preference. What the user actually
+//                reads, whether or not this app speaks it.
+// An app shipping only English on a French Mac gets ["en"] in the first and
+// ["fr-FR", ...] in the second, and picking the wrong one is how you either
+// render mojibake or fail to notice you should offer a translation.
+static std::string locale_json() {
+  @autoreleasepool {
+    NSArray<NSString *> *pref = [NSLocale preferredLanguages];
+    NSArray *raw = [[NSUserDefaults standardUserDefaults]
+        stringArrayForKey:@"AppleLanguages"] ?: pref;
+    NSLocale *cur = [NSLocale currentLocale];
+    auto list = [](NSArray *a) {
+      std::string out = "[";
+      bool first = true;
+      for (id v in a) {
+        if (![v isKindOfClass:[NSString class]]) continue;
+        if (!first) out += ",";
+        first = false;
+        out += json_escape([(NSString *)v UTF8String]);
+      }
+      return out + "]";
+    };
+    NSString *lang = pref.count ? pref[0] : @"en";
+    NSString *region = [cur objectForKey:NSLocaleCountryCode];
+    return std::string("{\"language\":") + json_escape([lang UTF8String]) +
+           ",\"languages\":" + list(pref) +
+           ",\"system\":" + list(raw) +
+           ",\"region\":" +
+           (region ? json_escape([region UTF8String]) : "null") +
+           ",\"timeZone\":" +
+           json_escape([[[NSTimeZone systemTimeZone] name] UTF8String]) + "}";
+  }
+}
+
 static void install_system_observers() {
+  // The language/region change lands as a distributed notification; the app's
+  // own NSLocale caches until the next runloop turn, same as the theme one.
+  [[NSDistributedNotificationCenter defaultCenter]
+      addObserverForName:(NSString *)NSCurrentLocaleDidChangeNotification
+                  object:nil
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                  sock_write_line("SYSLOCALE " + locale_json());
+                });
+              }];
   [[NSDistributedNotificationCenter defaultCenter]
       addObserverForName:@"AppleInterfaceThemeChangedNotification"
                   object:nil
@@ -3290,6 +3345,8 @@ static void do_get(webview_t w, void *arg) {
       }
     } else if (req->what == "battery") {
       json = battery_json();
+    } else if (req->what == "locale") {
+      json = locale_json();
     } else if (req->what == "wifi") {
       json = wifi_json();
     } else if (req->what == "selectedtext") {
@@ -6996,6 +7053,18 @@ int main(int argc, char *argv[]) {
   // banner click that started the app.
   install_early_open_handlers();
   install_notif_delegate();
+
+  // No automatic window tabbing. With "Prefer tabs when opening documents"
+  // set to "always" — a system-wide setting, not the default one — AppKit
+  // merges each new same-sized window into the previous one as a TAB: same
+  // frame, page shrunk by the tab bar, and the x/y that win.open asked for
+  // silently ignored. An app that opens a window per document then looks like
+  // it moved the window you were reading. tinyjs has no tab-bar support to
+  // offer in exchange (the bar's "+" routes to newWindowForTab:, which nothing
+  // implements), so every window is a window. Window ▸ Merge All still works
+  // for anyone who wants them stacked.
+  if ([NSWindow respondsToSelector:@selector(setAllowsAutomaticWindowTabbing:)])
+    [NSWindow setAllowsAutomaticWindowTabbing:NO];
 
   // Accessory activation (menu-bar agents): env in dev/spawn mode, plist in
   // bundle mode. Must also precede webview_create — that's where the library

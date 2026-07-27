@@ -92,6 +92,14 @@ ones no-op — so nothing hangs. (`spotlight` DOES work: name search via
 `plocate`/`locate` or a bounded `find`.) (Linux plans: tarwin/tinyjsapp
 TODO-linux.md.)
 
+`tiny.system.locale()` -> { language, languages, system, region, timeZone },
+read from the OS. In a PAGE you rarely need it — navigator.language(s), all of
+Intl and the 'languagechange' event work in the webview. On the BACKEND you do:
+txiki has NO Intl, and reading LANG is wrong (no such var on Windows; inherited
+elsewhere). `languages` is filtered to the app's bundle localizations, `system`
+is the raw user preference — they differ for an English-only app on a French
+Mac. Format in the page, branch on language in the backend.
+
 `tiny.system.capabilities()` lists only the EXCEPTIONS — on macOS it returns
 about seven keys, and every capability it doesn't name is supported. So test
 `caps.ocr !== false`, never `if (caps.ocr)`: the truthy form reports "no OCR"

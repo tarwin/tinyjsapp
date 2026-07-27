@@ -532,6 +532,18 @@ btn.addEventListener('click', (e) =>
 // seconds since the user's last input (pause polling when they're away)
 const idle = await tiny.system.idleTime();
 
+// the user's languages + time zone, read from the OS — NOT from LANG, which
+// Windows doesn't have and which elsewhere describes the parent process
+const { language, languages, system, region, timeZone } = await tiny.system.locale();
+// `languages` is filtered to the localizations the app bundle declares;
+// `system` is the raw preference. They differ for an English-only app on a
+// French Mac — render with the first, offer a translation based on the second.
+//
+// A PAGE rarely needs this: navigator.language / navigator.languages / all of
+// Intl / the 'languagechange' event work in the webview. The BACKEND is the
+// gap — txiki has no Intl at all, so format in the page and branch on
+// language in the backend.
+
 // Quick Look — the Finder-spacebar preview panel (no qlmanage spawn);
 // an array pages with the arrow keys, no args closes it
 tiny.macos.quickLook('/path/to/photo.heic');

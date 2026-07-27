@@ -47,6 +47,14 @@ names refer to the protocol table in the README; Windows handlers live in
 
 ## Still open
 
+- [ ] **`tiny.system.locale()`** — declared `false`; no locale arm in the
+      launcher. `GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, …)` is the
+      route, with `GetUserDefaultLocaleName` for the region and
+      `GetDynamicTimeZoneInformation` for the zone. This is the platform where
+      it matters most: Windows has **no `LANG`**, so backend code has no
+      fallback at all — and txiki has no `Intl` either. For the change event,
+      `WM_SETTINGCHANGE` with lParam `"intl"` is the notification.
+
 - [ ] **`tiny.system.wifi`** — the launcher answers `null` for a `wifi` query
       unconditionally, so `capabilities().wifi` is declared `false`. It's
       genuinely portable in principle, unlike `ocr`/`recorder`, which is why it

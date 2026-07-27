@@ -319,6 +319,14 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
 
 ## Still open
 
+- [ ] **`tiny.system.locale()`** — declared `false`; no locale arm in the
+      launcher. `g_get_language_names()` is the route — it already does the
+      `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG` fallback chain the OS itself
+      uses, so it beats reading one variable by hand. Time zone from
+      `/etc/localtime`'s symlink target. There's no system-wide "language
+      changed" signal to hook, so the event may simply not exist here — which
+      is worth stating rather than leaving the capability ambiguous.
+
 Ordered roughly by value/effort. Each lists the concrete route. All of these
 currently fail cleanly (reject with a specific message, or resolve
 null/empty) so nothing here is a correctness hazard — they're missing

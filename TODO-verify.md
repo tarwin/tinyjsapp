@@ -452,6 +452,28 @@ here could reach.
       tried. (`macos.ai` is macOS-only regardless, so the full loop isn't
       portable — but dictation into the prompt box would be.)
 
+## `tiny.system.locale()` — read, but never seen change
+
+Added 2026-07-27. Reading it is verified on macOS: `{ language: 'en-US',
+languages: ['en-US'], system: ['en-US'], region: 'US', timeZone:
+'America/Los_Angeles' }`, matching `defaults read -g AppleLanguages`.
+
+- [ ] **The `locale` event.** An observer on
+      `NSCurrentLocaleDidChangeNotification` is wired and has NEVER fired —
+      changing the system language is the only way to trigger it, and that's a
+      System Settings trip plus, on macOS, usually a logout. Check that the
+      deck's row updates without a reload, and that the page's own
+      `languagechange` fires alongside it (the handler is there; whether
+      WebKit fires it in a WKWebView is equally unverified).
+- [ ] **`languages` vs `system` actually differing.** They're identical on this
+      machine, so the branch that says "differs" has never rendered. Set the
+      system to a language the deck doesn't declare and they should split —
+      that difference is the whole reason the field exists, and it's currently
+      an argument rather than a demonstration.
+- [ ] **A packaged app vs dev.** `NSLocale.preferredLanguages` is filtered by
+      `CFBundleLocalizations`, which a dev run doesn't have — so the two may
+      legitimately disagree, and which one is "right" depends on the bundle.
+
 ## Tool calling — built and driven, but only on this Mac
 
 Added 2026-07-27. The full round trip is verified end to end in the deck:

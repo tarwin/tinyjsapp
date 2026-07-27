@@ -200,6 +200,30 @@ are gone rather than deprecated.
   put anything irreversible behind a confirmation rather than a hopeful read
   of a sentence.
 
+- **`tiny.system.locale()`** — `{ language, languages, system, region,
+  timeZone }`, read from the OS. Plus a **`locale` event** when the user
+  changes their language or region, so an app can re-render instead of going
+  stale until relaunch.
+
+  A page mostly doesn't need it: `navigator.language`, `navigator.languages`,
+  the whole of `Intl` and the `languagechange` event all work in the webview
+  (measured — `Intl.DateTimeFormat().resolvedOptions()` gives locale, time
+  zone, calendar and numbering, and formatting is correct). **The backend is
+  the gap**: txiki has no `Intl` at all, and reading `LANG` is the wrong
+  instinct — Windows has no such variable, and elsewhere it describes the
+  parent process rather than the user.
+
+  Two lists because they answer different questions. `languages` is
+  `NSLocale.preferredLanguages`, filtered to the localizations the app bundle
+  declares — what to render. `system` is the raw preference — what the user
+  actually reads. They agree until they matter: an English-only app on a
+  French Mac gets `['en']` and `['fr-FR', …]`. Rendering from the wrong one
+  either produces text nobody asked for or hides that a translation is worth
+  offering.
+
+  macOS only for now; `capabilities().locale` is `false` on Windows and Linux,
+  with the route for each in their TODOs.
+
 - **On-device AI just ships now.** `tiny.app.ai` was previously reachable only
   by people who built tinyjs themselves with an opt-in env var, because the
   release pipeline ran on a `macos-14` runner without the macOS 26 SDK — so

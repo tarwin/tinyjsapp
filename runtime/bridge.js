@@ -270,6 +270,10 @@ async function systemCapabilities(query, aiStatus) {
     // over D-Bus (which the launcher already speaks) has ssid/bssid. Route
     // and caveats in TODO-linux.md.
     wifi: false,
+    // No locale reader in this launcher yet. g_get_language_names() is the
+    // route (LANG/LC_ALL with the fallback chain the OS itself uses) — see
+    // TODO-linux.md.
+    locale: false,
     authenticate: false,
     // app.badge / app.progress ride the Unity LauncherEntry DBus protocol,
     // which KDE Plasma, Ubuntu Dock and Dash-to-Dock implement but vanilla
@@ -319,6 +323,10 @@ async function systemCapabilities(query, aiStatus) {
     // MEDIAKEY line, so onMediaKey could never fire. The keys themselves want
     // the same SystemMediaTransportControls nowPlaying does — one job, not two.
     mediaKeys: false,
+    // Same: no locale arm in launcher-win.cc. GetUserPreferredUILanguages is
+    // the route — and the one platform where an app CAN'T fall back to LANG,
+    // since Windows has no such variable. See TODO-windows.md.
+    locale: false,
     // The launcher answers null for a wifi query unconditionally, so claiming
     // it (by omission, under the "absent = true" rule) was another instance of
     // the same over-claim nowPlaying had. NOT macOS-only in principle, which
@@ -510,7 +518,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -1138,6 +1146,19 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       // Seconds since the user's last input, session-wide — pause polling /
       // dim UI when they walk away.
       idleTime: async () => (await query('idle'))?.seconds ?? 0,
+      // The user's language preferences and time zone, read from the OS:
+      // { language, languages, system, region, timeZone }.
+      //
+      // `languages` is what the APP should render — on macOS it's filtered to
+      // the localizations the bundle declares. `system` is the raw user
+      // preference, whatever this app happens to speak. They disagree exactly
+      // when you'd want to know: an English-only app on a French Mac.
+      //
+      // A page can already read navigator.language and use Intl; this is for
+      // the BACKEND, which has neither (txiki has no Intl at all) and where
+      // reading LANG would be wrong — Windows has no such variable, and an
+      // inherited one describes the parent process, not the user.
+      locale: () => query('locale'),
     },
     // macOS-only: concepts the other OSes don't have at all, so they live in
     // their own namespace instead of pretending to be portable. Same shape
@@ -1607,6 +1628,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       return query(win === 'main' ? 'mouse' : 'mouse:' + win);
     },
     'theme.get': async () => lastTheme,
+    // Cached from the last SYSLOCALE, so a page that just wants "what is it
+    // now" doesn't pay a round trip; null until the first change.
+    'system.locale': async () => lastLocale ?? query('locale'),
     'app.info': async () => app.info,
     'system.info': async () => systemInfo(),
     'system.capabilities': async () => systemCapabilities(query, () => app.macos.ai.availability()),
@@ -1648,6 +1672,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };
   let lastTheme = null; // { dark } once the launcher reports it (at startup)
+  let lastLocale = null;   // last SYSLOCALE payload
   let markEof;
   const eofDone = new Promise((r) => { markEof = () => r({ exit_status: 0 }); });
 
@@ -1723,6 +1748,14 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           const id = line.slice(4);
           push('contextmenu', { id });
           if (onContextMenu) onContextMenu(id, app);
+        } else if (line.startsWith('SYSLOCALE ')) {
+          let info = null;
+          try { info = JSON.parse(line.slice(10)); } catch {}
+          if (info) {
+            lastLocale = info;
+            push('locale', info);
+            if (onLocale) onLocale(info, app);
+          }
         } else if (line.startsWith('SYS ')) {
           const [kind, value] = line.slice(4).split(' ');
           if (kind === 'theme') {
