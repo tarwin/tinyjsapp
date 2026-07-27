@@ -105,6 +105,13 @@ deprecated.
 
 **Fixed**
 
+- **`readAccess` could stop the app loading at all** (macOS). WebKit refuses to
+  load a page unless the page itself sits under the directory passed to
+  `allowingReadAccessToURL:`, so a `readAccess` that didn't contain the page
+  produced a blank window with nothing said. That's every app declaring
+  `readAccess` under the documented headless-test recipe — `TINYJS_HTML` points
+  at a page in a temp dir while `readAccess` names the home directory. The read
+  root is now the nearest common ancestor of the two.
 - **`app.playSound` crashed the app on macOS**, intermittently, usually on the
   second play. `[NSSound soundNamed:]` returns an autoreleased sound and the
   launcher stored it in a global without retaining it, so it was freed as soon

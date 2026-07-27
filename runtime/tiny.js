@@ -102,6 +102,13 @@
     // A correct file:// URL for a disk path on BOTH platforms — hand-rolled
     // versions break on Windows (file://C:/… makes the drive the URL host).
     // Use for <audio>/<img>/<video> src of backend-provided paths.
+    //
+    // The URL is only half of it: the page can load a file:// path only if it
+    // sits under the page's read root, which is the directory the page itself
+    // was loaded from. Anything outside that — and a backend-provided path
+    // usually is — needs "readAccess" in tinyjs.json (true for the home dir,
+    // or a specific directory). Without it the element just fires `error`,
+    // with nothing saying why.
     fileURL: (p) => {
       p = String(p);
       // Backslashes are separators ONLY in Windows-shaped paths (drive

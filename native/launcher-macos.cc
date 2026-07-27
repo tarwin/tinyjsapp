@@ -447,6 +447,34 @@ static void do_terminate(webview_t w, void *) { webview_terminate(w); }
 // APIs like navigator.gpu (WebGPU) there. A file:// document is a secure
 // context, and read access to the containing directory lets the page load
 // sibling assets.
+// The read root for loadFileURL:allowingReadAccessToURL:. WebKit refuses to
+// load the page at all unless the page itself sits UNDER that root, so a
+// readAccess directory that doesn't contain the page can't simply be used as
+// given — the app comes up blank with nothing saying why. That happens
+// whenever the page lives somewhere else: TINYJS_HTML points at a page in a
+// temp dir while readAccess names the home directory, which is exactly the
+// documented headless-testing recipe. Widen to the nearest common ancestor of
+// the two instead; the app asked for the wider of them anyway.
+static NSURL *tiny_read_access_url(NSURL *pageURL) {
+  NSURL *pageDir = [pageURL URLByDeletingLastPathComponent];
+  if (g_read_access.empty())
+    return pageDir;
+  NSString *want = [[NSString stringWithUTF8String:g_read_access.c_str()]
+      stringByStandardizingPath];
+  NSString *have = [[pageDir path] stringByStandardizingPath];
+  if ([have isEqualToString:want] ||
+      [have hasPrefix:[want hasSuffix:@"/"] ? want : [want stringByAppendingString:@"/"]])
+    return [NSURL fileURLWithPath:want isDirectory:YES];
+  NSArray *a = [want pathComponents], *b = [have pathComponents];
+  NSMutableArray *common = [NSMutableArray array];
+  for (NSUInteger i = 0; i < a.count && i < b.count; i++) {
+    if (![a[i] isEqualToString:b[i]]) break;
+    [common addObject:a[i]];
+  }
+  NSString *anc = common.count ? [NSString pathWithComponents:common] : @"/";
+  return [NSURL fileURLWithPath:anc isDirectory:YES];
+}
+
 static bool load_html_file(webview_t w, const std::string &path) {
   std::ifstream f(path, std::ios::binary);
   if (!f)
@@ -457,13 +485,7 @@ static bool load_html_file(webview_t w, const std::string &path) {
   if (wv) {
     NSURL *url =
         [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
-    NSURL *access =
-        g_read_access.empty()
-            ? [url URLByDeletingLastPathComponent]
-            : [NSURL fileURLWithPath:[NSString stringWithUTF8String:
-                                          g_read_access.c_str()]
-                         isDirectory:YES];
-    [wv loadFileURL:url allowingReadAccessToURL:access];
+    [wv loadFileURL:url allowingReadAccessToURL:tiny_read_access_url(url)];
     return true;
   }
 #endif
@@ -5289,11 +5311,7 @@ static void do_winopen(webview_t w, void *arg) {
       [wv loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:ns(req->page)]]];
     } else {
       NSURL *url = [NSURL fileURLWithPath:ns(req->page)];
-      NSURL *access = g_read_access.empty()
-                          ? [url URLByDeletingLastPathComponent]
-                          : [NSURL fileURLWithPath:ns(g_read_access)
-                                       isDirectory:YES];
-      [wv loadFileURL:url allowingReadAccessToURL:access];
+      [wv loadFileURL:url allowingReadAccessToURL:tiny_read_access_url(url)];
     }
 
     TinyWinDelegate *del = [[TinyWinDelegate alloc] init];
