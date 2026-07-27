@@ -322,6 +322,54 @@ TODO-linux.md).
       a re-check right after ticking the box still says `denied`. That is
       correct behaviour that looks exactly like a bug.
 
+## Needs ears, a keypress, or a permission — kitchen-sink, 2026-07-27
+
+Fourteen APIs went into the deck this night. What a script could reach was
+driven and is recorded under each card; this is the remainder. Deliberately
+*not* run, because the machine's owner was asleep and its output volume was 38:
+
+- [ ] **`app.say` out loud** — Media ▸ Speech. Only the silent half is proven:
+      `voices()` returns **181 voices across 49 languages, 1 of them enhanced**,
+      the language filter picks **42 en voices**, and `say('')` resolves `true`
+      in **23 ms** (so the wire and the promise work). Unproven, and it's the
+      whole claim on the card: that `say()` resolves when playback **finishes**
+      — time a long sentence and the number should track the audio — and that
+      **`stopSpeaking()` makes a pending `say()` resolve `false`**, which the
+      third button ("cut it off at 1s") exists to show. Also worth an ear: the
+      `rate` slider, and passing a bare `en-AU` instead of a voice id.
+- [ ] **The hardware media keys** — Media ▸ Now Playing. `nowPlaying.set()` is
+      driven (the elapsed counter ticks and Control Center should show the fake
+      track), but **nothing has ever pressed F8**: `onMediaKey` is wired and has
+      never been seen to fire. Check play/pause/next/previous, the AirPods tap,
+      and a Control Center **scrub**, which is the only source of a `seek` with
+      a `time`. Then start Music and confirm it **takes the keys away** — the
+      card claims the OS arbitrates by whoever set Now Playing last.
+- [ ] **`app.recorder`** — Desktop ▸ Pixels to text. Rejects here with "screen
+      recording permission required", which is the card's fallback path working.
+      Grant Screen Recording and watch the real one: that **`start()` resolves
+      only once capture is live** (it prints the ms), that `stop()` resolves
+      `{ path, duration }` with the file **already finalised** (the card stats
+      it immediately and says so), and that the mp4 actually plays.
+- [ ] **`app.ai`** — System ▸ Asking the OS. Answers `unsupported` on this
+      stock build, and `generate()` rejects with "not built in (needs macOS 26 +
+      TINYJS_AI=1)" — the fallback path, verified. The real thing needs a
+      `TINYJS_AI=1` build on macOS 26: check `availability()` → `available`, a
+      generation that respects the `instructions`, and how long it takes.
+- [ ] **`app.selectedText` with something actually selected** — Desktop ▸
+      Reaching other apps. Returns `null` with Accessibility **granted**, which
+      the card correctly reports as "nothing was selected". The three-second
+      button exists so you can go select text in another app first; that path
+      has never returned a string.
+- [ ] **`app.keystroke` posting a real combo** — same card. `{ ok: false,
+      trusted: true }` for a modifier-only combo is measured (Accessibility is
+      granted here); no real keystroke was posted into another app, because
+      doing that unattended is how you find out what was frontmost. Try
+      `cmd+shift+4`, and try `paste()` after `win.hide()` with something on the
+      clipboard — the card reports which app had focus while hidden.
+- [ ] **`app.onNotificationAction`** — Desktop ▸ notify (demoed before tonight,
+      still never verified). Needs a click on a real banner, which needs a
+      packaged signed app; dev falls back to osascript.
+
 ## Secrets & permissions off macOS — never run there
 
 Driven on macOS 2026-07-27 (kitchen-sink, System ▸ Secrets & permission):
@@ -353,6 +401,27 @@ elsewhere:
 - [ ] **Linux — `authenticate` answers `false`.** Deliberate: no portable owner
       check exists, so the gate fails closed. The card claims this in prose;
       confirm the button actually says so rather than looking broken.
+
+## The 2026-07-27 capability corrections — asserted from source, never run
+
+Six capability keys were flipped to `false` after auditing every name against
+what each launcher dispatches. The evidence is in the source (a `GET` with no
+arm for the name, or an explicit `got_unsupported`), which is strong — but no
+Windows or Linux machine was involved, and "the launcher has no handler" is
+exactly the kind of claim that deserves a run:
+
+- [ ] **Windows** — confirm `otherWindows()` really resolves `null`,
+      `moveWindow()` rejects, `pickColor()` and `spotlight()` reject, and that
+      pressing a media key with Now Playing set does nothing at all.
+- [ ] **Linux/X11** — same for `otherWindows()`, `selectedText()` and
+      `moveWindow()`. If any of them *does* work, the table is now
+      under-claiming, which is the better failure but still wrong.
+- [ ] **`app.thumbnail` after the representation change** — macOS is measured
+      (folders, `.app` bundles, `.css`, `.wasm` and executables all render now;
+      a missing path still rejects). Windows and Linux have their own
+      renderers and were not touched, so check whether their coverage matches
+      what the docs now promise — the README says "any path" without
+      qualifying by platform.
 
 ## Window sizes are the page's box now — Windows and Linux unbuilt
 

@@ -2414,13 +2414,30 @@ static void do_thumb(webview_t, void *arg) {
   std::string qid = req->qid, path = req->path;
   int size = req->size > 0 ? req->size : 256;
   delete req;
+  // Check existence ourselves. With representationTypes:...Thumbnail the
+  // generator failed a missing path for us; with ...TypeAll it happily hands
+  // back a generic document ICON instead, so `thumbnail('/nope')` would
+  // resolve as though it had worked. Callers branch on this rejection.
+  if (![[NSFileManager defaultManager] fileExistsAtPath:ns(path)]) {
+    sock_write_line("GOT " + qid + " {\"ok\":false,\"error\":" +
+                    json_escape("no such file: " + path) + "}");
+    return;
+  }
   if (@available(macOS 10.15, *)) {
     QLThumbnailGenerationRequest *r = [[QLThumbnailGenerationRequest alloc]
         initWithFileAtURL:[NSURL fileURLWithPath:ns(path)]
                      size:CGSizeMake(size, size)
                     scale:2.0
+      // ...TypeAll, not ...TypeThumbnail. A content preview only exists for
+      // file types Quick Look has a generator for, so asking for Thumbnail
+      // alone made folders, .app bundles, .css and .wasm all fail with
+      // "QLThumbnailErrorDomain error 0" — while .js, .md, .html and images
+      // worked, which reads as random from the outside. Measured 2026-07-27.
+      // ...TypeAll lets generateBestRepresentation fall back to the document
+      // ICON, which always exists — so the call now delivers what the API
+      // promises: a picture for ANY path, best available quality.
       representationTypes:
-          QLThumbnailGenerationRequestRepresentationTypeThumbnail];
+          QLThumbnailGenerationRequestRepresentationTypeAll];
     [[QLThumbnailGenerator sharedGenerator]
         generateBestRepresentationForRequest:r
                            completionHandler:^(

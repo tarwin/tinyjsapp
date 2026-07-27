@@ -839,10 +839,12 @@ const { path, width, height } = await <b>tiny.app.captureScreen</b>();</pre>
 <i>// macOS · Windows · Linux (xdg portal)</i>
 const color = await <b>tiny.app.pickColor</b>();   <i>// '#rrggbb' | null on cancel</i>
 
-<i>// a thumbnail png for a file type the OS knows how to preview</i>
-<i>// macOS (anything Quick Look understands) · Windows · Linux (images)</i>
+<i>// a thumbnail png for ANY path — a real preview where Quick Look has a</i>
+<i>// renderer, the document/app/folder ICON where it doesn't, so it never</i>
+<i>// fails on file type alone. A missing path DOES reject.</i>
+<i>// macOS (any path) · Windows · Linux (images)</i>
 const thumb = await <b>tiny.app.thumbnail</b>('/path/file.psd', 256);
-<i>// -&gt; { path, width, height }</i>
+<i>// -&gt; { path, width, height } — @2x, aspect preserved</i>
 
 <i>// find files by name or content — macOS Spotlight, Windows Search,</i>
 <i>// plocate/locate on Linux (falling back to a bounded find)</i>

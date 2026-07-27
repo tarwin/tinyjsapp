@@ -112,6 +112,36 @@ are gone rather than deprecated.
   rather than an `XDG_CURRENT_DESKTOP` guess, which was wrong in both
   directions.
 
+  A second pass (2026-07-27) found six more of exactly the same shape, by
+  checking every capability name against what the launcher actually dispatches:
+  **Windows** claimed `otherWindows`, `moveOtherWindows`, `pickColor`,
+  `spotlight` and `mediaKeys` — the first falls through the launcher's `GET` to
+  `null`, the next three reach `got_unsupported`, and nothing in
+  `launcher-win.cc` has ever written a media-key line, so `onMediaKey` could
+  not fire. **Linux** claimed `otherWindows`, `selectedText` and
+  `moveOtherWindows` on X11; the first two have no `GET` arm at all and
+  `WINCTRL` already said "moving other apps' windows isn't supported on Linux".
+  X11 could support all three — nobody has written it, which is a different
+  statement from the one the table was making.
+
+- **`capabilities().ai` reflects the build, not the OS.** `tiny.app.ai` needs
+  the macOS 26 SDK and `swiftc`, so it's opt-in at build time via
+  `TINYJS_AI=1` — and a stock build's `generate()` rejects with "not built in"
+  while the table, by omitting the key, called it supported. It now asks the
+  launcher (the only party that knows how the binary was compiled) and answers
+  `false` on a stock build. The worst-placed over-claim of the set: the
+  fallback for "no model here" is usually a whole different feature.
+
+- **`app.thumbnail` works for *any* path now** — folders, `.app` bundles,
+  `.css`, `.wasm`, executables. It asked Quick Look for a content preview only
+  (`representationTypes: …Thumbnail`), which exists just for types Quick Look
+  has a generator for, so those all failed with "QLThumbnailErrorDomain error
+  0" while `.js`, `.md`, `.html` and images worked — indistinguishable from
+  random, from outside. It now asks for the best available representation and
+  falls back to the document icon, which every file has. A path that doesn't
+  exist still rejects, and now does so explicitly: the icon fallback would
+  otherwise have turned a typo into a successful-looking generic page icon.
+
 - **`tiny.audio.filters` works on macOS** (14.2+), not just Linux — so an app
   can ask for an EQ once instead of branching. There's no driver and no system
   install: a Core Audio process tap over the app's own WebKit audio processes

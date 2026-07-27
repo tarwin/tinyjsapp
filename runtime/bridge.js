@@ -231,9 +231,10 @@ async function hasUnityLauncher() {
   return unityLauncher;
 }
 
-// `query` is the launcher read-back, handed in because it lives in the app
-// factory's scope — only macOS needs it (see hasMacAudioFilters).
-async function systemCapabilities(query) {
+// `query` is the launcher read-back and `aiStatus` the AI availability probe,
+// both handed in because they live in the app factory's scope — only macOS
+// needs either (see hasMacAudioFilters and the `ai` key).
+async function systemCapabilities(query, aiStatus) {
   const linux = {
     // Wayland forbids a client placing its own toplevels, reading the global
     // pointer, seeing other windows, or synthesising input. X11 allows all of
@@ -242,9 +243,15 @@ async function systemCapabilities(query) {
     mousePosition: ON_X11,
     captureScreen: ON_X11,
     keystroke: ON_X11,
-    otherWindows: ON_X11,
-    moveOtherWindows: ON_X11,
-    selectedText: ON_X11,
+    // Claimed ON_X11 until 2026-07-27, but nothing implements them: the
+    // launcher's GET has no arm for either name, so both fall through to the
+    // final `null` — which a caller can't tell from "Accessibility isn't
+    // granted". X11 could do this (XQueryTree / the AT-SPI text interface);
+    // nobody has written it. WINCTRL is explicit about it already
+    // ("moving other apps' windows isn't supported on Linux").
+    otherWindows: false,
+    moveOtherWindows: false,
+    selectedText: false,
     // no Linux equivalent at all
     recorder: false,
     ocr: false,
@@ -288,6 +295,16 @@ async function systemCapabilities(query) {
     vibrancy: false, selectedText: false, ocr: false,
     windowPosition: true, mousePosition: true, captureScreen: true,
     keystroke: true, recorder: false,
+    // Same audit, 2026-07-27. otherWindows falls through the launcher's GET to
+    // null (the source comment says so outright: "wifi/selectedtext/
+    // otherwindows/debug:* -> null"); WINCTRL, PICKCOLOR and SPOTLIGHT each
+    // reach got_unsupported. All four claimed support by omission.
+    otherWindows: false, moveOtherWindows: false,
+    pickColor: false, spotlight: false,
+    // No media-key path at all: nothing in launcher-win.cc ever writes a
+    // MEDIAKEY line, so onMediaKey could never fire. The keys themselves want
+    // the same SystemMediaTransportControls nowPlaying does — one job, not two.
+    mediaKeys: false,
     // The launcher answers null for a wifi query unconditionally, so claiming
     // it (by omission, under the "absent = true" rule) was another instance of
     // the same over-claim nowPlaying had.
@@ -308,7 +325,18 @@ async function systemCapabilities(query) {
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
     // Native DSP on our own output, via a muted Core Audio process tap fed
     // back through an aggregate device. 14.2+, so the launcher answers.
-    audioFilters: await hasMacAudioFilters(query) };
+    audioFilters: await hasMacAudioFilters(query),
+    // A BUILD decision, not an OS one: FoundationModels needs the macOS 26 SDK
+    // + swiftc, so a stock build has no AI in it at all and generate() rejects
+    // with "not built in". Absent from this table it read as supported on
+    // every Mac — the same over-claim by omission as badge and nowPlaying, and
+    // the worst-placed one, since the fallback for "no model" is a whole
+    // different feature. Ask the launcher rather than guessing from the OS
+    // version: only the binary knows whether it was compiled with it.
+    // Guarded like hasMacAudioFilters: this object is built on every OS, so
+    // without the check every Linux/Windows capabilities() call would spend a
+    // round trip asking about a model that isn't there.
+    ai: OS === 'macos' && aiStatus ? (await aiStatus()) !== 'unsupported' : false };
   const table = IS_LINUX ? linux : IS_WIN ? windows : macos;
   return { os: OS, ...table };
 }
@@ -1511,7 +1539,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'theme.get': async () => lastTheme,
     'app.info': async () => app.info,
     'system.info': async () => systemInfo(),
-    'system.capabilities': async () => systemCapabilities(query),
+    'system.capabilities': async () => systemCapabilities(query, () => app.ai.availability()),
     'system.requirements': async ({ ids, refresh } = {}) => systemRequirements(ids, refresh),
     'app.screens': async () => app.screens(),
     'app.paths': async () => app.paths,

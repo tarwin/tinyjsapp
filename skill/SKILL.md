@@ -92,6 +92,13 @@ ones no-op — so nothing hangs. (`spotlight` DOES work: name search via
 `plocate`/`locate` or a bounded `find`.) (Linux plans: tarwin/tinyjsapp
 TODO-linux.md.)
 
+`tiny.system.capabilities()` lists only the EXCEPTIONS — on macOS it returns
+about seven keys, and every capability it doesn't name is supported. So test
+`caps.ocr !== false`, never `if (caps.ocr)`: the truthy form reports "no OCR"
+on the one OS that has it. (Two other reads of the same table: `granted` from
+`permissions.check` off macOS usually means "not gated here", not "consent
+given"; and `capabilities().ai` is a BUILD fact — stock builds are false.)
+
 Cross-platform app pattern: gate features, don't fork code —
 `if ((await tiny.app.permissions.check('accessibility')) !== 'unsupported')`,
 `try { await tiny.win.printToPDF(p) } catch { /* fallback */ }`. Backend
@@ -420,8 +427,14 @@ await tiny.app.pickColor();     // system eyedropper (NO screen-recording
                                 // perm) -> '#rrggbb' | null on cancel
 await tiny.app.ocr(pngPath);    // on-device Vision OCR -> { text, blocks:
                                 // [{text, confidence, box (0..1 top-left)}] }
-await tiny.app.thumbnail(path, size?);  // preview png for ANY file type ->
-                                // { path, width, height }
+// OCR transcribes, it doesn't photocopy: lookalike glyphs get normalised
+// (a '·' comes back '•'), so don't test with string equality. And give the
+// text margin — a glyph clipped at the image edge silently drops a digit.
+await tiny.app.thumbnail(path, size?);  // png for ANY path -> { path, width,
+                                // height }. Content preview where Quick Look
+// has a renderer, the document/app/FOLDER icon where it doesn't, so it never
+// fails on file type alone. Rejects only if the path doesn't exist. @2x,
+// aspect preserved (so a wide image comes back wide, an icon square).
 await tiny.app.secrets.get(key);        // Keychain (keytar role): tokens go
 await tiny.app.secrets.set(key, value); // here, NEVER in tiny.store;
 await tiny.app.secrets.delete(key);     // get -> string | null

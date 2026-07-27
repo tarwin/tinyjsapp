@@ -545,8 +545,10 @@ const color = await tiny.app.pickColor();
 const { text, blocks } = await tiny.app.ocr('/path/scan.png');
 // blocks: [{ text, confidence, box }] — box normalized 0..1, top-left
 
-// a thumbnail png for ANY file type Quick Look understands (PSD, video,
-// 3D models, …) — file browsers stop caring about formats
+// a thumbnail png for ANY path — file browsers stop caring about formats.
+// A content preview where Quick Look has a renderer (PSD, video, 3D models,
+// source files); the document / app / folder ICON where it doesn't, so this
+// never fails on file type alone. A path that doesn't exist DOES reject.
 const thumb = await tiny.app.thumbnail('/path/file.psd', 256);
 
 // Keychain secrets (the keytar/safeStorage role) — tokens go here,

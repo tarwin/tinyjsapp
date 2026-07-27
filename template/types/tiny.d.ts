@@ -750,8 +750,11 @@ declare interface Tiny {
     pickColor(): Promise<string | null>;
     /** on-device OCR (Vision, accurate mode) */
     ocr(path: string): Promise<TinyOcrResult>;
-    /** thumbnail png for ANY file type Quick Look understands; size is the
-     *  bounding box in points (rendered @2x) */
+    /** thumbnail png for ANY path — a content preview where Quick Look has a
+     *  renderer (images, video, PDF, source files), the document/app/folder
+     *  ICON otherwise, so this never fails on file type alone. size is the
+     *  bounding box in points, rendered @2x, aspect preserved. Rejects if the
+     *  path doesn't exist. */
     thumbnail(path: string, size?: number): Promise<TinyThumbnail>;
     secrets: TinySecrets;
     /** Touch ID (or the account-password sheet); false covers cancel */
