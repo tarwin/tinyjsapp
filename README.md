@@ -791,8 +791,10 @@ To branch at runtime instead, ask what the machine can do:
 
 ```js
 tiny.system.os()                     // 'macos' | 'windows' | 'linux'   (sync)
-tiny.system.isLinux()                // sync — safe during page setup
-await tiny.system.architecture()     // 'arm64' | 'x86_64'
+tiny.system.isMacOS()                // sync — as are isWindows() / isLinux(),
+                                     // so a page can branch before first paint
+await tiny.system.architecture()     // 'arm64' | 'x86_64' — must be awaited:
+                                     // WKWebView says MacIntel on Apple silicon
 await tiny.system.info()             // { os, arch, session, desktop }
 const can = await tiny.system.capabilities();
 if (!can.windowPosition) useDragInstead();   // e.g. tiny.win.startDrag()
@@ -872,6 +874,10 @@ on the next. `requirements()` answers what's missing and how to fix it:
 ```js
 const [aac] = await tiny.system.requirements(['media.aac']);
 // -> { id, ok, feature, detail, install: { manager, packages, command } }
+
+// the same thing with the satisfied ones dropped — the common case, and
+// empty on macOS/Windows, where all of it ships with the OS
+const gaps = await tiny.system.missing();
 ```
 
 `promptMissing()` is the presentable version: it shows a native dialog naming

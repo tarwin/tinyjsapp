@@ -1039,7 +1039,14 @@ Linux         launcher-linux.cc         GTK3 + WebKitGTK 4.1  unix socket</pre>
 if (caps.badge) <b>tiny.app.badge</b>('3');
 
 <i>// synchronous, safe during page setup (the webview's own UA is decisive)</i>
-<b>tiny.system.os</b>();  <b>tiny.system.isMacOS</b>();  <b>tiny.system.isLinux</b>();</pre>
+<b>tiny.system.os</b>();  <b>tiny.system.isMacOS</b>();  <b>tiny.system.isWindows</b>();  <b>tiny.system.isLinux</b>();
+
+<i>// the chip is the one thing the page CAN'T see: WKWebView reports MacIntel</i>
+<i>// on Apple silicon, so ask the backend</i>
+await <b>tiny.system.architecture</b>();   <i>// 'arm64' | 'x86_64'</i>
+
+<i>// requirements() filtered to the ones that failed — [] on macOS/Windows</i>
+const gaps = await <b>tiny.system.missing</b>();  <i>// [{ id, feature, detail, install }]</i></pre>
     <p class="note">Some things are not "not ported yet" but concepts the other
     OSes don't have — AppleScript, Quick Look, trackpad haptics. Those live in
     <code>tiny.macos.*</code> and reject elsewhere, so the split is visible in
