@@ -416,6 +416,34 @@ elsewhere:
       check exists, so the gate fails closed. The card claims this in prose;
       confirm the button actually says so rather than looking broken.
 
+## AI in released builds — the one check CI can't make
+
+The release job now links the FoundationModels shim into every macOS
+tarball. Verified locally on macOS 26.5, building with the exact commands the
+workflow runs: both slices present, `minos 14.0` on each, FoundationModels
+**weak** in both, `tiny_ai_generate` present in both, the x86_64 slice loads
+under Rosetta, and the resulting launcher generates (1.3–1.6 s). The three CI
+assertions were checked against a deliberately-wrong build and each one fails
+where it should.
+
+- [ ] **Launch a release tarball on a real macOS 14 machine.** This is the
+      claim the whole design rests on — weak-linking plus `@available` guards
+      mean the launcher loads fine where FoundationModels doesn't exist — and
+      it has never been tested on an OS that old. It was a footnote while AI
+      was opt-in; now that it ships to everyone, a mistake here doesn't break
+      a feature, it breaks the app at dyld time for every macOS 14 user. Check
+      the app opens at all, and that `ai.availability()` answers
+      `'unsupported'` rather than crashing.
+- [ ] **Same on macOS 15**, the other version below the FoundationModels
+      floor that people actually run.
+- [ ] **A real Intel Mac.** The x86_64 slice is cross-compiled from an arm64
+      runner and has only been seen under Rosetta, which is not the same
+      thing as native execution.
+- [ ] **The first release on the new runner.** `macos-26` also changes the
+      SDK every other part of that job builds against (`tinyjs build`'s app
+      bundle, the codesign step, the smoke test). Watch the run rather than
+      assuming the launcher was the only thing affected.
+
 ## The 2026-07-27 capability corrections — asserted from source, never run
 
 Six capability keys were flipped to `false` after auditing every name against

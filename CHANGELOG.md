@@ -124,6 +124,34 @@ are gone rather than deprecated.
   X11 could support all three — nobody has written it, which is a different
   statement from the one the table was making.
 
+- **Released macOS builds ship on-device AI.** `tiny.app.ai` was only ever
+  available to people who built tinyjs themselves with `TINYJS_AI=1`, because
+  the release pipeline ran on a `macos-14` runner without the macOS 26 SDK —
+  so for anyone who installed a release, `availability()` was permanently
+  `'unsupported'`. The release job now builds on `macos-26` with the Swift
+  shim linked in. Source builds still take the flag, since compiling the shim
+  needs that SDK and not every checkout has it.
+
+  Two things made this more than a runner-label change. The workflow never
+  passed `-mmacosx-version-min`, so the deployment floor came from the host
+  SDK — invisible on `macos-14`, and on `macos-26` it would have published a
+  universal binary refusing to launch below macOS 26 (measured: `minos 26.0`
+  without the flag, `14.0` with it). And `swiftc` takes a single `-target`
+  where clang takes `-arch a -arch b`; passing two targets doesn't error, the
+  last silently wins, so the universal build is now per-arch plus `lipo`.
+  Both slices cross-compile from one arm64 runner.
+
+  The job asserts the three properties whose failures are silent, per slice:
+  the floor is still 14.0, FoundationModels is still **weak**-linked (a strong
+  link would stop the launcher loading at all below macOS 26 — the AI feature
+  taking the whole app down), and the shim is actually present rather than a
+  broken Swift step having quietly shipped a launcher that answers
+  `'unsupported'`. Cost: ~62 KB on a universal binary.
+
+  Also fixes a latent hazard unrelated to AI: `macos-14` is deprecated in
+  GitHub's runner images, so that job had to move regardless — and moving it
+  without pinning the floor was the trap waiting there.
+
 - **`capabilities().ai` reflects the build, not the OS.** `tiny.app.ai` needs
   the macOS 26 SDK and `swiftc`, so it's opt-in at build time via
   `TINYJS_AI=1` — and a stock build's `generate()` rejects with "not built in"

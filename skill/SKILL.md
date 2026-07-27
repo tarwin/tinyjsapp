@@ -97,7 +97,9 @@ about seven keys, and every capability it doesn't name is supported. So test
 `caps.ocr !== false`, never `if (caps.ocr)`: the truthy form reports "no OCR"
 on the one OS that has it. (Two other reads of the same table: `granted` from
 `permissions.check` off macOS usually means "not gated here", not "consent
-given"; and `capabilities().ai` is a BUILD fact — stock builds are false.)
+given"; and `capabilities().ai` is a BUILD fact as much as an OS one —
+released macOS builds have the shim linked in, a source build without
+`TINYJS_AI=1` does not, and either way it needs macOS 26 at runtime.)
 
 Cross-platform app pattern: gate features, don't fork code —
 `if ((await tiny.app.permissions.check('accessibility')) !== 'unsupported')`,
@@ -483,8 +485,10 @@ tiny.app.icon(pngPath);           // '' resets (render a canvas for live tiles)
 await tiny.system.battery();      // { percent, charging, plugged, minutesRemaining }|null
 await tiny.system.wifi();         // { ssid, bssid, rssi, noise, txRate }|null (ssid→Location)
 await tiny.app.spotlight(query);  // find files by name/content -> up to 100 paths
-// on-device LLM (Apple FoundationModels; offline, no key). Ships only in a
-// TINYJS_AI build on macOS 26 — always guard on availability().
+// on-device LLM (Apple FoundationModels; offline, no key). In released macOS
+// builds; source builds need TINYJS_AI=1. Needs macOS 26 + Apple Intelligence
+// ON at runtime, so ALWAYS guard on availability() — three states, and only
+// 'available' can generate.
 if (await tiny.app.ai.availability() === 'available')   // |'unavailable'|'unsupported'
   await tiny.app.ai.generate(prompt, { instructions }); // instructions = system prompt
 

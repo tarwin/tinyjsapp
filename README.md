@@ -635,7 +635,8 @@ const net = await tiny.system.wifi();           // { ssid, bssid, rssi, txRate }
 const docs = await tiny.app.spotlight('quarterly report');
 
 // on-device LLM — Apple's FoundationModels (offline, no API key, private).
-// Ships only in a TINYJS_AI build on macOS 26 (see below); check first.
+// In released macOS builds; source builds need TINYJS_AI=1. Needs macOS 26
+// AND Apple Intelligence on, so ALWAYS check availability() first.
 if (await tiny.app.ai.availability() === 'available') {
   const reply = await tiny.app.ai.generate('Summarise this in one line: ' + text,
     { instructions: 'You are terse.' });   // instructions = a system prompt
@@ -1247,28 +1248,39 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
 ### On-device AI (`tiny.app.ai`)
 
 `tiny.app.ai.generate()` runs Apple's FoundationModels LLM locally — offline,
-no API key, fully private. It needs the macOS 26 SDK + `swiftc`, so it's an
-**opt-in build** (a tiny Swift shim linked into the launcher):
+no API key, fully private.
+
+**Released macOS tarballs include it.** The release workflow builds on a
+`macos-26` runner with the Swift shim linked in, so `tiny.app.ai` is a
+feature you can ship, not one users have to build for themselves.
+
+Building from source is the case that still needs a flag, because compiling
+the shim needs the macOS 26 SDK + `swiftc` and not every checkout has them:
 
 ```sh
-TINYJS_AI=1 ./setup.sh      # builds the launcher with FoundationModels
+./setup.sh                  # no AI — builds on any supported SDK
+TINYJS_AI=1 ./setup.sh      # with FoundationModels (needs the macOS 26 SDK)
 ```
 
-The resulting binary keeps the **macOS 14 floor** and weak-links
+Either way the binary keeps the **macOS 14 floor** and weak-links
 FoundationModels, so it still launches on macOS 14+ — `ai.availability()`
-just returns `'unsupported'` below macOS 26. Stock release builds (and any
-build without the flag) ship the same `'unsupported'` fallback, so app code
-that guards on `availability()` is always safe:
+just returns `'unsupported'` below macOS 26, as does a build made without
+the flag. So app code that guards on `availability()` is always safe, and
+guarding is not optional: the honest states are *available*, *unavailable*
+(Apple Intelligence off or still downloading) and *unsupported*, and only
+the first one can generate anything.
 
 ```js
 if (await tiny.app.ai.availability() === 'available')
   await tiny.app.ai.generate(prompt, { instructions });
 ```
 
-To ship AI in the released tarballs, the release workflow's runner needs the
-macOS 26 SDK (a `macos-26` image / Xcode 26) and the `TINYJS_AI=1` build step
-— it's kept off the default `macos-14` pipeline so stock builds never depend
-on the newer SDK.
+The release build asserts what makes that safe, per architecture, because
+each of these failures is silent: the deployment floor is still 14.0, the
+FoundationModels link is still **weak** (a strong one would stop the
+launcher loading at all below macOS 26 — the AI feature taking the whole app
+down with it), and the shim is actually present rather than a broken Swift
+step having shipped a launcher that just answers `'unsupported'`.
 
 ### Portability
 
