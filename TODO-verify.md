@@ -43,7 +43,7 @@ Added 2026-07-25 (the dock→intent-verb rename + `progress`).
 | check | macOS | Windows | Linux |
 | --- | --- | --- | --- |
 | `badge('3')` shows a count | ✅ seen | ❌ not built ([TODO-windows.md]) | 🔶 signal correct, drawing unseen |
-| `badge('NEW')` (non-numeric) | ✅ arbitrary text | — | ⬜ hides — Unity badge is an int |
+| `badge('NEW')` (non-numeric) | ✅ arbitrary text | — | 🔶 hides: dbus shows count-visible=false (2026-07-28) |
 | `attention()` | ✅ bounces | ✅ flashes the taskbar button | ✅ X11 urgency bit / ❌ Wayland |
 | `icon(png)` replaces the icon | ✅ seen | ✅ seen (fixed 2026-07-25) | ✅ X11 (fixed 2026-07-26) / ❌ Wayland |
 | `icon(ico)` replaces the icon | n/a | ✅ seen | n/a |
@@ -283,8 +283,15 @@ TODO-linux.md).
       bug. `getState` deliberately reports `null` here rather than echoing the
       request. 2026-07-28: the call resolves on both sessions and `getState`
       does report `null`; `capabilities().windowControls` is session-gated
-      (false on Wayland, true on X11). Whether Mutter actually removes the
-      buttons still needs eyes.
+      (false on Wayland, true on X11). But the MWM half is worse than
+      "the WM may ignore it": measured with xprop on GNOME 46/X11, the
+      property reads GTK's own CSD signature (`0x3, 0x1, 0x0` — all
+      functions, zero decorations) after `setChrome(['close'])`, i.e. **GTK
+      rewrites _MOTIF_WM_HINTS over the launcher's request**, and under CSD
+      the WM doesn't draw the buttons anyway. So on GNOME, minimize/maximize
+      removal is structurally a no-op; only the `set_deletable` half (the
+      close button, which GTK itself draws) can work — and that half still
+      needs eyes. A real fix would drive the CSD title bar, not MWM.
 
 ## Needs a hand on the mouse — kitchen-sink, 2026-07-26
 
