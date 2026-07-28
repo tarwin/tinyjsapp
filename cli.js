@@ -504,6 +504,7 @@ const app = await createApp({
   contextMenu: ${JSON.stringify(cfg.contextMenu ?? true)},
   urlScheme: ${JSON.stringify(cfg.urlScheme ?? null)},
   fileExtensions: ${JSON.stringify(cfg.fileExtensions ?? null)},
+  openFolders: ${JSON.stringify(cfg.openFolders ?? false)},
 });
 if (appMod.init) appMod.init(app);
 `;
@@ -789,6 +790,52 @@ async function makeDmg(cfg, APP) {
   return dmg;
 }
 
+// `tinyjs build --cli [name]` writes a shim so the app is runnable from a
+// terminal. It's a build artifact because only the build knows where the
+// executable lands — and because argv now reaches onOpenFiles on every
+// platform, the shim is genuinely just exec: no `open -a`, no --open mode, no
+// per-platform branch.
+//
+// It goes in dist/bin/, NOT dist/ — the bare executable is already dist/<name>
+// and a shim of the same name would overwrite it (which is exactly what the
+// first version of this did). dist/bin/<name> also means the symlink onto PATH
+// carries the right command name.
+//
+// It targets the bare dist/<name> backend, NOT the .app. Inside the bundle
+// the main executable is the LAUNCHER, which parses argv as <html> <socket>
+// and dies on a file path ("cannot connect to /tmp/x.md" — found the hard
+// way). The backend is the binary that reads argv and hands paths to
+// onOpenFiles.
+//
+// Caveat worth knowing on macOS: the bare binary has no single-instance pipe
+// (that's Windows/Linux only — macOS normally gets it from LaunchServices),
+// so running the shim while the app is already open starts a SECOND copy.
+// Cold start is the case this covers well.
+async function maybeWriteCliShim(cfg, appBundle) {
+  const i = args.indexOf('--cli');
+  if (i < 0) return;
+  const next = args[i + 1];
+  const name = next && !next.startsWith('--') ? next : cfg.name;
+  const isWin = tjs.env.OS === 'Windows_NT';
+  await tjs.makeDir('dist/bin', { recursive: true });
+  const shimPath = 'dist/bin/' + name + (isWin ? '.cmd' : '');
+  // ../ from dist/bin back to dist/
+  const target = isWin ? `%~dp0..\\${cfg.name}.exe` : `$DIR/../${cfg.name}`;
+  const body = isWin
+    ? `@echo off\r\n"${target}" %*\r\n`
+    // exec, so signals and the exit code belong to the app rather than to a
+    // shell sitting in front of it. "$@" quoted keeps paths with spaces whole.
+    : `#!/bin/sh\n`
+      + `# ${cfg.title} — run from a terminal. Files named here reach the app\n`
+      + `# through onOpenFiles, whether it was already running or not.\n`
+      + `DIR="$(cd "$(dirname "$0")" && pwd)"\n`
+      + `exec "${target}" "$@"\n`;
+  await tjs.writeFile(shimPath, enc.encode(body));
+  if (!isWin) await tryRun(['chmod', '+x', shimPath]);
+  console.log(`==> cli shim: ${shimPath}`);
+  console.log(`    link it:  ln -sf "$(pwd)/${shimPath}" /usr/local/bin/${name}`);
+}
+
 async function cmdBuild() {
   const cfg = await loadConfig();
   // Same staleness guard `dev` has, and it matters more here: a build SHIPS
@@ -1003,17 +1050,29 @@ async function cmdBuild() {
     extraKeys += `
   <key>NSAudioCaptureUsageDescription</key> <string>${why}</string>`;
   }
+  // Document types: file extensions, and optionally folders. "openFolders":
+  // true is its own dict rather than another extension — a folder has no
+  // extension to match, so LaunchServices wants the public.folder UTI.
   const exts = cfg.fileExtensions ?? [];
-  if (exts.length) {
-    extraKeys += `
-  <key>CFBundleDocumentTypes</key>
-  <array><dict>
+  if (exts.length || cfg.openFolders) {
+    const dicts = [];
+    if (exts.length) dicts.push(`<dict>
     <key>CFBundleTypeName</key>   <string>${cfg.title} Document</string>
     <key>CFBundleTypeRole</key>   <string>Editor</string>
     <key>LSHandlerRank</key>      <string>Default</string>
     <key>CFBundleTypeExtensions</key>
     <array>${exts.map((e) => `<string>${e}</string>`).join('')}</array>
-  </dict></array>`;
+  </dict>`);
+    if (cfg.openFolders) dicts.push(`<dict>
+    <key>CFBundleTypeName</key>   <string>Folder</string>
+    <key>CFBundleTypeRole</key>   <string>Viewer</string>
+    <key>LSHandlerRank</key>      <string>Alternate</string>
+    <key>LSItemContentTypes</key>
+    <array><string>public.folder</string></array>
+  </dict>`);
+    extraKeys += `
+  <key>CFBundleDocumentTypes</key>
+  <array>${dicts.join('')}</array>`;
   }
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
@@ -1083,6 +1142,7 @@ async function cmdBuild() {
   // Note: this dmg holds the un-notarized .app — `notarize --dmg` rebuilds it
   // from the stapled bundle so it validates offline.
   if (args.includes('--dmg')) await makeDmg(cfg, APP);
+  await maybeWriteCliShim(cfg, APP);
 
   console.log('==> done');
   await run(['ls', '-lh', 'dist/' + cfg.name, 'dist/launcher']);

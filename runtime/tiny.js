@@ -552,6 +552,13 @@
       // Standard per-app directories: { home, data, cache, logs, temp,
       // downloads, desktop, documents } (data/cache/logs are per app id).
       paths: () => call('app.paths'),
+      // Become the default opener for a file extension (or 'folder').
+      // -> 'ok' | 'unsupported' | 'failed'. Linux only today; macOS and
+      // Windows answer 'unsupported' rather than pretending, since one wants
+      // a LaunchServices call and the other deliberately guards the setting.
+      // Ask because the user asked — claiming .md on first run is the kind of
+      // thing that makes people uninstall an app.
+      setAsDefaultHandler: (ext) => call('app.setAsDefaultHandler', { ext }),
       // NSWorkspace verbs. open(): URL (any scheme) or file path in the
       // default app; reveal(): show in Finder; trash(): move to Trash
       // (recoverable). Resolve true; reject with the reason on failure.

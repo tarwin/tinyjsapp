@@ -6897,14 +6897,28 @@ static void tiny_openURLs(id, SEL, id /*app*/, NSArray *urls) {
   send_open_urls(urls);
 }
 
+// The launcher's OWN argv — the page it was told to load and the socket it
+// talks over. AppKit hands a process's arguments to application:openFiles:
+// during launch, so without this every built app received its own index.html
+// and app.sock as "files the user opened", on every single launch. Anything
+// with an onOpenFiles handler was quietly told to open its own plumbing.
+static std::set<std::string> g_own_argv_paths;
+
 static void tiny_openFiles(id, SEL, id app, NSArray *files) {
   std::string json = "[";
+  bool any = false;
   for (NSUInteger i = 0; i < files.count; i++) {
-    if (i)
-      json += ",";
-    json += json_escape([(NSString *)files[i] UTF8String]);
+    std::string path = [(NSString *)files[i] UTF8String];
+    if (g_own_argv_paths.count(path)) continue;   // our own html / socket
+    if (any) json += ",";
+    any = true;
+    json += json_escape(path);
   }
   json += "]";
+  if (!any) {
+    [(NSApplication *)app replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
+    return;
+  }
   sock_write_line("OPENFILES " + json);
   [(NSApplication *)app replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
 }
@@ -7034,6 +7048,16 @@ static bool bundle_mode_setup(std::string &target, std::string &title,
 int main(int argc, char *argv[]) {
   std::string target, sock_path, title = "tinyjs", size_s = "960x640";
   bool bundle_mode = false;
+
+#ifdef __APPLE__
+  // Remember our own arguments before anything else can hand them back to us
+  // as "files the user opened" — see tiny_openFiles.
+  // EVERY argument, not just the path-shaped ones: AppKit hands the whole
+  // command line over, so the title and the "960x640" size string arrived as
+  // documents too once the paths were filtered.
+  for (int i = 1; i < argc; i++)
+    if (argv[i]) g_own_argv_paths.insert(argv[i]);
+#endif
 
 #ifdef __APPLE__
   if (argc < 3)

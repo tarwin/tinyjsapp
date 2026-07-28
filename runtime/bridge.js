@@ -518,7 +518,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -1273,6 +1273,34 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         return true;
       },
     },
+    // Ask the OS to make this app the default opener for a file extension (or
+    // 'folder'). Linux only for now, and deliberately not faked elsewhere:
+    // macOS wants LSSetDefaultRoleHandlerForContentType from the launcher, and
+    // Windows guards the UserChoice key precisely so apps can't do this behind
+    // the user's back — a no-op that resolved true would be a lie on both.
+    //
+    // -> 'ok' | 'unsupported' | 'failed'. Registration must have happened
+    // first (a built app writes its .desktop on first run), since xdg-mime
+    // points a mime at a .desktop that has to exist.
+    async setAsDefaultHandler(ext) {
+      if (!IS_LINUX) return 'unsupported';
+      const appIdStr = id || 'tinyjs-app';
+      const safeId = appIdStr.toLowerCase().replace(/[^a-z0-9.-]/g, '-');
+      const clean = String(ext ?? '').replace(/^\./, '').toLowerCase();
+      if (!clean) return 'failed';
+      // 'folder' is the one non-extension case worth spelling, since it's the
+      // mime a folder-opening app actually needs.
+      const mime = clean === 'folder' ? 'inode/directory'
+                                      : 'application/x-' + safeId + '-' + clean;
+      try {
+        const p = tjs.spawn(['xdg-mime', 'default', appIdStr + '.desktop', mime],
+                            { stdout: 'ignore', stderr: 'ignore' });
+        const st = await p.wait();
+        return st.exit_code === 0 ? 'ok' : 'failed';
+      } catch {
+        return 'failed';   // no xdg-mime on this box
+      }
+    },
     // Standard per-app directories (data/cache/logs are per app id, not
     // auto-created — tjs.makeDir(..., { recursive: true }) first write).
     // Prefer these over hardcoding ~/Library paths.
@@ -1644,6 +1672,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'system.requirements': async ({ ids, refresh } = {}) => systemRequirements(ids, refresh),
     'app.screens': async () => app.screens(),
     'app.paths': async () => app.paths,
+    'app.setAsDefaultHandler': async ({ ext }) => app.setAsDefaultHandler(ext),
     'shell.open': async ({ target }) => app.shell.open(target),
     'shell.reveal': async ({ path }) => app.shell.reveal(path),
     'shell.trash': async ({ path }) => app.shell.trash(path),
@@ -1877,6 +1906,26 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // call app.clipboard.watch(ms) on top (idempotent).
   if (onClipboardChange) app.clipboard.watch();
 
+  // --- files named on the command line ------------------------------------
+  // A CLI shim is just `exec <exe> "$@"`, so argv is where documents arrive
+  // when an app is started from a terminal — on every platform, and before
+  // LaunchServices or the .desktop handler get a look in.
+  //
+  // tjs.args is [argv0, ...user args] in a built app. Flags are skipped and
+  // relative paths resolved against the cwd the user typed them in; anything
+  // that isn't an existing path is dropped rather than guessed at, so
+  // `myapp --verbose` doesn't hand the app a document called "--verbose".
+  async function argvPaths() {
+    const out = [];
+    for (const a of tjs.args.slice(1)) {
+      if (!a || a.startsWith('-')) continue;
+      const abs = isAbs(a) ? a : tjs.cwd + '/' + a;
+      if (await exists(abs)) out.push(abs);
+    }
+    return out;
+  }
+  const cliPaths = await argvPaths();
+
   // --- Windows/Linux: single instance + deep links / file associations -----
   // Built apps only (macOS gets all of this from LaunchServices + the plist).
   // The app listens on \\.\pipe\tinyjs-app-<id> (Windows) or
@@ -1893,7 +1942,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       const conn = await tjs.connect('pipe', instPipe);
       const { writable } = await conn.opened;
       const w = writable.getWriter();
-      await w.write(enc.encode('{"activate":true}\n'));
+      // Carry the argv documents over: the running instance opens them, which
+      // is what `myapp notes.md` should do whether or not the app is already
+      // up. The receiving end already understands `paths`.
+      await w.write(enc.encode(JSON.stringify(
+        cliPaths.length ? { activate: true, paths: cliPaths } : { activate: true }) + '\n'));
       tjs.exit(0); // another instance owns the app — hand over
     } catch {}
     // A unix socket left by a crashed instance blocks listen() — nothing
@@ -1955,6 +2008,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         for (const scheme of urlScheme ? [].concat(urlScheme) : []) {
           mimes.push('x-scheme-handler/' + scheme);
         }
+        // A folder isn't a file type with an extension — it's one fixed mime,
+        // so it needs no shared-mime-info XML of its own.
+        if (openFolders) mimes.push('inode/directory');
         if (fileExtensions?.length) {
           const safeId = appIdStr.toLowerCase().replace(/[^a-z0-9.-]/g, '-');
           let xml = '<?xml version="1.0" encoding="UTF-8"?>\n' +
@@ -2011,6 +2067,17 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         }
       }
     }
+  }
+
+  // Documents from argv, delivered the same way the OS handlers deliver
+  // theirs. The backend hook is the reliable half: onOpenFiles fires here and
+  // now. The page event is best-effort, exactly like OPENFILES from
+  // LaunchServices — there's no page-loaded signal to wait for, so a page that
+  // wants cold-start files should register its handler in its first script,
+  // or read them from the backend instead.
+  if (cliPaths.length) {
+    push('open-files', { paths: cliPaths });
+    if (onOpenFiles) onOpenFiles(cliPaths, app);
   }
 
   // Background update checks ("update": { "auto": "launch" | "daily" }).

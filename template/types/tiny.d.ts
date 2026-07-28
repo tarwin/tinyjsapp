@@ -794,6 +794,11 @@ declare interface Tiny {
     screens(): Promise<TinyScreen[]>;
     /** standard per-app directories */
     paths(): Promise<TinyPaths>;
+    /** become the default opener for a file extension, or 'folder'.
+     *  'ok' | 'unsupported' (macOS/Windows today) | 'failed'. Call it when
+     *  the USER asks — silently claiming an extension is how apps get
+     *  uninstalled. */
+    setAsDefaultHandler(ext: string): Promise<'ok' | 'unsupported' | 'failed'>;
     shell: TinyShell;
     launchAtLogin: TinyLaunchAtLogin;
     /** '' clears the badge */

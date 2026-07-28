@@ -535,6 +535,15 @@ btn.addEventListener('click', (e) =>
 // seconds since the user's last input (pause polling when they're away)
 const idle = await tiny.system.idleTime();
 
+// files named on the command line reach onOpenFiles — cold start on all
+// three platforms, and forwarded to the running copy over the instance pipe
+// on win/linux. `tinyjs build --cli [name]` writes dist/bin/<name>, a shim
+// that's just `exec <backend> "$@"`.
+export function onOpenFiles(paths, app) { /* argv, LaunchServices, drag-drop */ }
+
+// become the default opener for an extension — ask because the USER asked
+await tiny.app.setAsDefaultHandler('md');   // 'ok' | 'unsupported' | 'failed'
+
 // the user's languages + time zone, read from the OS — NOT from LANG, which
 // Windows doesn't have and which elsewhere describes the parent process
 const { language, languages, system, region, timeZone } = await tiny.system.locale();

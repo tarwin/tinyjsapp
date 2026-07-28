@@ -217,6 +217,50 @@ are gone rather than deprecated.
   Windows also stopped firing an accelerator when Shift was held but not
   declared, which made `'F'` and `'f'` the same key there.
 
+- **Files on the command line reach `onOpenFiles`.** Nothing read process argv
+  before, so `myapp notes.md` from a terminal was a launch with a document
+  silently dropped. Now argv is parsed on every platform at startup — flags
+  skipped, relative paths resolved against the cwd, and anything that isn't an
+  existing path dropped rather than guessed at, so `myapp --verbose` doesn't
+  hand the app a document called `--verbose`. On Windows and Linux a second
+  launch forwards its documents over the instance pipe to the running copy
+  instead of only waking it.
+
+  The backend hook is the reliable half: `onOpenFiles` fires immediately. The
+  page event is best-effort, exactly as `OPENFILES` from LaunchServices always
+  was — there is no page-loaded signal to wait on.
+
+- **Fixed: every built macOS app was told to open its own plumbing.** AppKit
+  hands a process's whole command line to `application:openFiles:` during
+  launch, so an app with an `onOpenFiles` handler received its own
+  `frontend/index.html` and `app.sock` — and, once those were filtered, its own
+  title and `"960x640"` — as documents the user had opened. On every launch,
+  since the handler existed. The launcher now remembers its own argv and drops
+  it. Found while testing the argv work, not by looking for it.
+
+- **`"openFolders": true`** — a folder document type: `public.folder` in
+  `CFBundleDocumentTypes`, `inode/directory` in the `.desktop` `MimeType=`. A
+  folder has no extension to match, so it needed saying separately rather than
+  being another `fileExtensions` entry.
+
+- **`tinyjs build --cli [name]`** — writes a shim beside the app, since only
+  the build knows where the executable lands. It goes in `dist/bin/`, not
+  `dist/`, because the bare executable is already `dist/<name>` and a
+  same-named shim overwrites it. On macOS it targets that bare binary, NOT the
+  `.app`: the bundle's main executable is the launcher, which parses argv as
+  `<html> <socket>` and dies on a file path. Caveat: the bare binary has no
+  single-instance pipe on macOS, so running the shim while the app is open
+  starts a second copy — cold start is what this covers well.
+
+- **`app.setAsDefaultHandler(ext)`** — `'ok' | 'unsupported' | 'failed'`.
+  Linux runs `xdg-mime default` for the app's own mime (or `inode/directory`
+  for `'folder'`); macOS and Windows answer `'unsupported'` rather than
+  no-oping, since one wants a LaunchServices call and the other guards the
+  setting deliberately. Deliberately NOT automatic at registration the way
+  `urlScheme` is: claiming `tinydeck://` competes with nobody, claiming `.md`
+  competes with the user's editor, and an app that does that on first run is
+  an app people uninstall.
+
 - **`tiny.system.locale()`** — `{ language, languages, system, region,
   timeZone }`, read from the OS. Plus a **`locale` event** when the user
   changes their language or region, so an app can re-render instead of going

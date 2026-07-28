@@ -95,6 +95,16 @@ ones no-op — so nothing hangs. (`spotlight` DOES work: name search via
 `plocate`/`locate` or a bounded `find`.) (Linux plans: tarwin/tinyjsapp
 TODO-linux.md.)
 
+Files on the command line arrive via `onOpenFiles(paths, app)` — argv is
+parsed at startup on all three platforms (flags skipped, relative paths
+resolved, non-existent dropped), and on win/linux a second launch forwards
+its paths to the running copy over the instance pipe. `tinyjs build --cli
+[name]` emits `dist/bin/<name>`, a shim that is just `exec <backend> "$@"` —
+it targets the BARE dist/<name>, never the .app (whose main executable is the
+launcher and takes `<html> <socket>`). `"openFolders": true` adds a folder
+document type. `app.setAsDefaultHandler(ext)` -> 'ok'|'unsupported'|'failed'
+(Linux only; call it when the user asks, never on first run).
+
 `tiny.system.locale()` -> { language, languages, system, region, timeZone },
 read from the OS. In a PAGE you rarely need it — navigator.language(s), all of
 Intl and the 'languagechange' event work in the webview. On the BACKEND you do:
