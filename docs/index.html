@@ -5,14 +5,70 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tinyjs — desktop apps for macOS, Windows, and Linux in ~6 MB</title>
 <meta name="description" content="Build macOS, Windows, and Linux desktop apps in JavaScript: txiki.js backend, native WebKit / WebView2 / WebKitGTK window, ~6 MB shipped. No Electron. No ports.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='%2314161b'/%3E%3Cpath d='M22 24l12 8-12 8z' fill='%2385b3ea'/%3E%3Crect x='36' y='38' width='10' height='4' fill='%2385b3ea'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='%23101318'/%3E%3Cpath d='M22 24l12 8-12 8z' fill='%238ec0ff'/%3E%3Crect x='36' y='38' width='10' height='4' fill='%238ec0ff'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#fcfcfa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#101318" media="(prefers-color-scheme: dark)">
+<script>
+  // Theme pin, applied before first paint so a pinned reader never sees a
+  // flash of the other palette. No pin = follow the OS (the media query below).
+  try {
+    var t = localStorage.getItem('tinyjs-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
 <style>
   :root {
-    --bg: #14161b; --panel: #1a1d24; --line: #262a33;
-    --text: #d9dce3; --muted: #71788a; --accent: #85b3ea;
+    color-scheme: dark;
+    --bg: #101318; --panel: #191d24; --line: #363d4c;
+    --text: #e6e9f0; --muted: #99a1b3; --accent: #8ec0ff;
+    --bar: #2b3140;                      /* the electron comparison bar */
+    --wash: rgba(142,192,255,.10);       /* accent tint behind active chips */
+    --wash-2: rgba(142,192,255,.17);
+    --chip: rgba(255,255,255,.045);
+    --scan: rgba(255,255,255,.008);
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --serif: Charter, "Iowan Old Style", Georgia, serif;
   }
+  /* Light: the OS preference unless dark is pinned — same var names, so every
+     rule below is written once. Duplicated for the explicit pin because a
+     media query and an attribute selector can't share one rule. */
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg: #fcfcfa; --panel: #f2f1ec; --line: #d3d0c7;
+      --text: #16181d; --muted: #565c69; --accent: #1a5fb4;
+      --bar: #ded9d0;
+      --wash: rgba(26,95,180,.07);
+      --wash-2: rgba(26,95,180,.13);
+      --chip: rgba(0,0,0,.04);
+      --scan: rgba(0,0,0,.014);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #fcfcfa; --panel: #f2f1ec; --line: #d3d0c7;
+    --text: #16181d; --muted: #565c69; --accent: #1a5fb4;
+    --bar: #ded9d0;
+    --wash: rgba(26,95,180,.07);
+    --wash-2: rgba(26,95,180,.13);
+    --chip: rgba(0,0,0,.04);
+    --scan: rgba(0,0,0,.014);
+  }
+
+  /* theme switch: auto → light → dark → auto. The label is CSS-driven so it
+     is already correct at first paint (and still right with JS off). */
+  .theme {
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    font: 11px var(--mono); letter-spacing: .06em; padding: 4px 9px;
+    border-radius: 6px; cursor: pointer; min-width: 64px; text-align: center;
+  }
+  .theme:hover { color: var(--accent); border-color: var(--accent); background: var(--wash); }
+  .theme::before { content: "◐ "; }
+  .theme::after { content: "auto"; }
+  html[data-theme="light"] .theme::before { content: "☀ "; }
+  html[data-theme="light"] .theme::after { content: "light"; }
+  html[data-theme="dark"] .theme::before { content: "☾ "; }
+  html[data-theme="dark"] .theme::after { content: "dark"; }
   * { margin: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
@@ -27,7 +83,7 @@
   /* subtle scanline texture */
   body::before {
     content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
-    background: repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.006) 2px 4px);
+    background: repeating-linear-gradient(0deg, transparent 0 2px, var(--scan) 2px 4px);
   }
 
   @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
@@ -36,10 +92,25 @@
   .r4 { animation-delay: .35s } .r5 { animation-delay: .5s }
 
   header { padding: 96px 0 0; position: relative; z-index: 1; }
-  .brand { font: 700 15px var(--mono); letter-spacing: .08em; color: var(--accent); }
-  .brand .links { float: right; display: flex; gap: 18px; }
-  .brand a { color: var(--muted); text-decoration: none; font-weight: 400; }
+  /* One flex row: wordmark, links, theme switch. It was a float, which on a
+     phone dropped the links into a ragged pile over the h1. */
+  .brand {
+    font: 700 15px var(--mono); letter-spacing: .08em; color: var(--accent);
+    display: flex; align-items: center; gap: 18px;
+  }
+  .brand .mark { margin-right: auto; }
+  .brand .links { display: flex; align-items: center; gap: 18px; order: 1; }
+  .brand .theme { order: 2; }
+  /* nowrap so "examples ↗" never leaves its arrow behind on the next line */
+  .brand a { color: var(--muted); text-decoration: none; font-weight: 400; white-space: nowrap; }
   .brand a:hover { color: var(--text); }
+  /* Phones: wordmark + switch on top, the four links as their own full row. */
+  @media (max-width: 620px) {
+    .brand { flex-wrap: wrap; gap: 14px 16px; font-size: 13.5px; }
+    .brand .theme { order: 0; }
+    /* wrap rather than run off the edge on a 320px-class phone */
+    .brand .links { flex: 1 0 100%; flex-wrap: wrap; gap: 8px 16px; }
+  }
 
   h1 {
     font: 700 clamp(44px, 9vw, 76px)/1.02 var(--mono);
@@ -59,7 +130,7 @@
   }
   .os-tab em { font-style: normal; font-size: 10px; color: var(--accent); opacity: .8; }
   .os-tab:hover { color: var(--text); }
-  .os-tab.on { color: var(--accent); border-color: var(--accent); background: rgba(133,179,234,.06); }
+  .os-tab.on { color: var(--accent); border-color: var(--accent); background: var(--wash); }
   html[data-os="mac"] [data-os-panel="win"],
   html[data-os="mac"] [data-os-panel="linux"] { display: none !important; }
   html[data-os="win"] [data-os-panel="mac"],
@@ -85,7 +156,7 @@
     border: 0; border-left: 1px solid var(--line); background: transparent;
     color: var(--muted); font: 12px var(--mono); padding: 0 18px; cursor: pointer;
   }
-  .install button:hover { color: var(--accent); background: rgba(133,179,234,.06); }
+  .install button:hover { color: var(--accent); background: var(--wash); }
   .platform { margin: 12px 2px 0; font: 12px var(--mono); color: var(--muted); letter-spacing: .04em; }
 
   section { padding: 72px 0 0; position: relative; z-index: 1; }
@@ -105,7 +176,7 @@
   }
   @keyframes grow { from { width: 0 !important; } }
   .bar .fill span { padding-left: 10px; white-space: nowrap; }
-  .electron .fill { width: 100%; background: #2a2e39; color: var(--muted); }
+  .electron .fill { width: 100%; background: var(--bar); color: var(--muted); }
   .tiny .fill { width: 4%; background: var(--accent); }
   .tiny .fill span { color: var(--accent); padding-left: calc(100% + 10px); }
   .bar .label { color: var(--muted); }
@@ -129,19 +200,19 @@
     display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
     border-left: 1px solid var(--line); padding: 22px 24px; text-decoration: none;
     color: var(--accent); font: 600 14px var(--mono); white-space: nowrap; text-align: center;
-    background: rgba(133,179,234,.04);
+    background: var(--wash);
   }
   .try-icon { display: block; width: 64px; height: 64px; border-radius: 14px; margin-bottom: 10px; }
   .try-dl span { font-weight: 400; font-size: 11px; line-height: 1.6; color: var(--muted); letter-spacing: .02em; white-space: normal; }
-  a.try-dl:hover { background: rgba(133,179,234,.09); }
+  a.try-dl:hover { background: var(--wash-2); }
   /* linux: two architectures, so the archs are the buttons */
   .try-dl .arch { display: flex; gap: 8px; margin: 10px 0 2px; }
   .try-dl .arch a {
     color: var(--text); text-decoration: none; font: 600 12px var(--mono); letter-spacing: .02em;
     border: 1px solid var(--line); border-radius: 7px; padding: 5px 12px;
-    background: rgba(255,255,255,.03);
+    background: var(--chip);
   }
-  .try-dl .arch a:hover { color: #fff; border-color: var(--accent); background: rgba(133,179,234,.12); }
+  .try-dl .arch a:hover { color: var(--accent); border-color: var(--accent); background: var(--wash-2); }
   @media (max-width: 560px) {
     .try { flex-direction: column; }
     .try-dl { max-width: none; border-left: 0; border-top: 1px solid var(--line); padding: 16px 22px; }
@@ -181,7 +252,7 @@
 
 <div class="wrap">
   <header>
-    <div class="brand r r1">▸_ tinyjs <span class="links"><a href="./docs.html">docs</a><a href="./changelog.html">changelog</a><a href="https://github.com/tarwin/tinyjsapp-examples">examples ↗</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span></div>
+    <div class="brand r r1"><span class="mark">▸_ tinyjs</span> <span class="links"><a href="./docs.html">docs</a><a href="./changelog.html">changelog</a><a href="https://github.com/tarwin/tinyjsapp-examples">examples ↗</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span><button class="theme" onclick="cycleTheme()" title="Theme — click to cycle auto / light / dark" aria-label="Change theme"></button></div>
     <h1 class="r r2">Desktop apps<br>in <em>~6&hairsp;MB</em>.</h1>
     <p class="sub r r3">A <strong>JavaScript backend</strong> with full system access, a
     <strong>native webview window</strong> (WebKit on macOS, WebView2 on
@@ -335,6 +406,19 @@ tiny.menu.set([…]);
 </div>
 
 <script>
+// Theme: auto (whatever the OS says) → light → dark → auto. The pin is read
+// back in the <head> on the next page load; "auto" is stored as no pin at all.
+function cycleTheme() {
+  var el = document.documentElement;
+  var order = ['auto', 'light', 'dark'];
+  var next = order[(order.indexOf(el.dataset.theme || 'auto') + 1) % 3];
+  if (next === 'auto') delete el.dataset.theme; else el.dataset.theme = next;
+  try {
+    if (next === 'auto') localStorage.removeItem('tinyjs-theme');
+    else localStorage.setItem('tinyjs-theme', next);
+  } catch (e) {}
+}
+
 // macOS / Windows tabs: every strip is synced; the default comes from OS
 // sniffing, a click is remembered for return visits.
 var osBooted = false;
