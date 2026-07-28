@@ -5,7 +5,8 @@
 // Each handler receives (params, app) — `app` has push/setTitle/setSize/quit.
 //
 // Built-ins you get for free: ping, log, quit, win.setTitle, win.setSize,
-// win.openFile, win.openFiles, win.pickFolder, win.saveFile (native dialogs).
+// dialog.openFile/openFiles/pickFolder/saveFile + alert/confirm/prompt —
+// native dialogs, application-modal (which is why they aren't on tiny.win).
 
 const dec = new TextDecoder();
 

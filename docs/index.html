@@ -279,8 +279,10 @@
     transparency, multi-window, drag-and-drop with real paths, tray apps
     (<code style="font-size:13px">emoji:</code> icons standing in for macOS
     <code style="font-size:13px">sf:</code> symbols), WebGPU, and media /
-    WebAudio all work. The calls that are genuinely mac-only — Quick Look,
-    AppleScript, Touch ID — answer <code style="font-size:13px">'unsupported'</code>,
+    WebAudio all work. Windows also has Touch ID's counterpart (Windows Hello),
+    audio capture, deep links and file associations. The calls that are
+    genuinely mac-only — Quick Look, AppleScript, on-device AI, OCR — answer
+    <code style="font-size:13px">'unsupported'</code>,
     so a cross-platform app degrades honestly instead of breaking. Linux
     support just landed — the same one-by-one sweep hasn't happened yet, but
     the framework-level parity list is in the
@@ -308,7 +310,7 @@
         <h3>in the page</h3>
         <pre><span class="a">await</span> tiny.api.call(<span class="c">'hello'</span>, { name });
 tiny.menu.set([…]);
-<span class="a">await</span> tiny.win.openFile();</pre>
+<span class="a">await</span> tiny.dialog.openFile();</pre>
       </div>
       <div class="qs-cell">
         <h3>how it fits</h3>

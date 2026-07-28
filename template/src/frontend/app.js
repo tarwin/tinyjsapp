@@ -37,7 +37,7 @@ async function init() {
   tiny.menu.on((id) => {
     if (id === 'open') openFile();
     if (id === 'rename') renameWindow();
-    if (id === 'hello') tiny.win.alert('Hello!', 'This came from a native menu item.');
+    if (id === 'hello') tiny.dialog.alert('Hello!', 'This came from a native menu item.');
   });
 }
 
@@ -59,7 +59,7 @@ async function listDir(path) {
 }
 
 async function openFile() {
-  const path = await tiny.win.openFile();
+  const path = await tiny.dialog.openFile();
   if (!path) return;
   const head = await tiny.api.call('readFileHead', { path });
   $('picked').textContent = path + '\n\n' + head;
@@ -83,18 +83,18 @@ $('retitle').addEventListener('click', renameWindow);
 $('grow').addEventListener('click', () => tiny.win.setSize(1200, 800));
 $('shrink').addEventListener('click', () => tiny.win.setSize(960, 640));
 $('quit').addEventListener('click', async () => {
-  if (await tiny.win.confirm('Quit the app?', { detail: 'This is tiny.win.confirm().' })) tiny.quit();
+  if (await tiny.dialog.confirm('Quit the app?', { detail: 'This is tiny.dialog.confirm().' })) tiny.quit();
 });
 
 // Native dialogs
 $('openfile').addEventListener('click', openFile);
 $('savefile').addEventListener('click', async () => {
-  const path = await tiny.win.saveFile();
+  const path = await tiny.dialog.saveFile();
   $('picked').textContent = path ? 'would save to: ' + path : '(cancelled)';
 });
-$('alert').addEventListener('click', () => tiny.win.alert('Heads up', 'This is tiny.win.alert().'));
+$('alert').addEventListener('click', () => tiny.dialog.alert('Heads up', 'This is tiny.dialog.alert().'));
 $('promptBtn').addEventListener('click', async () => {
-  const name = await tiny.win.prompt('What is your name?', { default: 'world' });
+  const name = await tiny.dialog.prompt('What is your name?', { default: 'world' });
   $('picked').textContent = name == null ? '(cancelled)' : 'hello, ' + name + '!';
 });
 
