@@ -256,9 +256,10 @@
       // size and handing it straight back is a no-op. Top-left stays put.
       setSize: (width, height) => call('win.setSize', { width, height }),
       // hide(): hides the APP — focus returns to the previous app (palettes
-      // can hide-then-paste with no frontmost tracking). show({ activate:
+      // can hide-then-paste with no frontmost tracking). hide({ app: false }):
+      // put away just this window, the app stays put. show({ activate:
       // false }): surface the window without stealing focus (overlays/HUDs).
-      hide: () => call('win.hide'),
+      hide: (opts) => call('win.hide', opts ?? {}),
       show: (opts) => call('win.show', opts ?? {}),
       center: () => call('win.center'),
       minimize: () => call('win.minimize'),

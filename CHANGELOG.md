@@ -200,6 +200,23 @@ are gone rather than deprecated.
   put anything irreversible behind a confirmation rather than a hopeful read
   of a sentence.
 
+- **`win.hide({ app: false })`** — put one window away without hiding the app.
+  A plain `hide()` on the main window is `[NSApp hide:]`, which is right for a
+  palette (focus goes back to whatever you were in) and wrong for an app whose
+  main window is a launcher screen: putting it away while its document windows
+  are up deactivated the app around them. Secondary windows always ordered out,
+  so this only changes what `'main'` can do, and only when asked. Windows and
+  Linux hides were already window-scoped; the flag is a no-op there.
+
+- **Menu keys can carry other modifiers** — a menu `key` was ⌘ plus the
+  character, with an uppercase letter meaning ⌘⇧, and no way at all to say ⌥⌘P
+  or ⌃⌘K. Now anything extra is a prefix: `key: 'alt+p'` is ⌥⌘P, `'alt+shift+f'`
+  is ⌥⇧⌘F, and `ctrl+`/`shift+` spell themselves (`cmd+` is accepted and
+  redundant — ⌘ is always in, since a menu bar without it isn't one). Same
+  grammar on all three platforms, with ⌘ reading as Ctrl on Windows and Linux;
+  Windows also stopped firing an accelerator when Shift was held but not
+  declared, which made `'F'` and `'f'` the same key there.
+
 - **`tiny.system.locale()`** — `{ language, languages, system, region,
   timeZone }`, read from the OS. Plus a **`locale` event** when the user
   changes their language or region, so an app can re-render instead of going

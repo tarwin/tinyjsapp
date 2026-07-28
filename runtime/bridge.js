@@ -826,7 +826,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // hide-then-paste palettes need no frontmost-tracking. show() re-activates;
     // show({ activate: false }) surfaces the window without stealing focus
     // (overlay/HUD panels).
-    hide() { send('WINOP hide'); },
+    //
+    // hide({ app: false }) puts away THIS WINDOW and nothing else — the app
+    // stays frontmost and its other windows stay where they are. On macOS
+    // that's [win orderOut:] instead of [NSApp hide:]; on Windows and Linux a
+    // hide was always window-scoped, so the flag changes nothing there.
+    hide(opts) { send('WINOP ' + (opts?.app === false ? 'hidewin' : 'hide')); },
     show(opts) { send('WINOP show' + (opts?.activate === false ? ' 0' : '')); },
     center() { send('WINOP center'); },
     minimize() { send('WINOP minimize'); },
@@ -1367,7 +1372,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         setSize: (w2, h2) => t('SIZE', `${w2 | 0} ${h2 | 0}`),
         setPosition: (x, y) => t('WINOP', `pos ${x | 0} ${y | 0}`),
         center: () => t('WINOP', 'center'),
-        hide: () => t('WINOP', 'hide'),
+        // hide({ app: false }) orders this window out on its own; a bare
+        // hide() on 'main' still hides the whole app (see app.hide above).
+        hide: (opts) => t('WINOP', opts?.app === false ? 'hidewin' : 'hide'),
         show: (opts) => t('WINOP', 'show' + (opts?.activate === false ? ' 0' : '')),
         minimize: () => t('WINOP', 'minimize'),
         restore: () => t('WINOP', 'restore'),
@@ -1515,7 +1522,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // win.* calls target the window the page lives in.
     'win.setTitle': async ({ title: t }, _a, m) => (forWin(m).setTitle(t), true),
     'win.setSize': async ({ width, height }, _a, m) => (forWin(m).setSize(width, height), true),
-    'win.hide': async (_p, _a, m) => (forWin(m).hide(), true),
+    'win.hide': async (p, _a, m) => (forWin(m).hide(p), true),
     'win.show': async (p, _a, m) => (forWin(m).show(p), true),
     'win.center': async (_p, _a, m) => (forWin(m).center(), true),
     'win.minimize': async (_p, _a, m) => (forWin(m).minimize(), true),

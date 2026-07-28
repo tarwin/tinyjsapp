@@ -11,7 +11,11 @@
 declare interface TinyMenuItem {
   id?: string;
   label?: string;
-  /** ⌘+<key> shortcut (menu bar items) */
+  /**
+   * ⌘+<key> shortcut (menu bar items). An uppercase letter carries its own
+   * shift — 'S' is ⌘⇧S. Anything more is spelled with prefixes: 'alt+p' is
+   * ⌥⌘P, 'alt+shift+f' is ⌥⇧⌘F. ⌘ (Ctrl on Windows/Linux) is always in.
+   */
   key?: string;
   /** show a ✓ checkmark */
   checked?: boolean;
@@ -376,6 +380,12 @@ declare interface TinyShowOptions {
   activate?: boolean;
 }
 
+declare interface TinyHideOptions {
+  /** false: put away THIS WINDOW only — the app stays frontmost. Default
+   *  true, which on macOS hides the app when the window is 'main' */
+  app?: boolean;
+}
+
 declare interface TinyMousePosition {
   /** global cursor position — same top-left coords as win.setPosition */
   x: number;
@@ -573,8 +583,9 @@ declare interface Tiny {
      *  the same units getState().width/height reports back */
     setSize(width: number, height: number): Promise<any>;
     /** hides the APP (NSApp hide): focus returns to the previous app —
-     *  palettes can hide-then-paste with no frontmost tracking */
-    hide(): Promise<any>;
+     *  palettes can hide-then-paste with no frontmost tracking.
+     *  hide({ app: false }) puts away just this window instead */
+    hide(opts?: TinyHideOptions): Promise<any>;
     /** show({ activate: false }) surfaces the window without stealing focus */
     show(opts?: TinyShowOptions): Promise<any>;
     center(): Promise<any>;
@@ -866,7 +877,9 @@ declare interface TinyWindowHandle {
   setSize(width: number, height: number): void;
   setPosition(x: number, y: number): void;
   center(): void;
-  hide(): void;
+  /** hide({ app: false }) puts away this window alone; on 'main' a bare
+   *  hide() hides the whole app (macOS) */
+  hide(opts?: TinyHideOptions): void;
   show(opts?: TinyShowOptions): void;
   minimize(): void;
   restore(): void;

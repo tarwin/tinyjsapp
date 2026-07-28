@@ -745,7 +745,9 @@ static void do_winop(const std::string& winid, const std::string& op) {
   if (!win) return;
   bool main_win = (winid.empty() || winid == "main");
 
-  if (op == "hide") gtk_widget_hide(GTK_WIDGET(win));
+  // "hidewin" is hide({ app: false }) — window-scoped, which is all a hide has
+  // ever been here (only macOS's main-window hide takes the app with it).
+  if (op == "hide" || op == "hidewin") gtk_widget_hide(GTK_WIDGET(win));
   else if (op == "show" || op == "show 1") {
     gtk_widget_show(GTK_WIDGET(win));
     gtk_window_present(win);
@@ -891,6 +893,27 @@ static void on_menu_item_activate(GtkMenuItem*, gpointer data) {
   else pipe_write_line("MENU " + id);
 }
 
+// A menu key is Ctrl plus the character ("s" is Ctrl+S, "S" is Ctrl+Shift+S,
+// the shift coming out of the character itself). Prefixes spell the rest:
+// "alt+p" is Ctrl+Alt+P. Ctrl is always in — cmd maps to it here.
+static GdkModifierType split_accel(const std::string& spec, std::string& key) {
+  int mask = GDK_CONTROL_MASK;
+  key = spec;
+  for (;;) {
+    size_t plus = key.find('+');
+    if (plus == std::string::npos || plus == 0) break;
+    std::string mod = key.substr(0, plus);
+    for (auto& c : mod) c = (char)tolower((unsigned char)c);
+    if (mod == "alt" || mod == "opt" || mod == "option") mask |= GDK_MOD1_MASK;
+    else if (mod == "shift") mask |= GDK_SHIFT_MASK;
+    else if (mod == "ctrl" || mod == "control" || mod == "cmd" || mod == "command"
+             || mod == "meta" || mod == "super") { /* already in */ }
+    else break;                                   // not a modifier — it's the key
+    key = key.substr(plus + 1);
+  }
+  return (GdkModifierType)mask;
+}
+
 // Build a GtkMenu from item specs; register items under `kind`.
 static GtkWidget* build_gtk_menu(const std::vector<MenuItemSpec>& items,
                                  const std::string& kind) {
@@ -914,10 +937,12 @@ static GtkWidget* build_gtk_menu(const std::vector<MenuItemSpec>& items,
     if (!checked) g_object_set(mi, "draw-as-radio", FALSE, NULL);
     gtk_widget_set_sensitive(mi, !disabled);
     if (!it.key.empty() && g_accel && kind == "menu") {
-      guint keyval = gdk_keyval_from_name(it.key.c_str());
+      std::string key;
+      GdkModifierType mask = split_accel(it.key, key);
+      guint keyval = gdk_keyval_from_name(key.c_str());
       if (keyval != GDK_KEY_VoidSymbol) {
         gtk_widget_add_accelerator(mi, "activate", g_accel, keyval,
-                                   GDK_CONTROL_MASK, GTK_ACCEL_VISIBLE);
+                                   mask, GTK_ACCEL_VISIBLE);
       }
     }
     g_signal_connect_data(mi, "activate", G_CALLBACK(on_menu_item_activate),

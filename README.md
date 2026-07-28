@@ -278,6 +278,9 @@ tiny.win.hide();  tiny.win.show();
 // frontmost-pid bookkeeping. show() re-activates;
 tiny.win.show({ activate: false });  // …or surface WITHOUT stealing focus
                                      // (overlay/HUD panels)
+tiny.win.hide({ app: false });       // …or put away THIS WINDOW only, app
+                                     // stays frontmost (a welcome/launcher
+                                     // window stepping aside for documents)
 tiny.win.setHideOnClose(true);  // close button hides instead of quitting
 
 // global cursor position (same top-left coords as setPosition — handy for
@@ -700,6 +703,7 @@ own menus after those:
 tiny.menu.set([
   { title: 'Actions', items: [
     { id: 'open',  label: 'Open File…', key: 'o' },   // key = ⌘+<key>
+    { id: 'find',  label: 'Replace…', key: 'alt+f' }, // ⌥⌘F ('F' alone = ⌘⇧F)
     { id: 'mute',  label: 'Mute', checked: true },    // ✓ checkmark
     { id: 'later', label: 'Not Yet', enabled: false },// grayed out
     { separator: true },

@@ -765,6 +765,28 @@ static TinyMenuTarget *g_menu_target = nil;
 static NSMutableDictionary *g_reg_menu = nil;
 static NSMutableDictionary *g_reg_tray = nil;
 
+// A menu key is ⌘ plus the character — "s" is ⌘S and an uppercase "S" is ⌘⇧S,
+// because AppKit reads the shift out of the character itself. Anything more
+// than that is spelled with prefixes: "alt+p" is ⌥⌘P, "alt+shift+f" is ⌥⇧⌘F.
+// ⌘ is always in, since a menu bar without it isn't a menu bar.
+static NSEventModifierFlags split_accel(const std::string &spec, std::string &key) {
+  NSEventModifierFlags mask = NSEventModifierFlagCommand;
+  key = spec;
+  for (;;) {
+    size_t plus = key.find('+');
+    if (plus == std::string::npos || plus == 0) break;
+    std::string mod = key.substr(0, plus);
+    for (auto &c : mod) c = (char)tolower((unsigned char)c);
+    if (mod == "alt" || mod == "opt" || mod == "option") mask |= NSEventModifierFlagOption;
+    else if (mod == "ctrl" || mod == "control") mask |= NSEventModifierFlagControl;
+    else if (mod == "shift") mask |= NSEventModifierFlagShift;
+    else if (mod == "cmd" || mod == "command" || mod == "meta" || mod == "super") { /* already in */ }
+    else break;                                   // not a modifier — it's the key
+    key = key.substr(plus + 1);
+  }
+  return mask;
+}
+
 // Recursively fill `menu` from specs. autoenablesItems=NO so `disabled`
 // sticks (AppKit would otherwise re-enable anything with a live target).
 static void build_menu_into(NSMenu *menu, const std::vector<MenuItemSpec> &items,
@@ -775,9 +797,12 @@ static void build_menu_into(NSMenu *menu, const std::vector<MenuItemSpec> &items
       [menu addItem:[NSMenuItem separatorItem]];
       continue;
     }
+    std::string key;
+    NSEventModifierFlags mask = split_accel(it.key, key);
     NSMenuItem *mi = [[[NSMenuItem alloc] initWithTitle:ns(it.label)
                                                  action:action
-                                          keyEquivalent:ns(it.key)] autorelease];
+                                          keyEquivalent:ns(key)] autorelease];
+    if (!key.empty()) mi.keyEquivalentModifierMask = mask;
     mi.target = g_menu_target;
     mi.representedObject = ns(it.id);
     mi.state = it.checked ? NSControlStateValueOn : NSControlStateValueOff;
@@ -1044,6 +1069,11 @@ static void do_winop(webview_t w, void *arg) {
         [NSApp hide:nil];
       else
         [win orderOut:nil];
+    } else if (*op == "hidewin") {
+      // hide({ app: false }): this window only, whoever it is. An app whose
+      // main window is a launcher screen wants it out of the way while its
+      // document windows are up — without deactivating the app around them.
+      [win orderOut:nil];
     } else if (*op == "show" || *op == "show 1") {
       [NSApp unhide:nil];
       [NSApp activateIgnoringOtherApps:YES];

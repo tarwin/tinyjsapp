@@ -116,6 +116,7 @@ struct ItemReg {
   std::string id, label, kind; // kind: menu | tray | ctx
   bool checked = false, enabled = true;
   std::string key; // menu accelerator char ('' = none); fired via Ctrl+<key>
+  bool needAlt = false, needShift = false;  // from "alt+" / "shift+" prefixes
 };
 static std::map<UINT, ItemReg *> g_cmd_reg;
 static std::map<std::string, ItemReg *> g_id_reg;
@@ -421,12 +422,41 @@ static void clear_registry(const std::string &kind) {
   }
 }
 
-static std::string display_key(const std::string &key) {
-  if (key.empty())
+// A menu key is Ctrl plus the character ("s" is Ctrl+S, "S" is Ctrl+Shift+S,
+// the shift coming out of the character itself). Prefixes spell the rest:
+// "alt+p" is Ctrl+Alt+P. Ctrl is always in — cmd maps to it here.
+static void split_accel(const std::string &spec, std::string &key,
+                        bool &alt, bool &shift) {
+  key = spec;
+  alt = false;
+  shift = false;
+  for (;;) {
+    size_t plus = key.find('+');
+    if (plus == std::string::npos || plus == 0)
+      break;
+    std::string mod = key.substr(0, plus);
+    for (auto &c : mod) c = (char)tolower((unsigned char)c);
+    if (mod == "alt" || mod == "opt" || mod == "option") alt = true;
+    else if (mod == "shift") shift = true;
+    else if (mod == "ctrl" || mod == "control" || mod == "cmd" ||
+             mod == "command" || mod == "meta" || mod == "super") { /* already in */ }
+    else break;                                 // not a modifier — it's the key
+    key = key.substr(plus + 1);
+  }
+  // an uppercase letter carries its own shift, the same as on macOS
+  if (key.size() == 1 && isupper((unsigned char)key[0])) shift = true;
+}
+
+static std::string display_key(const std::string &spec) {
+  if (spec.empty())
     return "";
-  std::string k = key;
+  std::string k;
+  bool alt = false, shift = false;
+  split_accel(spec, k, alt, shift);
+  if (k.empty())
+    return "";
   k[0] = (char)toupper((unsigned char)k[0]);
-  return "\tCtrl+" + k;
+  return std::string("\tCtrl+") + (alt ? "Alt+" : "") + (shift ? "Shift+" : "") + k;
 }
 
 static void build_menu_items(HMENU menu, const std::vector<MenuItemSpec> &items,
@@ -444,9 +474,12 @@ static void build_menu_items(HMENU menu, const std::vector<MenuItemSpec> &items,
       continue;
     }
     UINT cmd = g_next_cmd++;
+    std::string bare;
+    bool alt = false, shift = false;
+    split_accel(it.key, bare, alt, shift);
     ItemReg *reg = new ItemReg{cmd, menu, it.id,
                                it.label.empty() ? it.id : it.label, kind,
-                               it.checked, !it.disabled, it.key};
+                               it.checked, !it.disabled, bare, alt, shift};
     g_cmd_reg[cmd] = reg;
     if (!it.id.empty())
       g_id_reg[it.id] = reg;
@@ -1557,7 +1590,9 @@ static void do_winop(webview_t, void *arg) {
     return;
   }
   auto starts = [&](const char *p) { return op.rfind(p, 0) == 0; };
-  if (op == "hide") {
+  // "hidewin" is hide({ app: false }) — window-scoped, which is what a hide
+  // has always been here (only macOS's main-window hide takes the app with it).
+  if (op == "hide" || op == "hidewin") {
     ShowWindow(hwnd, SW_HIDE);
   } else if (starts("show")) {
     bool activate = op != "show 0";
@@ -3447,9 +3482,10 @@ struct AccelHandler : public ICoreWebView2AcceleratorKeyPressedEventHandler {
     args->get_KeyEventKind(&kind);
     if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN)
       return S_OK;
-    if (!(GetKeyState(VK_CONTROL) & 0x8000) ||
-        (GetKeyState(VK_MENU) & 0x8000))
+    if (!(GetKeyState(VK_CONTROL) & 0x8000))
       return S_OK;
+    bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+    bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
     UINT vk = 0;
     args->get_VirtualKey(&vk);
     char c = 0;
@@ -3460,6 +3496,7 @@ struct AccelHandler : public ICoreWebView2AcceleratorKeyPressedEventHandler {
     for (auto &kv : g_cmd_reg) {
       ItemReg *reg = kv.second;
       if (reg->kind == "menu" && reg->enabled && reg->key.size() == 1 &&
+          reg->needAlt == alt && reg->needShift == shift &&
           tolower((unsigned char)reg->key[0]) == c) {
         args->put_Handled(TRUE);
         pipe_write_line("MENU " + reg->id);
