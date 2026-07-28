@@ -1386,12 +1386,11 @@ Not yet ported:
 
 - notification action buttons — balloons only; real toasts need an
   AppUserModelID story
-- exe icons in built apps
-- deep links / file associations / single instance
-- `authenticate` (Windows Hello)
-- `audioTap`
-- the genuinely macOS-only APIs: Quick Look, OCR, AppleScript, Spotlight,
-  Now Playing, Dock badges, Spaces
+- `app.badge` — needs an overlay `HICON` rendered at runtime
+- `nowPlaying` / media keys — wants the WinRT `SystemMediaTransportControls`
+- `otherWindows` / `moveWindow`, `pickColor`, `spotlight`, `system.locale`
+- the genuinely macOS-only APIs: Quick Look, OCR, AppleScript, `proxyURL`
+  media proxy, Now Playing on the lock screen, Spaces, `tiny.macos.*`
 
 Burn-down list with implementation notes:
 [TODO-windows.md](TODO-windows.md).

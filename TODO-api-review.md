@@ -170,3 +170,50 @@ So if this is built:
 - Prefer one action per turn, or verify after each call and re-prompt.
 - A demo that prints the model's summary next to what actually ran would
   teach this better than any prose — and is the honest way to show it.
+
+## 7. CLI shims and file/folder opening — wishlist, 2026-07-27
+
+Raised from outside: building a `tinyjs`-app CLI shim works today but only by
+special-casing `open -a` on macOS and the `--open` launcher mode elsewhere.
+Four changes would collapse the whole thing to `exec <exe> "$@"` on all three.
+Each claim below was checked against the source.
+
+**1. Deliver argv as `onOpenFiles` — cold start AND second launch.**
+Confirmed: nothing in `bridge.js` reads process argv. The only mentions are a
+`probeOk(argv)` spawn helper and a Windows console-routing comment. Paths reach
+an app exclusively through the launcher — `OPENFILES <json-paths>` on macOS
+(routed from `openURLs`), and the instance pipe on a re-launch, which already
+carries `{ url }` or `{ paths }` and calls `onOpenFiles`. So the plumbing on
+the receiving end exists; what's missing is reading argv at startup and
+forwarding it into the same two paths. That's the highest-value item here: it
+removes the per-platform launch dance entirely.
+
+**2. `"openFolders": true` alongside `fileExtensions`.** Wants `public.folder`
+in `CFBundleDocumentTypes` and `inode/directory` in the `.desktop`
+`MimeType=`. Small and self-contained; the plist/desktop writers already take
+a list.
+
+**3. `tinyjs build --cli <name>` to emit the shim next to the app.** The
+argument for it is real: the shim needs the launcher path and the instance-pipe
+name, and only the build knows both. Worth deciding whether the shim is a
+build artifact or something `tinyjs publish` installs.
+
+**4. `app.setAsDefaultHandler(ext)`.** Confirmed one-line-shaped on Linux:
+`bridge.js` already loops `xdg-mime default <app>.desktop
+x-scheme-handler/<scheme>` for every `urlScheme`, while the file MIME types
+derived from `fileExtensions` are written into `MimeType=` and never made
+default. A second loop over those mimes is the whole Linux story. macOS wants
+`LSSetDefaultRoleHandlerForContentType`, Windows a `HKCU\…\UserChoice` write
+that Windows deliberately makes hard — so this one is "Linux now, the other two
+are their own projects", and the API should probably answer `'unsupported'`
+rather than pretend.
+
+**5. ~~Stale Windows docs~~ — FIXED 2026-07-27.** The README listed deep links
+/ file associations / single instance as unported while `bridge.js` registers
+them, and it was worse than reported: `authenticate` (WinRT
+`UserConsentVerifier`), `audioTap` (WASAPI loopback) and exe icons
+(`--embed-icon`) were all listed as missing too, and `SKILL.md` contradicted
+itself — claiming `audioTap` works on Windows in one paragraph and listing it
+as macOS-only in the next. Both files corrected, and the Windows gap list
+rewritten around what's actually missing (`app.badge`, `nowPlaying`/media keys,
+`otherWindows`/`moveWindow`, `pickColor`, `spotlight`, `system.locale`).

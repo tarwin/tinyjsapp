@@ -73,13 +73,16 @@ the GNOME/KDE media widget + lock screen; transport routes to `onMediaKey`).
 Windows.
 
 macOS-only (on Windows these reject or answer `'unsupported'`/null — always
-feature-detect): notification action buttons, `audioTap`, `proxyURL` media
-proxy, deep links / file associations / single instance, `permissions.*`
-TCC flow (Windows answers 'granted'), `quickLook`, `recorder`, `pickColor`,
-`ocr`, `authenticate`, `applescript`, `nowPlaying`/media keys,
-`selectedText`/`otherWindows`/`moveWindow`, `share`,
-`app.badge`/`app.icon`/`app.presence`, `setAllSpaces`, `wifi`, `spotlight`,
-`tiny.macos.ai`. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
+feature-detect): notification action buttons, `proxyURL` media proxy,
+`permissions.*` TCC flow (Windows answers 'granted'), `recorder`,
+`pickColor`, `nowPlaying`/media keys, `share`, `app.badge` (`app.icon` and
+`app.presence` DO work there), `setAllSpaces`, `wifi`, `spotlight`,
+`system.locale`, and the whole `tiny.macos.*` namespace — `quickLook`,
+`applescript`, `ocr`, `ai`, `selectedText`/`otherWindows`/`moveWindow`.
+Windows DOES have, despite older docs here saying otherwise: `authenticate`
+(Windows Hello via UserConsentVerifier), `audioTap` (WASAPI loopback,
+'system' scope), deep links / file associations / single instance, and exe
+icons in built apps. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
 Not supported on Linux (reject or answer `'unsupported'`/`null` — always
 feature-detect): `recorder`, `ocr`, `app.badge` (`app.icon`/`app.presence`
