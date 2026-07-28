@@ -576,8 +576,11 @@ const { text, blocks } = await tiny.macos.ocr('/path/scan.png');
 
 // a thumbnail png for ANY path — file browsers stop caring about formats.
 // A content preview where Quick Look has a renderer (PSD, video, 3D models,
-// source files); the document / app / folder ICON where it doesn't, so this
-// never fails on file type alone. A path that doesn't exist DOES reject.
+// source files); the document / app / folder ICON where it doesn't, so on
+// macOS this never fails on file type alone. Windows and Linux render
+// images only today and reject other types with 'no thumbnail' (measured
+// on Linux 2026-07-28) — feature-detect per file, not per platform.
+// A path that doesn't exist DOES reject.
 const thumb = await tiny.app.thumbnail('/path/file.psd', 256);
 
 // Keychain secrets (the keytar/safeStorage role) — tokens go here,

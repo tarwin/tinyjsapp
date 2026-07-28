@@ -249,22 +249,27 @@ TODO-linux.md).
 
 ## Written 2026-07-26, never run off macOS
 
-- [ ] **kitchen-sink FFI, Linux** — `libc.so.6` `sysinfo()` decoded by struct
-      offset (uptime / loads / totalram × mem_unit / procs at 0/8/32/104/80)
-      plus `gethostname()`, and zlib via `libz.so.1`. The offsets are the
-      x86_64 ABI; **aarch64 uses the same layout, but that is an assumption
-      worth one check** — if `ram` reads absurd, the struct is being decoded
-      at the wrong offsets.
+- [x] **kitchen-sink FFI, Linux** — verified 2026-07-28 on aarch64: the
+      offsets are right. `ram` reads 1.9 GB against a ground truth of
+      2049527808 bytes from `free -b` (exact), uptime 1.4 h (sane),
+      `gethostname()` returns the real hostname, `getpid()` matches tjs.pid,
+      and zlib round-trips (zlibVersion 1.3, compress→decompress true).
+      x86_64 remains assumed-by-ABI, which is the direction the offsets were
+      written for.
 - [ ] **kitchen-sink FFI, Windows** — `kernel32.dll` `GetTickCount64()` and
       `GlobalMemoryStatusEx()`. The struct's first field must be its own size
       (64) before the call or the API refuses; if `ram` is 0, that's the
       first thing to check. zlib is deliberately absent on Windows and the
       card says so rather than failing.
-- [ ] **`chrome.trafficLights` reporting** — it only ever worked on macOS,
+- [~] **`chrome.trafficLights` reporting** — it only ever worked on macOS,
       but Linux stored the bit and echoed it back through `getState`, so an
       app that set it and read it back was told it had worked. Linux now
       reports the truth, and `capabilities().trafficLights` is `false` on both
       Windows and Linux. Worth confirming nothing depended on the old lie.
+      Linux half verified 2026-07-28: `setChrome({windowControls:['close']})`
+      resolves and `getState().chrome.windowControls` reports `null`, not an
+      echo; the fleet sweep (all 26 examples launch) says nothing depended on
+      the lie. Windows unchecked.
 
 - [ ] **`chrome.windowControls` on Windows** — `WS_SYSMENU` /
       `WS_MINIMIZEBOX` / `WS_MAXIMIZEBOX`. Win32 is coarser than macOS: the
@@ -272,11 +277,14 @@ TODO-linux.md).
       expressible and asking for it gets close too. Check that `['close']`
       leaves only close, that `false` removes the group, and that `getState`
       round-trips what you set.
-- [ ] **`chrome.windowControls` on Linux** — `gtk_window_set_deletable` for
+- [~] **`chrome.windowControls` on Linux** — `gtk_window_set_deletable` for
       close, `_MOTIF_WM_HINTS` for minimize/maximize. Mutter and KWin read the
       hint; many WMs don't, so treat a no-op as "this WM ignores MWM", not a
       bug. `getState` deliberately reports `null` here rather than echoing the
-      request.
+      request. 2026-07-28: the call resolves on both sessions and `getState`
+      does report `null`; `capabilities().windowControls` is session-gated
+      (false on Wayland, true on X11). Whether Mutter actually removes the
+      buttons still needs eyes.
 
 ## Needs a hand on the mouse — kitchen-sink, 2026-07-26
 
@@ -535,15 +543,19 @@ exactly the kind of claim that deserves a run:
 - [ ] **Windows** — confirm `otherWindows()` really resolves `null`,
       `moveWindow()` rejects, `pickColor()` and `spotlight()` reject, and that
       pressing a media key with Now Playing set does nothing at all.
-- [ ] **Linux/X11** — same for `otherWindows()`, `selectedText()` and
-      `moveWindow()`. If any of them *does* work, the table is now
-      under-claiming, which is the better failure but still wrong.
-- [ ] **`app.thumbnail` after the representation change** — macOS is measured
+- [x] **Linux/X11** — verified 2026-07-28, both sessions: the three now live
+      on `tiny.macos.*` and each rejects with the guard message
+      ("tiny.macos.X is macOS-only (this is linux) — guard with
+      tiny.system.isMacOS()"); `system.wifi` resolves `null`;
+      `system.locale()` resolves `null` with `capabilities().locale` false —
+      the table matches reality, no under-claim found.
+- [~] **`app.thumbnail` after the representation change** — macOS is measured
       (folders, `.app` bundles, `.css`, `.wasm` and executables all render now;
-      a missing path still rejects). Windows and Linux have their own
-      renderers and were not touched, so check whether their coverage matches
-      what the docs now promise — the README says "any path" without
-      qualifying by platform.
+      a missing path still rejects). Linux measured 2026-07-28: an image
+      renders (64 asked → 128 returned, the documented @2x), but a source
+      file and a folder both reject `no thumbnail` — so the README's "any
+      path" was over-promising off macOS. Docs now qualify it (README +
+      SKILL.md). Windows still unchecked; expected to match Linux.
 
 ## Window sizes are the page's box now — Windows and Linux unbuilt
 
@@ -564,14 +576,18 @@ launchers were edited to match but not compiled:
       frame there. The check that matters is the ratchet the frame-units
       workaround was fixed for: read `getState()`, hand width/height back to
       `setSize`, repeat three times, and watch for growth.
-- [ ] **Linux** — already content-units on both ends, so the change is
-      `getState().outer` (from `gdk_window_get_frame_extents`) plus one fix:
-      the menu bar lives inside the toplevel, so the first bar to appear used
-      to eat its own height out of the page. `apply_menus` now gives it back
-      once, on an idle pass, and only while the window is still exactly the
-      size it was born at. Check a menu'd app gets its declared height, that a
-      user resize before the menus land isn't stomped, and what `outer` reports
-      under Wayland (expected: equal to the page box — no server-side frame).
+- [x] **Linux** — verified 2026-07-28 on Ubuntu 24.04 aarch64, GNOME 46, in
+      both Wayland and XWayland, launcher rebuilt from source. Declared
+      960x640 gives a 960x640 page; after `menu.set` the page is STILL
+      960x640 and `outer` grows by exactly the bar (729 → 755 on Wayland) —
+      the give-back works. setSize 600x400 → getState → setSize holds
+      600x400 over three passes, zero drift. A titled satellite asked for
+      460x420 reports 460x420 (outer 460x457 on X11); a frameless 150x150
+      reports 150x150 with outer == page box. One expectation was wrong in
+      this file: `outer` under Wayland is NOT the page box — GTK draws
+      client-side decorations, so frame extents include the CSD titlebar and
+      shadow (960x640 page → 1012x729 outer). That's the honest footprint.
+      Not checked: a user resize racing the menu idle pass (needs a hand).
 
 ## The ball on Windows and Linux — never run there
 
@@ -579,13 +595,64 @@ launchers were edited to match but not compiled:
       `SetWindowPos` per frame smooth, or does it stutter/trail? And does
       `chrome: { transparent: true }` on a WebView2 child window give a real
       circle, or a black square behind it?
-- [ ] **Linux/X11** — same two questions through GTK, plus: WebKitGTK needs an
-      RGBA visual for a transparent window, and the ball is the first place a
-      *secondary* window asks for one.
-- [ ] **Linux/Wayland** — the honest-failure path: `getState().canPosition` is
-      false there, and ball.html is supposed to show `✋ no setPosition` and
-      close after six seconds rather than sit still counting down. Written
-      blind; never seen.
+- [~] **Linux/X11** — mechanics verified 2026-07-28, pixels not: opened the
+      way the deck opens it, the ball lived the full 10s flight (present at
+      7.5s, gone by 13s), i.e. per-frame setPosition ran to completion.
+      Whether it's SMOOTH, and whether the RGBA visual gives a real circle
+      rather than a black square, still needs eyes.
+- [x] **Linux/Wayland** — the honest-failure path works as written (blind):
+      same probe, the ball closed itself between 2s and 7.5s — the 6s
+      `no setPosition` path, not the 10s countdown. Verified 2026-07-28.
+
+## The 2026-07-28 overnight Linux sweep — what got proven, what got fixed
+
+Run on Ubuntu 24.04 aarch64 (Parallels), GNOME 46, both Wayland and
+XWayland, launcher + client rebuilt from source first. Full fleet: **all 26
+examples build and launch** (23 native; procsy/sqlittle/trolley built inside
+an arm64 `node:22-trixie-slim` container — `node:22-slim` is bookworm, whose
+glibc 2.36 is too old for our tjs, and the container needs `libffi8`
+installed). worldclock and amp soaked 30s (the old tray-ticker bug killed
+worldclock in seconds). `test/smoke.html` and `test/appsurface.html` pass on
+both sessions.
+
+Two real bugs found and fixed, one platform gap closed:
+
+- [x] **`setAsDefaultHandler` always returned `'failed'`** — bridge checked
+      `st.exit_code`, but tjs `wait()` returns `exit_status` (every other
+      call site had it right). Fixed; now returns `'ok'` and the mimeapps
+      entry lands. All-platform code path, so Windows gets the fix for free.
+- [x] **`tinyjs build --cli` wrote no shim on Windows or Linux** — the
+      `maybeWriteCliShim` call sat at the end of the macOS bundle branch,
+      after the win/linux branches `return`. Both branches now call it.
+      Linux verified end to end: shim written, `dist/bin/<name> file.txt`
+      delivers the path to `onOpenFiles`. Windows is the same one-line call
+      but unwatched.
+- [x] **argv → onOpenFiles on Linux** — cold start delivers
+      `["/abs/path"]` with flags skipped and nonexistent paths dropped; a
+      second launch exits 0 and forwards its paths over the instance pipe to
+      the running copy (watched in the log; one process left).
+- [x] **Menu accelerators with modifiers on Linux/X11** — end to end with no
+      hands: registered `key:'ctrl+shift+k'`, fired it through the
+      launcher's own XTest `keystroke`, and the `menu {id}` event arrived.
+      On pure Wayland the keystroke resolves `ok:true` but lands in
+      XWayland where no Wayland window can hear it — `capabilities()`
+      honestly says `keystroke:false` there, so apps can feature-detect,
+      but know the resolve-true is not delivery.
+- [x] **`win.hide({app:false})` / `win.hide()` / `show()`** — all resolve on
+      Linux and the window still answers `getState` after the round trip
+      (both are window-scoped here, which is all a hide can be on Linux).
+- [x] **The 0.30 scaffold names** — from a live scaffolded app: all seven
+      dialog calls are functions on `tiny.dialog.*` and ZERO remain on
+      `tiny.win.*`, so the five buttons `tinyjs new` ships call things that
+      exist. (First probe of this found the opposite — because a launcher
+      built by hand without `native/gen-client.sh` had embedded a stale
+      client. `setup.sh` and the dev auto-rebuild both regenerate it; a bare
+      `c++` invocation does not. If tiny.* looks ancient, rebuild via
+      setup.sh.)
+- [x] **spotlight's `find` fallback** — works (a visible file in $HOME is
+      found), and hides dotfiles BY DESIGN (`-name '.*' -prune`), so a
+      query for `bashrc` honestly returns nothing. Boxes with no
+      plocate/locate get name-only, non-hidden results.
 
 ## Driving these checks headlessly on Windows
 

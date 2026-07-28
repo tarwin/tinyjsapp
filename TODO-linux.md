@@ -64,10 +64,16 @@ committed).
   UTM software-compositing problem is gone. Re-check `amp`'s audio here; the
   skipping should be fixed.
 - **Node**: the distro `nodejs` package has no npm, which the TS examples need
-  (`npx esbuild`, `vite`). Node 22 + npm 10 is installed at `~/.local/node` —
-  put `~/.local/node/bin` first on PATH. With it, all 26 examples build.
-  Do NOT commit the `package-lock.json` churn an install here produces: npm
-  drops the darwin/win32 optional binaries, which would break mac/win builds.
+  (`npx esbuild`, `vite`). This VM has NO host node (checked 2026-07-28) —
+  build the TS examples (procsy/sqlittle/trolley) in a container instead:
+  `docker run --platform linux/arm64 --rm -v <tinyjsapp>:<same path> -v
+  <examples>:<same path> node:22-trixie-slim` + `apt-get install libffi8`,
+  then `npm ci && tinyjs build` as uid 1000 inside. It must be **trixie**
+  (glibc 2.41): `node:22-slim` is bookworm/glibc 2.36, too old for our tjs;
+  and plain `docker run` grabs the cached **amd64** image here — always pass
+  `--platform linux/arm64`. `npm ci` (never `install`) keeps
+  `package-lock.json` untouched; npm-install churn drops the darwin/win32
+  optional binaries, which would break mac/win builds.
 - **WebKitGTK plays a graph-routed `<audio>` element TWICE.** When an app pipes
   a media element through Web Audio (`createMediaElementSource`, e.g. for an EQ),
   WebKitGTK does NOT mute the element's own output the way macOS/Windows WebKit
@@ -301,6 +307,13 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
         any non-Windows OS — they now take the polled-`mousePosition` path off
         macOS (real coordinates on X11, 0,0 on Wayland), and deja no longer
         spawns macOS's `screencapture` on Linux.
+- [x] **Fleet re-sweep 2026-07-28 (app-surface-api branch, overnight)** —
+      all 26 examples build AND launch against the rebuilt launcher; amp and
+      worldclock soaked 30s. Size contract, capability corrections, argv →
+      onOpenFiles, menu modifier accelerators, FFI offsets and the ball all
+      verified the same night — details and the two bugs fixed
+      (setAsDefaultHandler `exit_status`, `build --cli` shim never written
+      off macOS) in TODO-verify.md § "2026-07-28 overnight Linux sweep".
 - [x] **Auto-update verified on Linux (2026-07-23)** — end to end against a
       local manifest (`assertSafeUrl` allows http://127.0.0.1 for exactly
       this): published 0.1.0, installed the tarball, published 0.2.0, and the

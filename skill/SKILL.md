@@ -461,8 +461,9 @@ await tiny.macos.ocr(pngPath);    // on-device Vision OCR -> { text, blocks:
 // text margin — a glyph clipped at the image edge silently drops a digit.
 await tiny.app.thumbnail(path, size?);  // png for ANY path -> { path, width,
                                 // height }. Content preview where Quick Look
-// has a renderer, the document/app/FOLDER icon where it doesn't, so it never
-// fails on file type alone. Rejects only if the path doesn't exist. @2x,
+// has a renderer, the document/app/FOLDER icon where it doesn't, so on macOS
+// it never fails on file type alone; Windows/Linux do images only and reject
+// other types with 'no thumbnail'. Rejects if the path doesn't exist. @2x,
 // aspect preserved (so a wide image comes back wide, an icon square).
 await tiny.app.secrets.get(key);        // Keychain (keytar role): tokens go
 await tiny.app.secrets.set(key, value); // here, NEVER in tiny.store;
