@@ -273,10 +273,17 @@ TODO-linux.md).
       guards both.
       Verified end to end: title bar goes terminal → amp's png → terminal, and
       `WM_GETICON` returns to the exact startup handle on reset.
-- [ ] `app.icon` still cannot move the **taskbar button** — see the note above.
-      Unresolved whether it can be moved at all; built apps additionally carry
-      an AppUserModelID + `RelaunchIconResource` that dev spawns skip, and that
-      path is untested.
+- [x] `app.icon` **cannot move the taskbar button, and now that is settled** —
+      the AppUserModelID theory is dead. Retested 2026-07-28 against a BUILT
+      app (`dist/<name>.exe`, so `apply_relaunch_props` had run and the window
+      carried the AppUserModelID + `RelaunchIconResource` a dev spawn skips),
+      holding a deliberately garish magenta icon for 8s: the taskbar strip
+      showed **zero changed pixels** for the whole hold, and crops before and
+      during are identical. `icon()` resolved `true` and the title bar changes
+      as before, so the call works — the shell simply does not follow it.
+      So what `app.icon` controls on Windows is the title bar and Alt-Tab,
+      full stop, for dev and built apps alike. Anyone wanting the taskbar
+      button to change needs a different mechanism than `WM_SETICON`.
 
 ## Written 2026-07-26, never run off macOS
 
@@ -533,11 +540,18 @@ here could reach.
       audio may go to Apple. Testable by pulling the network and seeing if
       recognition still works — worth knowing before anyone builds a privacy
       claim on the pair.
-- [ ] **Windows.** WebView2 has `webkitSpeechRecognition` too, and needs no
-      Info.plist — so this may work there with no permission plumbing at all,
-      which would make it the rare feature that's *easier* off macOS. Never
-      tried. (`macos.ai` is macOS-only regardless, so the full loop isn't
-      portable — but dictation into the prompt box would be.)
+- [~] **Windows.** Tried 2026-07-28, and it is half good news. Both
+      `window.SpeechRecognition` and `window.webkitSpeechRecognition` are
+      **functions** in WebView2 (macOS WebKit has only the prefixed one), and a
+      recognizer **constructs** fine with no permission plumbing and no
+      Info.plist equivalent. But `start()` called from script produced **no
+      event at all within 6s** — not `start`, not `audiostart`, not even an
+      `error`. That is a different failure from macOS, which at least answers
+      `service-not-allowed`, and silence is the worst of the three. Likely a
+      missing transient user activation (the call came from a timer, not a
+      click) or an unimplemented backend behind a present API. Needs a
+      gesture-driven retry before anyone builds on it — and note the full
+      hands-free loop isn't portable regardless, since `macos.ai` is macOS-only.
 
 ## `tiny.system.locale()` — read, but never seen change
 
@@ -802,10 +816,14 @@ Three real bugs found and fixed:
       `win.setSize`, `menu.set`, `quit` and `api.call` all exist. So the
       buttons `tinyjs new` ships call things that exist here too.
 
+Two long-open questions also got closed, both negative, both from a **built**
+app rather than a dev spawn: `app.icon` cannot move the taskbar button even
+with an AppUserModelID, and WebView2's `SpeechRecognition` constructs but never
+fires. Details in their own sections.
+
 Not covered, and still needing a hand or hardware: `startDrag`/`startResize`
 (a modal OS loop that only ends on a real mouse-up), `dialog.openFiles`'
-multi-select panel, a real Windows Hello verification, media keys, and whether
-`app.icon` can ever reach the taskbar button.
+multi-select panel, a real Windows Hello verification, and media keys.
 
 ## Driving these checks headlessly on Windows
 
