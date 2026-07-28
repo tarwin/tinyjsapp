@@ -103,6 +103,9 @@ committed).
 - **gnome-keyring is locked** (autologin VM), so `secrets.set` fails with
   `org.freedesktop.Secret.Error.IsLocked`. Not a launcher bug — unlock the
   login keyring, or run `secrets` tests after a real password login.
+  UPDATE 2026-07-28: the keyring was unlocked when re-checked, and the full
+  secrets round trip works (details in TODO-verify.md) — if it reads locked
+  again after a reboot, that's the autologin state above, not a regression.
 - **Wayland session**, so per the notes below: `mouse`/window x,y report 0,0,
   `captureScreen` rejects, `keystroke` is unsupported. An X11 session lights
   those up.

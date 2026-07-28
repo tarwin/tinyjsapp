@@ -422,11 +422,16 @@ elsewhere:
       names (there is no TCC) and `unsupported` for anything else, including
       `automation:*`. The deck's summary line is written to say "nothing here
       is gated" when everything is unsupported; watch it say the right thing.
-- [ ] **Linux — `secrets` against the Secret Service.** The one with real
-      failure modes: with no keyring daemon running the launcher answers
-      `no secret service`, and the deck should show that as an error rather
-      than an empty value. Check a locked keyring too — GNOME prompts to
-      unlock, and it's worth knowing whether that blocks the call or fails.
+- [~] **Linux — `secrets` against the Secret Service.** Happy path verified
+      2026-07-28 (the VM's keyring turned out unlocked): set→get→delete
+      round-trips in single-digit ms, a second `set` REPLACES rather than
+      duplicating (get returns the new value, one delete leaves nothing
+      behind), an unsaved key reads `null` not an error. Still unwatched,
+      because this box can no longer produce them: the no-daemon answer
+      (`no secret service`) and the locked-keyring behavior — GNOME may
+      prompt to unlock, and it's worth knowing whether that blocks the call
+      or fails. (Earlier this VM DID report IsLocked while autologin'd, per
+      TODO-linux.md, so the locked case is real.)
 - [ ] **Linux — `authenticate` answers `false`.** Deliberate: no portable owner
       check exists, so the gate fails closed. The card claims this in prose;
       confirm the button actually says so rather than looking broken.
