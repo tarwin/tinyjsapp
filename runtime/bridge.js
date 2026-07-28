@@ -298,12 +298,20 @@ async function systemCapabilities(query, aiStatus) {
     secrets: true, mediaKeys: true, nowPlaying: true, audioTap: true,
     speech: true, pickColor: true, spotlight: true, launchAtLogin: true,
     printToPDF: true, transparency: true, vibrancy: false,
-    // Native DSP on our own output. Linux-only for now precisely BECAUSE
-    // Web Audio can't do it here — see TODO-audio-filters.md for the
-    // macOS/Windows plan; there, apps should use Web Audio instead.
+    // Native DSP on our own output. Exists here precisely BECAUSE Web Audio
+    // can't do it on WebKitGTK (crackles; measured, TODO-linux.md). macOS has
+    // it too (process tap); Windows is a measured permanent no — see the
+    // windows block below and TODO-audio-filters.md.
     audioFilters: true,
   };
   const windows = {
+    // Permanent, not pending: measured 2026-07-28. Process-loopback capture is
+    // post-mute AND post-volume, so silencing the dry signal means session
+    // volume — and that is PERSISTED mixer state keyed on the shared
+    // msedgewebview2.exe runtime path, so a crash while attenuated would
+    // near-silence every WebView2 app on the machine (the PipeWire/Firefox
+    // incident with a registry key). Apps use Web Audio here instead — it
+    // works on Chromium. Full numbers in TODO-audio-filters.md.
     audioFilters: false,
     applescript: false, ai: false, quickLook: false, share: false,
     vibrancy: false, selectedText: false, ocr: false,

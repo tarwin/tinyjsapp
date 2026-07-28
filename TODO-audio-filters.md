@@ -103,16 +103,69 @@ test from drifting from the code.
   `tiny_eq_process_objects` excludes but `tiny_app_process_objects` does not —
   the interaction of the two taps has not been measured.
 
-## Windows
+## Windows — measured 2026-07-28: NOT viable, and here is the exact reason
 
-Likely the hardest. WASAPI has no builtin EQ; we'd be writing the biquads
-ourselves (trivial) and finding somewhere to run them (not). Options to look
-at: a loopback capture + render pair, or an APO — APOs are a system-level
-install, which is far more invasive than anything tinyjs does today and
-probably disqualifying.
+The macOS architecture has a clean WASAPI translation, and every piece of it
+was probed on Windows 11 26200 against both a bare waveOut process and a real
+`tinyjs dev` WebView2 tree. The DSP path works; the SAFETY of the one
+source-silencing lever is what kills it. Numbers, in probe order:
 
-Same fallback applies: Web Audio works on Windows, so `audioFilters: false` and
-an app-side Web Audio chain is a legitimate end state.
+1. **Process-loopback capture works, including on a process tree.**
+   `ActivateAudioInterfaceAsync` + `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`
+   with include-tree aimed at `ICoreWebView2::get_BrowserProcessId()` captures
+   the audio-service child's output (the session lives on a `--type=utility`
+   child, not the browser process — capture pid and session pid differ). A
+   440 Hz sine rendered at −9.0 dBFS came back at exactly −9.0 dBFS, crest
+   1.41 — clean. This half is genuinely useful: it is the proven
+   route for the still-open `audioTap` `scope:'app'` item in TODO-windows.md.
+
+2. **Capture is POST-mute and POST-volume.** `ISimpleAudioVolume::SetMute` on
+   the session took the captured RMS from 0.3535 to 0.0000 — so the macOS
+   trick (mute the source, capture keeps flowing) does not port. Session
+   master volume and `IChannelAudioVolume` channel volumes are equally
+   post-capture.
+
+3. **The attenuation fallback is DSP-perfect.** Session volume 0.001 delivered
+   the sine at exactly ratio 0.001000 (−69.0 dBFS), crest still 1.41 — the
+   float mix path preserves the signal bit-cleanly, so "attenuate to −60 dB,
+   multiply back up in our filter, re-render" would sound right, with the dry
+   leak inaudible under the filtered output.
+
+4. **But every attenuation lever is PERSISTED, on a key shared by every
+   WebView2 app on the machine.** This is the disqualifier, measured three
+   ways: a toneplayer killed while muted came back muted on relaunch; a
+   WebView2 session killed at volume 0.31 came back at 0.3100 in a brand-new
+   session of a new process; and channel volumes — which the docs suggest are
+   transient — came back at [0.0010 0.0010] the same way. The persistence key
+   is the session identifier, and for WebView2 it reads
+   `...EdgeWebView\Application\<ver>\msedgewebview2.exe%b{00000000-…}` — the
+   SHARED runtime exe with a null GUID, no host-app distinction. On the test
+   box, Teams, Windows Search and Widgets were all running WebView2 trees
+   against that same identifier.
+
+So: a crash while the EQ is engaged leaves a persisted −60 dB on the mixer key
+that every WebView2 app on the machine reads, and their audio dies until
+something writes the key back. A guard process that waits on the launcher
+handle and restores on any exit narrows the window but cannot close it (power
+loss, guard killed too) — and the failure lands on OTHER apps' users with no
+visible cause. That is the PipeWire/Firefox incident with a registry key
+instead of a node, and the per-app-only rule in CLAUDE.md exists precisely
+because we ran that experiment once. APOs remain disqualified for the original
+reason (system-level install).
+
+**End state, per the fallback this file always allowed:** `audioFilters: false`
+on Windows, honestly declared, and apps use Web Audio in the page — which works
+fine on Chromium (amp already does; note its gotcha: `MediaElementSource` taps
+post-volume on Chromium, pre on WebKit). What Windows gives up is only the
+native extra: filtering audio the page never gets samples for (native HLS,
+cross-origin media). If that gap ever matters enough, the ONLY safe route is
+one where the silencing lever is not shared persisted state — i.e. Chromium
+gaining a way to route WebView2 output to a chosen device, not anything in
+WASAPI today.
+
+The probes (toneplayer.cc, plprobe.cc, sessiontool.cc — the last lists session
+identifiers, which is how the shared key was caught) lived in the session
+scratchpad; the pattern worth keeping is in this section's numbers.
 
 ## API contract to preserve
 

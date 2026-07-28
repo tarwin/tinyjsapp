@@ -131,7 +131,27 @@ names refer to the protocol table in the README; Windows handlers live in
          page can do something the backend can't.
 
 - [ ] **scope:'app' audioTap** — system loopback shipped; per-process
-      capture needs the Win10 2004+ process-loopback path.
+      capture needs the Win10 2004+ process-loopback path. **Route proven
+      2026-07-28** while probing the EQ question (TODO-audio-filters.md):
+      `ActivateAudioInterfaceAsync` + process-loopback activation params,
+      include-tree, aimed at `ICoreWebView2::get_BrowserProcessId()` —
+      captures the audio-service child's output cleanly (a −9 dBFS sine came
+      back at −9 dBFS). Two gotchas already measured: you TELL it the format
+      (there is no mix format to query), and the session/capture pids differ
+      (the session lives on a `--type=utility` child). What remains is
+      plumbing it into `tiny_audiotap`, not research.
+- [x] **native `tiny.audio.filters` — investigated 2026-07-28, and the answer
+      is NO, with the reason measured rather than assumed.** Capture works,
+      the biquads would port as-is, and the −60 dB attenuation trick is
+      bit-clean — but process-loopback capture is post-mute AND post-volume,
+      so the only way to silence the dry signal is session volume, and session
+      volume (master and per-channel alike) is PERSISTED mixer state keyed on
+      the shared `msedgewebview2.exe` runtime path with no host-app
+      distinction. A crash while attenuated near-silences every WebView2 app
+      on the machine (Teams, Widgets, …) until the key is rewritten. That is
+      the CLAUDE.md per-app-only rule's exact failure shape, so
+      `audioFilters: false` stays, honestly. Full numbers in
+      TODO-audio-filters.md.
 - [ ] **nowPlaying** — `NOWPLAYING` reaches the launcher, matches nothing in the
       dispatch chain and is dropped, so `tiny.nowPlaying.set()` did nothing
       while `capabilities()` claimed it worked (absent from the windows table =
