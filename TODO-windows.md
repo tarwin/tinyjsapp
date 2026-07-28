@@ -220,6 +220,27 @@ names refer to the protocol table in the README; Windows handlers live in
 - [x] ~~Windows CI GUI smoke~~ — the release job now runs the smoke page in
       a real window on the runner.
 
+## Verified 2026-07-28 (see TODO-verify.md for the measurements)
+
+- [x] **`app.badge`** — draws via `ITaskbarList3::SetOverlayIcon`; red disc,
+      white glyph, composes with `progress`, clears cleanly. `capabilities()
+      .badge` is now `true` on Windows. This was the last item in the
+      app-surface set that had never been seen here.
+- [x] **`secrets`** against Credential Manager — full round trip, replace
+      without duplicating, `null` for an unsaved key. Found and fixed a
+      **2560-byte blob ceiling** that used to fail with an unexplainable
+      "credential write failed" (Win32 1783). Don't reach for
+      `CRED_MAX_CREDENTIAL_BLOB_SIZE` — MinGW's header has the pre-Vista 512.
+- [x] **`permissions.check`**, **window-size contract** (zero ratchet drift),
+      **`chrome.windowControls`** (min/max need `WS_SYSMENU`, so asking for
+      minimize gets close too — and `getState` honestly reports what you got),
+      **`thumbnail`** (matches macOS's breadth, not Linux's — but returns exact
+      pixels, not @2x), **`build --cli`** shim + argv → `onOpenFiles` cold and
+      forwarded.
+- [~] **`authenticate`** — the no-Hello path only (`DeviceNotPresent`, resolves
+      `false` in 13ms, no hang). A real verification still needs enrolled
+      hardware.
+
 ## Not planned / no OS equivalent
 
 `quickLook`, `ocr` (Windows.Media.Ocr someday), `applescript`,

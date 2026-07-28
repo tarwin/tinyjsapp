@@ -831,8 +831,10 @@ declare interface Tiny {
     pickColor(): Promise<string | null>;
     /** thumbnail png for ANY path — a content preview where Quick Look has a
      *  renderer (images, video, PDF, source files), the document/app/folder
-     *  ICON otherwise, so this never fails on file type alone. size is the
-     *  bounding box in points, rendered @2x, aspect preserved. Rejects if the
+     *  ICON otherwise, so this never fails on file type alone (macOS and
+     *  Windows; Linux is images-only and rejects the rest). size is the
+     *  bounding box, aspect preserved — rendered @2x on macOS/Linux, exact
+     *  pixels on Windows, so read width/height off the result. Rejects if the
      *  path doesn't exist. */
     thumbnail(path: string, size?: number): Promise<TinyThumbnail>;
     secrets: TinySecrets;
@@ -1053,7 +1055,7 @@ declare interface TinyApp {
    *  '#rrggbb', or null if the user cancels */
   pickColor(): Promise<string | null>;
   /** thumbnail png for ANY file type Quick Look understands; size is the
-   *  bounding box in points (rendered @2x) */
+   *  bounding box — @2x on macOS/Linux, exact pixels on Windows */
   thumbnail(path: string, size?: number): Promise<TinyThumbnail>;
   secrets: TinySecrets;
   /** Touch ID (or the account-password sheet); false covers cancel */

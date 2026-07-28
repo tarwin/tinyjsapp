@@ -75,14 +75,17 @@ Windows.
 macOS-only (on Windows these reject or answer `'unsupported'`/null — always
 feature-detect): notification action buttons, `proxyURL` media proxy,
 `permissions.*` TCC flow (Windows answers 'granted'), `recorder`,
-`pickColor`, `nowPlaying`/media keys, `share`, `app.badge` (`app.icon` and
-`app.presence` DO work there), `setAllSpaces`, `wifi`, `spotlight`,
-`system.locale`, and the whole `tiny.macos.*` namespace — `quickLook`,
-`applescript`, `ocr`, `ai`, `selectedText`/`otherWindows`/`moveWindow`.
-Windows DOES have, despite older docs here saying otherwise: `authenticate`
-(Windows Hello via UserConsentVerifier), `audioTap` (WASAPI loopback,
-'system' scope), deep links / file associations / single instance, and exe
-icons in built apps. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
+`pickColor`, `nowPlaying`/media keys, `share`, `setAllSpaces`, `wifi`,
+`spotlight`, `system.locale`, and the whole `tiny.macos.*` namespace —
+`quickLook`, `applescript`, `ocr`, `ai`,
+`selectedText`/`otherWindows`/`moveWindow`.
+Windows DOES have, despite older docs here saying otherwise: the whole app
+surface including `app.badge` (verified drawing 2026-07-28, alongside
+`app.icon`, `app.progress`, `app.attention` and `app.presence`),
+`authenticate` (Windows Hello via UserConsentVerifier — answers `false` where
+no Hello is enrolled), `audioTap` (WASAPI loopback, 'system' scope), deep
+links / file associations / single instance, and exe icons in built apps.
+(Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
 Not supported on Linux (reject or answer `'unsupported'`/`null` — always
 feature-detect): `recorder`, `ocr`, `app.badge` (`app.icon`/`app.presence`
@@ -462,9 +465,11 @@ await tiny.macos.ocr(pngPath);    // on-device Vision OCR -> { text, blocks:
 await tiny.app.thumbnail(path, size?);  // png for ANY path -> { path, width,
                                 // height }. Content preview where Quick Look
 // has a renderer, the document/app/FOLDER icon where it doesn't, so on macOS
-// it never fails on file type alone; Windows/Linux do images only and reject
-// other types with 'no thumbnail'. Rejects if the path doesn't exist. @2x,
-// aspect preserved (so a wide image comes back wide, an icon square).
+// it never fails on file type alone; Windows matches that (shell icons for
+// folders/exe/text), LINUX is images-only and rejects the rest with 'no
+// thumbnail'. Rejects if the path doesn't exist. Aspect preserved (a wide
+// image comes back wide, an icon square). Size: @2x on macOS/Linux (ask 64,
+// get 128), exact pixels on Windows — read width/height off the result.
 await tiny.app.secrets.get(key);        // Keychain (keytar role): tokens go
 await tiny.app.secrets.set(key, value); // here, NEVER in tiny.store;
 await tiny.app.secrets.delete(key);     // get -> string | null

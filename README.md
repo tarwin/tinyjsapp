@@ -577,10 +577,15 @@ const { text, blocks } = await tiny.macos.ocr('/path/scan.png');
 // a thumbnail png for ANY path — file browsers stop caring about formats.
 // A content preview where Quick Look has a renderer (PSD, video, 3D models,
 // source files); the document / app / folder ICON where it doesn't, so on
-// macOS this never fails on file type alone. Windows and Linux render
-// images only today and reject other types with 'no thumbnail' (measured
-// on Linux 2026-07-28) — feature-detect per file, not per platform.
-// A path that doesn't exist DOES reject.
+// macOS this never fails on file type alone. WINDOWS behaves the same way
+// via IShellItemImageFactory — images preview, and folders, .exe and plain
+// text all come back as their shell icon (measured 2026-07-28). LINUX is the
+// narrow one: images only, everything else rejects 'no thumbnail' (measured
+// 2026-07-28) — so feature-detect per file, not per platform.
+// A path that doesn't exist rejects everywhere.
+// SIZE: macOS and Linux treat `size` as points and render @2x (ask 64, get
+// 128); Windows treats it as pixels and returns exactly what you asked for.
+// Read width/height off the result rather than assuming either.
 const thumb = await tiny.app.thumbnail('/path/file.psd', 256);
 
 // Keychain secrets (the keytar/safeStorage role) — tokens go here,
@@ -1398,7 +1403,6 @@ Not yet ported:
 
 - notification action buttons — balloons only; real toasts need an
   AppUserModelID story
-- `app.badge` — needs an overlay `HICON` rendered at runtime
 - `nowPlaying` / media keys — wants the WinRT `SystemMediaTransportControls`
 - `otherWindows` / `moveWindow`, `pickColor`, `spotlight`, `system.locale`
 - the genuinely macOS-only APIs: Quick Look, OCR, AppleScript, `proxyURL`

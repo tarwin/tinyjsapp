@@ -25,16 +25,14 @@ On macOS run the **dev checkout's** `./tinyjs` — a `tinyjs` on PATH may be an
 installed release whose client predates these calls, in which case the page
 throws on its first line and the window just flashes.
 
-Two checks in that page are structurally unable to pass on Windows, so read
-their `ok` as "the call resolved", not "the decoration appeared":
-
-- it calls `attention()` while the page is the foreground window, and
-  `FLASHW_TIMERNOFG` is a documented no-op in exactly that case;
-- it calls `presence('normal')` and then quits ~0.2s later, so a restored
-  taskbar button and a departed app look identical.
-
-Both need a hold and a defocus to mean anything on Windows — see the headless
-recipe at the bottom. Worth fixing in the page itself.
+~~Two checks in that page are structurally unable to pass on Windows~~ — **fixed
+in the page, 2026-07-28.** It used to call `attention()` while the page was the
+foreground window (where `FLASHW_TIMERNOFG` is a documented no-op), and to call
+`presence('normal')` ~0.2s before quitting, so a restored taskbar button and a
+departed app looked identical. The page now minimizes itself before
+`attention()`, holds ~6s so several flash cycles are observable, restores, and
+holds ~4s after `presence('normal')`. It runs ~27s rather than ~14s as a
+result. Both were then verified on Windows — see the Windows notes below.
 
 ## app surface — badge / attention / icon / progress / presence
 
@@ -42,8 +40,8 @@ Added 2026-07-25 (the dock→intent-verb rename + `progress`).
 
 | check | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| `badge('3')` shows a count | ✅ seen | ❌ not built ([TODO-windows.md]) | 🔶 signal correct, drawing unseen |
-| `badge('NEW')` (non-numeric) | ✅ arbitrary text | — | 🔶 hides: dbus shows count-visible=false (2026-07-28) |
+| `badge('3')` shows a count | ✅ seen | ✅ seen — red disc, white '3' (2026-07-28) | 🔶 signal correct, drawing unseen |
+| `badge('NEW')` (non-numeric) | ✅ arbitrary text | ✅ collapses to a bullet (2026-07-28) | 🔶 hides: dbus shows count-visible=false (2026-07-28) |
 | `attention()` | ✅ bounces | ✅ flashes the taskbar button | ✅ X11 urgency bit / ❌ Wayland |
 | `icon(png)` replaces the icon | ✅ seen | ✅ seen (fixed 2026-07-25) | ✅ X11 (fixed 2026-07-26) / ❌ Wayland |
 | `icon(ico)` replaces the icon | n/a | ✅ seen | n/a |
@@ -51,6 +49,7 @@ Added 2026-07-25 (the dock→intent-verb rename + `progress`).
 | `icon('')` restores | ✅ seen | ✅ back to icon.png (fixed 2026-07-25) | ✅ byte-identical restore |
 | `progress(0..1)` draws a bar | ✅ seen | ✅ seen — 45% then 90% | 🔶 signal correct, drawing unseen |
 | `progress` + `icon` compose | ✅ seen — the macOS-specific risk | n/a | n/a |
+| `badge` + `progress` compose | n/a | ✅ seen together (2026-07-28) | 🔶 one signal carries both |
 | `progress(null)` clears | ✅ seen | ✅ bar goes, button stays | 🔶 signal correct |
 | `presence('menubar')` hides it | ✅ seen | ✅ button vanishes | ✅ X11 skip-taskbar / ❌ Wayland |
 | `presence('normal')` restores | ✅ seen | ✅ button comes back | ✅ X11 / ❌ Wayland |
@@ -124,6 +123,40 @@ that binary and a copy predating the flag just exits non-zero. That failure is
 no longer swallowed: the build warns and passes the launcher's own reason
 through. `capabilities()` reported `badge=false icon=true presence=true
 progress=true`, and no badge was drawn — honest degradation, as intended.
+
+**Re-run 2026-07-28 against a launcher rebuilt from current source** (the local
+`launcher-win.exe` — a gitignored build artifact, so a fresh clone has none and
+a stale one is invisible to `git status` — was two days older than
+`launcher-win.cc`. Rebuild FIRST, always: `powershell -ExecutionPolicy Bypass
+-File setup.ps1 -SkipPath`).
+`badge` now draws, so the table above and `capabilities()` both changed; the
+rest of this section still holds.
+
+**`app.badge` works on Windows — seen, not merely compiled.** A red disc with a
+white `3` in the corner of the taskbar button. None of the three predicted
+failure modes happened: not invisible (the alpha fix in `badge_icon()` does its
+job), not a black square, and `SetOverlayIcon` DID get a taskbar button from a
+plain `tinyjs dev` spawn. `badge('NEW')` collapses to a centred bullet exactly
+as documented (16px fits 1–2 glyphs), `badge` and `progress` compose on the same
+button, and clearing both returns the strip to a pixel-identical baseline.
+`capabilities().badge` is therefore now `true` on Windows.
+
+Photographed rather than eyeballed, since the decorations live outside the app
+window: a page holding each state ~5s, the taskbar strip captured every 500ms,
+and frames diffed. **Diff against a frame from INSIDE the app's run, not one
+from before launch** — Windows 11 centres taskbar buttons, so a new button
+shifts the whole strip, and a diff-vs-before-launch is ~33k changed pixels of
+layout shift that drowns a 770-pixel badge completely. That mistake made the
+first pass read as "nothing drew".
+
+**`attention()` and `presence()` re-verified with the amended page.** With the
+window minimized, consecutive-frame diffs oscillate between ~0 and ~4500 changed
+pixels for about 4.7s — the flash — and the button then settles into a held red
+attention highlight (mean brightness 188.6 vs 198.2 idle) rather than reverting,
+which a single frame could never have shown. Restoring the window clears it.
+`presence('menubar')` takes the button away (the strip reads the same brightness
+as no-button-at-all) and `presence('normal')` brings it back and HOLDS for 6.5s
+before quit.
 
 **Windows `presence` was the highest-risk item — it is fine.** The handler
 matches `presence ` and parses `op.substr(9)`, which lines up, and both
@@ -215,19 +248,17 @@ TODO-linux.md).
 
 ## Windows-only
 
-- [ ] `app.badge` — **written 2026-07-26 on macOS, never run on Windows.**
-      `do_badge` renders an overlay HICON (`badge_icon()`) and hands it to
-      `ITaskbarList3::SetOverlayIcon`. `capabilities()` deliberately still
-      reports `badge:false`; flip that only once the badge has been SEEN, not
-      merely compiled.
+- [x] ~~`app.badge`~~ — **SEEN on Windows 2026-07-28**, and `capabilities()`
+      now reports `badge:true` there. `do_badge` renders an overlay HICON
+      (`badge_icon()`) and hands it to `ITaskbarList3::SetOverlayIcon`.
       The trap it works around: GDI writes RGB but leaves the alpha byte of a
       32bpp DIB alone, so text drawn the obvious way is fully transparent. It
       paints a disc + up to two glyphs in colours that are never pure black,
-      then sets alpha for every pixel that got written. Plausible failure
-      modes to look for: an invisible badge (alpha fix not doing its job), a
-      black square (mask/`CreateIconIndirect` wrong), or nothing at all
-      (`SetOverlayIcon` needing a taskbar button that a dev spawn may not
-      have). Longer text collapses to a bullet — 16px fits 1–2 glyphs.
+      then sets alpha for every pixel that got written — and that holds up:
+      the badge is neither invisible nor a black square. The third worry,
+      `SetOverlayIcon` needing a taskbar button a dev spawn might not have,
+      was unfounded — a plain `tinyjs dev` gets one. Longer text collapses to
+      a bullet as designed (`'NEW'` → a centred dot).
 - [x] ~~`app.icon` only took `.ico`~~ — fixed 2026-07-25. `do_appicon` still
       tries `LoadImage` first (it picks the right sub-image per size, which
       GDI+ can't), then falls back to `icon_from_png()` — the decoder the
@@ -256,11 +287,22 @@ TODO-linux.md).
       and zlib round-trips (zlibVersion 1.3, compress→decompress true).
       x86_64 remains assumed-by-ABI, which is the direction the offsets were
       written for.
-- [ ] **kitchen-sink FFI, Windows** — `kernel32.dll` `GetTickCount64()` and
-      `GlobalMemoryStatusEx()`. The struct's first field must be its own size
-      (64) before the call or the API refuses; if `ram` is 0, that's the
-      first thing to check. zlib is deliberately absent on Windows and the
-      card says so rather than failing.
+- [ ] **kitchen-sink FFI, Windows** — **this entry described code that was
+      never written.** Checked 2026-07-28: `kitchen-sink/src/main.js` has no
+      Windows branch at all — `ffiLibs()` hardcodes
+      `/usr/lib/libSystem.B.dylib` and `/usr/lib/libz.dylib`, and `kernel32`
+      appears nowhere in the examples repo except the matcha and presto ports.
+      Run on Windows, `ffiInfo` and `zlibRoundtrip` both throw a raw
+      `uv_dlopen failed: The specified module could not be found.` — not the
+      graceful "not here" the old text implied. (`sysinfo` does degrade
+      properly, reporting `ram: 'n/a'`; it also prints a hardcoded
+      `cpu: 'Apple Silicon × 4'` on Windows, which is its own small lie.)
+      So this stays open, and it is example-app work in tinyjsapp-examples,
+      not a tinyjs gap. The route is still the one sketched here:
+      `kernel32.dll` `GetTickCount64()` and `GlobalMemoryStatusEx()`, whose
+      struct's first field must be its own size (64) before the call or the
+      API refuses — if `ram` comes back 0, check that first. zlib has no
+      system copy on Windows, so that row should say so rather than throw.
 - [~] **`chrome.trafficLights` reporting** — it only ever worked on macOS,
       but Linux stored the bit and echoed it back through `getState`, so an
       app that set it and read it back was told it had worked. Linux now
@@ -271,12 +313,14 @@ TODO-linux.md).
       echo; the fleet sweep (all 26 examples launch) says nothing depended on
       the lie. Windows unchecked.
 
-- [ ] **`chrome.windowControls` on Windows** — `WS_SYSMENU` /
-      `WS_MINIMIZEBOX` / `WS_MAXIMIZEBOX`. Win32 is coarser than macOS: the
-      min/max boxes require `WS_SYSMENU`, so "minimize without close" isn't
-      expressible and asking for it gets close too. Check that `['close']`
-      leaves only close, that `false` removes the group, and that `getState`
-      round-trips what you set.
+- [x] **`chrome.windowControls` on Windows** — verified 2026-07-28, and the
+      predicted Win32 coarseness is exactly what happens. `['close']` →
+      `['close']`; `false` → `[]` (group gone); `true` → all three. And
+      `['minimize']` → **`['close','minimize']`**: the min/max boxes require
+      `WS_SYSMENU`, so "minimize without close" is not expressible and asking
+      for it gets close too. The important part is that `getState` reports
+      what you GOT, not what you asked for — so the round trip is honest
+      rather than an echo, and an app can detect the difference.
 - [~] **`chrome.windowControls` on Linux** — `gtk_window_set_deletable` for
       close, `_MOTIF_WM_HINTS` for minimize/maximize. Mutter and KWin read the
       hint; many WMs don't, so treat a no-op as "this WM ignores MWM", not a
@@ -410,18 +454,41 @@ service = the app id. `permissions.check` answered granted/denied/undetermined/
 unsupported across all seven names without a prompt. None of that was run
 elsewhere:
 
-- [ ] **Windows — `secrets` against Credential Manager.** Same round trip. The
-      replace semantics are the ones to watch: macOS gets them from an explicit
-      `SecItemDelete` before `SecItemAdd`, so check Windows doesn't end up with
-      two entries under one key. Also confirm an unsaved key gives `null`
-      rather than an error, since that's the branch every caller writes.
-- [ ] **Windows — `authenticate` via Windows Hello.** `CheckAvailabilityAsync`
-      short-circuits to `false` on a machine with no Hello enrolled — check
-      that path *and* a real verification, and that neither hangs the promise.
-- [ ] **Windows — `permissions.check`.** Expect `granted` for the five known
-      names (there is no TCC) and `unsupported` for anything else, including
-      `automation:*`. The deck's summary line is written to say "nothing here
-      is gated" when everything is unsupported; watch it say the right thing.
+- [x] **Windows — `secrets` against Credential Manager** — verified 2026-07-28.
+      set→get→delete→get round-trips in ~10ms; a second `set` REPLACES (get
+      returns the new value, ONE delete leaves nothing behind, and `cmdkey
+      /list` shows exactly one entry, target `<app id>/<key>`, so no duplicate);
+      an unsaved key reads `null` not an error; `delete` of an absent key
+      resolves `true`; an empty string comes back as `''`, not null.
+      **One real difference from macOS, and it cost a fix:** Credential Manager
+      caps a blob at **2560 bytes**, where the macOS keychain swallowed 4 KB of
+      emoji whole. Over the cap `CredWriteW` fails with 1783
+      (`RPC_X_BAD_STUB_DATA`), which names nothing, and the old message was a
+      bare "credential write failed" — so the 4 KB emoji case in this file's
+      macOS round trip simply exploded with no clue why. `do_secret` now
+      rejects oversized values up front naming the byte count and the limit.
+      The limit is BYTES of UTF-8, not characters: 4-byte emoji reach it four
+      times faster than ASCII (2560 chars of ASCII fits; 640 emoji is already
+      2560 bytes and is the last thing that does). NOTE the constant is
+      hardcoded, not `CRED_MAX_CREDENTIAL_BLOB_SIZE` — MinGW's wincred.h still
+      defines that as the pre-Vista 512, and using it rejected writes this
+      machine accepts. Bisected against a live `CredWriteW`: 2560 writes, 2561
+      fails.
+- [~] **Windows — `authenticate` via Windows Hello** — the short-circuit half
+      verified 2026-07-28: resolves `false` in **13ms**, no hang. Confirmed
+      HONEST rather than a broken binding by probing the WinRT enum directly
+      from a standalone program — the factory activates, the async op
+      completes, and `UserConsentVerifierAvailability` is `1
+      (DeviceNotPresent)`, i.e. this box has no Hello enrolled. Still unrun,
+      and it needs hardware: a REAL verification resolving `true`, and a
+      cancel resolving `false` rather than hanging or throwing.
+      (Gotcha if you write your own probe: copy the statics IID out of
+      `launcher-win.cc`. A wrong one answers `E_NOINTERFACE` and looks exactly
+      like "Hello is unavailable".)
+- [x] **Windows — `permissions.check`** — verified 2026-07-28. `granted` for
+      all five known names (`accessibility`, `screen`, `notifications`,
+      `microphone`, `camera` — there is no TCC), and `unsupported` for
+      `automation`, `automation:<id>` and any unknown name. No prompts.
 - [~] **Linux — `secrets` against the Secret Service.** Happy path verified
       2026-07-28 (the VM's keyring turned out unlocked): set→get→delete
       round-trips in single-digit ms, a second `set` REPLACES rather than
@@ -552,22 +619,46 @@ arm for the name, or an explicit `got_unsupported`), which is strong — but no
 Windows or Linux machine was involved, and "the launcher has no handler" is
 exactly the kind of claim that deserves a run:
 
-- [ ] **Windows** — confirm `otherWindows()` really resolves `null`,
-      `moveWindow()` rejects, `pickColor()` and `spotlight()` reject, and that
-      pressing a media key with Now Playing set does nothing at all.
+- [x] **Windows** — checked 2026-07-28, and it found a real bug. The three
+      that moved to `tiny.macos.*` reject with the guard message
+      ("tiny.macos.otherWindows is macOS-only (this is windows) — guard with
+      tiny.system.isMacOS()"), and `pickColor()` rejects "unsupported on
+      windows". **`spotlight()` did NOT reject — it resolved `[]`.** The
+      launcher is honest (`SPOTLIGHT` reaches `got_unsupported`); the BRIDGE
+      threw the answer away: `(await ask('SPOTLIGHT', …))?.paths ?? []` turned
+      `{ok:false,error:'unsupported on windows'}` into an empty array. To a
+      caller "no files matched" and "there is no search backend here" are
+      opposite answers and only the second was true — and `capabilities()
+      .spotlight` being `false` didn't help anyone who just called it. Fixed
+      to check `ok` and throw, the way the neighbouring `pickColor` already
+      did; re-verified rejecting.
+      Swept the other `ask()` call sites for the same shape: `voices()` has it
+      (`?.voices ?? []`) but all three launchers implement `VOICES`, so it can
+      never receive an unsupported reply — left alone. Everything else coerces
+      to an honest `'unsupported'`/`false` default.
+      Still unrun: pressing a media key with Now Playing set.
 - [x] **Linux/X11** — verified 2026-07-28, both sessions: the three now live
       on `tiny.macos.*` and each rejects with the guard message
       ("tiny.macos.X is macOS-only (this is linux) — guard with
       tiny.system.isMacOS()"); `system.wifi` resolves `null`;
       `system.locale()` resolves `null` with `capabilities().locale` false —
       the table matches reality, no under-claim found.
-- [~] **`app.thumbnail` after the representation change** — macOS is measured
+- [x] **`app.thumbnail` after the representation change** — macOS is measured
       (folders, `.app` bundles, `.css`, `.wasm` and executables all render now;
       a missing path still rejects). Linux measured 2026-07-28: an image
       renders (64 asked → 128 returned, the documented @2x), but a source
       file and a folder both reject `no thumbnail` — so the README's "any
-      path" was over-promising off macOS. Docs now qualify it (README +
-      SKILL.md). Windows still unchecked; expected to match Linux.
+      path" was over-promising off macOS.
+      **Windows measured 2026-07-28, and the expectation was wrong: it matches
+      macOS, not Linux.** Via `IShellItemImageFactory` a folder, a `.exe`, a
+      `.jpg` and a plain `.txt` ALL render; only a nonexistent path rejects
+      (`no thumbnail`). So Linux is the narrow one, not "Windows and Linux".
+      **Second difference, in the size contract:** macOS and Linux treat
+      `size` as points and render @2x (ask 64, get 128); Windows treats it as
+      pixels and returns exactly what was asked (ask 64, get 64x64; a wide jpg
+      at 64 comes back 64x36, so aspect IS preserved). Callers should read
+      `width`/`height` off the result rather than assuming either. Docs
+      corrected in README, SKILL.md and tiny.d.ts (both thumbnail sites).
 
 ## Window sizes are the page's box now — Windows and Linux unbuilt
 
@@ -579,15 +670,21 @@ gives a 1100x720 page and a 1100x752 outer, a titled satellite asked for
 setSize→getState→setSize holds still over three passes. The other two
 launchers were edited to match but not compiled:
 
-- [ ] **Windows** — `do_size` now measures the live window/client insets and
+- [x] **Windows** — verified 2026-07-28 on Windows 11 Pro 26200, launcher
+      rebuilt from source. `do_size` measures the live window/client insets and
       adds them (rather than calling AdjustWindowRect, which would inflate the
       page on the borderless-client windows this launcher makes); `getState`
       reports `GetClientRect` for width/height and `GetWindowRect` for `outer`.
-      Only a **titled satellite** can show a difference — main and frameless
-      secondaries answer `WM_NCCALCSIZE` with no non-client area, so client ==
-      frame there. The check that matters is the ratchet the frame-units
-      workaround was fixed for: read `getState()`, hand width/height back to
-      `setSize`, repeat three times, and watch for growth.
+      **Zero drift.** A titled satellite — the only Windows case where client
+      != frame, since main and frameless secondaries answer `WM_NCCALCSIZE`
+      with no non-client area — declared 460x420 reports 460x420 (outer
+      473x456) and HELD 460x420 over three read-modify-write passes.
+      `setSize(600,400)` → 600x400 (outer 613x436). Main declared 960x640
+      reports 960x640 (outer 973x676); a frameless satellite at 150x150
+      reports 150x150 with `outer` == the page box, as predicted.
+      The ratchet has to be run BY the satellite: window ops are scoped to the
+      calling page, so a driver page opening a satellite cannot size it — open
+      the satellite on a page that measures itself.
 - [x] **Linux** — verified 2026-07-28 on Ubuntu 24.04 aarch64, GNOME 46, in
       both Wayland and XWayland, launcher rebuilt from source. Declared
       960x640 gives a 960x640 page; after `menu.set` the page is STILL
@@ -637,8 +734,14 @@ Two real bugs found and fixed, one platform gap closed:
       `maybeWriteCliShim` call sat at the end of the macOS bundle branch,
       after the win/linux branches `return`. Both branches now call it.
       Linux verified end to end: shim written, `dist/bin/<name> file.txt`
-      delivers the path to `onOpenFiles`. Windows is the same one-line call
-      but unwatched.
+      delivers the path to `onOpenFiles`. **Windows verified 2026-07-28 too:**
+      `dist/bin/<name>.cmd` is written (`@echo off` + `"%~dp0..\<name>.exe"
+      %*`, CRLF), a cold start through it delivers the absolute path to
+      `onOpenFiles`, and a SECOND launch while the app is running exits
+      immediately and forwards its path to the running instance (process count
+      stays at 1). One polish bug fixed alongside: the shim hint printed the
+      Unix `ln -sf … /usr/local/bin/<name>` line on Windows, where neither the
+      command nor the path exists; it now prints a `setx PATH` line there.
 - [x] **argv → onOpenFiles on Linux** — cold start delivers
       `["/abs/path"]` with flags skipped and nonexistent paths dropped; a
       second launch exits 0 and forwards its paths over the instance pipe to
@@ -666,6 +769,44 @@ Two real bugs found and fixed, one platform gap closed:
       query for `bashrc` honestly returns nothing. Boxes with no
       plocate/locate get name-only, non-hidden results.
 
+## The 2026-07-28 Windows sweep — what got proven, what got fixed
+
+Run on Windows 11 Pro 26200, **launcher rebuilt from source first** (the local
+`launcher-win.exe` was two days stale — and being gitignored, a stale one never
+shows up in `git status`; this is the third time it has nearly wasted a
+session, so rebuild before believing anything). Everything
+below was driven from self-contained pages via `TINYJS_HTML`, with the taskbar
+photographed where the decoration lives outside the app window.
+
+Proven, each recorded in its own section above: `app.badge` draws (and
+`capabilities().badge` flipped to `true`), `attention` flashes and `presence`
+round-trips with the amended page, the secrets round trip against Credential
+Manager, `permissions.check` across all seven names, the window-size contract
+with zero ratchet drift, `chrome.windowControls`' Win32 coarseness, thumbnail's
+real scope, and `build --cli` + argv → `onOpenFiles` both cold and forwarded.
+
+Three real bugs found and fixed:
+
+- [x] **`spotlight()` resolved `[]` instead of rejecting** — the bridge's
+      `?? []` swallowed the launcher's `unsupported`, reporting "nothing
+      matched" on a platform with no search backend. See the capability
+      corrections section.
+- [x] **A secret over 2560 bytes failed with an unexplainable message** —
+      Credential Manager's cap, surfaced as bare "credential write failed"
+      (Win32 1783). Now rejected up front naming the size and the limit.
+- [x] **`build --cli` printed a Unix `ln -sf` hint on Windows.**
+
+- [x] **The 0.30 scaffold names on Windows** — from a live scaffolded app, the
+      same check the Linux sweep made: all seven dialog calls are functions on
+      `tiny.dialog.*` and ZERO remain on `tiny.win.*`, and `win.setTitle`,
+      `win.setSize`, `menu.set`, `quit` and `api.call` all exist. So the
+      buttons `tinyjs new` ships call things that exist here too.
+
+Not covered, and still needing a hand or hardware: `startDrag`/`startResize`
+(a modal OS loop that only ends on a real mouse-up), `dialog.openFiles`'
+multi-select panel, a real Windows Hello verification, media keys, and whether
+`app.icon` can ever reach the taskbar button.
+
 ## Driving these checks headlessly on Windows
 
 No clicking needed, and worth reusing — the decorations live outside the app
@@ -682,6 +823,14 @@ window, so the app's own logs can never confirm them:
 - A *flash* is only distinguishable from a static button by consecutive-frame
   pixel diffs oscillating; a single frame proves nothing. Same for progress —
   compare the bar across held states rather than trusting one shot.
+- **Diff against a reference frame from INSIDE the app's run.** Windows 11
+  centres taskbar buttons, so the app's own button appearing shifts the whole
+  strip sideways: a diff against a pre-launch frame is tens of thousands of
+  changed pixels of layout shift, and a 770-pixel badge is invisible inside
+  that. Pick a frame after the window is up but before the call under test.
+- Have the page print `MARK <ms> <label>` at each state change and align frames
+  to it afterwards, rather than trying to synchronise the two processes. The
+  screenshotter's own start-up (Add-Type compiling) is seconds of skew.
 - `WM_GETICON` read off the live window separates "the call did nothing" from
   "the call worked and the shell ignored it". That distinction is the whole
   point of this file, and it is what caught the `app.icon` taskbar finding.

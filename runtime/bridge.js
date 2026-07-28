@@ -336,11 +336,14 @@ async function systemCapabilities(query, aiStatus) {
     // caveats in TODO-windows.md.
     wifi: false,
     // app.attention (FlashWindowEx) and app.presence (WS_EX_TOOLWINDOW) both
-    // work. app.badge needs an overlay HICON rendered at runtime and isn't
-    // built yet; it was a silent no-op before, and absent from this table,
-    // which under the "absent = true" rule above claimed support that was
-    // never there.
-    badge: false, icon: true, progress: true,
+    // work. app.badge renders an overlay HICON at runtime and hands it to
+    // ITaskbarList3::SetOverlayIcon; it was declared false while it existed
+    // only as compiled-but-unrun code, and was SEEN on Windows 11 26200 on
+    // 2026-07-28 — a red disc with a white '3' on the taskbar button,
+    // photographed against a held state. badge('NEW') collapses to the
+    // documented bullet (16px fits 1-2 glyphs), badge+progress compose, and
+    // both clear back to a pixel-identical baseline.
+    badge: true, icon: true, progress: true,
     // Same trap as badge, found by auditing every wire op the bridge can send
     // against what launcher-win.cc actually dispatches (2026-07-25): NOWPLAYING
     // reaches the launcher's else-if chain, matches nothing and is dropped, so
@@ -893,9 +896,15 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // resets to the bundle icon. macOS Dock tile / Linux window icon.
     icon(pngPath) { send('APPICON ' + esc(pngPath ?? '')); return true; },
     // Find files by name or content (Spotlight/NSMetadataQuery, home scope)
-    // -> up to 100 absolute paths.
+    // -> up to 100 absolute paths. Rejects where there is no search backend.
     async spotlight(queryText) {
-      return (await ask('SPOTLIGHT', esc(String(queryText ?? ''))))?.paths ?? [];
+      const r = await ask('SPOTLIGHT', esc(String(queryText ?? '')));
+      // `?? []` here used to swallow the launcher's {ok:false,error} — Windows
+      // answers got_unsupported for SPOTLIGHT, so every query came back as an
+      // empty array, i.e. "nothing matched" rather than "not supported here".
+      // Those are opposite answers to a caller, and only the second is true.
+      if (!r?.ok) throw new Error(r?.error ?? 'unsupported');
+      return r.paths ?? [];
     },
     // Window chrome: { frame?, windowControls?, transparent?, vibrancy?,
     // squareCorners?, acceptsFirstMouse? }. frame:false hides the titlebar

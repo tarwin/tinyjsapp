@@ -2389,17 +2389,36 @@ static void do_secret(webview_t, void *arg) {
       json = "{\"ok\":false,\"error\":\"credential read failed\"}";
     }
   } else if (op == "set") {
-    CREDENTIALW cred = {};
-    cred.Type = CRED_TYPE_GENERIC;
-    cred.TargetName = (LPWSTR)target.c_str();
-    cred.CredentialBlob = (LPBYTE)value.data();
-    cred.CredentialBlobSize = (DWORD)value.size();
-    cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
-    std::wstring user = widen(account);
-    cred.UserName = (LPWSTR)user.c_str();
-    json = CredWriteW(&cred, 0)
-               ? "{\"ok\":true}"
-               : "{\"ok\":false,\"error\":\"credential write failed\"}";
+    // Credential Manager caps a blob at 2560 bytes — a HARDER limit than the
+    // macOS keychain, which takes 4 KB of emoji without complaint. Over the
+    // cap CredWriteW fails with 1783 (RPC_X_BAD_STUB_DATA), which names
+    // nothing, so check up front and say what the caller actually hit. The
+    // limit is BYTES of UTF-8, not characters: 4-byte emoji reach it four
+    // times faster than ASCII.
+    //
+    // Hardcoded, NOT CRED_MAX_CREDENTIAL_BLOB_SIZE: MinGW's wincred.h still
+    // defines that as the pre-Vista 512, and using it rejected writes this
+    // machine accepts. Bisected against a live CredWriteW on Windows 11 26200
+    // (2026-07-28): 2560 writes, 2561 fails — the documented Vista+ 5*512.
+    const size_t kMaxSecretBytes = 2560;
+    if (value.size() > kMaxSecretBytes) {
+      json = "{\"ok\":false,\"error\":\"secret too large: " +
+             std::to_string(value.size()) + " bytes (Windows Credential " +
+             "Manager allows " + std::to_string(kMaxSecretBytes) + ")\"}";
+    } else {
+      CREDENTIALW cred = {};
+      cred.Type = CRED_TYPE_GENERIC;
+      cred.TargetName = (LPWSTR)target.c_str();
+      cred.CredentialBlob = (LPBYTE)value.data();
+      cred.CredentialBlobSize = (DWORD)value.size();
+      cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+      std::wstring user = widen(account);
+      cred.UserName = (LPWSTR)user.c_str();
+      json = CredWriteW(&cred, 0)
+                 ? "{\"ok\":true}"
+                 : "{\"ok\":false,\"error\":\"credential write failed (" +
+                       std::to_string(GetLastError()) + ")\"}";
+    }
   } else if (op == "del") {
     if (CredDeleteW(target.c_str(), CRED_TYPE_GENERIC, 0) ||
         GetLastError() == ERROR_NOT_FOUND)

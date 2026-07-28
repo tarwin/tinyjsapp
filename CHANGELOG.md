@@ -425,11 +425,41 @@ are gone rather than deprecated.
   dev checkout can't ship a launcher predating its own sources — or silently
   skip the app icon, since `--embed-icon` is run *by* that binary.
 
+- **`app.badge` works on Windows**, and `capabilities().badge` says so. It was
+  written but never run there, so the capability deliberately reported `false`;
+  it has now been seen drawing on the taskbar button (and composing with
+  `app.progress`), so the claim is true rather than cautious.
+- **Fixed: `app.spotlight()` answered `[]` on Windows instead of rejecting.**
+  The launcher correctly reports the op as unsupported; the bridge threw that
+  away and returned an empty array, so a caller was told "no files matched"
+  where the truth was "there is no search backend here". Those are opposite
+  answers. It now rejects, like the neighbouring `pickColor` already did.
+- **Fixed: a secret larger than 2560 bytes failed unexplainably on Windows.**
+  Credential Manager caps a credential blob there — smaller than the macOS
+  keychain, which takes 4 KB without complaint — and over the cap `CredWriteW`
+  fails with a Win32 error (1783) that names nothing, which surfaced as a bare
+  "credential write failed". `tiny.app.secrets.set` now rejects oversized
+  values up front, naming the byte count and the limit. Note the limit counts
+  BYTES of UTF-8: 4-byte emoji reach it four times faster than ASCII.
+- **`app.thumbnail` on Windows is broader than the docs claimed, and sized
+  differently.** Folders, executables and plain text all render as their shell
+  icon, the same breadth macOS has — it's Linux that is images-only. And where
+  macOS and Linux treat `size` as points and render @2x, Windows treats it as
+  pixels and returns exactly what was asked. Read `width`/`height` off the
+  result rather than assuming either. Docs corrected.
+- **Fixed: `tinyjs build --cli` printed a Unix hint on Windows**, suggesting an
+  `ln -sf` into `/usr/local/bin` — neither of which exists there. It now prints
+  a `setx PATH` line.
+
 **Also**
 
 - `test/appsurface.html` — a self-driving page that steps through the whole app
   surface, holding each state long enough to see, and prints what
-  `capabilities()` claims for the machine.
+  `capabilities()` claims for the machine. It now minimizes itself before
+  `attention()` and holds after `presence('normal')`: Windows defines
+  `FLASHW_TIMERNOFG` as a no-op while the window is already foreground, and
+  quitting straight after restoring a taskbar button makes it indistinguishable
+  from the app simply leaving. Both checks were unfalsifiable on Windows before.
 - `TODO-verify.md` — what's been built on one OS but not yet watched run on
   another. A fire-and-forget op reaching a shell that ignores it looks exactly
   like one that was never implemented, so "nothing appeared" needs a written
