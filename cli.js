@@ -926,6 +926,7 @@ async function cmdBuild() {
         console.log('    WARNING: could not embed ' + winIcon + ' into launcher.exe.');
       }
     }
+    await maybeWriteCliShim(cfg, null);
     console.log('==> done');
     console.log(`run it:  .\\dist\\${cfg.name}.exe`);
     return;
@@ -940,6 +941,7 @@ async function cmdBuild() {
     await run(['chmod', '+x', 'dist/launcher', 'dist/' + cfg.name]);
     const linIcon = cfg.icon || 'icon.png';
     if (await exists(linIcon)) await copyFile(linIcon, 'dist/icon.png');
+    await maybeWriteCliShim(cfg, null);
     console.log('==> done');
     console.log(`run it:  ./dist/${cfg.name}`);
     return;

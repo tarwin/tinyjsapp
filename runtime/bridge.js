@@ -1296,7 +1296,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         const p = tjs.spawn(['xdg-mime', 'default', appIdStr + '.desktop', mime],
                             { stdout: 'ignore', stderr: 'ignore' });
         const st = await p.wait();
-        return st.exit_code === 0 ? 'ok' : 'failed';
+        return st.exit_status === 0 ? 'ok' : 'failed';
       } catch {
         return 'failed';   // no xdg-mime on this box
       }
