@@ -263,6 +263,25 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
 // is the terminal, so it delivers only if the terminal holds the grant, else
 // silent; a built .app owns its own grant. Denial surfaces as silent chunks.
 
+// tiny.audio — an EQ/DSP chain on the app's own output. Native (below the
+// browser: reaches native HLS/tainted streams, survives reload) on Linux +
+// macOS 14.2+; capabilities().audioFilters is FALSE on Windows (measured
+// permanent: the only silencing lever is persisted mixer state shared by all
+// WebView2 apps). pageChain(ctx) is the fallback: same verbs, same RBJ
+// curves, but PAGE-scoped — route your source through it. Pick a backend
+// once, use identically:
+const eq = caps.audioFilters ? tiny.audio : tiny.audio.pageChain(ctx);
+if (eq.input) { src.connect(eq.input); eq.output.connect(ctx.destination); }
+await eq.filters([{ type: 'gain', gain: 1 },              // linear preamp
+  { type: 'peaking', freq: 60, q: 1.1, gain: 4 }]);       // biquads: gain in dB
+eq.filter(1, { freq: 60, q: 1.1, gain: -3 });  // retune in place (slider drags)
+await eq.balance(-0.2); await eq.clear();
+// Types: peaking lowshelf highshelf lowpass highpass bandpass notch allpass
+// (freq/q/gain dB) + gain (linear). ≤28 filters (15 with gainR). pageChain
+// edges: shelf q and per-filter gainR ignored (use balance()); NEVER use
+// pageChain on Linux — Web Audio to ctx.destination crackles there, that's
+// why the native chain exists.
+
 tiny.win.setTitle(t); tiny.win.setSize(w, h);
 await tiny.dialog.openFile();                  // path | null (native panel)
 await tiny.dialog.openFiles();                 // paths[] | null

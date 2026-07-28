@@ -185,6 +185,7 @@
     <a href="#store">store</a>
     <a href="#clipboard">clipboard</a>
     <a href="#hotkeys">hotkeys</a>
+    <a href="#audio">audio filters</a>
     <a href="#audiotap">audioTap</a>
     <a href="#keystrokes">keystrokes</a>
     <a href="#permissions">permissions</a>
@@ -696,6 +697,45 @@ await <b>tiny.clipboard.changeCount</b>();   <i>// cheap "did it change?" probe<
     <pre><b>tiny.hotkey.register</b>('boss', 'cmd+shift+k');   <i>// fires even unfocused</i>
 <b>tiny.hotkey.on</b>((id) =&gt; tiny.win.show());
 <b>tiny.hotkey.unregister</b>('boss');</pre>
+  </section>
+
+  <section id="audio">
+    <h2>tiny.audio <span class="tag">an EQ on your own output</span></h2>
+    <p>A DSP chain — graphic EQ, headphone correction, a crossover — on
+    <b>this app's own output</b>. Native (applied below the browser, so it
+    reaches audio the page never gets samples for and survives a reload) on
+    Linux (PipeWire) and macOS 14.2+ (a muted Core Audio process tap);
+    <code>capabilities().audioFilters</code> is <b>false on Windows</b> — the
+    only way to silence the direct signal there is session volume, which
+    Windows persists on a key every WebView2 app shares, so a crash while
+    filtering would near-silence all of them. <b>pageChain</b> is the
+    fallback: the same chain from Web Audio nodes in the page, same RBJ
+    curves, same verbs.</p>
+    <pre>const can = await <b>tiny.system.capabilities</b>();
+<i>// one backend decision, identical code after it</i>
+const eq = can.audioFilters ? tiny.audio : <b>tiny.audio.pageChain</b>(ctx);
+if (eq.input) { src.connect(eq.input); eq.output.connect(ctx.destination); }
+await <b>eq.filters</b>([
+  { type: 'gain', gain: 1.0 },                     <i>// preamp (linear)</i>
+  { type: 'peaking',   freq: 60,   q: 1.1, gain: 4 },   <i>// dB</i>
+  { type: 'highshelf', freq: 8000, q: 0.7, gain: -2 },
+]);
+<b>eq.filter</b>(1, { freq: 60, q: 1.1, gain: -3 });  <i>// retune ONE, live — slider drags</i>
+await <b>eq.balance</b>(-0.2);                        <i>// -1 left .. 1 right, no filter slot</i>
+await <b>eq.clear</b>();                              <i>// unprocessed output restored</i></pre>
+    <p class="note">Types: <code>peaking</code>, <code>lowshelf</code>,
+    <code>highshelf</code>, <code>lowpass</code>, <code>highpass</code>,
+    <code>bandpass</code>, <code>notch</code>, <code>allpass</code>
+    (<code>freq</code>/<code>q</code>/<code>gain</code>, gain in dB) and
+    <code>gain</code> (a linear multiplier). At most 28 filters (15 if any
+    uses <code>gainR</code>). Replacing the chain rebuilds it; keep the shape
+    stable and let sliders call <code>filter(i, …)</code>.</p>
+    <p class="note">pageChain is page-<b>scoped</b> — it filters what you
+    route through <code>input</code>→<code>output</code>, nothing else — and
+    Web Audio's shelves ignore <code>q</code> / per-filter <code>gainR</code>
+    (use <code>balance()</code>). Don't use it on Linux: Web Audio reaching
+    <code>ctx.destination</code> crackles there, which is exactly why the
+    native chain exists.</p>
   </section>
 
   <section id="audiotap">

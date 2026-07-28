@@ -420,6 +420,93 @@
       // for exactly this.
       balance: (v) => call('audio.balance', { value: v }),
       clear: () => call('audio.filters', { filters: [] }),
+      // The same chain, built from Web Audio nodes IN THE PAGE — for where the
+      // native chain doesn't exist. On Windows it can't (silencing the direct
+      // path means session volume, which Windows persists on a key every
+      // WebView2 app shares — TODO-audio-filters.md has the measurements), so
+      // capabilities().audioFilters is false there and this is the fallback.
+      // Web Audio's BiquadFilterNode is the same RBJ cookbook as PipeWire's
+      // bq_* and the macOS tap, so the same numbers give the same curve.
+      //
+      // Same verbs as tiny.audio itself, so an app picks a backend once:
+      //
+      //   const can = await tiny.system.capabilities();
+      //   const eq = can.audioFilters ? tiny.audio : tiny.audio.pageChain(ctx);
+      //   if (eq.input) src.connect(eq.input), eq.output.connect(ctx.destination);
+      //   await eq.filters(bands);      // identical from here on
+      //
+      // Page-SCOPED, and that's the honest difference: it filters only what
+      // you route through input→output, not native HLS or a CORS-tainted
+      // <audio> the page never gets samples for. Two more edges, both real:
+      // shelf `q` is ignored (Web Audio shelves fix S=1; native honors it),
+      // and per-filter `gainR` is ignored — use balance(). Do NOT reach for
+      // this on Linux: anything hitting ctx.destination crackles there
+      // (measured — it's why the native chain exists).
+      pageChain(ctx) {
+        const input = ctx.createGain();
+        // Balance stage: force stereo up-front (a mono source into a bare
+        // splitter puts silence on the right), then split, per-side gains,
+        // merge. Always in-line, unity until balance() is called.
+        const balIn = ctx.createGain();
+        balIn.channelCount = 2;
+        balIn.channelCountMode = 'explicit';
+        const split = ctx.createChannelSplitter(2);
+        const gL = ctx.createGain(), gR = ctx.createGain();
+        const merge = ctx.createChannelMerger(2);
+        const output = ctx.createGain();
+        balIn.connect(split);
+        split.connect(gL, 0);
+        split.connect(gR, 1);
+        gL.connect(merge, 0, 0);
+        gR.connect(merge, 0, 1);
+        merge.connect(output);
+        let nodes = [];
+        // Retunes ramp over ~15ms (a bare .value write zippers audibly on a
+        // slider drag); a NEW node gets its values outright — ramping there
+        // would sweep in from Web Audio's defaults instead.
+        const tune = (p, v, now) =>
+          now ? (p.value = v) : p.setTargetAtTime(v, ctx.currentTime, 0.015);
+        const apply = (node, f, now) => {
+          if (node.frequency) {
+            tune(node.frequency, Number(f.freq ?? 1000), now);
+            tune(node.Q, Number(f.q ?? 1), now);
+            tune(node.gain, Number(f.gain ?? 0), now);  // dB, like the native chain
+          } else {
+            tune(node.gain, Number(f.gain ?? 1), now);  // 'gain' is a linear multiplier
+          }
+        };
+        const chain = {
+          input, output,
+          filters(list) {
+            input.disconnect();
+            for (const n of nodes) n.disconnect();
+            nodes = (list ?? []).map((f) => {
+              let n;
+              if (f.type === 'gain') n = ctx.createGain();
+              else { n = ctx.createBiquadFilter(); n.type = f.type ?? 'peaking'; }
+              apply(n, f, true);
+              return n;
+            });
+            let prev = input;
+            for (const n of nodes) { prev.connect(n); prev = n; }
+            prev.connect(balIn);
+            return true;
+          },
+          filter(i, patch) {
+            if (nodes[i]) apply(nodes[i], patch ?? {});
+            return true;
+          },
+          balance(v) {
+            const b = Math.max(-1, Math.min(1, Number(v) || 0));
+            tune(gL.gain, b > 0 ? 1 - b : 1);
+            tune(gR.gain, b < 0 ? 1 + b : 1);
+            return true;
+          },
+          clear() { chain.filters([]); chain.balance(0); return true; },
+        };
+        chain.filters([]);
+        return chain;
+      },
     },
 
     audioTap: {

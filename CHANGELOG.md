@@ -425,6 +425,25 @@ are gone rather than deprecated.
   dev checkout can't ship a launcher predating its own sources — or silently
   skip the app icon, since `--embed-icon` is run *by* that binary.
 
+- **`tiny.audio.pageChain(ctx)`** — the filter chain as Web Audio nodes in the
+  page, for where the native chain doesn't exist. Same band vocabulary, same
+  RBJ curves (measured in an OfflineAudioContext: ask +12 dB at the centre,
+  get 12.00), and the same four verbs as `tiny.audio` — so an app picks its
+  backend once and the code after is identical. Page-scoped, honestly: it
+  filters what you route through `input`→`output`, not audio the page never
+  gets samples for; shelf `q` and per-filter `gainR` are ignored (use
+  `balance()`); and it's not for Linux, where Web Audio crackles and the
+  native chain exists precisely because of that.
+
+  It exists because Windows measured out: process-loopback capture is
+  post-mute *and* post-volume, so the only way to silence the direct signal
+  is session volume — which Windows **persists**, keyed on the EdgeWebView
+  runtime path that every WebView2 app on the machine shares. A crash while
+  filtering would have near-silenced Teams and every other WebView2 app until
+  something rewrote the key. `capabilities().audioFilters` therefore stays
+  `false` there, permanently and with the numbers attached
+  (TODO-audio-filters.md); the deck's EQ card now runs this chain on Windows
+  instead of a dead panel.
 - **`app.badge` works on Windows**, and `capabilities().badge` says so. It was
   written but never run there, so the capability deliberately reported `false`;
   it has now been seen drawing on the taskbar button (and composing with

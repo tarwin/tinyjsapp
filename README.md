@@ -903,17 +903,19 @@ EQ, headphone correction, a crossover — below the browser:
 
 ```js
 const can = await tiny.system.capabilities();
-if (can.audioFilters) {
-  await tiny.audio.filters([
-    { type: 'gain', gain: 1.0 },                          // preamp (linear)
-    { type: 'peaking', freq: 60, q: 1.1, gain: 4 },       // dB
-    { type: 'highshelf', freq: 8000, q: 0.7, gain: -2 },
-  ]);
-  tiny.audio.filter(1, { gain: -3 });   // retune one, live, no gap
-  await tiny.audio.clear?.() ?? tiny.audio.filters([]);   // remove
-} else {
-  buildWebAudioChain();   // BiquadFilterNode — correct on macOS/Windows
+// One backend decision, then identical code: pageChain speaks the same verbs.
+const eq = can.audioFilters ? tiny.audio : tiny.audio.pageChain(ctx);
+if (eq.input) {                          // the page chain needs routing once
+  source.connect(eq.input);
+  eq.output.connect(ctx.destination);
 }
+await eq.filters([
+  { type: 'gain', gain: 1.0 },                          // preamp (linear)
+  { type: 'peaking', freq: 60, q: 1.1, gain: 4 },       // dB
+  { type: 'highshelf', freq: 8000, q: 0.7, gain: -2 },
+]);
+eq.filter(1, { gain: -3 });   // retune one, live, no gap
+await eq.clear();             // remove
 ```
 
 Types: `peaking`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `bandpass`,
@@ -937,8 +939,19 @@ How it's built, per platform:
   output, with the biquads applied in between. No driver, no system install.
   The maths is the same RBJ cookbook PipeWire's builtins use, so the same
   numbers give the same curve on both.
-- **Windows** — not yet; reports `false`. Use Web Audio, which works properly
-  there. See `TODO-audio-filters.md`.
+- **Windows** — reports `false`, permanently, and the reason is measured
+  rather than pending: taking the direct signal off the speakers there means
+  attenuating the audio session, and Windows *persists* session volume on a
+  key every WebView2 app on the machine shares — a crash while filtering
+  would near-silence all of them (see `TODO-audio-filters.md` for the
+  numbers). Instead, `tiny.audio.pageChain(ctx)` builds the same chain from
+  Web Audio nodes in the page — same band vocabulary, same RBJ curves
+  (verified: ask +12 dB at the centre, measure 12.00), same four verbs, so
+  the snippet above needs no second code path. Two honest differences: it
+  filters only what you route through it (not native HLS or CORS-tainted
+  media the page never gets samples for), and Web Audio's shelves ignore `q`
+  / per-filter `gainR` (use `balance()`). Don't reach for it on Linux — see
+  the crackle above; that's what the native chain is for.
 
 Three limits worth knowing:
 

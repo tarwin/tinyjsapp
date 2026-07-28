@@ -157,6 +157,31 @@ declare interface TinyWifi {
   txRate: number;
 }
 
+/** One filter in a tiny.audio chain. Biquad types take freq/q/gain (gain in
+ *  dB); 'gain' is a LINEAR multiplier (a preamp). gainR — the right channel's
+ *  gain when it differs — is native-only (the page chain ignores it; use
+ *  balance()). */
+declare interface TinyAudioFilter {
+  type: 'peaking' | 'lowshelf' | 'highshelf' | 'lowpass' | 'highpass'
+      | 'bandpass' | 'notch' | 'allpass' | 'gain';
+  freq?: number;
+  q?: number;
+  gain?: number;
+  gainR?: number;
+}
+
+/** tiny.audio.pageChain(ctx) — the same chain as Web Audio nodes in the page.
+ *  Route your source through input → output; the four verbs then match
+ *  tiny.audio, so one variable can hold either backend. */
+declare interface TinyPageChain {
+  input: GainNode;
+  output: GainNode;
+  filters(list: TinyAudioFilter[]): boolean;
+  filter(index: number, patch: Partial<TinyAudioFilter>): boolean;
+  balance(v: number): boolean;
+  clear(): boolean;
+}
+
 /** A window belonging to another app (accessibility), top-left coords. */
 declare interface TinyOtherWindow {
   app: string;
@@ -646,6 +671,35 @@ declare interface Tiny {
     register(id: string, combo: string): Promise<any>;
     unregister(id: string): Promise<any>;
     on(fn: (id: string) => void): void;
+  };
+
+  /**
+   * Native DSP on the app's OWN output — a graphic EQ, headphone correction —
+   * applied below the browser, so it reaches audio the page never gets
+   * samples for (native HLS, CORS-tainted streams) and survives reloads.
+   * Linux (PipeWire) and macOS 14.2+ (muted process tap); on Windows
+   * `capabilities().audioFilters` is false — silencing the direct path there
+   * means persisted mixer state every WebView2 app shares — so use
+   * `pageChain` instead, which speaks the same verbs.
+   */
+  audio: {
+    /** Replace the whole chain. Idempotent; [] restores unprocessed output.
+     *  At most 28 filters (15 with gainR) — the list is truncated past that. */
+    filters(list: TinyAudioFilter[]): Promise<any>;
+    /** Retune ONE filter in place — no rebuild, no gap; what a slider drag
+     *  should call */
+    filter(index: number, patch: Partial<TinyAudioFilter>): Promise<any>;
+    /** Stereo balance -1 (left) .. 1 (right), applied to the chain's output —
+     *  costs no filter slot; needs an active chain */
+    balance(v: number): Promise<any>;
+    clear(): Promise<any>;
+    /** The same chain as Web Audio nodes IN THE PAGE — the fallback where the
+     *  native chain doesn't exist (Windows). Same RBJ curves, same verbs;
+     *  page-SCOPED: filters only what you route through it. Shelf `q` and
+     *  per-filter `gainR` are ignored here. Don't use on Linux — Web Audio
+     *  reaching ctx.destination crackles there, which is why the native
+     *  chain exists. */
+    pageChain(ctx: BaseAudioContext): TinyPageChain;
   };
 
   /**
