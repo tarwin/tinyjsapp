@@ -298,12 +298,20 @@ async function systemCapabilities(query, aiStatus) {
     secrets: true, mediaKeys: true, nowPlaying: true, audioTap: true,
     speech: true, pickColor: true, spotlight: true, launchAtLogin: true,
     printToPDF: true, transparency: true, vibrancy: false,
-    // Native DSP on our own output. Linux-only for now precisely BECAUSE
-    // Web Audio can't do it here — see TODO-audio-filters.md for the
-    // macOS/Windows plan; there, apps should use Web Audio instead.
+    // Native DSP on our own output. Exists here precisely BECAUSE Web Audio
+    // can't do it on WebKitGTK (crackles; measured, TODO-linux.md). macOS has
+    // it too (process tap); Windows is a measured permanent no — see the
+    // windows block below and TODO-audio-filters.md.
     audioFilters: true,
   };
   const windows = {
+    // Permanent, not pending: measured 2026-07-28. Process-loopback capture is
+    // post-mute AND post-volume, so silencing the dry signal means session
+    // volume — and that is PERSISTED mixer state keyed on the shared
+    // msedgewebview2.exe runtime path, so a crash while attenuated would
+    // near-silence every WebView2 app on the machine (the PipeWire/Firefox
+    // incident with a registry key). Apps use Web Audio here instead — it
+    // works on Chromium. Full numbers in TODO-audio-filters.md.
     audioFilters: false,
     applescript: false, ai: false, quickLook: false, share: false,
     vibrancy: false, selectedText: false, ocr: false,
@@ -336,11 +344,14 @@ async function systemCapabilities(query, aiStatus) {
     // caveats in TODO-windows.md.
     wifi: false,
     // app.attention (FlashWindowEx) and app.presence (WS_EX_TOOLWINDOW) both
-    // work. app.badge needs an overlay HICON rendered at runtime and isn't
-    // built yet; it was a silent no-op before, and absent from this table,
-    // which under the "absent = true" rule above claimed support that was
-    // never there.
-    badge: false, icon: true, progress: true,
+    // work. app.badge renders an overlay HICON at runtime and hands it to
+    // ITaskbarList3::SetOverlayIcon; it was declared false while it existed
+    // only as compiled-but-unrun code, and was SEEN on Windows 11 26200 on
+    // 2026-07-28 — a red disc with a white '3' on the taskbar button,
+    // photographed against a held state. badge('NEW') collapses to the
+    // documented bullet (16px fits 1-2 glyphs), badge+progress compose, and
+    // both clear back to a pixel-identical baseline.
+    badge: true, icon: true, progress: true,
     // Same trap as badge, found by auditing every wire op the bridge can send
     // against what launcher-win.cc actually dispatches (2026-07-25): NOWPLAYING
     // reaches the launcher's else-if chain, matches nothing and is dropped, so
@@ -719,6 +730,26 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     }
   }
 
+  // The menu-bar declaration block. `win` names a single window's own menu
+  // ('main' included); null declares the APP menu — the one every window
+  // that hasn't overridden shows. Both end with a bare MENUEND: the target
+  // is remembered from the BEGIN line.
+  function sendMenuBlock(menus, win) {
+    send('MENUBEGIN' + (win ? '@' + win : ''));
+    for (const m of menus ?? []) {
+      if (m?.role) { send('MENUROLE ' + one(m.role)); continue; }
+      send('MENU ' + one(m.title));
+      sendItems(m.items);
+    }
+    send('MENUEND');
+  }
+
+  // MENUUPD payload: '' in a field means "leave this one alone".
+  function menuUpdWire(id, patch = {}) {
+    const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
+    return [one(id), one(patch.label ?? ''), bit(patch.checked), bit(patch.enabled)].join('\t');
+  }
+
   // Desktop notification. Packaged apps (attach mode: the launcher is the
   // bundle executable) get real Notification Center banners — the app's own
   // icon, permission prompt on first use, and clicks back as the
@@ -798,21 +829,18 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // needs its key equivalents to have working ⌘C/⌘V, so declaring the role
     // is the only way to say "and NOT first". Windows and Linux have no such
     // menu, and skip the entry.
-    setMenu(menus) {
-      send('MENUBEGIN');
-      for (const m of menus ?? []) {
-        if (m?.role) { send('MENUROLE ' + one(m.role)); continue; }
-        send('MENU ' + one(m.title));
-        sendItems(m.items);
-      }
-      send('MENUEND');
-    },
+    //
+    // This is the APP menu: every window shows it, including windows opened
+    // later. macOS has one bar for the whole app and always did; Windows and
+    // Linux draw a copy of it inside each window. One window can say
+    // something different with app.window(id).setMenu(), or show no bar at
+    // all with chrome.menu:false — neither disturbs the others.
+    setMenu(menus) { sendMenuBlock(menus, null); },
     // Patch a live item without redeclaring the menu: { label?, checked?, enabled? }.
-    updateMenuItem(id, patch = {}) {
-      const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
-      send('MENUUPD ' + [one(id), one(patch.label ?? ''),
-                         bit(patch.checked), bit(patch.enabled)].join('\t'));
-    },
+    // Every copy of that id moves, in every window carrying it — which is what
+    // one shared macOS bar already did. To move a single window's tick, use
+    // app.window(id).updateMenuItem().
+    updateMenuItem(id, patch = {}) { send('MENUUPD ' + menuUpdWire(id, patch)); },
     // { exists, label, checked, enabled } for a menu/tray/context item.
     getMenuItem(id) { return query('item:' + id); },
     // { x, y, width, height, fullscreen, minimized, visible, focused,
@@ -854,6 +882,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // 'normal': a normal app. Same name on both sides of the bridge.
     presence(mode) { send('WINOP presence ' + (mode === 'menubar' ? 0 : 1)); },
     // true: the close button hides the window instead of quitting.
+    // A macOS idea — there the app outlives its last window and the Dock icon
+    // brings it back. Windows and Linux have nowhere to put that, so the flag
+    // holds there only while something can bring the app back: a tray icon,
+    // accessory mode, or another window still on screen. Closing the last
+    // window of an ordinary app quits it, the way every other app does.
     setHideOnClose(v) { send('WINOP hideonclose ' + (v ? 1 : 0)); },
     // spec: { title?, icon?, template?, tooltip?, primaryAction?,
     //         menu?: [{ id, label, key? } | { separator: true }] }
@@ -893,12 +926,18 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // resets to the bundle icon. macOS Dock tile / Linux window icon.
     icon(pngPath) { send('APPICON ' + esc(pngPath ?? '')); return true; },
     // Find files by name or content (Spotlight/NSMetadataQuery, home scope)
-    // -> up to 100 absolute paths.
+    // -> up to 100 absolute paths. Rejects where there is no search backend.
     async spotlight(queryText) {
-      return (await ask('SPOTLIGHT', esc(String(queryText ?? ''))))?.paths ?? [];
+      const r = await ask('SPOTLIGHT', esc(String(queryText ?? '')));
+      // `?? []` here used to swallow the launcher's {ok:false,error} — Windows
+      // answers got_unsupported for SPOTLIGHT, so every query came back as an
+      // empty array, i.e. "nothing matched" rather than "not supported here".
+      // Those are opposite answers to a caller, and only the second is true.
+      if (!r?.ok) throw new Error(r?.error ?? 'unsupported');
+      return r.paths ?? [];
     },
     // Window chrome: { frame?, windowControls?, transparent?, vibrancy?,
-    // squareCorners?, acceptsFirstMouse? }. frame:false hides the titlebar
+    // squareCorners?, acceptsFirstMouse?, menu? }. frame:false hides the titlebar
     // (content extends under it; keep your own drag region via data-tiny-drag).
     // vibrancy: material name or null. squareCorners:true drops macOS's rounded
     // corners by making the window BORDERLESS — square, no titlebar, no traffic
@@ -909,6 +948,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // — "click once to focus, again to act"); handy for palettes/toolbars, and
     // for DOM drag regions on unfocused windows. Declare it in tinyjs.json
     // "chrome" so it applies before the first paint (no rounded→square flash).
+    //
+    // menu:false means this window shows no menu bar — the app menu keeps
+    // showing everywhere else. Windows and Linux draw the bar inside each
+    // window, so that is a real per-window question there; macOS has one bar
+    // for the whole app and ignores the flag (a bar-less mac app isn't a
+    // thing). Frameless and transparent windows never get a Win32 bar
+    // regardless — GDI can't draw one over a cleared background.
     setChrome(opts = {}) {
       const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
       const vib = opts.vibrancy === undefined ? ''
@@ -916,7 +962,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                 : String(opts.vibrancy);
       send('CHROME ' + [bit(opts.frame), controlsWire(opts.windowControls),
                         bit(opts.transparent), one(vib), bit(opts.squareCorners),
-                        bit(opts.acceptsFirstMouse)].join('\t'));
+                        bit(opts.acceptsFirstMouse), bit(opts.menu)].join('\t'));
     },
     // Native DSP on this app's own output — see tiny.audio.filters. The chain
     // is rebuilt only when its SHAPE changes; moving a control goes through
@@ -1296,7 +1342,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         const p = tjs.spawn(['xdg-mime', 'default', appIdStr + '.desktop', mime],
                             { stdout: 'ignore', stderr: 'ignore' });
         const st = await p.wait();
-        return st.exit_code === 0 ? 'ok' : 'failed';
+        return st.exit_status === 0 ? 'ok' : 'failed';
       } catch {
         return 'failed';   // no xdg-mime on this box
       }
@@ -1363,9 +1409,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // `size` is the page's box: a frameless window is exactly that big, a
     // titled one is that plus a title bar.
     // chrome ({ frame?, windowControls?, transparent?, vibrancy?,
-    // squareCorners?, acceptsFirstMouse? }) and position ({ x, y }) are applied
-    // BEFORE the window paints — no titlebar flash for frameless panels, no
-    // jump from center.
+    // squareCorners?, acceptsFirstMouse?, menu? }) and position ({ x, y }) are
+    // applied BEFORE the window paints — no titlebar flash for frameless
+    // panels, no jump from center, and a window born with chrome.menu:false
+    // never flickers a bar. A new window inherits the app menu (setMenu)
+    // unless it opts out that way or declares its own.
     openWindow(id, { page, title, size, minSize, chrome, x, y } = {}) {
       let p = String(page ?? 'index.html');
       if (!isUrl(p) && !isAbs(p)) {
@@ -1381,7 +1429,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400'),
                          bit(c.frame), controlsWire(c.windowControls), bit(c.transparent), one(vib),
                          bit(c.squareCorners), bit(c.acceptsFirstMouse),
-                         hasPos ? (x | 0) : '', hasPos ? (y | 0) : ''].join('\t'));
+                         hasPos ? (x | 0) : '', hasPos ? (y | 0) : '',
+                         bit(c.menu)].join('\t'));
       // minSize: "WxH" — a floor under user resizes, so a layout with a
       // natural size can't be shrunk until content falls off the bottom.
       if (minSize) send('WINOP@' + id + ' minsize ' + one(minSize));
@@ -1427,8 +1476,26 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                     : String(opts.vibrancy);
           t('CHROME', [bit(opts.frame), controlsWire(opts.windowControls),
                        bit(opts.transparent), one(vib), bit(opts.squareCorners),
-                       bit(opts.acceptsFirstMouse)].join('\t'));
+                       bit(opts.acceptsFirstMouse), bit(opts.menu)].join('\t'));
         },
+        // This window's OWN menu bar, overriding the app menu for it alone.
+        // Same spec shape as app.setMenu, clicks arrive the same way (a plain
+        // `MENU <id>`), so a handler doesn't have to care which bar it came
+        // from. Always addressed as '@<id>' — a bare MENUBEGIN is the app
+        // menu, so 'main' has to name itself to declare a menu of its own.
+        //
+        // macOS has one bar for the whole app, so it swaps this one in while
+        // the window is key and puts the app menu back when it isn't.
+        setMenu: (menus) => sendMenuBlock(menus, id),
+        // Drop the override: back to showing the app menu.
+        resetMenu: () => send('MENURESET@' + id),
+        // Patch an item in THIS window's bar only, leaving other windows'
+        // copies of the same id where they are.
+        updateMenuItem: (mid, patch = {}) => send('MENUUPD@' + id + ' ' + menuUpdWire(mid, patch)),
+        // item@<win>:<id> — this window's copy. (Bare `item:<id>` answers from
+        // whichever window happens to hold one, which is what app.getMenuItem
+        // and the tray/context items still want.)
+        getMenuItem: (mid) => query('item@' + id + ':' + mid),
         getState: () => query(id === 'main' ? 'win' : 'win:' + id),
         // This window's own page, on paper or as a PDF file — the print
         // panel is modal to it, and the PDF is of its document, not the
@@ -1627,6 +1694,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'menu.setContext': async ({ items }) => (app.setContextMenu(items), true),
     'menu.update': async ({ id: mid, ...patch }) => (app.updateMenuItem(mid, patch), true),
     'menu.get': async ({ id: mid }) => app.getMenuItem(mid),
+    // tiny.win.menu.* — the calling window's own bar (see app.window().setMenu).
+    'win.menu.set': async ({ menus }, _a, m) => (forWin(m).setMenu(menus), true),
+    'win.menu.reset': async (_p, _a, m) => (forWin(m).resetMenu(), true),
+    'win.menu.update': async ({ id: mid, ...patch }, _a, m) =>
+      (forWin(m).updateMenuItem(mid, patch), true),
+    'win.menu.get': async ({ id: mid }, _a, m) => forWin(m).getMenuItem(mid),
     'win.getState': async (_p, _a, m) => forWin(m).getState(),
     'debug.get': async ({ what }) => query(String(what)),
     'win.restore': async (_p, _a, m) => (forWin(m).restore(), true),

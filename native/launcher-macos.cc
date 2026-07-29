@@ -31,14 +31,21 @@
 //                         SUB <id>\t<label> … SUBEND /
 //                         SEP / MENUROLE <role> /
 //                         MENUEND                    declare custom menu bar
-//                                                    menus (applied on MENUEND;
+//                                                    menus (MENUBEGIN@<win>
+//                                                    declares that WINDOW's
+//                                                    own bar, up while it has
+//                                                    focus; MENURESET@<win>
+//                                                    drops it. Applied on
+//                                                    MENUEND;
 //                                                    flags: c=checked,
 //                                                    d=disabled; SUB nests;
 //                                                    MENUROLE edit places the
 //                                                    standard Edit menu)
-//                         MENUUPD <id>\t<label>\t<checked>\t<enabled>
+//                         MENUUPD[@<win>] <id>\t<label>\t<checked>\t<enabled>
 //                                                    patch a live item ('' =
-//                                                    leave unchanged)
+//                                                    leave unchanged); @<win>
+//                                                    patches only that
+//                                                    window's copy
 //                         GET <qid> <what>           read-back query; what =
 //                                                    win | item:<id> | mouse |
 //                                                    clipboard[:count]
@@ -761,8 +768,9 @@ static NSMenu *g_tray_menu = nil;
 static TinyMenuTarget *g_menu_target = nil;
 
 // Live NSMenuItems by id, per container, rebuilt on each apply — MENUUPD
-// patches and `GET item:<id>` reads go through these.
-static NSMutableDictionary *g_reg_menu = nil;
+// patches and `GET item:<id>` reads go through these. The menu-bar ones now
+// live on each MacBar (one per menu source: the app menu, plus any window
+// that declared its own); the tray keeps a registry of its own.
 static NSMutableDictionary *g_reg_tray = nil;
 
 // A menu key is ⌘ plus the character — "s" is ⌘S and an uppercase "S" is ⌘⇧S,
@@ -818,9 +826,25 @@ static void build_menu_into(NSMenu *menu, const std::vector<MenuItemSpec> &items
   }
 }
 
-static void apply_menus(webview_t, void *arg) {
-  std::vector<MenuSpec> *menus = static_cast<std::vector<MenuSpec> *>(arg);
+// One bar per menu SOURCE: the app menu, plus any window that declared its
+// own with MENUBEGIN@<win>. macOS has a single bar for the whole app, so the
+// source belonging to the KEY window is the one installed — swap on focus and
+// per-window menus mean the same thing here as on Windows and Linux, where
+// each window draws its own.
+struct MacBar {
+  std::vector<MenuSpec> spec;
+  NSMenu *bar = nil;               // built from spec, lazily
+  NSMutableDictionary *reg = nil;  // live NSMenuItems by id
+  bool built = false;
+};
+static MacBar g_app_bar;                          // the app menu
+static std::map<std::string, MacBar> g_win_bars;  // windows with their own
+static std::string g_key_win = "main";            // window the bar belongs to
+static std::string g_bar_showing;                 // source installed ("" = app)
+
+static void build_bar(MacBar &mb) {
   @autoreleasepool {
+    std::vector<MenuSpec> *menus = &mb.spec;
     if (!g_menu_target)
       g_menu_target = [[TinyMenuTarget alloc] init];
 
@@ -877,8 +901,8 @@ static void apply_menus(webview_t, void *arg) {
     if (!has_edit_slot) add_edit_menu();
 
     // Custom menus from the backend.
-    [g_reg_menu release];
-    g_reg_menu = [[NSMutableDictionary alloc] init];
+    [mb.reg release];
+    mb.reg = [[NSMutableDictionary alloc] init];
     if (menus) {
       for (const MenuSpec &m : *menus) {
         if (!m.role.empty()) {
@@ -888,19 +912,110 @@ static void apply_menus(webview_t, void *arg) {
         NSMenuItem *holder = [[NSMenuItem alloc] init];
         [bar addItem:holder];
         NSMenu *menu = [[NSMenu alloc] initWithTitle:ns(m.title)];
-        build_menu_into(menu, m.items, @selector(itemClicked:), g_reg_menu);
+        build_menu_into(menu, m.items, @selector(itemClicked:), mb.reg);
         holder.submenu = menu;
       }
     }
 
-    [NSApp setMainMenu:bar];
+    [mb.bar release];
+    mb.bar = bar;
+    mb.built = true;
   }
+}
+
+// The bar a window shows: its own if it declared one, else the app menu.
+static MacBar &bar_source_for(const std::string &winid) {
+  auto it = g_win_bars.find(winid);
+  return it == g_win_bars.end() ? g_app_bar : it->second;
+}
+
+// Put that window's bar up. Cheap and idempotent — called on every focus
+// change, so it returns early when the right one is already showing.
+static void install_bar_for(const std::string &winid, bool force = false) {
+  const std::string src = g_win_bars.count(winid) ? winid : std::string();
+  MacBar &mb = bar_source_for(winid);
+  g_key_win = winid;
+  if (!force && src == g_bar_showing && mb.built)
+    return;
+  if (!mb.built)
+    build_bar(mb);
+  g_bar_showing = src;
+  [NSApp setMainMenu:mb.bar];
+}
+
+// Which tinyjs window is this NSWindow? "" when it isn't one of ours — a
+// save panel or an alert taking key must not swap the bar out from under the
+// window behind it.
+static std::string winid_for_window(NSWindow *win) {
+  if (!win)
+    return "";
+  if (g_w && win == (NSWindow *)webview_get_native_handle(
+                        g_w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW))
+    return "main";
+  for (auto &kv : g_windows)
+    if (kv.second.win == win)
+      return kv.first;
+  return "";
+}
+
+// macOS shows ONE bar, so "this window's menu" means "the menu that goes up
+// while this window has focus". Watching key changes app-wide (rather than
+// hanging it off each window's delegate) covers main — whose window the
+// webview library owns — with the same three lines.
+static void install_key_window_observer() {
+  [[NSNotificationCenter defaultCenter]
+      addObserverForName:NSWindowDidBecomeKeyNotification
+                  object:nil
+                   queue:nil
+              usingBlock:^(NSNotification *n) {
+                std::string id = winid_for_window((NSWindow *)n.object);
+                if (!id.empty())
+                  install_bar_for(id);
+              }];
+}
+
+// Rebuild whatever is on screen after a spec changed.
+static void reinstall_current_bar() { install_bar_for(g_key_win, true); }
+
+static void apply_menus(webview_t, void *arg) {
+  std::vector<MenuSpec> *menus = static_cast<std::vector<MenuSpec> *>(arg);
+  g_app_bar.spec = *menus;
+  // Build now even when another window's bar is the one on screen: MENUUPD
+  // and `item:` reads go through the live NSMenuItems, and those questions
+  // get asked about windows that don't have focus.
+  build_bar(g_app_bar);
+  // Windows showing a menu of their own are unaffected.
+  if (g_bar_showing.empty())
+    [NSApp setMainMenu:g_app_bar.bar];
   delete menus;
+}
+
+// MENUBEGIN@<win> — this window's own menu, up right away if it has focus.
+// MENURESET@<win> drops it again (back to inheriting the app menu).
+static void apply_win_menu(const std::string &winid,
+                           const std::vector<MenuSpec> &menus, bool own) {
+  if (own) {
+    MacBar &mb = g_win_bars[winid];
+    mb.spec = menus;
+    build_bar(mb);
+  } else {
+    auto it = g_win_bars.find(winid);
+    if (it == g_win_bars.end())
+      return;
+    [it->second.bar release];
+    [it->second.reg release];
+    g_win_bars.erase(it);
+  }
+  if (winid == g_key_win)
+    reinstall_current_bar();
 }
 #else
 static void apply_menus(webview_t, void *arg) {
   delete static_cast<std::vector<MenuSpec> *>(arg);
 }
+static void apply_win_menu(const std::string &, const std::vector<MenuSpec> &,
+                           bool) {}
+static void install_key_window_observer() {}
 #endif
 
 // --- tray / status item (macOS) ----------------------------------------------
@@ -3239,7 +3354,7 @@ static void apply_ctx_suppress(webview_t, void *arg) {
 // with GOT <qid> <json>; what = "win" (window state) or "item:<id>".
 
 struct MenuUpdReq {
-  std::string id, label, checked, enabled;
+  std::string win, id, label, checked, enabled;  // win empty = every bar
 };
 
 struct GetReq {
@@ -3247,12 +3362,32 @@ struct GetReq {
 };
 
 #ifdef __APPLE__
+// Every bar carrying this id, or just one window's. An id can now live in the
+// app menu AND in a window that declared its own — one shared macOS bar used
+// to make that impossible, and callers still expect "patch it everywhere".
+static std::vector<NSMutableDictionary *> regs_for(const std::string &winid) {
+  std::vector<NSMutableDictionary *> out;
+  if (winid.empty()) {
+    if (g_app_bar.reg) out.push_back(g_app_bar.reg);
+    for (auto &kv : g_win_bars)
+      if (kv.second.reg) out.push_back(kv.second.reg);
+  } else {
+    MacBar &mb = bar_source_for(winid);
+    if (mb.reg) out.push_back(mb.reg);
+  }
+  return out;
+}
+
 static void do_menu_update(webview_t, void *arg) {
   MenuUpdReq *req = static_cast<MenuUpdReq *>(arg);
   @autoreleasepool {
     NSString *key = ns(req->id);
-    NSMenuItem *mi = g_reg_menu[key] ?: g_reg_tray[key];
-    if (mi) {
+    std::vector<NSMenuItem *> hits;
+    for (NSMutableDictionary *reg : regs_for(req->win))
+      if (NSMenuItem *found = reg[key]) hits.push_back(found);
+    if (req->win.empty() && g_reg_tray && g_reg_tray[key])
+      hits.push_back(g_reg_tray[key]);
+    for (NSMenuItem *mi : hits) {
       if (!req->label.empty())
         mi.title = ns(req->label);
       if (!req->checked.empty())
@@ -3527,10 +3662,24 @@ static void do_get(webview_t w, void *arg) {
       } else {
         json = "{\"exists\":false}";
       }
-    } else if (req->what.rfind("item:", 0) == 0) {
+    } else if (req->what.rfind("item:", 0) == 0 ||
+               req->what.rfind("item@", 0) == 0) {
+      // item:<id> — any bar carrying it (tray items too). item@<win>:<id> —
+      // that window's bar. Window ids don't contain ':' (win.open picks them),
+      // so the first colon after '@' ends the window name.
       std::string id = req->what.substr(5);
+      std::string only;
+      if (req->what[4] == '@') {
+        size_t colon = id.find(':');
+        only = colon == std::string::npos ? id : id.substr(0, colon);
+        id = colon == std::string::npos ? "" : id.substr(colon + 1);
+      }
       NSString *key = ns(id);
-      NSMenuItem *mi = g_reg_menu[key] ?: g_reg_tray[key];
+      NSMenuItem *mi = nil;
+      for (NSMutableDictionary *reg : regs_for(only))
+        if ((mi = reg[key])) break;
+      if (!mi && only.empty())
+        mi = g_reg_tray[key];
       if (mi) {
         json = std::string("{\"exists\":true,\"label\":") +
                json_escape([mi.title UTF8String]) +
@@ -5328,8 +5477,10 @@ static void do_resizewin(webview_t w, void *arg) {
     // The loop below waits on mouse events, so it must never start unless a
     // button is actually held — a stray startResize() from a click handler
     // would otherwise wait for a drag that never comes and freeze the app.
-    // (Windows' and GTK's begin-resize calls make the same demand; they just
-    // return instead of hanging.)
+    // (GTK's begin-resize call makes the same demand and just returns.
+    // Windows does NOT — DefWindowProc's SC_SIZE loop entered with the button
+    // up glues the window to the cursor until the next click — so launcher-
+    // win.cc checks GetAsyncKeyState explicitly, same as this.)
     bool held = ([NSEvent pressedMouseButtons] & 1) != 0;
     // setResizable(false) means the USER can't resize; the app's own setSize
     // still can. A page-drawn grip is a user resize, so honour the lock.
@@ -5491,6 +5642,9 @@ static NSString *tiny_shim_js(const std::string &winid) {
 - (void)windowWillClose:(NSNotification *)n {
   std::string id = [self.winId UTF8String];
   sock_write_line("WINCLOSED " + id);
+  // A bar of its own goes with it; the next window to take focus puts up
+  // whichever bar is then correct.
+  apply_win_menu(id, {}, false);
   auto it = g_windows.find(id);
   if (it != g_windows.end()) {
     TinyWindow tw = it->second;
@@ -6237,6 +6391,7 @@ static void sock_read_loop() {
   std::string buf;
   char chunk[4096];
   std::vector<MenuSpec> pending_menus;
+  std::string pending_menu_win;  // MENUBEGIN@<win>; empty = the app menu
   bool in_menu_block = false;
   TraySpec pending_tray;
   bool in_tray_block = false;
@@ -6353,11 +6508,22 @@ static void sock_read_loop() {
         req->op = parts[0];
         req->args.assign(parts.begin() + 1, parts.end());
         webview_dispatch(g_w, do_dialog, req);
-      } else if (line == "MENUBEGIN") {
+      } else if (line == "MENUBEGIN" || line.rfind("MENUBEGIN@", 0) == 0) {
+        // Bare: the app menu — what every window shows unless it overrode.
+        // @<win>: that window's own, up while it holds focus (macOS has one
+        // bar for the app, so per-window means per-focus here).
+        pending_menu_win = line.size() > 10 ? line.substr(10) : "";
         pending_menus.clear();
         collapse_subs();
         build_stack.assign(1, {});
         in_menu_block = true;
+      } else if (line.rfind("MENURESET@", 0) == 0) {
+        std::string *win = new std::string(line.substr(10));
+        webview_dispatch(g_w, [](webview_t, void *arg) {
+          std::string *w = static_cast<std::string *>(arg);
+          apply_win_menu(*w, {}, false);
+          delete w;
+        }, win);
       } else if (in_menu_block && line.rfind("MENU ", 0) == 0) {
         flush_root(); // previous menu's items (if any)
         pending_menus.push_back(MenuSpec{line.substr(5), {}, ""});
@@ -6404,8 +6570,18 @@ static void sock_read_loop() {
       } else if (line == "MENUEND") {
         flush_root();
         in_menu_block = false;
-        webview_dispatch(g_w, apply_menus,
-                         new std::vector<MenuSpec>(pending_menus));
+        if (pending_menu_win.empty()) {
+          webview_dispatch(g_w, apply_menus,
+                           new std::vector<MenuSpec>(pending_menus));
+        } else {
+          auto *req = new std::pair<std::string, std::vector<MenuSpec>>(
+              pending_menu_win, pending_menus);
+          webview_dispatch(g_w, [](webview_t, void *arg) {
+            auto *r = static_cast<std::pair<std::string, std::vector<MenuSpec>> *>(arg);
+            apply_win_menu(r->first, r->second, true);
+            delete r;
+          }, req);
+        }
       } else if (line.rfind("TRAYBEGIN", 0) == 0) {
         pending_tray = TraySpec{};
         std::vector<std::string> p =
@@ -6480,9 +6656,22 @@ static void sock_read_loop() {
           std::unique_ptr<std::string> s((std::string *)a);
           do_audiobalance(*s);
         }, new std::string(line.size() > 13 ? line.substr(13) : "0"));
-      } else if (line.rfind("MENUUPD ", 0) == 0) {
-        std::vector<std::string> p = split_tabs(line.substr(8));
+      } else if (line.rfind("MENUUPD", 0) == 0 &&
+                 (line[7] == ' ' || line[7] == '@')) {
+        // MENUUPD <fields> patches every bar carrying the id;
+        // MENUUPD@<win> <fields> only that window's.
+        std::string win;
+        size_t body = 8;
+        if (line[7] == '@') {
+          size_t sp = line.find(' ', 8);
+          if (sp == std::string::npos)
+            continue;
+          win = line.substr(8, sp - 8);
+          body = sp + 1;
+        }
+        std::vector<std::string> p = split_tabs(line.substr(body));
         MenuUpdReq *req = new MenuUpdReq;
+        req->win = win;
         req->id = p.size() > 0 ? p[0] : "";
         req->label = p.size() > 1 ? p[1] : "";
         req->checked = p.size() > 2 ? p[2] : "";
@@ -7238,6 +7427,9 @@ int main(int argc, char *argv[]) {
 
   // Default menu bar (About/Quit + Edit); custom menus replace it via MENUEND.
   apply_menus(g_w, new std::vector<MenuSpec>());
+  // …and from here the bar follows focus, so a window with a menu of its own
+  // (MENUBEGIN@<win>) shows it whenever it is the key window.
+  install_key_window_observer();
 
   if (target.rfind("http://", 0) == 0 || target.rfind("https://", 0) == 0) {
     webview_navigate(g_w, target.c_str());

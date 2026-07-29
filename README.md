@@ -298,9 +298,13 @@ tiny.win.setChrome({ frame: false, windowControls: false, vibrancy: 'hud' });
 // (packaged apps apply it before first paint — no titlebar flash).
 tiny.win.startDrag();  tiny.win.zoom();   // manual equivalents
 
-// Resizing a frameless window: macOS and Windows keep their native resize
-// edges, but an undecorated GTK window has none — so on Linux the client adds
-// invisible 5px grips around the edge automatically. Nothing to do per app.
+// Resizing a frameless window: only macOS keeps native edges throughout. An
+// undecorated GTK window has none, and neither does a frameless SECONDARY
+// window on Windows (WebView2's child HWND covers the whole rect, so the
+// resize border is never hit-tested) — so on Linux, and for Windows
+// satellites, the client adds invisible 5px grips around the edge
+// automatically. Nothing to do per app. The Windows MAIN window is the
+// exception: it keeps real left/right/bottom borders, trading the top edge.
 tiny.win.startResize('se');   // 'n','ne','e','se','s','sw','w','nw' — for your own handle
 // A fixed-size window (a Winamp-style deck) opts out of the grips:
 //   <html data-tiny-noresize>   …or make it non-resizable:
@@ -576,8 +580,16 @@ const { text, blocks } = await tiny.macos.ocr('/path/scan.png');
 
 // a thumbnail png for ANY path — file browsers stop caring about formats.
 // A content preview where Quick Look has a renderer (PSD, video, 3D models,
-// source files); the document / app / folder ICON where it doesn't, so this
-// never fails on file type alone. A path that doesn't exist DOES reject.
+// source files); the document / app / folder ICON where it doesn't, so on
+// macOS this never fails on file type alone. WINDOWS behaves the same way
+// via IShellItemImageFactory — images preview, and folders, .exe and plain
+// text all come back as their shell icon (measured 2026-07-28). LINUX is the
+// narrow one: images only, everything else rejects 'no thumbnail' (measured
+// 2026-07-28) — so feature-detect per file, not per platform.
+// A path that doesn't exist rejects everywhere.
+// SIZE: macOS and Linux treat `size` as points and render @2x (ask 64, get
+// 128); Windows treats it as pixels and returns exactly what you asked for.
+// Read width/height off the result rather than assuming either.
 const thumb = await tiny.app.thumbnail('/path/file.psd', 256);
 
 // Keychain secrets (the keytar/safeStorage role) — tokens go here,
@@ -895,17 +907,19 @@ EQ, headphone correction, a crossover — below the browser:
 
 ```js
 const can = await tiny.system.capabilities();
-if (can.audioFilters) {
-  await tiny.audio.filters([
-    { type: 'gain', gain: 1.0 },                          // preamp (linear)
-    { type: 'peaking', freq: 60, q: 1.1, gain: 4 },       // dB
-    { type: 'highshelf', freq: 8000, q: 0.7, gain: -2 },
-  ]);
-  tiny.audio.filter(1, { gain: -3 });   // retune one, live, no gap
-  await tiny.audio.clear?.() ?? tiny.audio.filters([]);   // remove
-} else {
-  buildWebAudioChain();   // BiquadFilterNode — correct on macOS/Windows
+// One backend decision, then identical code: pageChain speaks the same verbs.
+const eq = can.audioFilters ? tiny.audio : tiny.audio.pageChain(ctx);
+if (eq.input) {                          // the page chain needs routing once
+  source.connect(eq.input);
+  eq.output.connect(ctx.destination);
 }
+await eq.filters([
+  { type: 'gain', gain: 1.0 },                          // preamp (linear)
+  { type: 'peaking', freq: 60, q: 1.1, gain: 4 },       // dB
+  { type: 'highshelf', freq: 8000, q: 0.7, gain: -2 },
+]);
+eq.filter(1, { gain: -3 });   // retune one, live, no gap
+await eq.clear();             // remove
 ```
 
 Types: `peaking`, `lowshelf`, `highshelf`, `lowpass`, `highpass`, `bandpass`,
@@ -929,8 +943,19 @@ How it's built, per platform:
   output, with the biquads applied in between. No driver, no system install.
   The maths is the same RBJ cookbook PipeWire's builtins use, so the same
   numbers give the same curve on both.
-- **Windows** — not yet; reports `false`. Use Web Audio, which works properly
-  there. See `TODO-audio-filters.md`.
+- **Windows** — reports `false`, permanently, and the reason is measured
+  rather than pending: taking the direct signal off the speakers there means
+  attenuating the audio session, and Windows *persists* session volume on a
+  key every WebView2 app on the machine shares — a crash while filtering
+  would near-silence all of them (see `TODO-audio-filters.md` for the
+  numbers). Instead, `tiny.audio.pageChain(ctx)` builds the same chain from
+  Web Audio nodes in the page — same band vocabulary, same RBJ curves
+  (verified: ask +12 dB at the centre, measure 12.00), same four verbs, so
+  the snippet above needs no second code path. Two honest differences: it
+  filters only what you route through it (not native HLS or CORS-tainted
+  media the page never gets samples for), and Web Audio's shelves ignore `q`
+  / per-filter `gainR` (use `balance()`). Don't reach for it on Linux — see
+  the crackle above; that's what the native chain is for.
 
 Three limits worth knowing:
 
@@ -1395,7 +1420,6 @@ Not yet ported:
 
 - notification action buttons — balloons only; real toasts need an
   AppUserModelID story
-- `app.badge` — needs an overlay `HICON` rendered at runtime
 - `nowPlaying` / media keys — wants the WinRT `SystemMediaTransportControls`
 - `otherWindows` / `moveWindow`, `pickColor`, `spotlight`, `system.locale`
 - the genuinely macOS-only APIs: Quick Look, OCR, AppleScript, `proxyURL`

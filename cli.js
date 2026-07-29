@@ -833,7 +833,12 @@ async function maybeWriteCliShim(cfg, appBundle) {
   await tjs.writeFile(shimPath, enc.encode(body));
   if (!isWin) await tryRun(['chmod', '+x', shimPath]);
   console.log(`==> cli shim: ${shimPath}`);
-  console.log(`    link it:  ln -sf "$(pwd)/${shimPath}" /usr/local/bin/${name}`);
+  // Windows has no /usr/local/bin and no ln -sf; printing the Unix line there
+  // told users to run a command that cannot work.
+  if (isWin)
+    console.log(`    put it on PATH:  setx PATH "%PATH%;${tjs.cwd}\\dist\\bin"`);
+  else
+    console.log(`    link it:  ln -sf "$(pwd)/${shimPath}" /usr/local/bin/${name}`);
 }
 
 async function cmdBuild() {
@@ -926,6 +931,7 @@ async function cmdBuild() {
         console.log('    WARNING: could not embed ' + winIcon + ' into launcher.exe.');
       }
     }
+    await maybeWriteCliShim(cfg, null);
     console.log('==> done');
     console.log(`run it:  .\\dist\\${cfg.name}.exe`);
     return;
@@ -940,6 +946,7 @@ async function cmdBuild() {
     await run(['chmod', '+x', 'dist/launcher', 'dist/' + cfg.name]);
     const linIcon = cfg.icon || 'icon.png';
     if (await exists(linIcon)) await copyFile(linIcon, 'dist/icon.png');
+    await maybeWriteCliShim(cfg, null);
     console.log('==> done');
     console.log(`run it:  ./dist/${cfg.name}`);
     return;

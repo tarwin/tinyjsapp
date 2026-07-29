@@ -29,7 +29,8 @@ same commands.
 Works on ALL THREE platforms: the whole bridge (api calls, push events,
 `tiny.fetch`/`proxyURL` streaming), dev/hot-reload, Vite `devUrl`,
 multi-window (`win.open` — per-window bridge everywhere), file/folder/save
-dialogs, alert/confirm/prompt, menu bar (+ `menu.update`/`get`, `key:`
+dialogs, alert/confirm/prompt, menu bar on EVERY window (+ `menu.update`/`get`,
+per-window `win.menu.*`, `chrome.menu:false` to hide one window's bar, `key:`
 accelerators — cmd on mac, Ctrl on win/linux), custom context menus +
 `contextMenu: false`, clipboard (text/html/files/image, read + write +
 watch), global hotkeys (`cmd` maps to Ctrl on win/linux; linux uses
@@ -75,14 +76,17 @@ Windows.
 macOS-only (on Windows these reject or answer `'unsupported'`/null — always
 feature-detect): notification action buttons, `proxyURL` media proxy,
 `permissions.*` TCC flow (Windows answers 'granted'), `recorder`,
-`pickColor`, `nowPlaying`/media keys, `share`, `app.badge` (`app.icon` and
-`app.presence` DO work there), `setAllSpaces`, `wifi`, `spotlight`,
-`system.locale`, and the whole `tiny.macos.*` namespace — `quickLook`,
-`applescript`, `ocr`, `ai`, `selectedText`/`otherWindows`/`moveWindow`.
-Windows DOES have, despite older docs here saying otherwise: `authenticate`
-(Windows Hello via UserConsentVerifier), `audioTap` (WASAPI loopback,
-'system' scope), deep links / file associations / single instance, and exe
-icons in built apps. (Windows plans: tarwin/tinyjsapp TODO-windows.md.)
+`pickColor`, `nowPlaying`/media keys, `share`, `setAllSpaces`, `wifi`,
+`spotlight`, `system.locale`, and the whole `tiny.macos.*` namespace —
+`quickLook`, `applescript`, `ocr`, `ai`,
+`selectedText`/`otherWindows`/`moveWindow`.
+Windows DOES have, despite older docs here saying otherwise: the whole app
+surface including `app.badge` (verified drawing 2026-07-28, alongside
+`app.icon`, `app.progress`, `app.attention` and `app.presence`),
+`authenticate` (Windows Hello via UserConsentVerifier — answers `false` where
+no Hello is enrolled), `audioTap` (WASAPI loopback, 'system' scope), deep
+links / file associations / single instance, and exe icons in built apps.
+(Windows plans: tarwin/tinyjsapp TODO-windows.md.)
 
 Not supported on Linux (reject or answer `'unsupported'`/`null` — always
 feature-detect): `recorder`, `ocr`, `app.badge` (`app.icon`/`app.presence`
@@ -155,7 +159,7 @@ tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        permissions?: { microphone?: "why", camera?: "why" },
                        audioTap?: "app" | "system",   // enable tiny.audioTap
                        contextMenu?: false,           // suppress WebKit's default right-click menu (default true)
-                       chrome?: { frame, windowControls, transparent, vibrancy, squareCorners, acceptsFirstMouse },
+                       chrome?: { frame, windowControls, transparent, vibrancy, squareCorners, acceptsFirstMouse, menu },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build: "npm run build", dist: "dist",
                                     dev: "npm run dev", devUrl: "http://127.0.0.1:5173" },
@@ -260,6 +264,25 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
 // is the terminal, so it delivers only if the terminal holds the grant, else
 // silent; a built .app owns its own grant. Denial surfaces as silent chunks.
 
+// tiny.audio — an EQ/DSP chain on the app's own output. Native (below the
+// browser: reaches native HLS/tainted streams, survives reload) on Linux +
+// macOS 14.2+; capabilities().audioFilters is FALSE on Windows (measured
+// permanent: the only silencing lever is persisted mixer state shared by all
+// WebView2 apps). pageChain(ctx) is the fallback: same verbs, same RBJ
+// curves, but PAGE-scoped — route your source through it. Pick a backend
+// once, use identically:
+const eq = caps.audioFilters ? tiny.audio : tiny.audio.pageChain(ctx);
+if (eq.input) { src.connect(eq.input); eq.output.connect(ctx.destination); }
+await eq.filters([{ type: 'gain', gain: 1 },              // linear preamp
+  { type: 'peaking', freq: 60, q: 1.1, gain: 4 }]);       // biquads: gain in dB
+eq.filter(1, { freq: 60, q: 1.1, gain: -3 });  // retune in place (slider drags)
+await eq.balance(-0.2); await eq.clear();
+// Types: peaking lowshelf highshelf lowpass highpass bandpass notch allpass
+// (freq/q/gain dB) + gain (linear). ≤28 filters (15 with gainR). pageChain
+// edges: shelf q and per-filter gainR ignored (use balance()); NEVER use
+// pageChain on Linux — Web Audio to ctx.destination crackles there, that's
+// why the native chain exists.
+
 tiny.win.setTitle(t); tiny.win.setSize(w, h);
 await tiny.dialog.openFile();                  // path | null (native panel)
 await tiny.dialog.openFiles();                 // paths[] | null
@@ -280,6 +303,19 @@ tiny.menu.on((id) => ...);                  // clicks (also a 'menu' api event)
 tiny.menu.update('mute', { checked: false, label: 'Unmuted' });  // patch live
 await tiny.menu.get('mute');                // { exists, label, checked, enabled }
 // same item shape + update/get work for tray and context menus
+// menu.set is the APP menu: EVERY window shows it, including windows opened
+// later. macOS has one bar for the whole app; win/linux draw a copy of it in
+// each window. So the menu just works in multi-window apps — no per-window
+// setup — and menu.update moves every window's copy of that id at once.
+tiny.win.menu.set(spec);        // THIS window says something else instead
+tiny.win.menu.update(id, patch);// …and patches only its own copy
+tiny.win.menu.reset();          // back to inheriting the app menu
+// Hiding a bar is CHROME, not menu — the app menu stays put elsewhere:
+tiny.win.setChrome({ menu: false });        // or "chrome": { "menu": false }
+// in tinyjs.json / win.open (applied before first paint). Accelerators keep
+// firing with no bar showing, `size` still means the page's box, and macOS
+// ignores the flag (a bar-less mac app isn't a thing). Frameless and
+// transparent windows never draw one on Windows: the bar is GDI.
 
 tiny.notify(title, body, { id, subtitle, sound });  // desktop notification
 // packaged + signed (even Apple Development): native Notification Center
@@ -294,7 +330,8 @@ await tiny.win.getState();  // { x, y, width, height, outer: { width, height },
 // take (set -> get round-trips); outer = footprint on screen, decorations in.
 tiny.win.setPosition(x, y);                 // top-left origin
 tiny.win.setChrome({ frame: false, windowControls: false,
-                     transparent: false, vibrancy: 'hud' });  // frameless etc.
+                     transparent: false, vibrancy: 'hud',
+                     menu: true });                          // frameless etc.
 // squareCorners: true drops macOS's rounded corners → BORDERLESS window
 // (square, no titlebar/traffic lights; no native titlebar drag — use
 // data-tiny-drag; resize/shadow/focus kept). Put it in tinyjs.json "chrome"
@@ -310,6 +347,12 @@ tiny.win.setAlwaysOnTop(v); tiny.win.setResizable(v);
 tiny.win.hide(); tiny.win.show(); tiny.win.setHideOnClose(v);
 // hide() hides the APP (NSApp hide) — focus returns to the previous app,
 // so palettes can hide() then app.paste() with no frontmost tracking.
+// setHideOnClose is a macOS idea: the app outlives its last window and the
+// Dock icon brings it back. Win/linux have nowhere to put that (a hidden
+// window takes its taskbar button with it), so there the flag holds only
+// while something can bring the app back — a tray icon, accessory mode, or
+// another window still up. Closing the LAST window of an ordinary app quits
+// it there, as every other app on those platforms does.
 tiny.win.show({ activate: false });  // surface WITHOUT stealing focus (HUDs)
 await tiny.app.mousePosition();      // { x, y, window: { x, y, inside },
                                      //   screen: { x, y, width, height,
@@ -461,9 +504,12 @@ await tiny.macos.ocr(pngPath);    // on-device Vision OCR -> { text, blocks:
 // text margin — a glyph clipped at the image edge silently drops a digit.
 await tiny.app.thumbnail(path, size?);  // png for ANY path -> { path, width,
                                 // height }. Content preview where Quick Look
-// has a renderer, the document/app/FOLDER icon where it doesn't, so it never
-// fails on file type alone. Rejects only if the path doesn't exist. @2x,
-// aspect preserved (so a wide image comes back wide, an icon square).
+// has a renderer, the document/app/FOLDER icon where it doesn't, so on macOS
+// it never fails on file type alone; Windows matches that (shell icons for
+// folders/exe/text), LINUX is images-only and rejects the rest with 'no
+// thumbnail'. Rejects if the path doesn't exist. Aspect preserved (a wide
+// image comes back wide, an icon square). Size: @2x on macOS/Linux (ask 64,
+// get 128), exact pixels on Windows — read width/height off the result.
 await tiny.app.secrets.get(key);        // Keychain (keytar role): tokens go
 await tiny.app.secrets.set(key, value); // here, NEVER in tiny.store;
 await tiny.app.secrets.delete(key);     // get -> string | null
@@ -558,7 +604,10 @@ Backend SQLite is built into txiki: `import { Database } from 'tjs:sqlite'`;
 
 An app menu (About + Quit) and an Edit menu (copy/paste shortcuts) always
 exist; `tiny.menu.set` adds menus after them. About shows name + version from
-tinyjs.json automatically.
+tinyjs.json automatically. The menu belongs to the APP, not to one window: it
+shows in every window, including ones opened later. Per-window differences go
+through `tiny.win.menu.*` (content) and `chrome.menu` (whether a bar shows at
+all) — see the menu section above.
 
 ## Rules of thumb
 

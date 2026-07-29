@@ -6,6 +6,67 @@ https://tinyjs.app/changelog.
 
 ## 0.30.0 — upcoming
 
+- **`setHideOnClose` no longer strands the app on Windows and Linux.** It is a
+  macOS idea — there an app outlives its last window and the Dock icon brings
+  it back. Neither other platform has anywhere to put that: a hidden window
+  takes its taskbar button with it, so closing the last window of an app that
+  set the flag left a process the user could neither see nor quit (nib did
+  exactly this; `tinyjs dev` never returned). The flag is now honoured only
+  when there IS a way back — a tray icon, accessory mode, or another window
+  still on screen. Otherwise the close means what it means everywhere else on
+  that OS and the app exits. macOS is unchanged, tray apps are unchanged, a
+  programmatic `win.hide()` still hides whatever it is told to, and closing
+  the last *secondary* is left alone so an app that answers it by re-showing
+  its main window (nib's Welcome screen) still can.
+
+- **The menu bar shows in EVERY window.** It always did on macOS, which has
+  one bar for the whole app — but Windows and Linux draw the bar inside a
+  window, and the launchers only ever put it on `main`. A multi-window app
+  therefore lost its menu in exactly the windows that needed it: on Windows
+  nib's document windows had no File menu at all, while the Welcome screen
+  carried one it had no use for. `tiny.menu.set` is now the APP menu — every
+  window shows a copy, including windows opened later — and `menu.update`
+  moves every copy of an id at once, which is what one shared macOS bar
+  already did. Nothing to change in an existing app; the menu simply appears
+  where it was missing.
+
+  Two new ways to differ per window:
+
+  - **`tiny.win.menu.set/update/reset`** (backend: `app.window(id).setMenu`,
+    `.updateMenuItem`, `.resetMenu`) — this window says something else, and
+    only this window. Clicks arrive as the same `menu` event either way, so a
+    handler doesn't have to care which bar sent them. macOS swaps the bar in
+    while that window is key and puts the app menu back when it isn't, so a
+    per-window menu means the same thing on all three platforms.
+  - **`chrome.menu: false`** — this window shows no bar; the app menu carries
+    on everywhere else. Whether a bar shows is chrome, what's in it is menu.
+    Declare it in tinyjs.json `"chrome"` or `win.open`'s chrome to apply
+    before first paint, or flip it live with `setChrome({ menu: false })`.
+    Accelerators keep firing with no bar showing. macOS ignores it — a
+    bar-less mac app isn't a thing — and frameless or transparent windows
+    never draw one on Windows, where the bar is GDI.
+
+  Four Windows fixes rode along. **A page never had keyboard focus until the
+  user clicked in it.** WebView2's child window doesn't take focus when the
+  host window does, so `document.hasFocus()` answered `false` from launch —
+  and an app that gates on it (nib ignores menu events unless its own window
+  is the focused one, the standard multi-window pattern) dropped every
+  page-side menu action until you happened to click the document first. Menu
+  items answered by the backend worked, ones answered by the page did nothing,
+  which is a maddening thing to debug. The launcher now moves focus into the
+  page when a window is created and on every `WM_SETFOCUS`, matching macOS,
+  where a new window's webview is first responder immediately. **A menu
+  declared immediately before
+  `{ role: 'edit' }` came out empty** — the launcher flushed its items into
+  place at the role line and then, because the role slot claimed no entry of
+  its own, flushed an empty list back over them at the next menu. nib's File
+  menu is exactly that shape and had no items at all on Windows. `size` now
+  means the page's box whether or not the window has a menu bar: attaching one
+  used to silently shorten the page by its row (Linux had already made the
+  same repair for its in-window bar). And secondary windows no longer drop the
+  GDI redirection bitmap unconditionally — only transparent and frameless ones
+  do, since a window without one cannot draw a menu bar at all.
+
 **Breaking.** The Dock/taskbar/launcher calls are renamed, two macOS-only
 calls move to their own namespace, and `haptic` is removed outright. Old names
 are gone rather than deprecated.
@@ -406,6 +467,25 @@ are gone rather than deprecated.
 - **Windows `setZoom`, `setMinSize` and `startResize` implemented**;
   `startDrag` now honours the per-window `DRAGWIN@<id>` form, so a satellite's
   drag handle works. Frameless windows get the size they asked for.
+- **Windows: frameless satellite windows can be resized again.** They had no
+  grabbable edge at all. A frameless secondary answers `WM_NCCALCSIZE` with no
+  non-client area and then hands WebView2 the entire window rect, so its child
+  HWND — another process — owns every edge pixel: `WindowFromPoint` never
+  resolves to us and `WM_NCHITTEST` is never asked, leaving `WS_THICKFRAME`
+  inert for grabbing. The grips that cover for exactly this on Linux were gated
+  on `__TINY_FRAMELESS`, which only the Linux launcher injected. Windows now
+  injects it for frameless secondaries too, so they get the same automatic 5px
+  edges (`data-tiny-noresize` and `setResizable(false)` still opt out). The
+  main window is deliberately unmarked — it keeps real left/right/bottom
+  borders and trades away the top edge, as before.
+- **Windows `startDrag`/`startResize` no longer glue a window to the cursor.**
+  `DefWindowProc`'s `SC_MOVE`/`SC_SIZE` loop entered with the mouse button
+  already up tracks until the *next* click, and the trip from a page's
+  `mousedown` to the launcher is two process hops — so a click near an edge,
+  rather than a drag, wedged the window to the pointer. Now guarded on a held
+  button (as macOS already was), on `setResizable(false)` read live, and
+  against a second gesture nesting a modal loop inside the first. The live
+  cursor position is passed as the message point, matching macOS and GTK.
 - **macOS `setZoom`, `setMinSize` and `startResize` implemented** — the same
   three, missing on the other side. All three reached the launcher's op chain,
   matched nothing and were dropped, so each resolved `true` and did nothing;
@@ -425,11 +505,60 @@ are gone rather than deprecated.
   dev checkout can't ship a launcher predating its own sources — or silently
   skip the app icon, since `--embed-icon` is run *by* that binary.
 
+- **`tiny.audio.pageChain(ctx)`** — the filter chain as Web Audio nodes in the
+  page, for where the native chain doesn't exist. Same band vocabulary, same
+  RBJ curves (measured in an OfflineAudioContext: ask +12 dB at the centre,
+  get 12.00), and the same four verbs as `tiny.audio` — so an app picks its
+  backend once and the code after is identical. Page-scoped, honestly: it
+  filters what you route through `input`→`output`, not audio the page never
+  gets samples for; shelf `q` and per-filter `gainR` are ignored (use
+  `balance()`); and it's not for Linux, where Web Audio crackles and the
+  native chain exists precisely because of that.
+
+  It exists because Windows measured out: process-loopback capture is
+  post-mute *and* post-volume, so the only way to silence the direct signal
+  is session volume — which Windows **persists**, keyed on the EdgeWebView
+  runtime path that every WebView2 app on the machine shares. A crash while
+  filtering would have near-silenced Teams and every other WebView2 app until
+  something rewrote the key. `capabilities().audioFilters` therefore stays
+  `false` there, permanently and with the numbers attached
+  (TODO-audio-filters.md); the deck's EQ card now runs this chain on Windows
+  instead of a dead panel.
+- **`app.badge` works on Windows**, and `capabilities().badge` says so. It was
+  written but never run there, so the capability deliberately reported `false`;
+  it has now been seen drawing on the taskbar button (and composing with
+  `app.progress`), so the claim is true rather than cautious.
+- **Fixed: `app.spotlight()` answered `[]` on Windows instead of rejecting.**
+  The launcher correctly reports the op as unsupported; the bridge threw that
+  away and returned an empty array, so a caller was told "no files matched"
+  where the truth was "there is no search backend here". Those are opposite
+  answers. It now rejects, like the neighbouring `pickColor` already did.
+- **Fixed: a secret larger than 2560 bytes failed unexplainably on Windows.**
+  Credential Manager caps a credential blob there — smaller than the macOS
+  keychain, which takes 4 KB without complaint — and over the cap `CredWriteW`
+  fails with a Win32 error (1783) that names nothing, which surfaced as a bare
+  "credential write failed". `tiny.app.secrets.set` now rejects oversized
+  values up front, naming the byte count and the limit. Note the limit counts
+  BYTES of UTF-8: 4-byte emoji reach it four times faster than ASCII.
+- **`app.thumbnail` on Windows is broader than the docs claimed, and sized
+  differently.** Folders, executables and plain text all render as their shell
+  icon, the same breadth macOS has — it's Linux that is images-only. And where
+  macOS and Linux treat `size` as points and render @2x, Windows treats it as
+  pixels and returns exactly what was asked. Read `width`/`height` off the
+  result rather than assuming either. Docs corrected.
+- **Fixed: `tinyjs build --cli` printed a Unix hint on Windows**, suggesting an
+  `ln -sf` into `/usr/local/bin` — neither of which exists there. It now prints
+  a `setx PATH` line.
+
 **Also**
 
 - `test/appsurface.html` — a self-driving page that steps through the whole app
   surface, holding each state long enough to see, and prints what
-  `capabilities()` claims for the machine.
+  `capabilities()` claims for the machine. It now minimizes itself before
+  `attention()` and holds after `presence('normal')`: Windows defines
+  `FLASHW_TIMERNOFG` as a no-op while the window is already foreground, and
+  quitting straight after restoring a taskbar button makes it indistinguishable
+  from the app simply leaving. Both checks were unfalsifiable on Windows before.
 - `TODO-verify.md` — what's been built on one OS but not yet watched run on
   another. A fire-and-forget op reaching a shell that ignores it looks exactly
   like one that was never implemented, so "nothing appeared" needs a written

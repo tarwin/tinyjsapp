@@ -246,7 +246,10 @@
       id: window.__TINY_WIN || 'main',   // which window this page lives in
       // Open (or focus) another window; page = html file in your frontend dir.
       // size: 'WxH' is the page's box — a frameless window gets exactly that,
-      // a titled one gets it plus a title bar.
+      // a titled one gets it plus a title bar (and, on Windows/Linux, plus a
+      // menu bar when it has one: `size` stays the page's box either way).
+      // The new window shows the app menu unless opened with
+      // chrome: { menu: false }.
       open: (id, opts = {}) => call('win.open', { id, ...opts }),
       close: (id) => call('win.close', id ? { id } : {}),  // no id = this window
       windows: () => call('win.windows'),                  // ['main', ...]
@@ -293,13 +296,24 @@
       // are 0 in a WKWebView, so this is the only way to ask. x/y are the
       // window's top-left, which is what setPosition takes.
       getState: () => call('win.getState'),
+      // true: the close button hides the window instead of quitting the app.
+      // A macOS idea — there the app outlives its last window and the Dock
+      // icon brings it back. Windows and Linux have nowhere to put that (a
+      // hidden window takes its taskbar button with it), so there the flag
+      // holds only while there IS a way back: a tray icon, accessory mode, or
+      // another window still up. Closing the last window of an ordinary app
+      // quits it, as it does in every other app on those platforms.
       setHideOnClose: (enabled) => call('win.setHideOnClose', { enabled }),
-      // { frame?, windowControls?, transparent?, vibrancy? } — frameless
+      // { frame?, windowControls?, transparent?, vibrancy?, menu? } — frameless
       // windows keep native resize/focus; mark your own titlebar with
       // data-tiny-drag. windowControls is the close/minimize/maximize group
       // (macOS's "traffic lights"): true | false | a subset array such as
       // ['close'] | [] for none. What each OS can honour differs — ask
       // tiny.system.capabilities().windowControls.
+      // menu:false shows no menu bar on THIS window (the app menu carries on
+      // everywhere else) — a Windows/Linux question, ignored on macOS, where
+      // the bar belongs to the app. Frameless and transparent windows never
+      // draw one on Windows anyway.
       setChrome: (opts) => call('win.setChrome', opts),
       // No args: drag the window (frameless chrome). With { files: [path…],
       // image? }: drag real files OUT of the app (into Finder, Slack, …) —
@@ -314,6 +328,25 @@
       print: () => call('win.print'),
       // Render the page to a PDF file (vector) -> { path }.
       printToPDF: (path) => call('win.printToPDF', { path }),
+      // This window's OWN menu bar — same spec and same click event as
+      // tiny.menu, but for this window alone. Windows without an override
+      // keep showing the app menu, and a window opened later inherits it too.
+      //
+      // Hiding a bar is chrome, not menu: tiny.win.setChrome({ menu: false }),
+      // or chrome.menu:false in tinyjs.json / win.open. The app menu is
+      // untouched, so the other windows keep theirs.
+      //
+      // macOS has one bar for the whole app: it swaps to this window's menu
+      // while the window is key, and back to the app menu when it isn't.
+      menu: {
+        set: (menus) => call('win.menu.set', { menus }),
+        // Back to showing the app menu.
+        reset: () => call('win.menu.reset'),
+        // Patch one item in THIS window's bar; tiny.menu.update patches every
+        // window's copy.
+        update: (id, patch = {}) => call('win.menu.update', { id, ...patch }),
+        get: (id) => call('win.menu.get', { id }),
+      },
       // fn(paths): files dragged onto the window, as real filesystem paths.
       onDrop(fn) { window.tiny.api.on('drop', ({ paths }) => fn(paths)); },
       // Native share sheet ({ text?, url?, paths?, x?, y? }) — anchor it at
@@ -325,6 +358,11 @@
       // menus: [{ title, items: [...] }]; items support { id, label, key?,
       // checked?, enabled?, submenu?: [...] } | { separator: true } — same
       // item shape works for tray and context menus.
+      //
+      // The APP menu: it shows on every window, including windows opened
+      // later. (macOS has one bar for the whole app; Windows and Linux draw a
+      // copy of it in each window.) For one window to differ, see
+      // tiny.win.menu; for one window to show no bar, chrome.menu:false.
       set: (menus) => call('menu.set', { menus }),
       on(fn) { window.tiny.api.on('menu', ({ id }) => fn(id)); },
       // Patch one item in place: update('mute', { checked: true, label: 'Muted' })
@@ -420,6 +458,93 @@
       // for exactly this.
       balance: (v) => call('audio.balance', { value: v }),
       clear: () => call('audio.filters', { filters: [] }),
+      // The same chain, built from Web Audio nodes IN THE PAGE — for where the
+      // native chain doesn't exist. On Windows it can't (silencing the direct
+      // path means session volume, which Windows persists on a key every
+      // WebView2 app shares — TODO-audio-filters.md has the measurements), so
+      // capabilities().audioFilters is false there and this is the fallback.
+      // Web Audio's BiquadFilterNode is the same RBJ cookbook as PipeWire's
+      // bq_* and the macOS tap, so the same numbers give the same curve.
+      //
+      // Same verbs as tiny.audio itself, so an app picks a backend once:
+      //
+      //   const can = await tiny.system.capabilities();
+      //   const eq = can.audioFilters ? tiny.audio : tiny.audio.pageChain(ctx);
+      //   if (eq.input) src.connect(eq.input), eq.output.connect(ctx.destination);
+      //   await eq.filters(bands);      // identical from here on
+      //
+      // Page-SCOPED, and that's the honest difference: it filters only what
+      // you route through input→output, not native HLS or a CORS-tainted
+      // <audio> the page never gets samples for. Two more edges, both real:
+      // shelf `q` is ignored (Web Audio shelves fix S=1; native honors it),
+      // and per-filter `gainR` is ignored — use balance(). Do NOT reach for
+      // this on Linux: anything hitting ctx.destination crackles there
+      // (measured — it's why the native chain exists).
+      pageChain(ctx) {
+        const input = ctx.createGain();
+        // Balance stage: force stereo up-front (a mono source into a bare
+        // splitter puts silence on the right), then split, per-side gains,
+        // merge. Always in-line, unity until balance() is called.
+        const balIn = ctx.createGain();
+        balIn.channelCount = 2;
+        balIn.channelCountMode = 'explicit';
+        const split = ctx.createChannelSplitter(2);
+        const gL = ctx.createGain(), gR = ctx.createGain();
+        const merge = ctx.createChannelMerger(2);
+        const output = ctx.createGain();
+        balIn.connect(split);
+        split.connect(gL, 0);
+        split.connect(gR, 1);
+        gL.connect(merge, 0, 0);
+        gR.connect(merge, 0, 1);
+        merge.connect(output);
+        let nodes = [];
+        // Retunes ramp over ~15ms (a bare .value write zippers audibly on a
+        // slider drag); a NEW node gets its values outright — ramping there
+        // would sweep in from Web Audio's defaults instead.
+        const tune = (p, v, now) =>
+          now ? (p.value = v) : p.setTargetAtTime(v, ctx.currentTime, 0.015);
+        const apply = (node, f, now) => {
+          if (node.frequency) {
+            tune(node.frequency, Number(f.freq ?? 1000), now);
+            tune(node.Q, Number(f.q ?? 1), now);
+            tune(node.gain, Number(f.gain ?? 0), now);  // dB, like the native chain
+          } else {
+            tune(node.gain, Number(f.gain ?? 1), now);  // 'gain' is a linear multiplier
+          }
+        };
+        const chain = {
+          input, output,
+          filters(list) {
+            input.disconnect();
+            for (const n of nodes) n.disconnect();
+            nodes = (list ?? []).map((f) => {
+              let n;
+              if (f.type === 'gain') n = ctx.createGain();
+              else { n = ctx.createBiquadFilter(); n.type = f.type ?? 'peaking'; }
+              apply(n, f, true);
+              return n;
+            });
+            let prev = input;
+            for (const n of nodes) { prev.connect(n); prev = n; }
+            prev.connect(balIn);
+            return true;
+          },
+          filter(i, patch) {
+            if (nodes[i]) apply(nodes[i], patch ?? {});
+            return true;
+          },
+          balance(v) {
+            const b = Math.max(-1, Math.min(1, Number(v) || 0));
+            tune(gL.gain, b > 0 ? 1 - b : 1);
+            tune(gR.gain, b < 0 ? 1 + b : 1);
+            return true;
+          },
+          clear() { chain.filters([]); chain.balance(0); return true; },
+        };
+        chain.filters([]);
+        return chain;
+      },
     },
 
     audioTap: {

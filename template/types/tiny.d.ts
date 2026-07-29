@@ -69,6 +69,14 @@ declare interface TinyChromeOptions {
    *  palettes/toolbars and for DOM drag regions on unfocused windows.
    *  Off by default (matches the platform). */
   acceptsFirstMouse?: boolean;
+  /** false: this window shows no menu bar. The app menu carries on in every
+   *  other window, and this one's accelerators keep firing — only the bar is
+   *  gone. Windows and Linux draw the bar inside each window, so it's a real
+   *  per-window question there; macOS has one bar for the whole app and
+   *  ignores the flag. Set it in tinyjs.json "chrome" (or win.open's chrome)
+   *  to apply before first paint — no bar flashing in and out, and `size`
+   *  still means the page's box either way. */
+  menu?: boolean;
 }
 
 /** 'floating' = always-on-top; 'overlay' floats above almost everything
@@ -155,6 +163,31 @@ declare interface TinyWifi {
   noise: number;
   /** Mbps */
   txRate: number;
+}
+
+/** One filter in a tiny.audio chain. Biquad types take freq/q/gain (gain in
+ *  dB); 'gain' is a LINEAR multiplier (a preamp). gainR — the right channel's
+ *  gain when it differs — is native-only (the page chain ignores it; use
+ *  balance()). */
+declare interface TinyAudioFilter {
+  type: 'peaking' | 'lowshelf' | 'highshelf' | 'lowpass' | 'highpass'
+      | 'bandpass' | 'notch' | 'allpass' | 'gain';
+  freq?: number;
+  q?: number;
+  gain?: number;
+  gainR?: number;
+}
+
+/** tiny.audio.pageChain(ctx) — the same chain as Web Audio nodes in the page.
+ *  Route your source through input → output; the four verbs then match
+ *  tiny.audio, so one variable can hold either backend. */
+declare interface TinyPageChain {
+  input: GainNode;
+  output: GainNode;
+  filters(list: TinyAudioFilter[]): boolean;
+  filter(index: number, patch: Partial<TinyAudioFilter>): boolean;
+  balance(v: number): boolean;
+  clear(): boolean;
 }
 
 /** A window belonging to another app (accessibility), top-left coords. */
@@ -612,6 +645,12 @@ declare interface Tiny {
     /** drag files out of the window (same as startDrag({ files })) */
     dragOut(opts: TinyDragOutOptions): Promise<any>;
     zoom(): Promise<any>;
+    /** true: the close button hides the window instead of quitting. A macOS
+     *  idea — the app outlives its last window and the Dock icon brings it
+     *  back. Windows and Linux have nowhere to put that, so there it holds
+     *  only while something can bring the app back (a tray icon, accessory
+     *  mode, or another window still up); closing the last window of an
+     *  ordinary app quits it. */
     setHideOnClose(enabled: boolean): Promise<any>;
     print(): Promise<any>;
     /** render the page to a PDF file (vector) */
@@ -621,12 +660,32 @@ declare interface Tiny {
 
     /** native share sheet — anchor at the click's clientX/clientY */
     share(opts?: TinyShareOptions): Promise<any>;
+
+    /** This window's OWN menu bar, overriding the app menu for it alone.
+     *  Same spec and same click event as tiny.menu; windows that don't
+     *  override keep showing the app menu, and so do windows opened later.
+     *  macOS has one bar for the whole app, so it swaps this one in while the
+     *  window is key and puts the app menu back when it isn't.
+     *  To hide a bar rather than change it, use chrome.menu:false. */
+    menu: {
+      set(menus: TinyMenu[]): Promise<any>;
+      /** back to showing the app menu */
+      reset(): Promise<any>;
+      /** patch an item in THIS window's bar only */
+      update(id: string, patch?: { label?: string; checked?: boolean; enabled?: boolean }): Promise<any>;
+      get(id: string): Promise<TinyMenuItemState>;
+    };
   };
 
   menu: {
+    /** The APP menu: every window shows it, including windows opened later.
+     *  (macOS has one bar for the whole app; Windows and Linux draw a copy of
+     *  it inside each window.) For one window to differ, see tiny.win.menu;
+     *  for one window to show no bar at all, chrome.menu:false. */
     set(menus: TinyMenu[]): Promise<any>;
     on(fn: (id: string) => void): void;
-    /** patch a live item without redeclaring the menu */
+    /** patch a live item without redeclaring the menu — every window's copy of
+     *  the id moves. tiny.win.menu.update patches just one window's. */
     update(id: string, patch?: { label?: string; checked?: boolean; enabled?: boolean }): Promise<any>;
     get(id: string): Promise<TinyMenuItemState>;
     /** replace the right-click menu; null restores WebKit's default */
@@ -646,6 +705,35 @@ declare interface Tiny {
     register(id: string, combo: string): Promise<any>;
     unregister(id: string): Promise<any>;
     on(fn: (id: string) => void): void;
+  };
+
+  /**
+   * Native DSP on the app's OWN output — a graphic EQ, headphone correction —
+   * applied below the browser, so it reaches audio the page never gets
+   * samples for (native HLS, CORS-tainted streams) and survives reloads.
+   * Linux (PipeWire) and macOS 14.2+ (muted process tap); on Windows
+   * `capabilities().audioFilters` is false — silencing the direct path there
+   * means persisted mixer state every WebView2 app shares — so use
+   * `pageChain` instead, which speaks the same verbs.
+   */
+  audio: {
+    /** Replace the whole chain. Idempotent; [] restores unprocessed output.
+     *  At most 28 filters (15 with gainR) — the list is truncated past that. */
+    filters(list: TinyAudioFilter[]): Promise<any>;
+    /** Retune ONE filter in place — no rebuild, no gap; what a slider drag
+     *  should call */
+    filter(index: number, patch: Partial<TinyAudioFilter>): Promise<any>;
+    /** Stereo balance -1 (left) .. 1 (right), applied to the chain's output —
+     *  costs no filter slot; needs an active chain */
+    balance(v: number): Promise<any>;
+    clear(): Promise<any>;
+    /** The same chain as Web Audio nodes IN THE PAGE — the fallback where the
+     *  native chain doesn't exist (Windows). Same RBJ curves, same verbs;
+     *  page-SCOPED: filters only what you route through it. Shelf `q` and
+     *  per-filter `gainR` are ignored here. Don't use on Linux — Web Audio
+     *  reaching ctx.destination crackles there, which is why the native
+     *  chain exists. */
+    pageChain(ctx: BaseAudioContext): TinyPageChain;
   };
 
   /**
@@ -831,8 +919,10 @@ declare interface Tiny {
     pickColor(): Promise<string | null>;
     /** thumbnail png for ANY path — a content preview where Quick Look has a
      *  renderer (images, video, PDF, source files), the document/app/folder
-     *  ICON otherwise, so this never fails on file type alone. size is the
-     *  bounding box in points, rendered @2x, aspect preserved. Rejects if the
+     *  ICON otherwise, so this never fails on file type alone (macOS and
+     *  Windows; Linux is images-only and rejects the rest). size is the
+     *  bounding box, aspect preserved — rendered @2x on macOS/Linux, exact
+     *  pixels on Windows, so read width/height off the result. Rejects if the
      *  path doesn't exist. */
     thumbnail(path: string, size?: number): Promise<TinyThumbnail>;
     secrets: TinySecrets;
@@ -898,6 +988,15 @@ declare interface TinyWindowHandle {
   setAllSpaces(enabled: boolean): void;
   setChrome(opts: TinyChromeOptions): void;
   getState(): Promise<TinyWinState>;
+  /** This window's OWN menu bar, overriding the app menu for it alone.
+   *  Clicks arrive the same way either bar sent them, so a handler doesn't
+   *  have to care which. macOS shows it while the window is key. */
+  setMenu(menus: TinyMenu[]): void;
+  /** drop the override: back to showing the app menu */
+  resetMenu(): void;
+  /** patch an item in THIS window's bar, leaving other windows' copies alone */
+  updateMenuItem(id: string, patch?: { label?: string; checked?: boolean; enabled?: boolean }): void;
+  getMenuItem(id: string): Promise<TinyMenuItemState>;
   /** print THIS window's page (its own print panel) */
   print(): void;
   /** render THIS window's page to a PDF file (vector) */
@@ -912,7 +1011,10 @@ declare interface TinyApp {
   push(event: string, data?: unknown): void;
   setTitle(title: string): void;
   setSize(width: number, height: number): void;
+  /** The APP menu — every window shows it, including ones opened later.
+   *  app.window(id).setMenu gives one window something else. */
   setMenu(menus: TinyMenu[]): void;
+  /** patch a live item: every window's copy of the id moves */
   updateMenuItem(id: string, patch?: { label?: string; checked?: boolean; enabled?: boolean }): void;
   getMenuItem(id: string): Promise<TinyMenuItemState>;
   setContextMenu(items: TinyMenuItem[] | null): void;
@@ -938,6 +1040,10 @@ declare interface TinyApp {
   setClickThrough(enabled: boolean): void;
   setLevel(level: TinyWindowLevel): void;
   setAllSpaces(enabled: boolean): void;
+  /** true: the close button hides the window instead of quitting. macOS keeps
+   *  the app alive without windows (the Dock brings it back); Windows and
+   *  Linux honour it only while a tray icon, accessory mode or another window
+   *  offers a way back — otherwise the last close quits, as it does there. */
   setHideOnClose(enabled: boolean): void;
   presence(mode: 'normal' | 'menubar'): void;
   print(): void;
@@ -1053,7 +1159,7 @@ declare interface TinyApp {
    *  '#rrggbb', or null if the user cancels */
   pickColor(): Promise<string | null>;
   /** thumbnail png for ANY file type Quick Look understands; size is the
-   *  bounding box in points (rendered @2x) */
+   *  bounding box — @2x on macOS/Linux, exact pixels on Windows */
   thumbnail(path: string, size?: number): Promise<TinyThumbnail>;
   secrets: TinySecrets;
   /** Touch ID (or the account-password sheet); false covers cancel */

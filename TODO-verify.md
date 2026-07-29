@@ -25,16 +25,14 @@ On macOS run the **dev checkout's** `./tinyjs` — a `tinyjs` on PATH may be an
 installed release whose client predates these calls, in which case the page
 throws on its first line and the window just flashes.
 
-Two checks in that page are structurally unable to pass on Windows, so read
-their `ok` as "the call resolved", not "the decoration appeared":
-
-- it calls `attention()` while the page is the foreground window, and
-  `FLASHW_TIMERNOFG` is a documented no-op in exactly that case;
-- it calls `presence('normal')` and then quits ~0.2s later, so a restored
-  taskbar button and a departed app look identical.
-
-Both need a hold and a defocus to mean anything on Windows — see the headless
-recipe at the bottom. Worth fixing in the page itself.
+~~Two checks in that page are structurally unable to pass on Windows~~ — **fixed
+in the page, 2026-07-28.** It used to call `attention()` while the page was the
+foreground window (where `FLASHW_TIMERNOFG` is a documented no-op), and to call
+`presence('normal')` ~0.2s before quitting, so a restored taskbar button and a
+departed app looked identical. The page now minimizes itself before
+`attention()`, holds ~6s so several flash cycles are observable, restores, and
+holds ~4s after `presence('normal')`. It runs ~27s rather than ~14s as a
+result. Both were then verified on Windows — see the Windows notes below.
 
 ## app surface — badge / attention / icon / progress / presence
 
@@ -42,8 +40,8 @@ Added 2026-07-25 (the dock→intent-verb rename + `progress`).
 
 | check | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| `badge('3')` shows a count | ✅ seen | ❌ not built ([TODO-windows.md]) | 🔶 signal correct, drawing unseen |
-| `badge('NEW')` (non-numeric) | ✅ arbitrary text | — | ⬜ hides — Unity badge is an int |
+| `badge('3')` shows a count | ✅ seen | ✅ seen — red disc, white '3' (2026-07-28) | 🔶 signal correct, drawing unseen |
+| `badge('NEW')` (non-numeric) | ✅ arbitrary text | ✅ collapses to a bullet (2026-07-28) | 🔶 hides: dbus shows count-visible=false (2026-07-28) |
 | `attention()` | ✅ bounces | ✅ flashes the taskbar button | ✅ X11 urgency bit / ❌ Wayland |
 | `icon(png)` replaces the icon | ✅ seen | ✅ seen (fixed 2026-07-25) | ✅ X11 (fixed 2026-07-26) / ❌ Wayland |
 | `icon(ico)` replaces the icon | n/a | ✅ seen | n/a |
@@ -51,6 +49,7 @@ Added 2026-07-25 (the dock→intent-verb rename + `progress`).
 | `icon('')` restores | ✅ seen | ✅ back to icon.png (fixed 2026-07-25) | ✅ byte-identical restore |
 | `progress(0..1)` draws a bar | ✅ seen | ✅ seen — 45% then 90% | 🔶 signal correct, drawing unseen |
 | `progress` + `icon` compose | ✅ seen — the macOS-specific risk | n/a | n/a |
+| `badge` + `progress` compose | n/a | ✅ seen together (2026-07-28) | 🔶 one signal carries both |
 | `progress(null)` clears | ✅ seen | ✅ bar goes, button stays | 🔶 signal correct |
 | `presence('menubar')` hides it | ✅ seen | ✅ button vanishes | ✅ X11 skip-taskbar / ❌ Wayland |
 | `presence('normal')` restores | ✅ seen | ✅ button comes back | ✅ X11 / ❌ Wayland |
@@ -125,6 +124,40 @@ no longer swallowed: the build warns and passes the launcher's own reason
 through. `capabilities()` reported `badge=false icon=true presence=true
 progress=true`, and no badge was drawn — honest degradation, as intended.
 
+**Re-run 2026-07-28 against a launcher rebuilt from current source** (the local
+`launcher-win.exe` — a gitignored build artifact, so a fresh clone has none and
+a stale one is invisible to `git status` — was two days older than
+`launcher-win.cc`. Rebuild FIRST, always: `powershell -ExecutionPolicy Bypass
+-File setup.ps1 -SkipPath`).
+`badge` now draws, so the table above and `capabilities()` both changed; the
+rest of this section still holds.
+
+**`app.badge` works on Windows — seen, not merely compiled.** A red disc with a
+white `3` in the corner of the taskbar button. None of the three predicted
+failure modes happened: not invisible (the alpha fix in `badge_icon()` does its
+job), not a black square, and `SetOverlayIcon` DID get a taskbar button from a
+plain `tinyjs dev` spawn. `badge('NEW')` collapses to a centred bullet exactly
+as documented (16px fits 1–2 glyphs), `badge` and `progress` compose on the same
+button, and clearing both returns the strip to a pixel-identical baseline.
+`capabilities().badge` is therefore now `true` on Windows.
+
+Photographed rather than eyeballed, since the decorations live outside the app
+window: a page holding each state ~5s, the taskbar strip captured every 500ms,
+and frames diffed. **Diff against a frame from INSIDE the app's run, not one
+from before launch** — Windows 11 centres taskbar buttons, so a new button
+shifts the whole strip, and a diff-vs-before-launch is ~33k changed pixels of
+layout shift that drowns a 770-pixel badge completely. That mistake made the
+first pass read as "nothing drew".
+
+**`attention()` and `presence()` re-verified with the amended page.** With the
+window minimized, consecutive-frame diffs oscillate between ~0 and ~4500 changed
+pixels for about 4.7s — the flash — and the button then settles into a held red
+attention highlight (mean brightness 188.6 vs 198.2 idle) rather than reverting,
+which a single frame could never have shown. Restoring the window clears it.
+`presence('menubar')` takes the button away (the strip reads the same brightness
+as no-button-at-all) and `presence('normal')` brings it back and HOLDS for 6.5s
+before quit.
+
 **Windows `presence` was the highest-risk item — it is fine.** The handler
 matches `presence ` and parses `op.substr(9)`, which lines up, and both
 directions were watched: the taskbar button disappears on `'menubar'` and
@@ -186,12 +219,40 @@ What was wrong before: `DRAGWIN` was matched with `line == "DRAGWIN"`, exact,
 so the per-window `DRAGWIN@<id>` form the bridge sends for satellites was
 dropped — a satellite's drag handle did nothing. `RESIZEWIN` was never handled
 at all, and tiny.js gives **every frameless window** invisible resize grips
-that call it, so custom grips were dead on Windows (native `WS_THICKFRAME`
-borders still worked, which is probably why nobody noticed).
+that call it, so custom grips were dead on Windows.
+
+The parenthetical that used to close that paragraph — "native `WS_THICKFRAME`
+borders still worked, which is probably why nobody noticed" — was the mistake.
+It holds for the MAIN window only. A frameless SECONDARY answers
+`WM_NCCALCSIZE` with no non-client area and then hands WebView2 the whole rect,
+so its child HWND owns every edge pixel, `WindowFromPoint` never resolves to
+us, and `WM_NCHITTEST` is never asked. Frameless satellites had **no grabbable
+edge at all** on Windows, and the grips that would have covered for that were
+gated on `__TINY_FRAMELESS`, which only the Linux launcher injected. Fixed
+2026-07-28: `sec_shim_js` now injects the marker for frameless secondaries
+(main deliberately stays unmarked — it has real side/bottom borders), and
+`do_ncdrag` grew the guards below.
 
 To check: a frameless window, drag it by a `data-tiny-drag` region and by a
 satellite's own handle; then drag each of the eight edge grips and confirm the
 right edge moves (a wrong `HT*` mapping resizes the opposite side).
+
+- [x] All eight edges/corners of a frameless satellite, each moving the edge
+      grabbed. Automated as far as it goes: a probe app confirms the marker is
+      a boolean and all 8 grips mount on a frameless secondary, mount on
+      neither a titled secondary nor main. The dragging itself needs a hand —
+      watched on Windows 2026-07-28 in amp, edge resize working.
+- [ ] **Click an edge without moving** — press and release in place. The window
+      must NOT follow the pointer afterwards. `xxxMoveSize` entered with the
+      button already up tracks until the next click; the trip from the grip's
+      `mousedown` to `do_ncdrag` is two process hops, so this is easy to hit.
+      Guarded with `GetAsyncKeyState(VK_LBUTTON)`, mirroring macOS.
+- [ ] `setResizable(false)` then drag an edge — must do nothing (the style bit
+      is read live, because tiny.js gates its grips on one `getState` at load).
+- [ ] Alive mid-drag: hold an edge and confirm posted work still lands (the
+      modal loop pumps `WM_APP`, so dispatch keeps running inside it).
+- [ ] A monitor LEFT of primary (negative screen x) — exercises the
+      `MAKELPARAM` sign path in the point now passed as `lParam`.
 
 ## ~~macOS — `startDrag` / `startResize` / `dragOut`~~ — done 2026-07-26
 
@@ -215,19 +276,17 @@ TODO-linux.md).
 
 ## Windows-only
 
-- [ ] `app.badge` — **written 2026-07-26 on macOS, never run on Windows.**
-      `do_badge` renders an overlay HICON (`badge_icon()`) and hands it to
-      `ITaskbarList3::SetOverlayIcon`. `capabilities()` deliberately still
-      reports `badge:false`; flip that only once the badge has been SEEN, not
-      merely compiled.
+- [x] ~~`app.badge`~~ — **SEEN on Windows 2026-07-28**, and `capabilities()`
+      now reports `badge:true` there. `do_badge` renders an overlay HICON
+      (`badge_icon()`) and hands it to `ITaskbarList3::SetOverlayIcon`.
       The trap it works around: GDI writes RGB but leaves the alpha byte of a
       32bpp DIB alone, so text drawn the obvious way is fully transparent. It
       paints a disc + up to two glyphs in colours that are never pure black,
-      then sets alpha for every pixel that got written. Plausible failure
-      modes to look for: an invisible badge (alpha fix not doing its job), a
-      black square (mask/`CreateIconIndirect` wrong), or nothing at all
-      (`SetOverlayIcon` needing a taskbar button that a dev spawn may not
-      have). Longer text collapses to a bullet — 16px fits 1–2 glyphs.
+      then sets alpha for every pixel that got written — and that holds up:
+      the badge is neither invisible nor a black square. The third worry,
+      `SetOverlayIcon` needing a taskbar button a dev spawn might not have,
+      was unfounded — a plain `tinyjs dev` gets one. Longer text collapses to
+      a bullet as designed (`'NEW'` → a centred dot).
 - [x] ~~`app.icon` only took `.ico`~~ — fixed 2026-07-25. `do_appicon` still
       tries `LoadImage` first (it picks the right sub-image per size, which
       GDI+ can't), then falls back to `icon_from_png()` — the decoder the
@@ -242,41 +301,76 @@ TODO-linux.md).
       guards both.
       Verified end to end: title bar goes terminal → amp's png → terminal, and
       `WM_GETICON` returns to the exact startup handle on reset.
-- [ ] `app.icon` still cannot move the **taskbar button** — see the note above.
-      Unresolved whether it can be moved at all; built apps additionally carry
-      an AppUserModelID + `RelaunchIconResource` that dev spawns skip, and that
-      path is untested.
+- [x] `app.icon` **cannot move the taskbar button, and now that is settled** —
+      the AppUserModelID theory is dead. Retested 2026-07-28 against a BUILT
+      app (`dist/<name>.exe`, so `apply_relaunch_props` had run and the window
+      carried the AppUserModelID + `RelaunchIconResource` a dev spawn skips),
+      holding a deliberately garish magenta icon for 8s: the taskbar strip
+      showed **zero changed pixels** for the whole hold, and crops before and
+      during are identical. `icon()` resolved `true` and the title bar changes
+      as before, so the call works — the shell simply does not follow it.
+      So what `app.icon` controls on Windows is the title bar and Alt-Tab,
+      full stop, for dev and built apps alike. Anyone wanting the taskbar
+      button to change needs a different mechanism than `WM_SETICON`.
 
 ## Written 2026-07-26, never run off macOS
 
-- [ ] **kitchen-sink FFI, Linux** — `libc.so.6` `sysinfo()` decoded by struct
-      offset (uptime / loads / totalram × mem_unit / procs at 0/8/32/104/80)
-      plus `gethostname()`, and zlib via `libz.so.1`. The offsets are the
-      x86_64 ABI; **aarch64 uses the same layout, but that is an assumption
-      worth one check** — if `ram` reads absurd, the struct is being decoded
-      at the wrong offsets.
-- [ ] **kitchen-sink FFI, Windows** — `kernel32.dll` `GetTickCount64()` and
-      `GlobalMemoryStatusEx()`. The struct's first field must be its own size
-      (64) before the call or the API refuses; if `ram` is 0, that's the
-      first thing to check. zlib is deliberately absent on Windows and the
-      card says so rather than failing.
-- [ ] **`chrome.trafficLights` reporting** — it only ever worked on macOS,
+- [x] **kitchen-sink FFI, Linux** — verified 2026-07-28 on aarch64: the
+      offsets are right. `ram` reads 1.9 GB against a ground truth of
+      2049527808 bytes from `free -b` (exact), uptime 1.4 h (sane),
+      `gethostname()` returns the real hostname, `getpid()` matches tjs.pid,
+      and zlib round-trips (zlibVersion 1.3, compress→decompress true).
+      x86_64 remains assumed-by-ABI, which is the direction the offsets were
+      written for.
+- [ ] **kitchen-sink FFI, Windows** — **this entry described code that was
+      never written.** Checked 2026-07-28: `kitchen-sink/src/main.js` has no
+      Windows branch at all — `ffiLibs()` hardcodes
+      `/usr/lib/libSystem.B.dylib` and `/usr/lib/libz.dylib`, and `kernel32`
+      appears nowhere in the examples repo except the matcha and presto ports.
+      Run on Windows, `ffiInfo` and `zlibRoundtrip` both throw a raw
+      `uv_dlopen failed: The specified module could not be found.` — not the
+      graceful "not here" the old text implied. (`sysinfo` does degrade
+      properly, reporting `ram: 'n/a'`; it also prints a hardcoded
+      `cpu: 'Apple Silicon × 4'` on Windows, which is its own small lie.)
+      So this stays open, and it is example-app work in tinyjsapp-examples,
+      not a tinyjs gap. The route is still the one sketched here:
+      `kernel32.dll` `GetTickCount64()` and `GlobalMemoryStatusEx()`, whose
+      struct's first field must be its own size (64) before the call or the
+      API refuses — if `ram` comes back 0, check that first. zlib has no
+      system copy on Windows, so that row should say so rather than throw.
+- [~] **`chrome.trafficLights` reporting** — it only ever worked on macOS,
       but Linux stored the bit and echoed it back through `getState`, so an
       app that set it and read it back was told it had worked. Linux now
       reports the truth, and `capabilities().trafficLights` is `false` on both
       Windows and Linux. Worth confirming nothing depended on the old lie.
+      Linux half verified 2026-07-28: `setChrome({windowControls:['close']})`
+      resolves and `getState().chrome.windowControls` reports `null`, not an
+      echo; the fleet sweep (all 26 examples launch) says nothing depended on
+      the lie. Windows unchecked.
 
-- [ ] **`chrome.windowControls` on Windows** — `WS_SYSMENU` /
-      `WS_MINIMIZEBOX` / `WS_MAXIMIZEBOX`. Win32 is coarser than macOS: the
-      min/max boxes require `WS_SYSMENU`, so "minimize without close" isn't
-      expressible and asking for it gets close too. Check that `['close']`
-      leaves only close, that `false` removes the group, and that `getState`
-      round-trips what you set.
-- [ ] **`chrome.windowControls` on Linux** — `gtk_window_set_deletable` for
+- [x] **`chrome.windowControls` on Windows** — verified 2026-07-28, and the
+      predicted Win32 coarseness is exactly what happens. `['close']` →
+      `['close']`; `false` → `[]` (group gone); `true` → all three. And
+      `['minimize']` → **`['close','minimize']`**: the min/max boxes require
+      `WS_SYSMENU`, so "minimize without close" is not expressible and asking
+      for it gets close too. The important part is that `getState` reports
+      what you GOT, not what you asked for — so the round trip is honest
+      rather than an echo, and an app can detect the difference.
+- [~] **`chrome.windowControls` on Linux** — `gtk_window_set_deletable` for
       close, `_MOTIF_WM_HINTS` for minimize/maximize. Mutter and KWin read the
       hint; many WMs don't, so treat a no-op as "this WM ignores MWM", not a
       bug. `getState` deliberately reports `null` here rather than echoing the
-      request.
+      request. 2026-07-28: the call resolves on both sessions and `getState`
+      does report `null`; `capabilities().windowControls` is session-gated
+      (false on Wayland, true on X11). But the MWM half is worse than
+      "the WM may ignore it": measured with xprop on GNOME 46/X11, the
+      property reads GTK's own CSD signature (`0x3, 0x1, 0x0` — all
+      functions, zero decorations) after `setChrome(['close'])`, i.e. **GTK
+      rewrites _MOTIF_WM_HINTS over the launcher's request**, and under CSD
+      the WM doesn't draw the buttons anyway. So on GNOME, minimize/maximize
+      removal is structurally a no-op; only the `set_deletable` half (the
+      close button, which GTK itself draws) can work — and that half still
+      needs eyes. A real fix would drive the CSD title bar, not MWM.
 
 ## Needs a hand on the mouse — kitchen-sink, 2026-07-26
 
@@ -395,23 +489,51 @@ service = the app id. `permissions.check` answered granted/denied/undetermined/
 unsupported across all seven names without a prompt. None of that was run
 elsewhere:
 
-- [ ] **Windows — `secrets` against Credential Manager.** Same round trip. The
-      replace semantics are the ones to watch: macOS gets them from an explicit
-      `SecItemDelete` before `SecItemAdd`, so check Windows doesn't end up with
-      two entries under one key. Also confirm an unsaved key gives `null`
-      rather than an error, since that's the branch every caller writes.
-- [ ] **Windows — `authenticate` via Windows Hello.** `CheckAvailabilityAsync`
-      short-circuits to `false` on a machine with no Hello enrolled — check
-      that path *and* a real verification, and that neither hangs the promise.
-- [ ] **Windows — `permissions.check`.** Expect `granted` for the five known
-      names (there is no TCC) and `unsupported` for anything else, including
-      `automation:*`. The deck's summary line is written to say "nothing here
-      is gated" when everything is unsupported; watch it say the right thing.
-- [ ] **Linux — `secrets` against the Secret Service.** The one with real
-      failure modes: with no keyring daemon running the launcher answers
-      `no secret service`, and the deck should show that as an error rather
-      than an empty value. Check a locked keyring too — GNOME prompts to
-      unlock, and it's worth knowing whether that blocks the call or fails.
+- [x] **Windows — `secrets` against Credential Manager** — verified 2026-07-28.
+      set→get→delete→get round-trips in ~10ms; a second `set` REPLACES (get
+      returns the new value, ONE delete leaves nothing behind, and `cmdkey
+      /list` shows exactly one entry, target `<app id>/<key>`, so no duplicate);
+      an unsaved key reads `null` not an error; `delete` of an absent key
+      resolves `true`; an empty string comes back as `''`, not null.
+      **One real difference from macOS, and it cost a fix:** Credential Manager
+      caps a blob at **2560 bytes**, where the macOS keychain swallowed 4 KB of
+      emoji whole. Over the cap `CredWriteW` fails with 1783
+      (`RPC_X_BAD_STUB_DATA`), which names nothing, and the old message was a
+      bare "credential write failed" — so the 4 KB emoji case in this file's
+      macOS round trip simply exploded with no clue why. `do_secret` now
+      rejects oversized values up front naming the byte count and the limit.
+      The limit is BYTES of UTF-8, not characters: 4-byte emoji reach it four
+      times faster than ASCII (2560 chars of ASCII fits; 640 emoji is already
+      2560 bytes and is the last thing that does). NOTE the constant is
+      hardcoded, not `CRED_MAX_CREDENTIAL_BLOB_SIZE` — MinGW's wincred.h still
+      defines that as the pre-Vista 512, and using it rejected writes this
+      machine accepts. Bisected against a live `CredWriteW`: 2560 writes, 2561
+      fails.
+- [~] **Windows — `authenticate` via Windows Hello** — the short-circuit half
+      verified 2026-07-28: resolves `false` in **13ms**, no hang. Confirmed
+      HONEST rather than a broken binding by probing the WinRT enum directly
+      from a standalone program — the factory activates, the async op
+      completes, and `UserConsentVerifierAvailability` is `1
+      (DeviceNotPresent)`, i.e. this box has no Hello enrolled. Still unrun,
+      and it needs hardware: a REAL verification resolving `true`, and a
+      cancel resolving `false` rather than hanging or throwing.
+      (Gotcha if you write your own probe: copy the statics IID out of
+      `launcher-win.cc`. A wrong one answers `E_NOINTERFACE` and looks exactly
+      like "Hello is unavailable".)
+- [x] **Windows — `permissions.check`** — verified 2026-07-28. `granted` for
+      all five known names (`accessibility`, `screen`, `notifications`,
+      `microphone`, `camera` — there is no TCC), and `unsupported` for
+      `automation`, `automation:<id>` and any unknown name. No prompts.
+- [~] **Linux — `secrets` against the Secret Service.** Happy path verified
+      2026-07-28 (the VM's keyring turned out unlocked): set→get→delete
+      round-trips in single-digit ms, a second `set` REPLACES rather than
+      duplicating (get returns the new value, one delete leaves nothing
+      behind), an unsaved key reads `null` not an error. Still unwatched,
+      because this box can no longer produce them: the no-daemon answer
+      (`no secret service`) and the locked-keyring behavior — GNOME may
+      prompt to unlock, and it's worth knowing whether that blocks the call
+      or fails. (Earlier this VM DID report IsLocked while autologin'd, per
+      TODO-linux.md, so the locked case is real.)
 - [ ] **Linux — `authenticate` answers `false`.** Deliberate: no portable owner
       check exists, so the gate fails closed. The card claims this in prose;
       confirm the button actually says so rather than looking broken.
@@ -446,11 +568,18 @@ here could reach.
       audio may go to Apple. Testable by pulling the network and seeing if
       recognition still works — worth knowing before anyone builds a privacy
       claim on the pair.
-- [ ] **Windows.** WebView2 has `webkitSpeechRecognition` too, and needs no
-      Info.plist — so this may work there with no permission plumbing at all,
-      which would make it the rare feature that's *easier* off macOS. Never
-      tried. (`macos.ai` is macOS-only regardless, so the full loop isn't
-      portable — but dictation into the prompt box would be.)
+- [~] **Windows.** Tried 2026-07-28, and it is half good news. Both
+      `window.SpeechRecognition` and `window.webkitSpeechRecognition` are
+      **functions** in WebView2 (macOS WebKit has only the prefixed one), and a
+      recognizer **constructs** fine with no permission plumbing and no
+      Info.plist equivalent. But `start()` called from script produced **no
+      event at all within 6s** — not `start`, not `audiostart`, not even an
+      `error`. That is a different failure from macOS, which at least answers
+      `service-not-allowed`, and silence is the worst of the three. Likely a
+      missing transient user activation (the call came from a timer, not a
+      click) or an unimplemented backend behind a present API. Needs a
+      gesture-driven retry before anyone builds on it — and note the full
+      hands-free loop isn't portable regardless, since `macos.ai` is macOS-only.
 
 ## `tiny.system.locale()` — read, but never seen change
 
@@ -532,18 +661,46 @@ arm for the name, or an explicit `got_unsupported`), which is strong — but no
 Windows or Linux machine was involved, and "the launcher has no handler" is
 exactly the kind of claim that deserves a run:
 
-- [ ] **Windows** — confirm `otherWindows()` really resolves `null`,
-      `moveWindow()` rejects, `pickColor()` and `spotlight()` reject, and that
-      pressing a media key with Now Playing set does nothing at all.
-- [ ] **Linux/X11** — same for `otherWindows()`, `selectedText()` and
-      `moveWindow()`. If any of them *does* work, the table is now
-      under-claiming, which is the better failure but still wrong.
-- [ ] **`app.thumbnail` after the representation change** — macOS is measured
+- [x] **Windows** — checked 2026-07-28, and it found a real bug. The three
+      that moved to `tiny.macos.*` reject with the guard message
+      ("tiny.macos.otherWindows is macOS-only (this is windows) — guard with
+      tiny.system.isMacOS()"), and `pickColor()` rejects "unsupported on
+      windows". **`spotlight()` did NOT reject — it resolved `[]`.** The
+      launcher is honest (`SPOTLIGHT` reaches `got_unsupported`); the BRIDGE
+      threw the answer away: `(await ask('SPOTLIGHT', …))?.paths ?? []` turned
+      `{ok:false,error:'unsupported on windows'}` into an empty array. To a
+      caller "no files matched" and "there is no search backend here" are
+      opposite answers and only the second was true — and `capabilities()
+      .spotlight` being `false` didn't help anyone who just called it. Fixed
+      to check `ok` and throw, the way the neighbouring `pickColor` already
+      did; re-verified rejecting.
+      Swept the other `ask()` call sites for the same shape: `voices()` has it
+      (`?.voices ?? []`) but all three launchers implement `VOICES`, so it can
+      never receive an unsupported reply — left alone. Everything else coerces
+      to an honest `'unsupported'`/`false` default.
+      Still unrun: pressing a media key with Now Playing set.
+- [x] **Linux/X11** — verified 2026-07-28, both sessions: the three now live
+      on `tiny.macos.*` and each rejects with the guard message
+      ("tiny.macos.X is macOS-only (this is linux) — guard with
+      tiny.system.isMacOS()"); `system.wifi` resolves `null`;
+      `system.locale()` resolves `null` with `capabilities().locale` false —
+      the table matches reality, no under-claim found.
+- [x] **`app.thumbnail` after the representation change** — macOS is measured
       (folders, `.app` bundles, `.css`, `.wasm` and executables all render now;
-      a missing path still rejects). Windows and Linux have their own
-      renderers and were not touched, so check whether their coverage matches
-      what the docs now promise — the README says "any path" without
-      qualifying by platform.
+      a missing path still rejects). Linux measured 2026-07-28: an image
+      renders (64 asked → 128 returned, the documented @2x), but a source
+      file and a folder both reject `no thumbnail` — so the README's "any
+      path" was over-promising off macOS.
+      **Windows measured 2026-07-28, and the expectation was wrong: it matches
+      macOS, not Linux.** Via `IShellItemImageFactory` a folder, a `.exe`, a
+      `.jpg` and a plain `.txt` ALL render; only a nonexistent path rejects
+      (`no thumbnail`). So Linux is the narrow one, not "Windows and Linux".
+      **Second difference, in the size contract:** macOS and Linux treat
+      `size` as points and render @2x (ask 64, get 128); Windows treats it as
+      pixels and returns exactly what was asked (ask 64, get 64x64; a wide jpg
+      at 64 comes back 64x36, so aspect IS preserved). Callers should read
+      `width`/`height` off the result rather than assuming either. Docs
+      corrected in README, SKILL.md and tiny.d.ts (both thumbnail sites).
 
 ## Window sizes are the page's box now — Windows and Linux unbuilt
 
@@ -555,23 +712,33 @@ gives a 1100x720 page and a 1100x752 outer, a titled satellite asked for
 setSize→getState→setSize holds still over three passes. The other two
 launchers were edited to match but not compiled:
 
-- [ ] **Windows** — `do_size` now measures the live window/client insets and
+- [x] **Windows** — verified 2026-07-28 on Windows 11 Pro 26200, launcher
+      rebuilt from source. `do_size` measures the live window/client insets and
       adds them (rather than calling AdjustWindowRect, which would inflate the
       page on the borderless-client windows this launcher makes); `getState`
       reports `GetClientRect` for width/height and `GetWindowRect` for `outer`.
-      Only a **titled satellite** can show a difference — main and frameless
-      secondaries answer `WM_NCCALCSIZE` with no non-client area, so client ==
-      frame there. The check that matters is the ratchet the frame-units
-      workaround was fixed for: read `getState()`, hand width/height back to
-      `setSize`, repeat three times, and watch for growth.
-- [ ] **Linux** — already content-units on both ends, so the change is
-      `getState().outer` (from `gdk_window_get_frame_extents`) plus one fix:
-      the menu bar lives inside the toplevel, so the first bar to appear used
-      to eat its own height out of the page. `apply_menus` now gives it back
-      once, on an idle pass, and only while the window is still exactly the
-      size it was born at. Check a menu'd app gets its declared height, that a
-      user resize before the menus land isn't stomped, and what `outer` reports
-      under Wayland (expected: equal to the page box — no server-side frame).
+      **Zero drift.** A titled satellite — the only Windows case where client
+      != frame, since main and frameless secondaries answer `WM_NCCALCSIZE`
+      with no non-client area — declared 460x420 reports 460x420 (outer
+      473x456) and HELD 460x420 over three read-modify-write passes.
+      `setSize(600,400)` → 600x400 (outer 613x436). Main declared 960x640
+      reports 960x640 (outer 973x676); a frameless satellite at 150x150
+      reports 150x150 with `outer` == the page box, as predicted.
+      The ratchet has to be run BY the satellite: window ops are scoped to the
+      calling page, so a driver page opening a satellite cannot size it — open
+      the satellite on a page that measures itself.
+- [x] **Linux** — verified 2026-07-28 on Ubuntu 24.04 aarch64, GNOME 46, in
+      both Wayland and XWayland, launcher rebuilt from source. Declared
+      960x640 gives a 960x640 page; after `menu.set` the page is STILL
+      960x640 and `outer` grows by exactly the bar (729 → 755 on Wayland) —
+      the give-back works. setSize 600x400 → getState → setSize holds
+      600x400 over three passes, zero drift. A titled satellite asked for
+      460x420 reports 460x420 (outer 460x457 on X11); a frameless 150x150
+      reports 150x150 with outer == page box. One expectation was wrong in
+      this file: `outer` under Wayland is NOT the page box — GTK draws
+      client-side decorations, so frame extents include the CSD titlebar and
+      shadow (960x640 page → 1012x729 outer). That's the honest footprint.
+      Not checked: a user resize racing the menu idle pass (needs a hand).
 
 ## The ball on Windows and Linux — never run there
 
@@ -579,13 +746,112 @@ launchers were edited to match but not compiled:
       `SetWindowPos` per frame smooth, or does it stutter/trail? And does
       `chrome: { transparent: true }` on a WebView2 child window give a real
       circle, or a black square behind it?
-- [ ] **Linux/X11** — same two questions through GTK, plus: WebKitGTK needs an
-      RGBA visual for a transparent window, and the ball is the first place a
-      *secondary* window asks for one.
-- [ ] **Linux/Wayland** — the honest-failure path: `getState().canPosition` is
-      false there, and ball.html is supposed to show `✋ no setPosition` and
-      close after six seconds rather than sit still counting down. Written
-      blind; never seen.
+- [~] **Linux/X11** — mechanics verified 2026-07-28, pixels not: opened the
+      way the deck opens it, the ball lived the full 10s flight (present at
+      7.5s, gone by 13s), i.e. per-frame setPosition ran to completion.
+      Whether it's SMOOTH, and whether the RGBA visual gives a real circle
+      rather than a black square, still needs eyes.
+- [x] **Linux/Wayland** — the honest-failure path works as written (blind):
+      same probe, the ball closed itself between 2s and 7.5s — the 6s
+      `no setPosition` path, not the 10s countdown. Verified 2026-07-28.
+
+## The 2026-07-28 overnight Linux sweep — what got proven, what got fixed
+
+Run on Ubuntu 24.04 aarch64 (Parallels), GNOME 46, both Wayland and
+XWayland, launcher + client rebuilt from source first. Full fleet: **all 26
+examples build and launch** (23 native; procsy/sqlittle/trolley built inside
+an arm64 `node:22-trixie-slim` container — `node:22-slim` is bookworm, whose
+glibc 2.36 is too old for our tjs, and the container needs `libffi8`
+installed). worldclock and amp soaked 30s (the old tray-ticker bug killed
+worldclock in seconds). `test/smoke.html` and `test/appsurface.html` pass on
+both sessions.
+
+Two real bugs found and fixed, one platform gap closed:
+
+- [x] **`setAsDefaultHandler` always returned `'failed'`** — bridge checked
+      `st.exit_code`, but tjs `wait()` returns `exit_status` (every other
+      call site had it right). Fixed; now returns `'ok'` and the mimeapps
+      entry lands. All-platform code path, so Windows gets the fix for free.
+- [x] **`tinyjs build --cli` wrote no shim on Windows or Linux** — the
+      `maybeWriteCliShim` call sat at the end of the macOS bundle branch,
+      after the win/linux branches `return`. Both branches now call it.
+      Linux verified end to end: shim written, `dist/bin/<name> file.txt`
+      delivers the path to `onOpenFiles`. **Windows verified 2026-07-28 too:**
+      `dist/bin/<name>.cmd` is written (`@echo off` + `"%~dp0..\<name>.exe"
+      %*`, CRLF), a cold start through it delivers the absolute path to
+      `onOpenFiles`, and a SECOND launch while the app is running exits
+      immediately and forwards its path to the running instance (process count
+      stays at 1). One polish bug fixed alongside: the shim hint printed the
+      Unix `ln -sf … /usr/local/bin/<name>` line on Windows, where neither the
+      command nor the path exists; it now prints a `setx PATH` line there.
+- [x] **argv → onOpenFiles on Linux** — cold start delivers
+      `["/abs/path"]` with flags skipped and nonexistent paths dropped; a
+      second launch exits 0 and forwards its paths over the instance pipe to
+      the running copy (watched in the log; one process left).
+- [x] **Menu accelerators with modifiers on Linux/X11** — end to end with no
+      hands: registered `key:'ctrl+shift+k'`, fired it through the
+      launcher's own XTest `keystroke`, and the `menu {id}` event arrived.
+      On pure Wayland the keystroke resolves `ok:true` but lands in
+      XWayland where no Wayland window can hear it — `capabilities()`
+      honestly says `keystroke:false` there, so apps can feature-detect,
+      but know the resolve-true is not delivery.
+- [x] **`win.hide({app:false})` / `win.hide()` / `show()`** — all resolve on
+      Linux and the window still answers `getState` after the round trip
+      (both are window-scoped here, which is all a hide can be on Linux).
+- [x] **The 0.30 scaffold names** — from a live scaffolded app: all seven
+      dialog calls are functions on `tiny.dialog.*` and ZERO remain on
+      `tiny.win.*`, so the five buttons `tinyjs new` ships call things that
+      exist. (First probe of this found the opposite — because a launcher
+      built by hand without `native/gen-client.sh` had embedded a stale
+      client. `setup.sh` and the dev auto-rebuild both regenerate it; a bare
+      `c++` invocation does not. If tiny.* looks ancient, rebuild via
+      setup.sh.)
+- [x] **spotlight's `find` fallback** — works (a visible file in $HOME is
+      found), and hides dotfiles BY DESIGN (`-name '.*' -prune`), so a
+      query for `bashrc` honestly returns nothing. Boxes with no
+      plocate/locate get name-only, non-hidden results.
+
+## The 2026-07-28 Windows sweep — what got proven, what got fixed
+
+Run on Windows 11 Pro 26200, **launcher rebuilt from source first** (the local
+`launcher-win.exe` was two days stale — and being gitignored, a stale one never
+shows up in `git status`; this is the third time it has nearly wasted a
+session, so rebuild before believing anything). Everything
+below was driven from self-contained pages via `TINYJS_HTML`, with the taskbar
+photographed where the decoration lives outside the app window.
+
+Proven, each recorded in its own section above: `app.badge` draws (and
+`capabilities().badge` flipped to `true`), `attention` flashes and `presence`
+round-trips with the amended page, the secrets round trip against Credential
+Manager, `permissions.check` across all seven names, the window-size contract
+with zero ratchet drift, `chrome.windowControls`' Win32 coarseness, thumbnail's
+real scope, and `build --cli` + argv → `onOpenFiles` both cold and forwarded.
+
+Three real bugs found and fixed:
+
+- [x] **`spotlight()` resolved `[]` instead of rejecting** — the bridge's
+      `?? []` swallowed the launcher's `unsupported`, reporting "nothing
+      matched" on a platform with no search backend. See the capability
+      corrections section.
+- [x] **A secret over 2560 bytes failed with an unexplainable message** —
+      Credential Manager's cap, surfaced as bare "credential write failed"
+      (Win32 1783). Now rejected up front naming the size and the limit.
+- [x] **`build --cli` printed a Unix `ln -sf` hint on Windows.**
+
+- [x] **The 0.30 scaffold names on Windows** — from a live scaffolded app, the
+      same check the Linux sweep made: all seven dialog calls are functions on
+      `tiny.dialog.*` and ZERO remain on `tiny.win.*`, and `win.setTitle`,
+      `win.setSize`, `menu.set`, `quit` and `api.call` all exist. So the
+      buttons `tinyjs new` ships call things that exist here too.
+
+Two long-open questions also got closed, both negative, both from a **built**
+app rather than a dev spawn: `app.icon` cannot move the taskbar button even
+with an AppUserModelID, and WebView2's `SpeechRecognition` constructs but never
+fires. Details in their own sections.
+
+Not covered, and still needing a hand or hardware: `startDrag`/`startResize`
+(a modal OS loop that only ends on a real mouse-up), `dialog.openFiles`'
+multi-select panel, a real Windows Hello verification, and media keys.
 
 ## Driving these checks headlessly on Windows
 
@@ -603,9 +869,61 @@ window, so the app's own logs can never confirm them:
 - A *flash* is only distinguishable from a static button by consecutive-frame
   pixel diffs oscillating; a single frame proves nothing. Same for progress —
   compare the bar across held states rather than trusting one shot.
+- **Diff against a reference frame from INSIDE the app's run.** Windows 11
+  centres taskbar buttons, so the app's own button appearing shifts the whole
+  strip sideways: a diff against a pre-launch frame is tens of thousands of
+  changed pixels of layout shift, and a 770-pixel badge is invisible inside
+  that. Pick a frame after the window is up but before the call under test.
+- Have the page print `MARK <ms> <label>` at each state change and align frames
+  to it afterwards, rather than trying to synchronise the two processes. The
+  screenshotter's own start-up (Add-Type compiling) is seconds of skew.
 - `WM_GETICON` read off the live window separates "the call did nothing" from
   "the call worked and the shell ignored it". That distinction is the whole
   point of this file, and it is what caught the `app.icon` taskbar finding.
+
+## Per-window menu bars — Windows proven, macOS and Linux UNRUN (2026-07-28)
+
+`tiny.menu.set` became the APP menu (every window draws it), plus
+`tiny.win.menu.*` for one window's own and `chrome.menu:false` to hide one
+window's bar. Written on **Windows**, which is the only platform it has been
+compiled or run on.
+
+| check | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| a secondary window shows the app menu | ✅ seen — nib's doc window, plus a scripted app measuring its own frame | ⬜ (always did — one shared bar) | ⬜ never compiled |
+| `size` is still the page's box with a bar | ✅ declared 700x400 → 700x400 page, frame grew 19px | n/a (the bar isn't in the window) | ⬜ main was repaired before; secondaries are new code |
+| a window opened later inherits the app menu | ✅ seen | ⬜ | ⬜ |
+| `win.menu.set` overrides that window only | ✅ own id present, app id gone, other windows untouched | ⬜ **the focus swap is the risky part** | ⬜ |
+| `win.menu.reset` goes back to the app menu | ✅ seen | ⬜ | ⬜ |
+| `win.menu.update` moves one window's tick | ✅ seen | ⬜ | ⬜ |
+| `menu.update` moves every window's copy | ✅ seen | ⬜ | ⬜ |
+| `chrome.menu:false` hides one bar only | ✅ frame 19px shorter, page unchanged | n/a — no-op by design | ⬜ |
+| items survive a hidden bar (accelerators) | ✅ `menu.get` still answers | n/a | ⬜ |
+| a closed window's items leave the registry | ✅ by construction (WM_DESTROY) | ⬜ | ⬜ |
+| a menu declared before `{role:'edit'}` keeps its items | ✅ fixed + read back off the live `HMENU` — nib's File, 20 items | ✅ always worked | ✅ appends through a pointer, never flushes |
+| a page-gated menu action fires in a fresh window | ✅ fixed — `document.hasFocus()` is true from load now (was false until the first click) | ✅ webview is first responder at once | ⬜ **check this** — WebKitGTK may need `gtk_widget_grab_focus` on the webview the same way |
+| `setHideOnClose` + closing the last window quits | ✅ fixed (`can_live_hidden`) — process and backend both exit | n/a — the Dock is the way back, flag unchanged | ⬜ same rule written for GTK, unrun: check a tray app still survives, and that closing the last window exits |
+
+What to watch for on **macOS**: the bar now follows focus through an
+`NSWindowDidBecomeKeyNotification` observer, and per-window menus are only as
+good as that. Open two windows, give one its own menu, ⌘\` between them — the
+bar should swap and swap back, no flicker, no wrong bar left up. A save panel
+or an alert taking key must NOT swap it (`winid_for_window` answers "" for
+windows that aren't ours and the observer skips those). And a window with its
+own menu closing while key must put the app menu back.
+
+What to watch for on **Linux**: every secondary window now gets a `GtkBox` +
+`GtkMenuBar` + its own `GtkAccelGroup` at creation, where before the webview
+went straight into the toplevel. Confirm in this order — a plain secondary
+window still looks and behaves exactly as it did (nothing mis-packed, webview
+still fills), then the bar appears at all, then `win.open({ size })` still
+lands on the page's box once the bar has taken its row. That last one is the
+same repair main needed when its bar first appeared.
+
+The Windows numbers came from a scripted app that opens windows and reports
+`getState().outer.height - height` (the frame's share) for each. Worth
+rebuilding on the other two: it turns "is the bar there" into a number, which
+is the only way to tell a missing bar from one drawn over the page.
 
 [TODO-windows.md]: TODO-windows.md
 [TODO-linux.md]: TODO-linux.md

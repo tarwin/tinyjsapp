@@ -63,8 +63,8 @@ static std::mutex g_write_mutex;
 static GtkWindow* g_win = nullptr;    // main window
 static WebKitWebView* g_wv = nullptr; // main webview
 static GtkWidget* g_vbox = nullptr;
-static GtkWidget* g_menubar = nullptr;
-static GtkAccelGroup* g_accel = nullptr;
+static GtkWidget* g_menubar = nullptr;   // main's bar (== g_main_menu.bar)
+static GtkAccelGroup* g_accel = nullptr; // main's accelerators
 
 static bool g_hide_on_close = false;
 static bool g_accessory = false;
@@ -79,6 +79,40 @@ static std::string g_chrome_vibrancy;  // "" = none
 static std::string g_level = "normal";
 static bool g_click_through = false, g_all_spaces = false;
 
+// Menu declarations (shared by menu bar / tray / context menu). Defined this
+// early because a window carries its own menu — see WinMenu below.
+struct MenuItemSpec {
+  bool separator = false;
+  bool submenu = false;
+  std::string id, label, key, flags;
+  std::vector<MenuItemSpec> children;
+};
+struct MenuSpec {
+  std::string title;
+  std::vector<MenuItemSpec> items;
+};
+
+// A window's menu bar. Every window has one — main included — and resolves
+// its contents by inheritance: its OWN declaration if it made one
+// (MENUBEGIN@<win>), otherwise the app menu (a bare MENUBEGIN, i.e.
+// tiny.menu.set / app.setMenu). macOS has a single bar for the whole app;
+// GTK, like Win32, draws the bar inside each toplevel, so each window gets
+// its own copy of the same menu and an app that says nothing per-window sees
+// the same thing everywhere.
+//
+// The widgets are BUILT even when the bar is hidden: accelerators live on
+// them (per-window GtkAccelGroup), and Ctrl+S has to keep working in a
+// window that merely doesn't show a bar — the macOS behaviour that
+// chrome.menu:false is imitating.
+struct WinMenu {
+  std::vector<MenuSpec> own;
+  bool has_own = false;
+  bool visible = true;             // chrome.menu
+  GtkWidget* bar = nullptr;        // GtkMenuBar, packed above the webview
+  GtkAccelGroup* accel = nullptr;  // this window's accelerators
+  bool room_given = false;         // page box repaid once (see apply_menus)
+};
+
 struct SecWin {
   std::string id;
   GtkWindow* win = nullptr;
@@ -88,8 +122,16 @@ struct SecWin {
   std::string vibrancy;
   std::string level = "normal";
   bool click_through = false;
+  WinMenu menu;
+  int req_w = 0, req_h = 0;    // the page box win.open asked for
 };
 static std::map<std::string, SecWin*> g_secwins;
+static WinMenu g_main_menu;                // main's; secondaries carry theirs
+static std::vector<MenuSpec> g_app_menu;   // the app menu (bare MENUBEGIN)
+
+// menu plumbing, defined in the menu-building section below
+static WinMenu* menu_for(const std::string& winid);
+static void apply_menus(const std::string& winid);
 
 // ------------------------------------------------------------------- utils --
 
@@ -381,12 +423,6 @@ static WebKitUserContentManager* make_ucm(const std::string& winid) {
 
 // ------------------------------------------------- context menu (all wins) ---
 
-struct MenuItemSpec {
-  bool separator = false;
-  bool submenu = false;
-  std::string id, label, key, flags;
-  std::vector<MenuItemSpec> children;
-};
 static std::vector<MenuItemSpec> g_ctx_items;   // custom right-click menu
 static bool g_ctx_custom = false;
 static bool g_ctx_suppress = false;
@@ -397,8 +433,14 @@ struct RegItem {
   std::string label;
   bool checked = false, enabled = true;
   std::string kind;              // "menu" | "tray" | "ctx"
+  GtkWindow* owner = nullptr;    // menu-bar items: the window whose bar holds
+                                 // THIS copy. A GTK menu bar lives inside one
+                                 // toplevel, so a menu shown in three windows
+                                 // is three sets of widgets sharing ids.
+                                 // null for tray / context.
 };
-static std::map<std::string, RegItem> g_items;
+// Hence a multimap: an app-wide MENUUPD patches every copy, MENUUPD@<win> one.
+static std::multimap<std::string, RegItem> g_items;
 
 static gboolean on_context_menu(WebKitWebView*, WebKitContextMenu* menu,
                                 GdkEvent*, WebKitHitTestResult*, gpointer) {
@@ -630,7 +672,21 @@ static void apply_chrome(const std::string& winid, const std::vector<std::string
 
   std::string frame = tab_field(f, 0), traffic = tab_field(f, 1),
               transp = tab_field(f, 2), vib = tab_field(f, 3),
-              square = tab_field(f, 4), first = tab_field(f, 5);
+              square = tab_field(f, 4), first = tab_field(f, 5),
+              menu = tab_field(f, 6);
+
+  // chrome.menu — whether THIS window shows a bar. The app menu carries on
+  // everywhere else; the widgets stay built either way so the accelerators
+  // keep firing (see WinMenu).
+  if (!menu.empty()) {
+    if (WinMenu* wm = menu_for(winid)) {
+      bool on = menu == "1";
+      if (wm->visible != on) {
+        wm->visible = on;
+        apply_menus(winid);
+      }
+    }
+  }
 
   if (!frame.empty()) {
     bool on = frame == "1";
@@ -689,21 +745,35 @@ static gboolean on_window_state(GtkWidget* w, GdkEventWindowState* ev, gpointer)
   return FALSE;
 }
 
-static int menubar_height() {
-  if (!g_menubar || !gtk_widget_get_visible(g_menubar)) return 0;
+// This window's menu state ('main' or a secondary id).
+static WinMenu* menu_for(const std::string& winid) {
+  if (winid.empty() || winid == "main") return &g_main_menu;
+  SecWin* sw = sec_for(winid);
+  return sw ? &sw->menu : nullptr;
+}
+
+// main + every open secondary
+static std::vector<std::string> menu_windows() {
+  std::vector<std::string> out{"main"};
+  for (auto& kv : g_secwins) out.push_back(kv.first);
+  return out;
+}
+
+static int menubar_height(const std::string& winid) {
+  WinMenu* wm = menu_for(winid);
+  if (!wm || !wm->bar || !gtk_widget_get_visible(wm->bar)) return 0;
   GtkAllocation a;
-  gtk_widget_get_allocation(g_menubar, &a);
+  gtk_widget_get_allocation(wm->bar, &a);
   return a.height > 1 ? a.height : 0;
 }
 
-// SIZE sets the CONTENT area (the webview box); the main window's menu bar
-// rides above it, so add its height back when resizing the outer window.
+// SIZE sets the CONTENT area (the webview box); a window's menu bar rides
+// above it, so add its height back when resizing the outer window.
 static void set_content_size(const std::string& winid, int w, int h) {
   GtkWindow* win = win_for(winid);
   if (!win) return;
   if (w <= 0 || h <= 0) return;   // gtk_window_resize asserts on either
-  int extra = (winid.empty() || winid == "main") ? menubar_height() : 0;
-  gtk_window_resize(win, w, h + extra);
+  gtk_window_resize(win, w, h + menubar_height(winid));
 }
 
 static void set_level(const std::string& winid, const std::string& level) {
@@ -800,7 +870,7 @@ static void do_winop(const std::string& winid, const std::string& op) {
     if (sscanf(op.c_str() + 8, "%dx%d", &mw, &mh) == 2 && mw > 0 && mh > 0) {
       GdkGeometry geom;
       geom.min_width = mw;
-      geom.min_height = mh + (main_win ? menubar_height() : 0);
+      geom.min_height = mh + menubar_height(winid);
       gtk_window_set_geometry_hints(win, nullptr, &geom, GDK_HINT_MIN_SIZE);
     }
   }
@@ -837,8 +907,8 @@ static void do_winop(const std::string& winid, const std::string& op) {
 // shared block-builder state (menu bar / tray / context menu declarations)
 static std::vector<MenuItemSpec> g_build_menus_current;    // items at current level
 static std::vector<std::vector<MenuItemSpec>*> g_build_stack;
-struct MenuSpec { std::string title; std::vector<MenuItemSpec> items; };
 static std::vector<MenuSpec> g_build_menubar;              // MENU sections
+static std::string g_build_menu_win;   // MENUBEGIN@<win>; empty = the app menu
 static int g_build_mode = 0;   // 0 none, 1 menubar, 2 tray, 3 ctx
 struct TraySpec {
   std::string title, icon, tooltip;
@@ -882,13 +952,16 @@ static void build_item_line(const std::string& op, const std::string& rest) {
   }
 }
 
-static void on_menu_item_activate(GtkMenuItem*, gpointer data) {
+static void on_menu_item_activate(GtkMenuItem* item, gpointer data) {
   const char* payload = (const char*)data;   // "menu\0id" packed as "kind:id"
   std::string s = payload;
   size_t colon = s.find(':');
   std::string kind = s.substr(0, colon), id = s.substr(colon + 1);
-  auto it = g_items.find(id);
-  if (it != g_items.end() && !it->second.enabled) return;
+  // Match on the WIDGET, not the id: several windows can hold an item with
+  // this id, and only this one's enabled flag has any say here.
+  auto range = g_items.equal_range(id);
+  for (auto it = range.first; it != range.second; ++it)
+    if (it->second.widget == GTK_WIDGET(item) && !it->second.enabled) return;
   if (kind == "tray") pipe_write_line("TRAY " + id);
   else pipe_write_line("MENU " + id);
 }
@@ -914,9 +987,12 @@ static GdkModifierType split_accel(const std::string& spec, std::string& key) {
   return (GdkModifierType)mask;
 }
 
-// Build a GtkMenu from item specs; register items under `kind`.
+// Build a GtkMenu from item specs; register items under `kind`. `owner` and
+// `accel` are the window this copy belongs to (null for tray / context).
 static GtkWidget* build_gtk_menu(const std::vector<MenuItemSpec>& items,
-                                 const std::string& kind) {
+                                 const std::string& kind,
+                                 GtkWindow* owner = nullptr,
+                                 GtkAccelGroup* accel = nullptr) {
   GtkWidget* menu = gtk_menu_new();
   for (const auto& it : items) {
     if (it.separator) {
@@ -925,7 +1001,8 @@ static GtkWidget* build_gtk_menu(const std::vector<MenuItemSpec>& items,
     }
     if (it.submenu) {
       GtkWidget* mi = gtk_menu_item_new_with_label(it.label.c_str());
-      gtk_menu_item_set_submenu(GTK_MENU_ITEM(mi), build_gtk_menu(it.children, kind));
+      gtk_menu_item_set_submenu(GTK_MENU_ITEM(mi),
+                                build_gtk_menu(it.children, kind, owner, accel));
       gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
       continue;
     }
@@ -936,12 +1013,12 @@ static GtkWidget* build_gtk_menu(const std::vector<MenuItemSpec>& items,
     // hide the check box unless checked (plain items look plain)
     if (!checked) g_object_set(mi, "draw-as-radio", FALSE, NULL);
     gtk_widget_set_sensitive(mi, !disabled);
-    if (!it.key.empty() && g_accel && kind == "menu") {
+    if (!it.key.empty() && accel && kind == "menu") {
       std::string key;
       GdkModifierType mask = split_accel(it.key, key);
       guint keyval = gdk_keyval_from_name(key.c_str());
       if (keyval != GDK_KEY_VoidSymbol) {
-        gtk_widget_add_accelerator(mi, "activate", g_accel, keyval,
+        gtk_widget_add_accelerator(mi, "activate", accel, keyval,
                                    mask, GTK_ACCEL_VISIBLE);
       }
     }
@@ -955,30 +1032,42 @@ static GtkWidget* build_gtk_menu(const std::vector<MenuItemSpec>& items,
     reg.checked = checked;
     reg.enabled = !disabled;
     reg.kind = kind;
-    g_items[it.id] = reg;
+    reg.owner = owner;
+    g_items.emplace(it.id, reg);
   }
   return menu;
 }
 
-static void clear_registry_kind(const std::string& kind) {
+// kind = tray|ctx: clears the lot. kind = menu: clears ONE window's items —
+// the other windows' copies are still on screen and still theirs.
+static void clear_registry_kind(const std::string& kind, GtkWindow* owner = nullptr) {
   for (auto it = g_items.begin(); it != g_items.end();) {
-    if (it->second.kind == kind) it = g_items.erase(it);
+    if (it->second.kind == kind && (!owner || it->second.owner == owner))
+      it = g_items.erase(it);
     else ++it;
   }
 }
 
-static void apply_menus() {
-  if (!g_menubar) return;
-  clear_registry_kind("menu");
-  gtk_container_foreach(GTK_CONTAINER(g_menubar),
+// (Re)build one window's bar from its effective spec: its own declaration if
+// it made one, otherwise the app menu.
+static void apply_menus(const std::string& winid) {
+  GtkWindow* win = win_for(winid);
+  WinMenu* wm = menu_for(winid);
+  if (!win || !wm || !wm->bar) return;
+  clear_registry_kind("menu", win);
+  gtk_container_foreach(GTK_CONTAINER(wm->bar),
     [](GtkWidget* w, gpointer) { gtk_widget_destroy(w); }, nullptr);
-  for (const auto& m : g_build_menubar) {
+  const std::vector<MenuSpec>& spec = wm->has_own ? wm->own : g_app_menu;
+  for (const auto& m : spec) {
     GtkWidget* top = gtk_menu_item_new_with_label(m.title.c_str());
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(top), build_gtk_menu(m.items, "menu"));
-    gtk_menu_shell_append(GTK_MENU_SHELL(g_menubar), top);
+    gtk_menu_item_set_submenu(GTK_MENU_ITEM(top),
+                              build_gtk_menu(m.items, "menu", win, wm->accel));
+    gtk_menu_shell_append(GTK_MENU_SHELL(wm->bar), top);
   }
-  if (g_build_menubar.empty()) gtk_widget_hide(g_menubar);
-  else gtk_widget_show_all(g_menubar);
+  // chrome.menu:false keeps the widgets (so the accelerators above still
+  // fire) and just doesn't show them.
+  if (spec.empty() || !wm->visible) gtk_widget_hide(wm->bar);
+  else gtk_widget_show_all(wm->bar);
 
   // The menu bar lives INSIDE the toplevel, and gtk_window_set_default_size
   // took the declared size as the whole window — so the first bar to appear
@@ -986,46 +1075,66 @@ static void apply_menus() {
   // 720-minus-a-bar-tall document on Linux only. `size` means the page's box
   // (same as win.setSize and getState), so hand it back.
   //
-  // Once, and only while the window is still exactly the size it was born at:
-  // after the user has dragged an edge the size is theirs, not ours. Deferred
-  // to an idle pass because the bar has no allocation to measure until GTK has
-  // laid it out.
-  static bool menubar_room_given = false;
-  if (!menubar_room_given && !g_build_menubar.empty()) {
-    menubar_room_given = true;
-    g_idle_add([](gpointer) -> gboolean {
-      int w = 0, h = 0;
-      gtk_window_get_size(g_win, &w, &h);
-      if (w == g_width && h == g_height) set_content_size("main", g_width, g_height);
+  // Once per window, and only while it is still exactly the size it was born
+  // at: after the user has dragged an edge the size is theirs, not ours.
+  // Deferred to an idle pass because the bar has no allocation to measure
+  // until GTK has laid it out.
+  if (!wm->room_given && !spec.empty() && wm->visible) {
+    wm->room_given = true;
+    g_idle_add([](gpointer data) -> gboolean {
+      std::string* id = (std::string*)data;
+      GtkWindow* w2 = win_for(*id);
+      int want_w = (*id == "main") ? g_width : 0, want_h = (*id == "main") ? g_height : 0;
+      if (SecWin* sw = sec_for(*id)) { want_w = sw->req_w; want_h = sw->req_h; }
+      if (w2 && want_w > 0 && want_h > 0) {
+        int w = 0, h = 0;
+        gtk_window_get_size(w2, &w, &h);
+        if (w == want_w && h == want_h) set_content_size(*id, want_w, want_h);
+      }
+      delete id;
       return G_SOURCE_REMOVE;
-    }, nullptr);
+    }, new std::string(winid));
   }
 }
 
-static void menu_update(const std::string& rest) {
+// The app menu changed: every window that hasn't overridden shows it.
+static void apply_app_menu_everywhere() {
+  for (const auto& id : menu_windows()) {
+    WinMenu* wm = menu_for(id);
+    if (wm && !wm->has_own) apply_menus(id);
+  }
+}
+
+// winid empty = every window's copy of the id (what one shared macOS bar
+// already did); otherwise just that window's.
+static void menu_update(const std::string& rest, const std::string& winid = "") {
   auto f = split_tabs(rest);
   std::string id = tab_field(f, 0), label = tab_field(f, 1),
               checked = tab_field(f, 2), enabled = tab_field(f, 3);
-  auto it = g_items.find(id);
-  if (it == g_items.end()) return;
-  RegItem& reg = it->second;
-  if (!label.empty()) {
-    reg.label = label;
-    if (reg.widget) gtk_menu_item_set_label(GTK_MENU_ITEM(reg.widget), label.c_str());
-  }
-  if (!checked.empty()) {
-    reg.checked = checked == "1";
-    if (reg.widget && GTK_IS_CHECK_MENU_ITEM(reg.widget)) {
-      g_signal_handlers_block_matched(reg.widget, G_SIGNAL_MATCH_FUNC, 0, 0,
-        nullptr, (gpointer)on_menu_item_activate, nullptr);
-      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(reg.widget), reg.checked);
-      g_signal_handlers_unblock_matched(reg.widget, G_SIGNAL_MATCH_FUNC, 0, 0,
-        nullptr, (gpointer)on_menu_item_activate, nullptr);
+  GtkWindow* only = winid.empty() ? nullptr : win_for(winid);
+  if (!winid.empty() && !only) return;   // named a window that has since closed
+  auto range = g_items.equal_range(id);
+  for (auto it = range.first; it != range.second; ++it) {
+    RegItem& reg = it->second;
+    if (only && reg.owner != only) continue;
+    if (!label.empty()) {
+      reg.label = label;
+      if (reg.widget) gtk_menu_item_set_label(GTK_MENU_ITEM(reg.widget), label.c_str());
     }
-  }
-  if (!enabled.empty()) {
-    reg.enabled = enabled == "1";
-    if (reg.widget) gtk_widget_set_sensitive(reg.widget, reg.enabled);
+    if (!checked.empty()) {
+      reg.checked = checked == "1";
+      if (reg.widget && GTK_IS_CHECK_MENU_ITEM(reg.widget)) {
+        g_signal_handlers_block_matched(reg.widget, G_SIGNAL_MATCH_FUNC, 0, 0,
+          nullptr, (gpointer)on_menu_item_activate, nullptr);
+        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(reg.widget), reg.checked);
+        g_signal_handlers_unblock_matched(reg.widget, G_SIGNAL_MATCH_FUNC, 0, 0,
+          nullptr, (gpointer)on_menu_item_activate, nullptr);
+      }
+    }
+    if (!enabled.empty()) {
+      reg.enabled = enabled == "1";
+      if (reg.widget) gtk_widget_set_sensitive(reg.widget, reg.enabled);
+    }
   }
   // context-menu items live in the stored spec, not widgets
   std::function<void(std::vector<MenuItemSpec>&)> patch =
@@ -1146,7 +1255,7 @@ static void apply_tray() {
     reg.checked = checked;
     reg.enabled = !disabled;
     reg.kind = "tray";
-    g_items[it.id] = reg;
+    g_items.emplace(it.id, reg);
   }
   gtk_widget_show_all(menu);
   // Take our own reference on the new menu (menus are created floating), then
@@ -1505,7 +1614,7 @@ static std::string win_state_json(const std::string& winid) {
       if (ext.width > 0 && ext.height > 0) { outer_w = ext.width; outer_h = ext.height; }
     }
   }
-  if (main_win) h -= menubar_height();
+  h -= menubar_height(winid);
   GdkWindowState st = g_winstate.count(win) ? g_winstate[win] : (GdkWindowState)0;
   bool fullscreen = st & GDK_WINDOW_STATE_FULLSCREEN;
   bool minimized = st & GDK_WINDOW_STATE_ICONIFIED;
@@ -1677,13 +1786,25 @@ static void answer_get(const std::string& qid, const std::string& what) {
     send_got(qid, "null");
   } else if (what == "traypos") {
     send_got(qid, "null");  // SNI does not expose icon geometry
-  } else if (what.rfind("item:", 0) == 0) {
+  } else if (what.rfind("item:", 0) == 0 || what.rfind("item@", 0) == 0) {
+    // item:<id> — any copy (tray/context items live here too). item@<win>:<id>
+    // — that window's copy. Window ids don't contain ':' (win.open picks
+    // them), so the first colon after '@' ends the window name.
     std::string id = what.substr(5);
-    auto it = g_items.find(id);
-    if (it == g_items.end()) { send_got(qid, "{\"exists\":false}"); return; }
-    send_got(qid, "{\"exists\":true,\"label\":" + json_escape(it->second.label) +
-                  ",\"checked\":" + (it->second.checked ? "true" : "false") +
-                  ",\"enabled\":" + (it->second.enabled ? "true" : "false") + "}");
+    GtkWindow* only = nullptr;
+    if (what[4] == '@') {
+      size_t colon = id.find(':');
+      only = win_for(colon == std::string::npos ? id : id.substr(0, colon));
+      id = colon == std::string::npos ? "" : id.substr(colon + 1);
+    }
+    const RegItem* found = nullptr;
+    auto range = g_items.equal_range(id);
+    for (auto it = range.first; it != range.second && !found; ++it)
+      if (!only || it->second.owner == only) found = &it->second;
+    if (!found) { send_got(qid, "{\"exists\":false}"); return; }
+    send_got(qid, "{\"exists\":true,\"label\":" + json_escape(found->label) +
+                  ",\"checked\":" + (found->checked ? "true" : "false") +
+                  ",\"enabled\":" + (found->enabled ? "true" : "false") + "}");
   } else {
     send_got(qid, "null");
   }
@@ -3878,6 +3999,9 @@ static void on_secwin_destroy(GtkWidget*, gpointer data) {
   auto it = g_secwins.find(id);
   if (it != g_secwins.end()) {
     pipe_write_line(std::string("WINCLOSED ") + id);
+    // This window's menu items go with it — their widgets are already gone,
+    // and a later app-wide MENUUPD would otherwise walk into them.
+    clear_registry_kind("menu", it->second->win);
     delete it->second;
     g_secwins.erase(it);
   }
@@ -3906,17 +4030,30 @@ static void do_winopen(const std::string& rest) {
   apply_rgba_visual(GTK_WIDGET(sec->win));
   const char* icon = getenv("TINYJS_ICON");
   if (icon && *icon) set_window_icon(sec->win, icon);
+  sec->req_w = w;
+  sec->req_h = h;
+  // Same shape as main: a vertical box with the (initially empty) menu bar
+  // above the webview. Built up front rather than reparented later — a
+  // window that never shows a bar just never shows this widget.
+  sec->menu.accel = gtk_accel_group_new();
+  gtk_window_add_accel_group(sec->win, sec->menu.accel);
+  GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_container_add(GTK_CONTAINER(sec->win), vbox);
+  sec->menu.bar = gtk_menu_bar_new();
+  gtk_box_pack_start(GTK_BOX(vbox), sec->menu.bar, FALSE, FALSE, 0);
   sec->wv = make_webview(id);
-  gtk_container_add(GTK_CONTAINER(sec->win), GTK_WIDGET(sec->wv));
+  gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(sec->wv), TRUE, TRUE, 0);
   g_signal_connect(sec->win, "window-state-event", G_CALLBACK(on_window_state), nullptr);
   g_signal_connect(sec->win, "delete-event", G_CALLBACK(on_secwin_delete), nullptr);
   g_signal_connect_data(sec->win, "destroy", G_CALLBACK(on_secwin_destroy),
     g_strdup(id.c_str()), [](gpointer d, GClosure*) { g_free(d); }, (GConnectFlags)0);
   g_secwins[id] = sec;
 
-  // chrome + position BEFORE showing (no flash / no jump)
+  // chrome + position BEFORE showing (no flash / no jump). Field 12 is
+  // chrome.menu — '0' opens the window with no bar at all.
   std::vector<std::string> chrome = {tab_field(f, 4), tab_field(f, 5), tab_field(f, 6),
-                                     tab_field(f, 7), tab_field(f, 8), tab_field(f, 9)};
+                                     tab_field(f, 7), tab_field(f, 8), tab_field(f, 9),
+                                     tab_field(f, 12)};
   apply_chrome(id, chrome);
   std::string xs = tab_field(f, 10), ys = tab_field(f, 11);
   bool has_pos = !xs.empty() && !ys.empty();
@@ -3925,6 +4062,9 @@ static void do_winopen(const std::string& rest) {
 
   load_target_into(sec->wv, page);
   gtk_widget_show_all(GTK_WIDGET(sec->win));
+  // show_all just revealed the bar too. Fill it in from the app menu (or
+  // hide it again if there is nothing to show / the window opted out).
+  apply_menus(id);
 }
 
 static void do_winclose(const std::string& id) {
@@ -4012,7 +4152,14 @@ static void handle_line(const std::string& line) {
       if (line == "MENUEND") {
         g_build_mode = 0;
         g_build_stack.clear();
-        apply_menus();
+        if (g_build_menu_win.empty()) {
+          g_app_menu = g_build_menubar;
+          apply_app_menu_everywhere();
+        } else if (WinMenu* wm = menu_for(g_build_menu_win)) {
+          wm->own = g_build_menubar;
+          wm->has_own = true;
+          apply_menus(g_build_menu_win);
+        }
         return;
       }
     }
@@ -4078,13 +4225,34 @@ static void handle_line(const std::string& line) {
     return;
   }
 
-  if (line == "MENUBEGIN") {
+  // Bare: the app menu, shown by every window that hasn't overridden.
+  // @<win>: that window's own, main included (main has to name itself — a
+  // bare MENUBEGIN already means something else).
+  if (line == "MENUBEGIN" || line.rfind("MENUBEGIN@", 0) == 0) {
     g_build_mode = 1;
+    g_build_menu_win = line.size() > 10 ? line.substr(10) : "";
     g_build_menubar.clear();
     g_build_stack.clear();
     return;
   }
+  // MENURESET@<win>: drop the override, back to inheriting the app menu.
+  if (line.rfind("MENURESET@", 0) == 0) {
+    std::string id = line.substr(10);
+    if (WinMenu* wm = menu_for(id)) {
+      wm->own.clear();
+      wm->has_own = false;
+      apply_menus(id);
+    }
+    return;
+  }
   if (line.rfind("MENUUPD ", 0) == 0) { menu_update(line.substr(8)); return; }
+  // MENUUPD@<win> <fields> — just that window's copy of the id.
+  if (line.rfind("MENUUPD@", 0) == 0) {
+    size_t sp = line.find(' ', 8);
+    if (sp != std::string::npos)
+      menu_update(line.substr(sp + 1), line.substr(8, sp - 8));
+    return;
+  }
 
   if (line.rfind("TRAYBEGIN", 0) == 0) {
     g_build_mode = 2;
@@ -4389,8 +4557,27 @@ static void handle_line(const std::string& line) {
 
 // ------------------------------------------------------- main window close --
 
+// setHideOnClose is a macOS idea: there an app outlives its last window and
+// the Dock icon brings it back. A Linux desktop has nowhere to put that — a
+// hidden toplevel takes its taskbar entry with it — so honouring the flag with
+// nothing else on screen leaves a process the user can neither see nor quit.
+// Hide only when there IS a way back: a tray item, accessory mode, or another
+// window still up. Otherwise the close means what it means everywhere else on
+// this desktop, and the app exits.
+//
+// Only for a USER close of this window. A programmatic hide still hides
+// whatever it is told to, and the last SECONDARY closing is left alone — an
+// app that answers that by showing its main window again (nib brings the
+// Welcome screen back) would otherwise be killed in the gap before it could.
+static bool can_live_hidden() {
+  if (g_accessory || g_indicator) return true;
+  for (auto& kv : g_secwins)
+    if (kv.second->win && gtk_widget_get_visible(GTK_WIDGET(kv.second->win))) return true;
+  return false;
+}
+
 static gboolean on_main_delete(GtkWidget*, GdkEvent*, gpointer) {
-  if (g_hide_on_close) {
+  if (g_hide_on_close && can_live_hidden()) {
     gtk_widget_hide(GTK_WIDGET(g_win));
     return TRUE;
   }
@@ -4530,6 +4717,10 @@ int main(int argc, char** argv) {
   gtk_container_add(GTK_CONTAINER(g_win), g_vbox);
   g_menubar = gtk_menu_bar_new();
   gtk_box_pack_start(GTK_BOX(g_vbox), g_menubar, FALSE, FALSE, 0);
+  // main's WinMenu points at the widgets it already had; from here on every
+  // window (main included) resolves its bar the same way.
+  g_main_menu.bar = g_menubar;
+  g_main_menu.accel = g_accel;
 
   g_wv = make_webview("main");
   gtk_box_pack_start(GTK_BOX(g_vbox), GTK_WIDGET(g_wv), TRUE, TRUE, 0);

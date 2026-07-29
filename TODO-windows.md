@@ -32,6 +32,49 @@ names refer to the protocol table in the README; Windows handlers live in
       `color` writes as text (no native format).
 - [x] **Menu accelerators** — `key:` combos fire via WebView2
       `AcceleratorKeyPressed` (Ctrl+<key>).
+- [x] **A menu bar on EVERY window** (2026-07-28) — `SetMenu` only ever ran on
+      `g_hwnd`, so secondary windows had no bar at all and `secwin_proc` had no
+      `WM_COMMAND` to route one with. Each window now builds its own `HMENU`
+      from the app menu (or its own, via `MENUBEGIN@<win>`); `g_id_reg` is a
+      multimap so one `MENUUPD` patches every copy; `AccelHandler` carries a
+      winid so a combo resolves against the window it was pressed in; and
+      `chrome.menu:false` hides one window's bar while keeping its items — and
+      therefore its accelerators — alive. Two things had to be fixed
+      underneath. Attaching a bar used to eat a row out of the PAGE
+      (`attach_menu` now hands it back to the frame, so `size` keeps meaning
+      the page's box). And every secondary was created
+      `WS_EX_NOREDIRECTIONBITMAP`, which makes a GDI menu bar impossible —
+      only transparent and frameless ones drop it now, which is what that
+      ex-style was for.
+- [x] **`setHideOnClose` stranded the app** (2026-07-28) — the flag hid the
+      window unconditionally, so an app that set it (nib, for its Welcome
+      screen) survived its last window with no taskbar button and no way back:
+      `tinyjs dev` never returned and the launcher had to be killed by hand.
+      Now gated on `can_live_hidden()` — a tray icon, accessory mode, or
+      another visible window. Only for a user close of that window; a
+      programmatic hide and the last-secondary case are untouched. Verified
+      all four ways: doc open + close Welcome → hides; close the doc → Welcome
+      returns; close the last window → process exits, backend included; tray
+      app with the flag → survives with zero windows.
+- [x] **The page had no keyboard focus until clicked** (2026-07-28) —
+      WebView2's child HWND does not take focus when the host does, so
+      `document.hasFocus()` was `false` from launch and stayed false until the
+      user clicked in the page. Any app gating on it — the standard
+      multi-window "only the focused window acts" pattern, which nib uses for
+      every page-side menu action — silently dropped those actions, while
+      backend-answered items worked. `ctrl->MoveFocus(PROGRAMMATIC)` on
+      controller creation and on `WM_SETFOCUS` (main and secondaries) matches
+      macOS, where a new window's webview is first responder at once.
+      Measured before/after with a page logging `hasFocus` on a timer.
+- [x] **`{ role: 'edit' }` emptied the menu before it** (2026-07-28) — the
+      parser flushed the collected items into `pending_menus.back()` at the
+      MENUROLE line, then skipped pushing anything for the slot, so the NEXT
+      `MENU` line's flush landed on that same entry and overwrote it with an
+      empty list. nib's File menu (declared just before the role) had zero
+      items on Windows; macOS was fine because it pushes a placeholder for the
+      slot. Windows does too now, and skips role entries when building the
+      bar. Pre-existing — it only became obvious once the bar reached the
+      document windows people actually use the File menu in.
 - [x] **launchAtLogin** — HKCU Run key for built apps (dev → 'unsupported');
       the bridge passes the app exe path on the LOGIN wire op.
 - [x] **`tinyjs publish` + app auto-update** — zips `dist/` (bsdtar),
@@ -131,7 +174,27 @@ names refer to the protocol table in the README; Windows handlers live in
          page can do something the backend can't.
 
 - [ ] **scope:'app' audioTap** — system loopback shipped; per-process
-      capture needs the Win10 2004+ process-loopback path.
+      capture needs the Win10 2004+ process-loopback path. **Route proven
+      2026-07-28** while probing the EQ question (TODO-audio-filters.md):
+      `ActivateAudioInterfaceAsync` + process-loopback activation params,
+      include-tree, aimed at `ICoreWebView2::get_BrowserProcessId()` —
+      captures the audio-service child's output cleanly (a −9 dBFS sine came
+      back at −9 dBFS). Two gotchas already measured: you TELL it the format
+      (there is no mix format to query), and the session/capture pids differ
+      (the session lives on a `--type=utility` child). What remains is
+      plumbing it into `tiny_audiotap`, not research.
+- [x] **native `tiny.audio.filters` — investigated 2026-07-28, and the answer
+      is NO, with the reason measured rather than assumed.** Capture works,
+      the biquads would port as-is, and the −60 dB attenuation trick is
+      bit-clean — but process-loopback capture is post-mute AND post-volume,
+      so the only way to silence the dry signal is session volume, and session
+      volume (master and per-channel alike) is PERSISTED mixer state keyed on
+      the shared `msedgewebview2.exe` runtime path with no host-app
+      distinction. A crash while attenuated near-silences every WebView2 app
+      on the machine (Teams, Widgets, …) until the key is rewritten. That is
+      the CLAUDE.md per-app-only rule's exact failure shape, so
+      `audioFilters: false` stays, honestly. Full numbers in
+      TODO-audio-filters.md.
 - [ ] **nowPlaying** — `NOWPLAYING` reaches the launcher, matches nothing in the
       dispatch chain and is dropped, so `tiny.nowPlaying.set()` did nothing
       while `capabilities()` claimed it worked (absent from the windows table =
@@ -219,6 +282,27 @@ names refer to the protocol table in the README; Windows handlers live in
       on runtimes without `ContextMenuRequested`).
 - [x] ~~Windows CI GUI smoke~~ — the release job now runs the smoke page in
       a real window on the runner.
+
+## Verified 2026-07-28 (see TODO-verify.md for the measurements)
+
+- [x] **`app.badge`** — draws via `ITaskbarList3::SetOverlayIcon`; red disc,
+      white glyph, composes with `progress`, clears cleanly. `capabilities()
+      .badge` is now `true` on Windows. This was the last item in the
+      app-surface set that had never been seen here.
+- [x] **`secrets`** against Credential Manager — full round trip, replace
+      without duplicating, `null` for an unsaved key. Found and fixed a
+      **2560-byte blob ceiling** that used to fail with an unexplainable
+      "credential write failed" (Win32 1783). Don't reach for
+      `CRED_MAX_CREDENTIAL_BLOB_SIZE` — MinGW's header has the pre-Vista 512.
+- [x] **`permissions.check`**, **window-size contract** (zero ratchet drift),
+      **`chrome.windowControls`** (min/max need `WS_SYSMENU`, so asking for
+      minimize gets close too — and `getState` honestly reports what you got),
+      **`thumbnail`** (matches macOS's breadth, not Linux's — but returns exact
+      pixels, not @2x), **`build --cli`** shim + argv → `onOpenFiles` cold and
+      forwarded.
+- [~] **`authenticate`** — the no-Hello path only (`DeviceNotPresent`, resolves
+      `false` in 13ms, no hang). A real verification still needs enrolled
+      hardware.
 
 ## Not planned / no OS equivalent
 

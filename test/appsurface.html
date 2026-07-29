@@ -4,7 +4,8 @@
 <body>
 <h1>app surface test…</h1>
 <p>Watch the Dock (macOS) / taskbar button (Windows) / launcher icon (Linux)
-while this runs. It quits itself after ~14s.</p>
+while this runs. It minimizes itself briefly (so the attention flash is
+observable on Windows) and quits after ~27s.</p>
 <script>
 // Exercises the app-surface verbs — badge / attention / icon / progress /
 // presence — on whatever platform it's running on. The wire plumbing is
@@ -46,9 +47,18 @@ const ok = (v) => (v === true ? 'ok' : 'FAIL: ' + JSON.stringify(v));
     r.progressClear = ok(await tiny.app.progress(null));
     await wait(3000);
 
+    // Windows passes FLASHW_TIMERNOFG, which is DEFINED to do nothing while the
+    // target window is already in front — so flashing ourselves while focused
+    // proves nothing. Minimize first, hold long enough for a few flash cycles
+    // (a flash is only distinguishable from a static button by consecutive
+    // frames oscillating), then restore, which is also what stops it.
     await say('attention() — bounce (macOS) / flash (Windows) / urgency (Linux)');
+    await tiny.win.minimize();
+    await wait(1500);
     r.attention = ok(await tiny.app.attention());
-    await wait(2000);
+    await wait(6000);
+    await tiny.win.restore();
+    await wait(1500);
 
     // icon() needs a real file, so only the reset path is automated here —
     // pointing it at a png is a manual check (TODO-verify.md).
@@ -56,8 +66,11 @@ const ok = (v) => (v === true ? 'ok' : 'FAIL: ' + JSON.stringify(v));
 
     await say('presence("menubar") then back to "normal"');
     r.presenceMenubar = ok(await tiny.app.presence('menubar'));
-    await wait(2000);
+    await wait(3000);
     r.presenceNormal = ok(await tiny.app.presence('normal'));
+    // HOLD: quitting straight after this makes a restored taskbar button and a
+    // departed app look identical, which is how this read as unverifiable.
+    await wait(4000);
 
     try {
       await tiny.app.presence('sideways');
