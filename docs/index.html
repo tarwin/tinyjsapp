@@ -179,6 +179,8 @@
   .electron .fill { width: 100%; background: var(--bar); color: var(--muted); }
   .tiny .fill { width: 4%; background: var(--accent); }
   .tiny .fill span { color: var(--accent); padding-left: calc(100% + 10px); }
+  .tauri .fill { width: 7%; background: var(--bar); }
+  .tauri .fill span { color: var(--muted); padding-left: calc(100% + 10px); }
   .bar .label { color: var(--muted); }
   .tiny .label { color: var(--text); }
   .bars-note { margin-top: 18px; font-size: 15px; color: var(--muted); }
@@ -234,9 +236,22 @@
   .qs-cell pre { margin: 0; }
 
   /* architecture */
-  pre.arch { line-height: 1.75; color: var(--muted); font-size: 13px; }
-  pre.arch b { color: var(--text); font-weight: 400; }
-  pre.arch i { color: var(--accent); font-style: normal; }
+  /* how it fits — was a <pre>, which flattened three tiers and two transports
+     into one wall of muted mono. Boxes for the layers, arrows for the wires. */
+  .stack { display: grid; text-align: center; }
+  .stack .tier {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 11px 14px;
+  }
+  .stack .tier b { display: block; font: 600 13px var(--mono); color: var(--text); letter-spacing: .02em; }
+  .stack .tier span { display: block; margin-top: 4px; font: 11.5px var(--mono); color: var(--muted); }
+  .stack .wire {
+    padding: 9px 0; font: 11px var(--mono); color: var(--accent);
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+  }
+  /* the glyph carries the diagram, so it doesn't ride at label size */
+  .stack .wire::before { content: "⇅"; font-size: 19px; line-height: 1; }
+  .stack .wire em { font-style: normal; opacity: .8; }
 
   footer {
     margin-top: 96px; padding: 28px 0 56px; border-top: 1px solid var(--line);
@@ -292,15 +307,19 @@
     <div class="bars">
       <div class="bar electron"><span class="label">electron</span>
         <div class="track"><div class="fill"><span>≥ 150 MB</span></div></div></div>
+      <div class="bar tauri"><span class="label">tauri</span>
+        <div class="track"><div class="fill"><span>~10 MB</span></div></div></div>
       <div class="bar tiny"><span class="label">tinyjs</span>
         <div class="track"><div class="fill"><span>~6 MB</span></div></div></div>
     </div>
     <p class="bars-note">Your backend, a ~600 KB window process, and your
-    plain HTML/CSS/JS. The window is the WebKit already on every Mac — or the
-    WebView2 runtime already on every Windows 11 — or the WebKitGTK runtime
-    on most Linux desktops (one <code style="font-size:13px">apt install</code>
-    away where it's missing). The Windows zip and Linux tarball land at
-    ~6 MB too.</p>
+    plain HTML/CSS/JS — ~6 MB on all three platforms. The window is the
+    webview the OS already ships.</p>
+    <p class="bars-note">Tauri does the same, and does it well — but its
+    backend is Rust, and you compile it. It also ships a window and little
+    else: dialogs, clipboard, notifications, global shortcuts, filesystem,
+    keychain, autostart, deep links are plugins you add. Here they're just
+    the API, and the 6 MB is all of it.</p>
   </section>
 
   <section>
@@ -325,11 +344,10 @@
     <div class="try">
       <div class="try-body">
         <b>shelf — an app store for the examples</b>
-        <p>A 4.6 MB native app that shelves every example (pine by day,
-        walnut by night) and installs, updates, and removes them in one click.
+        <p>A 4.6 MB native app that shelves every example and installs,
+        updates, and removes them in one click.
         The catalog updates itself from the examples repo — and carries
-        per-platform downloads, so it installs the Windows and Linux
-        (x86_64 + arm64) builds too.</p>
+        per-platform downloads.</p>
       </div>
       <a class="try-dl" data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.5/shelf-0.2.5-win.zip">
         <img class="try-icon" src="shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf<span>-win.zip · 4.1 MB · win 10/11</span>
@@ -346,18 +364,6 @@
         <span>.tar.gz · 5 MB · needs libwebkit2gtk-4.1-0</span>
       </div>
     </div>
-    <p class="bars-note">All 25 examples were swept app-by-app on Windows:
-    transparency, multi-window, drag-and-drop with real paths, tray apps
-    (<code style="font-size:13px">emoji:</code> icons standing in for macOS
-    <code style="font-size:13px">sf:</code> symbols), WebGPU, and media /
-    WebAudio all work. Windows also has Touch ID's counterpart (Windows Hello),
-    audio capture, deep links and file associations. The calls that are
-    genuinely mac-only — Quick Look, AppleScript, on-device AI, OCR — answer
-    <code style="font-size:13px">'unsupported'</code>,
-    so a cross-platform app degrades honestly instead of breaking. Linux
-    support just landed — the same one-by-one sweep hasn't happened yet, but
-    the framework-level parity list is in the
-    <a href="https://github.com/tarwin/tinyjsapp#portability" style="color:var(--accent)">README's Portability section</a>.</p>
   </section>
 
   <section>
@@ -367,8 +373,13 @@
         <h3>terminal</h3>
         <pre><span class="a">tinyjs</span> new myapp
 <span class="a">cd</span> myapp
-<span class="a">tinyjs</span> dev    <span class="c"># window opens, hot reload</span>
-<span class="a">tinyjs</span> build  <span class="c"># dist/myapp.app, signed (win/linux: dist/myapp.exe or dist/myapp)</span></pre>
+
+<span class="a">tinyjs</span> dev
+<span class="c"># window opens, hot reload</span>
+
+<span class="a">tinyjs</span> build
+<span class="c"># dist/myapp.app, signed</span>
+<span class="c"># (win/linux: dist/myapp.exe or dist/myapp)</span></pre>
       </div>
       <div class="qs-cell">
         <h3>src/main.js — the whole backend</h3>
@@ -385,11 +396,13 @@ tiny.menu.set([…]);
       </div>
       <div class="qs-cell">
         <h3>how it fits</h3>
-        <pre class="arch"><b>your page</b>
-  ⇅  <i>tiny.api.call · tiny.api.on</i>
-<b>launcher</b> (WebKit / WebView2 / WebKitGTK)
-  ⇅  <i>unix socket (mac/linux) · named pipe on windows</i>
-<b>backend</b> (txiki.js)</pre>
+        <div class="stack">
+          <div class="tier"><b>your page</b><span>your HTML, CSS and JS</span></div>
+          <div class="wire"><em>tiny.api.call · tiny.api.on</em></div>
+          <div class="tier"><b>launcher</b><span>WebKit · WebView2 · WebKitGTK</span></div>
+          <div class="wire"><em>unix socket · named pipe on windows</em></div>
+          <div class="tier"><b>backend</b><span>txiki.js</span></div>
+        </div>
       </div>
     </div>
   </section>
