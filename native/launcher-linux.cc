@@ -652,11 +652,22 @@ static void set_mwm_buttons(GtkWindow* w, bool close_on, bool min_on,
   Display* dpy = GDK_DISPLAY_XDISPLAY(gdk_window_get_display(gw));
   Atom prop = XInternAtom(dpy, "_MOTIF_WM_HINTS", False);
   long hints[5] = {0, 0, 0, 0, 0};
-  hints[0] = 1L << 0;              // MWM_HINTS_FUNCTIONS
+  // PropModeReplace clobbers whatever GDK wrote, so BOTH sections must be
+  // specified: a property whose flags omit DECORATIONS reads as "WM
+  // default", i.e. decorated — which put a title bar back on every
+  // frameless window that also asked for windowControls (amp, found
+  // 2026-07-29; frame:false and windowControls:false travel together in
+  // every frameless app). Carry the window's decorated state through.
+  hints[0] = (1L << 0) | (1L << 1); // MWM_HINTS_FUNCTIONS | _DECORATIONS
   hints[1] = (1L << 1) | (1L << 2); // keep resize + move
   if (min_on) hints[1] |= (1L << 3);
   if (max_on) hints[1] |= (1L << 4);
   if (close_on) hints[1] |= (1L << 5);
+  if (gtk_window_get_decorated(w)) {
+    hints[2] = (1L << 1) | (1L << 2) | (1L << 3) | (1L << 4); // border, resizeh, title, menu
+    if (min_on) hints[2] |= (1L << 5);   // MWM_DECOR_MINIMIZE
+    if (max_on) hints[2] |= (1L << 6);   // MWM_DECOR_MAXIMIZE
+  }                                      // undecorated: explicitly 0
   XChangeProperty(dpy, GDK_WINDOW_XID(gw), prop, prop, 32, PropModeReplace,
                   (unsigned char*)hints, 5);
 #else
@@ -4783,6 +4794,14 @@ int main(int argc, char** argv) {
   g_signal_connect(cb, "owner-change", G_CALLBACK(on_clip_owner_change), nullptr);
 
   load_target_into(g_wv, g_target);
+
+  // Chrome from tinyjs.json, via the bridge's spawn env — applied before the
+  // show below so a frameless app never flashes a decorated frame (the
+  // socket CHROME line lands only after the window is up, and still arrives
+  // and re-applies harmlessly). Note set_mwm_buttons is a no-op this early
+  // (no GdkWindow yet); the socket pass covers it post-realize.
+  if (const char* ch = getenv("TINYJS_CHROME"); ch && *ch)
+    apply_chrome("", split_tabs(ch));
 
   if (g_accessory) {
     gtk_window_set_skip_taskbar_hint(g_win, TRUE);

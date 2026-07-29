@@ -449,6 +449,20 @@ function controlsWire(v) {
   return '';
 }
 
+// The CHROME wire fields — shared by both setChrome flavours and by the
+// Linux spawn env (TINYJS_CHROME), which applies tinyjs.json chrome before
+// the window first shows so a frameless app never flashes a decorated
+// frame. Same shape as TINYJS_TRANSPARENT on Windows.
+function chromeWire(opts = {}) {
+  const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
+  const vib = opts.vibrancy === undefined ? ''
+            : opts.vibrancy === null || opts.vibrancy === false ? 'none'
+            : String(opts.vibrancy);
+  return [bit(opts.frame), controlsWire(opts.windowControls),
+          bit(opts.transparent), one(vib), bit(opts.squareCorners),
+          bit(opts.acceptsFirstMouse), bit(opts.menu)].join('\t');
+}
+
 const DIALOG_OPS = {
   'dialog.openFile': { op: 'open', args: () => [] },
   'dialog.openFiles': { op: 'openmulti', args: () => [] },
@@ -614,6 +628,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // transparency. Declare it in tinyjs.json "chrome" — a setChrome from
     // page JS alone is too late for the main window on Windows.
     if (IS_WIN && chrome?.transparent) spawnEnv.TINYJS_TRANSPARENT = '1';
+    // Linux: startup chrome rides the env so the launcher applies it BEFORE
+    // the window first shows — the socket CHROME line lands with the window
+    // already on screen, so a frameless app briefly flashed its decorated
+    // frame. (The title bar that STAYED was a different bug — see
+    // set_mwm_buttons in the launcher.)
+    if (IS_LINUX && chrome) spawnEnv.TINYJS_CHROME = chromeWire(chrome);
     if (readAccess) spawnEnv.TINYJS_READ_ACCESS = readAccess === true ? tjs.homeDir : String(readAccess);
     // "windowPlacement": true — the app places its own windows (setPosition/
     // center), e.g. to snap or dock them. Wayland forbids a client from
@@ -956,13 +976,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // thing). Frameless and transparent windows never get a Win32 bar
     // regardless — GDI can't draw one over a cleared background.
     setChrome(opts = {}) {
-      const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
-      const vib = opts.vibrancy === undefined ? ''
-                : opts.vibrancy === null || opts.vibrancy === false ? 'none'
-                : String(opts.vibrancy);
-      send('CHROME ' + [bit(opts.frame), controlsWire(opts.windowControls),
-                        bit(opts.transparent), one(vib), bit(opts.squareCorners),
-                        bit(opts.acceptsFirstMouse), bit(opts.menu)].join('\t'));
+      send('CHROME ' + chromeWire(opts));
     },
     // Native DSP on this app's own output — see tiny.audio.filters. The chain
     // is rebuilt only when its SHAPE changes; moving a control goes through
@@ -1470,13 +1484,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         setLevel: (level) => t('WINOP', 'level ' + one(level ?? 'normal')),
         setAllSpaces: (v) => t('WINOP', 'allspaces ' + (v ? 1 : 0)),
         setChrome(opts = {}) {
-          const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
-          const vib = opts.vibrancy === undefined ? ''
-                    : opts.vibrancy === null || opts.vibrancy === false ? 'none'
-                    : String(opts.vibrancy);
-          t('CHROME', [bit(opts.frame), controlsWire(opts.windowControls),
-                       bit(opts.transparent), one(vib), bit(opts.squareCorners),
-                       bit(opts.acceptsFirstMouse), bit(opts.menu)].join('\t'));
+          t('CHROME', chromeWire(opts));
         },
         // This window's OWN menu bar, overriding the app menu for it alone.
         // Same spec shape as app.setMenu, clicks arrive the same way (a plain

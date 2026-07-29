@@ -372,6 +372,24 @@ TODO-linux.md).
       close button, which GTK itself draws) can work — and that half still
       needs eyes. A real fix would drive the CSD title bar, not MWM.
 
+      **2026-07-29: this arm carried a serious side effect, now fixed — it
+      RE-FRAMED frameless windows.** `set_mwm_buttons` replaced the whole
+      `_MOTIF_WM_HINTS` property with flags saying "functions specified"
+      only; without the DECORATIONS flag the WM falls back to its default,
+      which is decorated — erasing the `frame:false` GDK had written moments
+      earlier. Since every frameless app also declares
+      `windowControls:false`, each of the six frameless+windowPlacement
+      examples wore a full mutter-x11-frames title bar on X11 (amp is how it
+      was caught — the only pixel anybody looked at since the arm landed
+      2026-07-26). The property now always specifies both sections and
+      carries `gtk_window_get_decorated` through. Verified: amp's client is
+      back to exactly 320x172 with no frame window wrapping it, and the menu
+      suite + smoke + appsurface still pass on both sessions.
+      Startup chrome also now rides the spawn env (`TINYJS_CHROME`, the
+      Windows `TINYJS_TRANSPARENT` shape) so the launcher applies it BEFORE
+      first show — previously the socket line landed with the window already
+      on screen, so frameless apps flashed a decorated frame at launch.
+
 ## Needs a hand on the mouse — kitchen-sink, 2026-07-26
 
 - [ ] **`dialog.openFiles`** — the deck's Storage ▸ Files "Open many…" button.
