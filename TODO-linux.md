@@ -112,6 +112,13 @@ committed).
 - One harmless `Gtk-CRITICAL … gtk_widget_get_scale_factor` line at startup for
   any app with a tray. It comes from inside libayatana-appindicator (we never
   call it); setting the icon after the menu doesn't avoid it.
+- **WebKitGTK suspends a fully occluded window's page** (measured 2026-07-28):
+  cover a window completely and its timers all but stop — a 150ms poll loop
+  woke so rarely its replies lagged the whole run. Unfocused-but-visible is
+  fine. Bites test choreography especially hard on Wayland, where `win.open`'s
+  x/y are ignored (compositor placement) and same-size windows stack exactly.
+  Apps that run work in a background window should assume that window's page
+  can be frozen at any time.
 - **The app surface (`icon`/`attention`/`presence`) is X11-only** — measured
   2026-07-26 with `WAYLAND_DEBUG=1`: under a Wayland session all three produce
   zero protocol bytes, because GTK3's Wayland backend has nothing to carry a
@@ -335,19 +342,18 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
 
 ## Still open
 
-- [ ] **Per-window menu bars — WRITTEN 2026-07-28, NEVER COMPILED HERE.** The
-      GTK bar lives inside a toplevel, and only `main` had one: every
-      secondary window was menu-less. Each `SecWin` now gets a `GtkBox` +
-      `GtkMenuBar` + its own `GtkAccelGroup` at creation (the webview used to
-      be added straight to the toplevel), `g_items` is a multimap keyed by id
-      with the owning `GtkWindow*` on each entry, and `apply_menus` takes a
-      winid. `MENUBEGIN@<win>` / `MENURESET@<win>` / `MENUUPD@<win>` and
-      `chrome.menu` are wired the same as Windows, where this was all verified.
-      First run here should check, in order: a plain secondary window is
-      unchanged (nothing mis-packed, webview still fills), the bar appears,
-      and `win.open({ size })` still lands on the page's box once the bar has
-      taken its row — that last one is the repair main already needed when its
-      own bar first appeared. Details + the full checklist: TODO-verify.md.
+- [x] **Per-window menu bars — verified 2026-07-28, both sessions,** the same
+      night's second sweep. The full checklist in TODO-verify.md § "Per-window
+      menu bars" is green on Linux, driven by a scripted multi-window app.
+      First compile surfaced three real bugs, all fixed the same night: the
+      birth-size repayment raced X11's async layout (random windows lost the
+      bar's 26px from their page box — the flaky one the checklist predicted),
+      `chrome.menu:false` handed the bar's row to the page instead of the
+      frame, and `menu.update` never reached the stored specs so any rebuild
+      (reset / chrome toggle / a window opened later) resurrected stale state.
+      That last one is an architecture twin of the Windows launcher — check it
+      there. Only pixels remain unseen (bar cosmetics); the hide-on-close rule
+      was driven with a real WM_DELETE_WINDOW both with and without a tray.
 
 - [ ] **`tiny.system.locale()`** — declared `false`; no locale arm in the
       launcher. `g_get_language_names()` is the route — it already does the

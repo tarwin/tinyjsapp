@@ -132,6 +132,9 @@ static std::vector<MenuSpec> g_app_menu;   // the app menu (bare MENUBEGIN)
 // menu plumbing, defined in the menu-building section below
 static WinMenu* menu_for(const std::string& winid);
 static void apply_menus(const std::string& winid);
+static int menubar_height(const std::string& winid);
+static void set_content_size(const std::string& winid, int w, int h);
+static void repay_page_box(const std::string& winid, int w, int h, bool guard_born);
 
 // ------------------------------------------------------------------- utils --
 
@@ -682,8 +685,17 @@ static void apply_chrome(const std::string& winid, const std::vector<std::string
     if (WinMenu* wm = menu_for(winid)) {
       bool on = menu == "1";
       if (wm->visible != on) {
+        // The bar's row belongs to the FRAME, not the page: hiding it must
+        // shrink the window, not hand the page an extra 26px (and showing it
+        // must grow the window, not eat the page). Measure the page box
+        // before the flip, restore it after — repay_page_box waits out the
+        // freshly shown bar having no allocation yet.
+        int pw = 0, ph = 0;
+        gtk_window_get_size(win, &pw, &ph);
+        ph -= menubar_height(winid);
         wm->visible = on;
         apply_menus(winid);
+        repay_page_box(winid, pw, ph, false);
       }
     }
   }
@@ -774,6 +786,37 @@ static void set_content_size(const std::string& winid, int w, int h) {
   if (!win) return;
   if (w <= 0 || h <= 0) return;   // gtk_window_resize asserts on either
   gtk_window_resize(win, w, h + menubar_height(winid));
+}
+
+// Restore a window's page box to (w,h) once its bar's row has settled. The
+// bar has no allocation until GTK lays it out, and on X11 that can land
+// several main-loop passes after the window is created — a single idle that
+// reads menubar_height()==0 there resizes by nothing and the bar then eats
+// the page (seen: 3 windows opened the same way, 2 lost their row, 1 kept
+// it). So poll until the bar has a height, bounded so a never-mapped window
+// can't pin a timer. guard_born: only act while the window still sits at
+// exactly (w,h) — the once-per-window birth repayment; after a user resize
+// the size is theirs.
+struct Repay { std::string id; int w, h; bool guard_born; int tries; };
+static void repay_page_box(const std::string& winid, int w, int h, bool guard_born) {
+  if (w <= 0 || h <= 0) return;
+  g_timeout_add(16, [](gpointer data) -> gboolean {
+    Repay* r = (Repay*)data;
+    GtkWindow* win = win_for(r->id);
+    WinMenu* wm = menu_for(r->id);
+    if (!win || !wm) { delete r; return G_SOURCE_REMOVE; }
+    const std::vector<MenuSpec>& spec = wm->has_own ? wm->own : g_app_menu;
+    if (!spec.empty() && wm->visible && menubar_height(r->id) == 0 && r->tries++ < 120)
+      return G_SOURCE_CONTINUE;        // bar not laid out yet — wait for it
+    if (r->guard_born) {
+      int cw = 0, ch = 0;
+      gtk_window_get_size(win, &cw, &ch);
+      if (cw != r->w || ch != r->h) { delete r; return G_SOURCE_REMOVE; }
+    }
+    set_content_size(r->id, r->w, r->h);
+    delete r;
+    return G_SOURCE_REMOVE;
+  }, new Repay{winid, w, h, guard_born, 0});
 }
 
 static void set_level(const std::string& winid, const std::string& level) {
@@ -1077,23 +1120,13 @@ static void apply_menus(const std::string& winid) {
   //
   // Once per window, and only while it is still exactly the size it was born
   // at: after the user has dragged an edge the size is theirs, not ours.
-  // Deferred to an idle pass because the bar has no allocation to measure
-  // until GTK has laid it out.
+  // repay_page_box waits for the bar's allocation — on X11 one idle pass is
+  // not enough and a too-early read loses the repayment forever.
   if (!wm->room_given && !spec.empty() && wm->visible) {
     wm->room_given = true;
-    g_idle_add([](gpointer data) -> gboolean {
-      std::string* id = (std::string*)data;
-      GtkWindow* w2 = win_for(*id);
-      int want_w = (*id == "main") ? g_width : 0, want_h = (*id == "main") ? g_height : 0;
-      if (SecWin* sw = sec_for(*id)) { want_w = sw->req_w; want_h = sw->req_h; }
-      if (w2 && want_w > 0 && want_h > 0) {
-        int w = 0, h = 0;
-        gtk_window_get_size(w2, &w, &h);
-        if (w == want_w && h == want_h) set_content_size(*id, want_w, want_h);
-      }
-      delete id;
-      return G_SOURCE_REMOVE;
-    }, new std::string(winid));
+    int want_w = g_width, want_h = g_height;
+    if (SecWin* sw = sec_for(winid)) { want_w = sw->req_w; want_h = sw->req_h; }
+    repay_page_box(winid, want_w, want_h, true);
   }
 }
 
@@ -1152,6 +1185,22 @@ static void menu_update(const std::string& rest, const std::string& winid = "") 
       }
     };
   patch(g_ctx_items);
+  // Menu bars are REBUILT from their stored specs (a window opening later,
+  // MENURESET, a chrome.menu toggle) — patch those too or the update
+  // evaporates on the next apply_menus. App-wide: the app menu and every
+  // window's override, mirroring the widget walk above. Per-window: only
+  // that window's own spec — an inheriting window has no spec of its own,
+  // and writing through to the app menu would move every other window too.
+  auto patch_spec = [&](std::vector<MenuSpec>& spec) {
+    for (auto& m : spec) patch(m.items);
+  };
+  if (winid.empty()) {
+    patch_spec(g_app_menu);
+    for (const auto& wid : menu_windows())
+      if (WinMenu* wm = menu_for(wid); wm && wm->has_own) patch_spec(wm->own);
+  } else if (WinMenu* wm = menu_for(winid); wm && wm->has_own) {
+    patch_spec(wm->own);
+  }
 }
 
 // ------------------------------------------------------------------ tray ----

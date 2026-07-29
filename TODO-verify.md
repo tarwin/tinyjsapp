@@ -890,19 +890,19 @@ compiled or run on.
 
 | check | Windows | macOS | Linux |
 | --- | --- | --- | --- |
-| a secondary window shows the app menu | ✅ seen — nib's doc window, plus a scripted app measuring its own frame | ⬜ (always did — one shared bar) | ⬜ never compiled |
-| `size` is still the page's box with a bar | ✅ declared 700x400 → 700x400 page, frame grew 19px | n/a (the bar isn't in the window) | ⬜ main was repaired before; secondaries are new code |
-| a window opened later inherits the app menu | ✅ seen | ⬜ | ⬜ |
-| `win.menu.set` overrides that window only | ✅ own id present, app id gone, other windows untouched | ⬜ **the focus swap is the risky part** | ⬜ |
-| `win.menu.reset` goes back to the app menu | ✅ seen | ⬜ | ⬜ |
-| `win.menu.update` moves one window's tick | ✅ seen | ⬜ | ⬜ |
-| `menu.update` moves every window's copy | ✅ seen | ⬜ | ⬜ |
-| `chrome.menu:false` hides one bar only | ✅ frame 19px shorter, page unchanged | n/a — no-op by design | ⬜ |
-| items survive a hidden bar (accelerators) | ✅ `menu.get` still answers | n/a | ⬜ |
-| a closed window's items leave the registry | ✅ by construction (WM_DESTROY) | ⬜ | ⬜ |
+| a secondary window shows the app menu | ✅ seen — nib's doc window, plus a scripted app measuring its own frame | ⬜ (always did — one shared bar) | ✅ measured 2026-07-28 — `win.menu.get` answers from every window and the bar's 26px row shows in `outer`; pixels themselves unseen |
+| `size` is still the page's box with a bar | ✅ declared 700x400 → 700x400 page, frame grew 19px | n/a (the bar isn't in the window) | ✅ 460x420 → 460x420 both sessions — **after a fix; it was flaky on X11** (see below) |
+| a window opened later inherits the app menu | ✅ seen | ⬜ | ✅ two later windows, both carrying it — one opened after a `menu.update`, showing the UPDATED state |
+| `win.menu.set` overrides that window only | ✅ own id present, app id gone, other windows untouched | ⬜ **the focus swap is the risky part** | ✅ same three-way check |
+| `win.menu.reset` goes back to the app menu | ✅ seen | ⬜ | ✅ and to the CURRENT app state, post-update — after a fix (below) |
+| `win.menu.update` moves one window's tick | ✅ seen | ⬜ | ✅ other windows and the app spec untouched |
+| `menu.update` moves every window's copy | ✅ seen | ⬜ | ✅ main + inheriting sat; overridden sat untouched |
+| `chrome.menu:false` hides one bar only | ✅ frame 19px shorter, page unchanged | n/a — no-op by design | ✅ outer −26px, page box unchanged — **after a fix; it used to hand the row to the page** |
+| items survive a hidden bar (accelerators) | ✅ `menu.get` still answers | n/a | ✅ `menu.get` answers while hidden |
+| a closed window's items leave the registry | ✅ by construction (WM_DESTROY) | ⬜ | ✅ `menu.update` after a close is fine, survivors still answer |
 | a menu declared before `{role:'edit'}` keeps its items | ✅ fixed + read back off the live `HMENU` — nib's File, 20 items | ✅ always worked | ✅ appends through a pointer, never flushes |
-| a page-gated menu action fires in a fresh window | ✅ fixed — `document.hasFocus()` is true from load now (was false until the first click) | ✅ webview is first responder at once | ⬜ **check this** — WebKitGTK may need `gtk_widget_grab_focus` on the webview the same way |
-| `setHideOnClose` + closing the last window quits | ✅ fixed (`can_live_hidden`) — process and backend both exit | n/a — the Dock is the way back, flag unchanged | ⬜ same rule written for GTK, unrun: check a tray app still survives, and that closing the last window exits |
+| a page-gated menu action fires in a fresh window | ✅ fixed — `document.hasFocus()` is true from load now (was false until the first click) | ✅ webview is first responder at once | ✅ `document.hasFocus()` true at load in every fresh secondary, both sessions — no grab_focus needed |
+| `setHideOnClose` + closing the last window quits | ✅ fixed (`can_live_hidden`) — process and backend both exit | n/a — the Dock is the way back, flag unchanged | ✅ both halves, driven by a real WM_DELETE_WINDOW: no tray → process exits; tray → page goes `visible→hidden` and the app lives on |
 
 What to watch for on **macOS**: the bar now follows focus through an
 `NSWindowDidBecomeKeyNotification` observer, and per-window menus are only as
@@ -924,6 +924,55 @@ The Windows numbers came from a scripted app that opens windows and reports
 `getState().outer.height - height` (the frame's share) for each. Worth
 rebuilding on the other two: it turns "is the bar there" into a number, which
 is the only way to tell a missing bar from one drawn over the page.
+
+**Linux column filled 2026-07-28** (Ubuntu 24.04 aarch64, GNOME 46, Wayland +
+XWayland, first-ever compile of this code) by exactly that kind of scripted
+app — a driver window commanding two satellites over `tiny.store`, every row
+settled by numbers (`getState` page/outer boxes, `menu.get` read back off the
+live registry). The accelerator row was driven for real on X11: the
+launcher's own XTest `keystroke('ctrl+shift+m')` produced the `menu` event
+(remember the event then broadcasts to every window — apps filter by id, so
+"which window fired" is not observable from pages, by design). On Wayland the
+keystroke resolves `ok:true` and nothing can hear it, as capabilities
+honestly report. Pixels remain unseen as everywhere else in this file — but a
+bar with a measurable 26px row that answers `menu.get` and fires accelerators
+is drawn, or GTK is lying on three channels at once.
+
+**Three real launcher bugs found and fixed the same night**, all in the
+never-compiled code:
+
+- **The birth-size repayment raced X11's async layout, losing the bar's row
+  for random windows.** `apply_menus` repaid the page box in a single idle;
+  on X11 the bar often has no allocation yet at that point, so
+  `menubar_height()` read 0, the resize was a no-op, and `room_given` was
+  already spent — three windows opened the same way came out 460x420,
+  460x394, 360x254. Wayland lays out fast enough to hide it. Now
+  `repay_page_box()` polls (16ms, bounded) until the bar has a height.
+- **`chrome.menu:false` handed the bar's row to the page** (420 → 446) with
+  the outer size unchanged — Windows shrinks the frame and keeps the page
+  box, which is what the size contract says. The toggle now measures the
+  page box before the flip and restores it after.
+- **`menu.update` evaporated on rebuild.** It patched live widgets and the
+  registry but never the stored specs bars are REBUILT from — so a
+  `win.menu.reset`, a `chrome.menu` toggle, or a window opened later all
+  resurrected the stale checked/label state. The macOS bar can't have this
+  bug (one live NSMenu, nothing rebuilds); **the Windows launcher has the
+  same rebuild-from-spec architecture and should be checked for it** — open
+  a window AFTER a `menu.update` and see which state it shows.
+
+**Two testing gotchas that produced convincing ghost failures first**, worth
+knowing before trusting any multi-window store-choreographed page on Linux:
+
+- **WebKitGTK suspends a fully occluded window's page.** Two same-size
+  satellites stack exactly on Wayland (x/y in `win.open` are ignored there —
+  the compositor places windows), the covered one's timers all but stop, and
+  its command loop lags the whole run — replies arrive eventually, carrying
+  states from the wrong era. Unfocused-but-visible pages run fine; give
+  satellites different sizes so nothing is ever fully covered.
+- **`tiny.store` persists across runs, so reply keys must carry a run
+  nonce.** A re-run of a page that waits on `store` keys written by a
+  previous run reads the OLD replies instantly and reports a full set of
+  plausible, internally consistent, completely stale results.
 
 [TODO-windows.md]: TODO-windows.md
 [TODO-linux.md]: TODO-linux.md
