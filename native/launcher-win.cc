@@ -15,9 +15,12 @@
 // Implemented protocol subset (everything the OS has a sane native answer
 // for): EVAL/TITLE/SIZE/RELOAD/QUIT, DLG (file panels via IFileDialog,
 // alert/confirm via MessageBox, prompt via an in-memory dialog template),
-// MENU*/MENUUPD (Win32 menu bar), TRAY* (Shell_NotifyIcon), WINOP (hide/show/
+// MENU*/MENUUPD (Win32 menu bar — one per window: a bare MENUBEGIN declares
+// the APP menu that every window shows, MENUBEGIN@<win> one window's own,
+// MENURESET@<win> drops it, MENUUPD@<win> patches one window's copy),
+// TRAY* (Shell_NotifyIcon), WINOP (hide/show/
 // center/minimize/restore/fullscreen/zoom/ontop/resizable/pos/hideonclose/
-// clickthrough/level), CHROME (frame/squareCorners), GET (win/mouse/screens/
+// clickthrough/level), CHROME (frame/squareCorners/menu), GET (win/mouse/screens/
 // clipboard/battery/idle/frontmost/item/traypos/windows), CLIPWRITE/CLIPWATCH,
 // HKREG/HKUNREG (RegisterHotKey), KEYSTROKE (SendInput; cmd ≡ ctrl), SHELL
 // (open/reveal/trash), SECRET (Credential Manager), POWER
@@ -103,6 +106,10 @@ static int g_min_w = 0, g_min_h = 0;
 static bool g_hide_on_close = false;
 static bool g_frameless = false;
 static bool g_square = false;
+// Main's transparency: the webview library reads TINYJS_TRANSPARENT at create
+// time, so the launcher keeps its own copy — a transparent window has no
+// redirection bitmap for GDI to draw a menu bar on.
+static bool g_main_transparent = false;
 static bool g_click_through = false;
 static std::string g_level = "normal";
 static bool g_fullscreen = false;
@@ -117,11 +124,16 @@ struct ItemReg {
   bool checked = false, enabled = true;
   std::string key; // menu accelerator char ('' = none); fired via Ctrl+<key>
   bool needAlt = false, needShift = false;  // from "alt+" / "shift+" prefixes
+  HWND owner = nullptr;  // menu-bar items only: the window whose bar holds
+                         // THIS copy. Win32 menus belong to one window, so a
+                         // menu shown in three windows is three sets of items
+                         // wearing the same ids. null for tray / context.
 };
 static std::map<UINT, ItemReg *> g_cmd_reg;
-static std::map<std::string, ItemReg *> g_id_reg;
+// One id therefore names as many items as there are windows showing it: an
+// app-wide MENUUPD patches every copy, MENUUPD@<win> just that window's.
+static std::multimap<std::string, ItemReg *> g_id_reg;
 static UINT g_next_cmd = 1000;
-static HMENU g_menu_bar = nullptr;
 static HMENU g_tray_menu = nullptr;
 static bool g_tray_primary = false;
 static bool g_tray_added = false;
@@ -401,6 +413,13 @@ struct MenuItemSpec {
 struct MenuSpec {
   std::string title;
   std::vector<MenuItemSpec> items;
+  // MENUROLE: a standard menu the launcher would build itself. Win32 has none
+  // to place, so these draw nothing — but the slot still has to occupy an
+  // entry, because the parser flushes the items it has collected into
+  // pending_menus.back() and skipping the push would aim that flush at the
+  // PREVIOUS menu, emptying it. That is exactly what happened to a File menu
+  // declared before { role: 'edit' }: it lost every item.
+  std::string role;
 };
 struct TraySpec {
   std::string title, icon, tooltip;
@@ -410,10 +429,48 @@ struct TraySpec {
   std::vector<MenuItemSpec> items;
 };
 
-static void clear_registry(const std::string &kind) {
+// A window's menu bar. Every window has one of these, main included, and
+// resolves its contents by inheritance: its OWN declaration if it made one
+// (MENUBEGIN@<win>), otherwise the app menu (a bare MENUBEGIN, which is what
+// tiny.menu.set / app.setMenu send). macOS has a single bar for the whole
+// app and always did; here each window draws its own copy of the same thing,
+// so an app that says nothing per-window sees the same menu everywhere.
+//
+// The bar is BUILT even when hidden. Accelerators, MENUUPD and `item@` reads
+// all run off the rendered items, and Ctrl+S must keep working in a window
+// that merely doesn't show a bar — which is the macOS behaviour a
+// chrome.menu:false window is imitating.
+struct WinMenu {
+  std::vector<MenuSpec> own;
+  bool has_own = false;
+  bool visible = true;   // chrome.menu
+  HMENU bar = nullptr;   // ours to destroy: while hidden it is attached to no
+                         // window, so nothing else will free it
+};
+static std::vector<MenuSpec> g_app_menu;  // the app menu (bare MENUBEGIN)
+static WinMenu g_main_menu;               // main's; secondaries carry a WinMenu
+
+// Defined down with the multi-window plumbing (they need TinyWin).
+static WinMenu *menu_for(HWND hwnd);
+static std::vector<HWND> menu_windows();  // main + every open secondary
+// Frameless and transparent windows can't have one: a Win32 bar is GDI, and
+// those windows are exactly the ones with no non-client area to draw it in
+// (and, when transparent, no redirection bitmap to draw it on).
+static bool menu_allowed(HWND hwnd);
+
+static void forget_reg(ItemReg *reg) {
+  auto range = g_id_reg.equal_range(reg->id);
+  for (auto i = range.first; i != range.second; ++i) {
+    if (i->second == reg) { g_id_reg.erase(i); break; }
+  }
+}
+
+// kind = tray|ctx: clears the lot. kind = menu: clears one WINDOW's items,
+// since the others' copies are still on screen and still theirs.
+static void clear_registry(const std::string &kind, HWND owner = nullptr) {
   for (auto it = g_cmd_reg.begin(); it != g_cmd_reg.end();) {
-    if (it->second->kind == kind) {
-      g_id_reg.erase(it->second->id);
+    if (it->second->kind == kind && (!owner || it->second->owner == owner)) {
+      forget_reg(it->second);
       delete it->second;
       it = g_cmd_reg.erase(it);
     } else {
@@ -460,7 +517,7 @@ static std::string display_key(const std::string &spec) {
 }
 
 static void build_menu_items(HMENU menu, const std::vector<MenuItemSpec> &items,
-                             const std::string &kind) {
+                             const std::string &kind, HWND owner = nullptr) {
   for (const auto &it : items) {
     if (it.separator) {
       AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -468,7 +525,7 @@ static void build_menu_items(HMENU menu, const std::vector<MenuItemSpec> &items,
     }
     if (!it.submenu.empty()) {
       HMENU sub = CreatePopupMenu();
-      build_menu_items(sub, it.submenu, kind);
+      build_menu_items(sub, it.submenu, kind, owner);
       AppendMenuW(menu, MF_POPUP, (UINT_PTR)sub,
                   widen(it.label.empty() ? it.id : it.label).c_str());
       continue;
@@ -479,10 +536,11 @@ static void build_menu_items(HMENU menu, const std::vector<MenuItemSpec> &items,
     split_accel(it.key, bare, alt, shift);
     ItemReg *reg = new ItemReg{cmd, menu, it.id,
                                it.label.empty() ? it.id : it.label, kind,
-                               it.checked, !it.disabled, bare, alt, shift};
+                               it.checked, !it.disabled, bare, alt, shift,
+                               owner};
     g_cmd_reg[cmd] = reg;
     if (!it.id.empty())
-      g_id_reg[it.id] = reg;
+      g_id_reg.emplace(it.id, reg);
     UINT flags = MF_STRING;
     if (it.checked)
       flags |= MF_CHECKED;
@@ -493,36 +551,122 @@ static void build_menu_items(HMENU menu, const std::vector<MenuItemSpec> &items,
   }
 }
 
-static void apply_menus(webview_t, void *arg) {
-  std::vector<MenuSpec> *menus = static_cast<std::vector<MenuSpec> *>(arg);
-  clear_registry("menu");
+// SetMenu, keeping the PAGE's box. A Win32 bar eats client height, while
+// `size`, setSize and getState all speak the page's box — so hand back
+// whatever the client just lost (or reclaim it when a bar goes away). Linux
+// had to make the same repair when its GTK bar first appeared inside the
+// toplevel; before this, Windows quietly shortened the main window's page by
+// a bar's worth the moment an app called setMenu.
+static void attach_menu(HWND hwnd, HMENU bar) {
+  if (GetMenu(hwnd) == bar)
+    return;
+  RECT before;
+  GetClientRect(hwnd, &before);
+  SetMenu(hwnd, bar);
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                   SWP_FRAMECHANGED);
+  DrawMenuBar(hwnd);
+  RECT after;
+  GetClientRect(hwnd, &after);
+  int dh = (before.bottom - before.top) - (after.bottom - after.top);
+  // A maximized, minimized or fullscreen window has no size of its own to
+  // give back — there the bar takes its row from the page, as it does in
+  // every other Windows app.
+  if (!dh || IsZoomed(hwnd) || IsIconic(hwnd) || (hwnd == g_hwnd && g_fullscreen))
+    return;
+  RECT wr;
+  GetWindowRect(hwnd, &wr);
+  SetWindowPos(hwnd, nullptr, 0, 0, wr.right - wr.left,
+               (wr.bottom - wr.top) + dh,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+// (Re)build one window's bar from its effective spec and attach it.
+static void render_menu(HWND hwnd) {
+  WinMenu *wm = hwnd ? menu_for(hwnd) : nullptr;
+  if (!wm)
+    return;
+  clear_registry("menu", hwnd);
+  const std::vector<MenuSpec> &spec = wm->has_own ? wm->own : g_app_menu;
   HMENU bar = nullptr;
-  if (!menus->empty()) {
+  if (!spec.empty()) {
     bar = CreateMenu();
-    for (const auto &m : *menus) {
+    for (const auto &m : spec) {
+      if (!m.role.empty())
+        continue;  // a standard menu Win32 doesn't have — nothing to draw
       HMENU popup = CreatePopupMenu();
-      build_menu_items(popup, m.items, "menu");
+      build_menu_items(popup, m.items, "menu", hwnd);
       AppendMenuW(bar, MF_POPUP, (UINT_PTR)popup, widen(m.title).c_str());
     }
+    // Nothing but role slots: no bar rather than an empty strip.
+    if (GetMenuItemCount(bar) == 0) {
+      DestroyMenu(bar);
+      bar = nullptr;
+    }
   }
-  HMENU old = GetMenu(g_hwnd);
-  SetMenu(g_hwnd, bar);
+  HMENU old = wm->bar;
+  wm->bar = bar;
+  attach_menu(hwnd, wm->visible && menu_allowed(hwnd) ? bar : nullptr);
   if (old)
-    DestroyMenu(old);
-  g_menu_bar = bar;
-  DrawMenuBar(g_hwnd);
-  delete menus;
+    DestroyMenu(old);  // detached by the SetMenu above (or never attached)
+}
+
+// win empty = the app menu, which every window that hasn't overridden shows.
+struct ApplyMenuReq {
+  std::string win;
+  std::vector<MenuSpec> menus;
+};
+
+static void do_apply_menus(webview_t, void *arg) {
+  ApplyMenuReq *req = static_cast<ApplyMenuReq *>(arg);
+  if (req->win.empty()) {
+    g_app_menu = req->menus;
+    // Windows with a menu of their own are deliberately not showing this one.
+    for (HWND h : menu_windows()) {
+      WinMenu *wm = menu_for(h);
+      if (wm && !wm->has_own)
+        render_menu(h);
+    }
+  } else {
+    HWND h = hwnd_for_win(req->win);
+    if (WinMenu *wm = h ? menu_for(h) : nullptr) {
+      wm->own = req->menus;
+      wm->has_own = true;
+      render_menu(h);
+    }
+  }
+  delete req;
+}
+
+// MENURESET@<win>: drop the override, go back to inheriting the app menu.
+static void do_reset_menu(webview_t, void *arg) {
+  std::string *win = static_cast<std::string *>(arg);
+  HWND h = hwnd_for_win(*win);
+  if (WinMenu *wm = h ? menu_for(h) : nullptr) {
+    wm->own.clear();
+    wm->has_own = false;
+    render_menu(h);
+  }
+  delete win;
 }
 
 struct MenuUpdReq {
-  std::string id, label, checked, enabled;
+  std::string win, id, label, checked, enabled;  // win empty = every window
 };
 
 static void do_menu_update(webview_t, void *arg) {
   MenuUpdReq *req = static_cast<MenuUpdReq *>(arg);
-  auto it = g_id_reg.find(req->id);
-  if (it != g_id_reg.end()) {
-    ItemReg *reg = it->second;
+  HWND only = req->win.empty() ? nullptr : hwnd_for_win(req->win);
+  if (!req->win.empty() && !only) {
+    delete req;  // named a window that has since closed
+    return;
+  }
+  auto range = g_id_reg.equal_range(req->id);
+  for (auto i = range.first; i != range.second; ++i) {
+    ItemReg *reg = i->second;
+    if (only && reg->owner != only)
+      continue;
     if (!req->label.empty()) {
       reg->label = req->label;
       ModifyMenuW(reg->parent, reg->cmd, MF_BYCOMMAND | MF_STRING, reg->cmd,
@@ -538,8 +682,8 @@ static void do_menu_update(webview_t, void *arg) {
       EnableMenuItem(reg->parent, reg->cmd,
                      MF_BYCOMMAND | (reg->enabled ? MF_ENABLED : MF_GRAYED));
     }
-    if (reg->kind == "menu")
-      DrawMenuBar(g_hwnd);
+    if (reg->kind == "menu" && reg->owner)
+      DrawMenuBar(reg->owner);
   }
   delete req;
 }
@@ -1684,7 +1828,8 @@ static void do_winop(webview_t, void *arg) {
 }
 
 struct ChromeReq {
-  std::string win, frame, traffic, transparent, vibrancy, square, first_mouse;
+  std::string win, frame, traffic, transparent, vibrancy, square, first_mouse,
+      menu;
 };
 
 static void set_win_transparent_flag(const std::string &id, bool on);
@@ -1697,11 +1842,19 @@ static void do_chrome(webview_t, void *arg) {
     delete req;
     return;
   }
+  // Whether a bar can be drawn at all turns on frame/square/transparent, and
+  // whether one is wanted turns on menu — so any of the four re-resolves it.
+  bool remenu = !req->menu.empty();
   if (!req->frame.empty()) {
     bool frameless = req->frame == "0";
     if (main)
       g_frameless = frameless;
     set_style_bits_keep_client(hwnd, WS_CAPTION, !frameless);
+    remenu = true;  // the caption going away takes the bar's strip with it
+  }
+  if (!req->menu.empty()) {
+    if (WinMenu *wm = menu_for(hwnd))
+      wm->visible = req->menu == "1";
   }
   if (!req->traffic.empty()) {
     // windowControls: '' keep · 'all' · 'none' · comma list of
@@ -1723,6 +1876,7 @@ static void do_chrome(webview_t, void *arg) {
     set_style_bits_keep_client(hwnd, WS_MAXIMIZEBOX, any && max_on);
   }
   if (!req->square.empty()) {
+    remenu = true;  // borderless: same story as frame
     bool square = req->square == "1";
     if (main)
       g_square = square;
@@ -1746,8 +1900,11 @@ static void do_chrome(webview_t, void *arg) {
     // Secondary controllers are created async: a setChrome right after
     // win.open can land before the controller exists, so record the wish on
     // the TinyWin — SecCtrlHandler applies tw->transparent on creation.
-    if (!main)
+    if (main)
+      g_main_transparent = req->transparent == "1";
+    else
       set_win_transparent_flag(req->win, req->transparent == "1");
+    remenu = true;  // a cleared background has nothing to draw a bar on
     ICoreWebView2Controller *ctrl = ctrl_for_win(req->win);
     ICoreWebView2Controller2 *c2 = nullptr;
     HRESULT setbg = E_FAIL;
@@ -1777,6 +1934,8 @@ static void do_chrome(webview_t, void *arg) {
     DwmSetWindowAttribute(hwnd, 38 /* DWMWA_SYSTEMBACKDROP_TYPE */,
                           &backdrop, sizeof(backdrop));
   }
+  if (remenu)
+    render_menu(hwnd);
   delete req;
 }
 
@@ -1823,9 +1982,37 @@ static int ht_for_edge(const std::string &e) {
 static void do_ncdrag(webview_t, void *arg) {
   NcDragReq *r = static_cast<NcDragReq *>(arg);
   HWND h = hwnd_for_win(r->win);
-  if (h) {
+  // DefWindowProc turns this into SC_MOVE/SC_SIZE and runs a MODAL loop that
+  // ends on the next button transition — so entered with the button already
+  // UP, the window just sticks to the cursor until the user clicks again.
+  // (macOS demands a held button for the same reason, launcher-macos.cc; the
+  // comment there claiming Windows "returns instead of hanging" was wrong.)
+  // The trip here is two process hops — page -> WebView2 IPC -> launcher ->
+  // pipe -> backend -> pipe -> launcher — so a *click* near an edge, rather
+  // than a drag, easily releases inside that window.
+  bool held = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+  // setResizable(false) means the USER can't resize; the app's own setSize
+  // still can. A page-drawn grip is a user resize, so honour the lock — and
+  // read it live, because tiny.js gates its grips on one getState at page
+  // load and the window may have been locked since.
+  bool locked = r->ht != HTCAPTION && h &&
+                !(GetWindowLongW(h, GWL_STYLE) & WS_THICKFRAME);
+  // That modal loop pumps and dispatches our posted WM_APP work, so a second
+  // RESIZEWIN arriving mid-drag would nest a modal loop inside this one.
+  static bool in_ncdrag = false;
+  if (h && held && !locked && !in_ncdrag) {
+    // Screen coords: GetCursorPos and WM_NCLBUTTONDOWN are both physical px
+    // and the process is per-monitor-DPI-aware, so nothing is converted here
+    // (unlike every op that carries a logical wire coordinate). DefWindowProc
+    // anchors from the global cursor anyway, but macOS and GTK both pass the
+    // live point, and MAKELPARAM round-trips a monitor left of primary
+    // (negative x) because POINTS sign-extends through short.
+    POINT pt;
+    GetCursorPos(&pt);
     release_webview_capture();
-    SendMessageW(h, WM_NCLBUTTONDOWN, r->ht, 0);
+    in_ncdrag = true;
+    SendMessageW(h, WM_NCLBUTTONDOWN, r->ht, MAKELPARAM(pt.x, pt.y));
+    in_ncdrag = false;
   }
   delete r;
 }
@@ -3477,6 +3664,10 @@ static void do_dragout(webview_t, void *arg) {
 
 struct AccelHandler : public ICoreWebView2AcceleratorKeyPressedEventHandler {
   ULONG refs = 1;
+  // Which window's keyboard this is. Each window has its own copy of the
+  // items (its own bar), so the combo must resolve against that window's —
+  // a Save greyed out in one window's menu is not greyed out in another's.
+  std::string winid = "main";
   ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
   ULONG STDMETHODCALLTYPE Release() override {
     if (refs > 1) return --refs;
@@ -3512,9 +3703,13 @@ struct AccelHandler : public ICoreWebView2AcceleratorKeyPressedEventHandler {
     else if (vk >= '0' && vk <= '9') c = (char)vk;
     if (!c)
       return S_OK;
+    HWND owner = hwnd_for_win(winid);
+    if (!owner)
+      return S_OK;
     for (auto &kv : g_cmd_reg) {
       ItemReg *reg = kv.second;
-      if (reg->kind == "menu" && reg->enabled && reg->key.size() == 1 &&
+      if (reg->kind == "menu" && reg->owner == owner && reg->enabled &&
+          reg->key.size() == 1 &&
           reg->needAlt == alt && reg->needShift == shift &&
           tolower((unsigned char)reg->key[0]) == c) {
         args->put_Handled(TRUE);
@@ -3796,10 +3991,24 @@ static void do_get(webview_t, void *arg) {
         json = buf;
       }
     }
-  } else if (what.rfind("item:", 0) == 0) {
-    auto it = g_id_reg.find(what.substr(5));
-    if (it != g_id_reg.end()) {
-      ItemReg *reg = it->second;
+  } else if (what.rfind("item:", 0) == 0 || what.rfind("item@", 0) == 0) {
+    // item:<id> — any copy (tray/context items live here too). item@<win>:<id>
+    // — that window's copy. Window ids don't contain ':' (win.open picks
+    // them), so the first colon after '@' ends the window name.
+    std::string id = what.substr(5);
+    HWND only = nullptr;
+    if (what[4] == '@') {
+      size_t colon = id.find(':');
+      only = hwnd_for_win(colon == std::string::npos ? id : id.substr(0, colon));
+      id = colon == std::string::npos ? "" : id.substr(colon + 1);
+    }
+    ItemReg *found = nullptr;
+    auto range = g_id_reg.equal_range(id);
+    for (auto i = range.first; i != range.second && !found; ++i)
+      if (!only || i->second->owner == only)
+        found = i->second;
+    if (found) {
+      ItemReg *reg = found;
       json = "{\"exists\":true,\"label\":" + json_escape(reg->label) +
              ",\"checked\":" + (reg->checked ? "true" : "false") +
              ",\"enabled\":" + (reg->enabled ? "true" : "false") + "}";
@@ -3911,6 +4120,7 @@ struct TinyWin {
   int min_w = 0, min_h = 0;            // win.setMinSize, logical px (0 = none)
   std::string url;                     // navigated once the controller exists
   std::vector<std::string> pending_js; // eval'd once the controller exists
+  WinMenu menu;                        // this window's bar (see WinMenu)
 };
 
 static TinyWin *win_for_id(const std::string &id) {
@@ -3982,6 +4192,69 @@ static ICoreWebView2Controller *ctrl_for_win(const std::string &id) {
   return tw ? tw->ctrl : nullptr;
 }
 
+// --- menu-bar resolution (declared up in the menu section) -----------------
+
+static WinMenu *menu_for(HWND hwnd) {
+  if (!hwnd)
+    return nullptr;
+  if (hwnd == g_hwnd)
+    return &g_main_menu;
+  for (auto &kv : g_windows)
+    if (kv.second->hwnd == hwnd)
+      return &kv.second->menu;
+  return nullptr;
+}
+
+static std::vector<HWND> menu_windows() {
+  std::vector<HWND> out;
+  if (g_hwnd)
+    out.push_back(g_hwnd);
+  for (auto &kv : g_windows)
+    if (kv.second->hwnd)
+      out.push_back(kv.second->hwnd);
+  return out;
+}
+
+// setHideOnClose is a macOS idea: there an app outlives its last window and
+// the Dock icon brings it back. Windows has nowhere to put that — a hidden
+// window takes its taskbar button with it — so honouring the flag with
+// nothing else on screen leaves a process the user can neither see nor quit.
+// Hide only when there IS a way back: a tray icon, accessory mode, or another
+// window still up. Otherwise the close means what it means everywhere else on
+// this OS, and the app exits.
+//
+// Deliberately only consulted for a USER close of the hide-on-close window.
+// A programmatic win.hide() still hides whatever it is told to, and the last
+// SECONDARY closing is left alone — an app that answers that by showing its
+// main window again (nib brings the Welcome screen back) would otherwise be
+// killed in the gap before it could.
+static bool can_live_hidden() {
+  if (g_accessory || g_tray_added)
+    return true;
+  for (auto &kv : g_windows)
+    if (kv.second->hwnd && IsWindowVisible(kv.second->hwnd))
+      return true;
+  return false;
+}
+
+static bool menu_allowed(HWND hwnd) {
+  if (!hwnd)
+    return false;
+  // No caption, no bar. A frameless (or squareCorners) window answers
+  // WM_NCCALCSIZE with "the client IS the window", so there is no non-client
+  // strip for GDI to draw a menu in — asked anyway, Win32 takes the row out
+  // of the page instead. Read the live style rather than the creation flag:
+  // a setChrome({ frame: false }) later is the same window either way.
+  if (!(GetWindowLongPtrW(hwnd, GWL_STYLE) & WS_CAPTION))
+    return false;
+  if (hwnd == g_hwnd)
+    return !g_main_transparent;
+  for (auto &kv : g_windows)
+    if (kv.second->hwnd == hwnd)
+      return !kv.second->transparent;
+  return false;
+}
+
 static void set_win_transparent_flag(const std::string &id, bool on) {
   TinyWin *tw = win_for_id(id);
   if (tw)
@@ -4017,10 +4290,22 @@ static void route_ret(webview_t w, const std::string &composite, int status,
                          json_escape(json) + ")");
 }
 
-static std::string sec_shim_js(const std::string &winid) {
+static std::string sec_shim_js(const std::string &winid, bool frameless) {
+  // A frameless secondary has no reachable resize edge: WM_NCCALCSIZE leaves
+  // no non-client area and WebView2's child HWNDs — another process — cover
+  // the whole window rect, so WindowFromPoint never resolves to us and our
+  // WM_NCHITTEST is never asked. WS_THICKFRAME is inert for grabbing; the
+  // page has to provide the grips. Same story as an undecorated GTK window,
+  // so tell the client the same way (launcher-linux.cc). The main window is
+  // NOT marked: it keeps real left/right/bottom borders (tiny_wndproc's
+  // WM_NCCALCSIZE reclaims only the top), and 5px grips over a ~6px native
+  // border would just make an 11px band with two different latencies.
+  // The value only marks the host — the page is injected before any later
+  // CHROME op, so tiny.js re-asks the window itself via win.getState.
   return "(() => {"
          "if (window.__tinyShim) return; window.__tinyShim = true;"
          "window.__TINY_WIN = '" + winid + "';"
+         "window.__TINY_FRAMELESS = " + (frameless ? "true" : "false") + ";"
          // capture at document-start: page code can shadow window.chrome
          // (e.g. a global `function chrome(){}`) and a lazy read would break
          "const post = window.chrome.webview.postMessage.bind(window.chrome.webview);"
@@ -4078,8 +4363,10 @@ struct SecCtrlHandler
     : public ICoreWebView2CreateCoreWebView2ControllerCompletedHandler {
   ULONG refs = 1;
   std::string winid;
-  bool transparent = false; // carried here: the tw lookup can race a
-                            // close/reopen storm and must not decide this
+  // Both carried here: the tw lookup can race a close/reopen storm and must
+  // not be what decides them.
+  bool transparent = false;
+  bool frameless = false;
   ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
   ULONG STDMETHODCALLTYPE Release() override {
     if (refs > 1) return --refs;
@@ -4127,7 +4414,8 @@ struct SecCtrlHandler
     }
     if (tw->wv) {
       tw->wv->AddScriptToExecuteOnDocumentCreated(
-          widen(sec_shim_js(winid)).c_str(), nullptr);
+          widen(sec_shim_js(winid, frameless || tw->frameless)).c_str(),
+          nullptr);
       tw->wv->AddScriptToExecuteOnDocumentCreated(widen(TINY_CLIENT_JS).c_str(),
                                                   nullptr);
       char inj[8192];
@@ -4160,7 +4448,17 @@ struct SecCtrlHandler
       tw->wv->add_WebMessageReceived(dh, &dtok);
       dh->Release();
       EventRegistrationToken atok;
-      ctrl->add_AcceleratorKeyPressed(new AccelHandler(), &atok);
+      AccelHandler *ah = new AccelHandler();
+      ah->winid = winid;
+      ctrl->add_AcceleratorKeyPressed(ah, &atok);
+      ah->Release();
+      // Hand the keyboard to the page. The host HWND has focus, but WebView2's
+      // child does not until something moves it there — so a brand-new window
+      // answered document.hasFocus() with FALSE until the user clicked inside
+      // it, and anything the app gates on that (nib drops every page-side menu
+      // action for "someone else's window") silently did nothing. macOS makes
+      // the webview first responder on its own; here it has to be asked.
+      ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
       tw->wv->Navigate(widen(tw->url).c_str());
       for (auto &js : tw->pending_js)
         tw->wv->ExecuteScript(widen(js).c_str(), nullptr);
@@ -4175,8 +4473,15 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
   switch (msg) {
   case WM_NCCALCSIZE: {
     // Frameless: the client fills the whole window, matching the main window
-    // and macOS (where a borderless window's content IS its frame). Keeps
-    // WS_THICKFRAME for edge hit-testing; only the inset goes away.
+    // and macOS (where a borderless window's content IS its frame). Only the
+    // inset goes away; WS_THICKFRAME stays, but NOT for edge hit-testing —
+    // WebView2's child HWNDs cover every client pixel from another process,
+    // so WindowFromPoint never lands on us and this proc's WM_NCHITTEST is
+    // never asked. The bit is kept because it is what DefWindowProc gates
+    // SC_SIZE on (so win.startResize works) and what getState reports as
+    // `resizable`. Believing it bought hit-testing is what hid the fact that
+    // frameless satellites had NO grabbable edge on Windows at all — the
+    // page's grips are the whole story here (see sec_shim_js).
     TinyWin *tw = win_for_id(id_for_hwnd(hwnd));
     if (wp && tw && tw->frameless)
       return 0;
@@ -4199,6 +4504,29 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
     }
     break;
   }
+  case WM_SETFOCUS: {
+    // Activation lands on the host window; pass it down to the page, or the
+    // page believes it is unfocused until clicked (see the MoveFocus note in
+    // SecCtrlHandler). Alt-Tab and title-bar clicks come through here.
+    TinyWin *tw = win_for_id(id_for_hwnd(hwnd));
+    if (tw && tw->ctrl)
+      tw->ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    break;
+  }
+  case WM_COMMAND: {
+    // Same routing as the main window (tiny_wndproc): a secondary's bar is a
+    // different HMENU carrying different command ints, but they resolve to
+    // the same string ids, so the backend sees a plain `MENU <id>` from
+    // whichever window the user clicked in — exactly what one shared macOS
+    // bar reports.
+    auto it = g_cmd_reg.find((UINT)LOWORD(wp));
+    if (it != g_cmd_reg.end() && it->second->kind == "menu") {
+      if (it->second->enabled)
+        pipe_write_line("MENU " + it->second->id);
+      return 0;
+    }
+    break;
+  }
   case WM_CLOSE:
     DestroyWindow(hwnd);
     return 0;
@@ -4206,6 +4534,14 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
     std::string id = id_for_hwnd(hwnd);
     if (!id.empty()) {
       TinyWin *tw = g_windows[id];
+      // Drop this window's menu items before the map entry goes: their owner
+      // hwnd is about to be a stale handle, and a later app-wide MENUUPD
+      // would walk right into them.
+      clear_registry("menu", hwnd);
+      // Only if it isn't the attached one — DestroyWindow frees that itself.
+      if (tw->menu.bar && GetMenu(hwnd) != tw->menu.bar)
+        DestroyMenu(tw->menu.bar);
+      tw->menu.bar = nullptr;
       g_windows.erase(id);
       pipe_write_line("WINCLOSED " + id);
       if (tw->ctrl) {
@@ -4225,7 +4561,7 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
 struct WinOpenReq {
   std::string id, page, title;
   int width = 600, height = 400;
-  std::string frame, traffic, transparent, vibrancy, square, first_mouse;
+  std::string frame, traffic, transparent, vibrancy, square, first_mouse, menu;
   bool hasPos = false;
   int x = 0, y = 0;
 };
@@ -4281,15 +4617,25 @@ static void do_winopen(webview_t, void *arg) {
     if (py < vy) py = vy;
     if (py > vy + vh - margin) py = vy + vh - margin;
   }
-  // Always drop the GDI redirection bitmap: with one, alpha content that
-  // renders via DirectComposition (WebGL swapchains) composites OPAQUE, and
-  // a setChrome({transparent}) AFTER creation leaves the stale white GDI
-  // surface showing behind the cleared webview (macOS apps set chrome late).
-  // We never GDI-paint secondaries, so opaque pages lose nothing.
+  // Drop the GDI redirection bitmap for the windows that need it gone: with
+  // one, alpha content that renders via DirectComposition (WebGL swapchains)
+  // composites OPAQUE, and a setChrome({transparent}) AFTER creation leaves
+  // the stale white GDI surface showing behind the cleared webview (macOS
+  // apps set chrome late).
+  //
+  // Not for ALL of them any more, though — a window with no redirection
+  // bitmap can't draw a Win32 menu bar either (the bar is GDI), and that
+  // silently cost every secondary window its menu. Frameless and transparent
+  // windows are the HUD/overlay/WebGL cases and never wanted a bar; a plain
+  // titled window keeps its bitmap so a bar can appear whenever the app asks
+  // for one. The tradeoff is the documented Windows rule, unchanged:
+  // transparency has to be declared at open time, not set later.
 #ifndef WS_EX_NOREDIRECTIONBITMAP
 #define WS_EX_NOREDIRECTIONBITMAP 0x00200000L
 #endif
-  DWORD exStyle = WS_EX_NOREDIRECTIONBITMAP;
+  DWORD exStyle = (wr->transparent == "1" || frameless)
+                      ? WS_EX_NOREDIRECTIONBITMAP
+                      : 0;
   HWND hwnd = CreateWindowExW(
       exStyle, L"TinyjsSecondary",
       widen(wr->title.empty() ? wr->id : wr->title).c_str(),
@@ -4309,6 +4655,7 @@ static void do_winopen(webview_t, void *arg) {
   tw->hwnd = hwnd;
   tw->transparent = wr->transparent == "1";
   tw->frameless = frameless;
+  tw->menu.visible = wr->menu != "0";  // chrome.menu:false — see WinMenu
   bool is_url = wr->page.rfind("http://", 0) == 0 ||
                 wr->page.rfind("https://", 0) == 0;
   tw->url = is_url ? wr->page : to_file_url(wr->page);
@@ -4319,6 +4666,10 @@ static void do_winopen(webview_t, void *arg) {
   if (frameless)
     SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+  // The app menu (or nothing, if the app never set one) goes on BEFORE the
+  // first paint, so a new window neither flashes a bar into place nor opens
+  // a menu-bar's-worth short: attach_menu hands the row back to the frame.
+  render_menu(hwnd);
   ShowWindow(hwnd, SW_SHOW);
   // Reuse the main webview's environment for the new controller.
   ICoreWebView2_2 *wv22 = nullptr;
@@ -4330,6 +4681,7 @@ static void do_winopen(webview_t, void *arg) {
       SecCtrlHandler *ch = new SecCtrlHandler();
       ch->winid = wr->id;
       ch->transparent = tw->transparent;
+      ch->frameless = tw->frameless;
       env->CreateCoreWebView2Controller(hwnd, ch);
       ch->Release();
       env->Release();
@@ -4415,7 +4767,7 @@ static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
     }
     break;
   case WM_CLOSE:
-    if (g_hide_on_close) {
+    if (g_hide_on_close && can_live_hidden()) {
       ShowWindow(hwnd, SW_HIDE);
       return 0;
     }
@@ -4429,6 +4781,12 @@ static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
     }
     break;
   }
+  case WM_SETFOCUS:
+    // Same as the secondaries: activation stops at the host window unless the
+    // page is handed the keyboard explicitly.
+    if (g_ctrl)
+      g_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    break;
   case WM_TINY_TRAY:
     switch (LOWORD(lp)) {
     case WM_LBUTTONUP:
@@ -5008,6 +5366,7 @@ static void pipe_read_loop() {
   std::string buf;
   char chunk[4096];
   std::vector<MenuSpec> pending_menus;
+  std::string pending_menu_win;  // MENUBEGIN@<win>; empty = the app menu
   bool in_menu_block = false;
   TraySpec pending_tray;
   bool in_tray_block = false;
@@ -5100,7 +5459,7 @@ static void pipe_read_loop() {
         webview_dispatch(g_w, do_size, s);
       } else if (line.rfind("WINOPEN ", 0) == 0) {
         // <id>\t<page>\t<title>\t<WxH>[\t<frame>\t<traffic>\t<transp>\t<vib>
-        //   \t<square>\t<firstMouse>\t<x>\t<y>]
+        //   \t<square>\t<firstMouse>\t<x>\t<y>\t<menu>]
         std::vector<std::string> p = split_tabs(line.substr(8));
         WinOpenReq *wr = new WinOpenReq;
         wr->id = p.size() > 0 ? p[0] : "";
@@ -5119,6 +5478,7 @@ static void pipe_read_loop() {
           wr->x = std::atoi(p[10].c_str());
           wr->y = std::atoi(p[11].c_str());
         }
+        wr->menu = p.size() > 12 ? p[12] : "";
         webview_dispatch(g_w, do_winopen, wr);
       } else if (line.rfind("WINCLOSE ", 0) == 0) {
         webview_dispatch(g_w, do_winclose, new std::string(line.substr(9)));
@@ -5132,19 +5492,28 @@ static void pipe_read_loop() {
         req->op = parts[0];
         req->args.assign(parts.begin() + 1, parts.end());
         webview_dispatch(g_w, do_dialog, req);
-      } else if (line == "MENUBEGIN") {
+      } else if (line == "MENUBEGIN" || line.rfind("MENUBEGIN@", 0) == 0) {
+        // Bare: the app menu, shown by every window that hasn't overridden.
+        // @<win>: that window's own, main included (main has to name itself —
+        // a bare MENUBEGIN already means something else).
+        pending_menu_win = line.size() > 10 ? line.substr(10) : "";
         pending_menus.clear();
         collapse_subs();
         build_stack.assign(1, {});
         in_menu_block = true;
+      } else if (line.rfind("MENURESET@", 0) == 0) {
+        webview_dispatch(g_w, do_reset_menu, new std::string(line.substr(10)));
       } else if (in_menu_block && line.rfind("MENU ", 0) == 0) {
         flush_root();
         pending_menus.push_back(MenuSpec{line.substr(5), {}});
         build_stack.assign(1, {});
       } else if (in_menu_block && line.rfind("MENUROLE ", 0) == 0) {
-        // a standard-menu slot (MENUROLE edit, macOS's Edit menu). Win32 has
-        // no launcher-owned menu to place, so the slot is skipped.
+        // A standard-menu slot (MENUROLE edit, macOS's Edit menu). Win32 has
+        // no launcher-owned menu to place, so it draws nothing — but it still
+        // claims an entry, or the next MENU's flush lands on the menu before
+        // it and empties that instead (see MenuSpec::role).
         flush_root();
+        pending_menus.push_back(MenuSpec{"", {}, line.substr(9)});
         build_stack.assign(1, {});
       } else if ((in_menu_block || in_tray_block || in_ctx_block) &&
                  line.rfind("ITEM ", 0) == 0) {
@@ -5183,8 +5552,8 @@ static void pipe_read_loop() {
       } else if (line == "MENUEND") {
         flush_root();
         in_menu_block = false;
-        webview_dispatch(g_w, apply_menus,
-                         new std::vector<MenuSpec>(pending_menus));
+        webview_dispatch(g_w, do_apply_menus,
+                         new ApplyMenuReq{pending_menu_win, pending_menus});
       } else if (line.rfind("TRAYBEGIN", 0) == 0) {
         pending_tray = TraySpec{};
         std::vector<std::string> p =
@@ -5238,9 +5607,22 @@ static void pipe_read_loop() {
           webview_dispatch(g_w, do_hotkey, new HotkeyReq{p[0], p[1]});
       } else if (line.rfind("HKUNREG ", 0) == 0) {
         webview_dispatch(g_w, do_hotkey, new HotkeyReq{line.substr(8), ""});
-      } else if (line.rfind("MENUUPD ", 0) == 0) {
-        std::vector<std::string> p = split_tabs(line.substr(8));
+      } else if (line.rfind("MENUUPD", 0) == 0 &&
+                 (line[7] == ' ' || line[7] == '@')) {
+        // MENUUPD <fields> patches every window's copy of the id;
+        // MENUUPD@<win> <fields> just that window's.
+        std::string win;
+        size_t body = 8;
+        if (line[7] == '@') {
+          size_t sp = line.find(' ', 8);
+          if (sp == std::string::npos)
+            continue;
+          win = line.substr(8, sp - 8);
+          body = sp + 1;
+        }
+        std::vector<std::string> p = split_tabs(line.substr(body));
         MenuUpdReq *req = new MenuUpdReq;
+        req->win = win;
         req->id = p.size() > 0 ? p[0] : "";
         req->label = p.size() > 1 ? p[1] : "";
         req->checked = p.size() > 2 ? p[2] : "";
@@ -5283,6 +5665,7 @@ static void pipe_read_loop() {
         req->vibrancy = p.size() > 3 ? p[3] : "";
         req->square = p.size() > 4 ? p[4] : "";
         req->first_mouse = p.size() > 5 ? p[5] : "";
+        req->menu = p.size() > 6 ? p[6] : "";
         webview_dispatch(g_w, do_chrome, req);
       } else if (line.rfind("DRAGWIN", 0) == 0 &&
                  (line.size() == 7 || line[7] == '@')) {
@@ -5776,6 +6159,14 @@ static int run(int argc, char **argv) {
                                            WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
   g_orig_wndproc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC,
                                               (LONG_PTR)tiny_wndproc);
+  // The webview library created main with (or without) a redirection bitmap
+  // from this same env var; menu_allowed needs to know which, since a
+  // transparent window has nothing for a GDI menu bar to draw on.
+  {
+    char t[8];
+    DWORD n = GetEnvironmentVariableA("TINYJS_TRANSPARENT", t, sizeof(t));
+    g_main_transparent = n > 0 && t[0] == '1';
+  }
   apply_relaunch_props(g_hwnd);
   // Built apps get their Start-Menu shortcut on FIRST RUN, not on a first
   // toast that may never arrive. That shortcut is what makes an app findable
@@ -5810,6 +6201,13 @@ static int run(int argc, char **argv) {
   install_drop_target();
   install_accel_handler();
   install_unc_handler();
+  // Give the page the keyboard from the start, the way a mac window's webview
+  // is first responder the moment it opens. Without it document.hasFocus() is
+  // false until the first click in the page — and an app that gates on it
+  // (nib ignores menu events unless its window is the focused one) looks
+  // broken until you happen to click.
+  if (g_ctrl)
+    g_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
 
   // Custom User-Agent (TINYJS_UA env; see createApp userAgent).
   {

@@ -32,6 +32,49 @@ names refer to the protocol table in the README; Windows handlers live in
       `color` writes as text (no native format).
 - [x] **Menu accelerators** — `key:` combos fire via WebView2
       `AcceleratorKeyPressed` (Ctrl+<key>).
+- [x] **A menu bar on EVERY window** (2026-07-28) — `SetMenu` only ever ran on
+      `g_hwnd`, so secondary windows had no bar at all and `secwin_proc` had no
+      `WM_COMMAND` to route one with. Each window now builds its own `HMENU`
+      from the app menu (or its own, via `MENUBEGIN@<win>`); `g_id_reg` is a
+      multimap so one `MENUUPD` patches every copy; `AccelHandler` carries a
+      winid so a combo resolves against the window it was pressed in; and
+      `chrome.menu:false` hides one window's bar while keeping its items — and
+      therefore its accelerators — alive. Two things had to be fixed
+      underneath. Attaching a bar used to eat a row out of the PAGE
+      (`attach_menu` now hands it back to the frame, so `size` keeps meaning
+      the page's box). And every secondary was created
+      `WS_EX_NOREDIRECTIONBITMAP`, which makes a GDI menu bar impossible —
+      only transparent and frameless ones drop it now, which is what that
+      ex-style was for.
+- [x] **`setHideOnClose` stranded the app** (2026-07-28) — the flag hid the
+      window unconditionally, so an app that set it (nib, for its Welcome
+      screen) survived its last window with no taskbar button and no way back:
+      `tinyjs dev` never returned and the launcher had to be killed by hand.
+      Now gated on `can_live_hidden()` — a tray icon, accessory mode, or
+      another visible window. Only for a user close of that window; a
+      programmatic hide and the last-secondary case are untouched. Verified
+      all four ways: doc open + close Welcome → hides; close the doc → Welcome
+      returns; close the last window → process exits, backend included; tray
+      app with the flag → survives with zero windows.
+- [x] **The page had no keyboard focus until clicked** (2026-07-28) —
+      WebView2's child HWND does not take focus when the host does, so
+      `document.hasFocus()` was `false` from launch and stayed false until the
+      user clicked in the page. Any app gating on it — the standard
+      multi-window "only the focused window acts" pattern, which nib uses for
+      every page-side menu action — silently dropped those actions, while
+      backend-answered items worked. `ctrl->MoveFocus(PROGRAMMATIC)` on
+      controller creation and on `WM_SETFOCUS` (main and secondaries) matches
+      macOS, where a new window's webview is first responder at once.
+      Measured before/after with a page logging `hasFocus` on a timer.
+- [x] **`{ role: 'edit' }` emptied the menu before it** (2026-07-28) — the
+      parser flushed the collected items into `pending_menus.back()` at the
+      MENUROLE line, then skipped pushing anything for the slot, so the NEXT
+      `MENU` line's flush landed on that same entry and overwrote it with an
+      empty list. nib's File menu (declared just before the role) had zero
+      items on Windows; macOS was fine because it pushes a placeholder for the
+      slot. Windows does too now, and skips role entries when building the
+      bar. Pre-existing — it only became obvious once the bar reached the
+      document windows people actually use the File menu in.
 - [x] **launchAtLogin** — HKCU Run key for built apps (dev → 'unsupported');
       the bridge passes the app exe path on the LOGIN wire op.
 - [x] **`tinyjs publish` + app auto-update** — zips `dist/` (bsdtar),

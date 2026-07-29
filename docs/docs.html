@@ -610,7 +610,10 @@ await <b>tiny.dialog.prompt</b>(message, { default, ok, cancel });   <i>// strin
   <section id="menus">
     <h2>tiny.menu <span class="tag">menu bar + right-click</span></h2>
     <p class="note">Every app gets an app menu (About, Quit ⌘Q) and an Edit
-    menu (copy/paste) for free; yours append after.</p>
+    menu (copy/paste) for free; yours append after. This is the <b>app</b>
+    menu — every window shows it, including windows opened later. macOS has
+    one bar for the whole app; Windows and Linux draw a copy of it inside
+    each window.</p>
     <pre><b>tiny.menu.set</b>([
   { title: 'Actions', items: [
     { id: 'open', label: 'Open…', key: 'o' },   <i>// key = ⌘+key</i>
@@ -622,9 +625,22 @@ await <b>tiny.dialog.prompt</b>(message, { default, ok, cancel });   <i>// strin
 ]);
 <b>tiny.menu.on</b>((id) =&gt; …);
 
-<i>// patch a live item — no redeclaring; works for tray + context items too</i>
+<i>// patch a live item — no redeclaring; works for tray + context items too.</i>
+<i>// Every window's copy of the id moves (one shared macOS bar always did).</i>
 <b>tiny.menu.update</b>('mute', { checked: false, label: 'Unmuted' });
 await <b>tiny.menu.get</b>('mute');   <i>// { exists, label, checked, enabled }</i>
+
+<i>// ONE window saying something else — same spec, same click event. macOS</i>
+<i>// swaps this bar in while the window is key; win/linux draw it in place.</i>
+<b>tiny.win.menu.set</b>(spec);
+<b>tiny.win.menu.update</b>(id, patch);   <i>// only this window's copy</i>
+<b>tiny.win.menu.reset</b>();             <i>// back to the app menu</i>
+
+<i>// ONE window showing NO bar — the app menu carries on elsewhere. Whether a</i>
+<i>// bar shows is chrome; what's in it is menu. Accelerators keep firing, and</i>
+<i>// `size` still means the page's box. macOS ignores it.</i>
+<b>tiny.win.setChrome</b>({ menu: false });  <i>// or "chrome": { "menu": false }</i>
+                                       <i>// in tinyjs.json / win.open</i>
 
 <i>// right-click menu — native items replace WebKit's default (null restores)</i>
 <b>tiny.menu.setContext</b>([{ id, label }, { separator: true }]);

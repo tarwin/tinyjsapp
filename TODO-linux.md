@@ -335,6 +335,20 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
 
 ## Still open
 
+- [ ] **Per-window menu bars — WRITTEN 2026-07-28, NEVER COMPILED HERE.** The
+      GTK bar lives inside a toplevel, and only `main` had one: every
+      secondary window was menu-less. Each `SecWin` now gets a `GtkBox` +
+      `GtkMenuBar` + its own `GtkAccelGroup` at creation (the webview used to
+      be added straight to the toplevel), `g_items` is a multimap keyed by id
+      with the owning `GtkWindow*` on each entry, and `apply_menus` takes a
+      winid. `MENUBEGIN@<win>` / `MENURESET@<win>` / `MENUUPD@<win>` and
+      `chrome.menu` are wired the same as Windows, where this was all verified.
+      First run here should check, in order: a plain secondary window is
+      unchanged (nothing mis-packed, webview still fills), the bar appears,
+      and `win.open({ size })` still lands on the page's box once the bar has
+      taken its row — that last one is the repair main already needed when its
+      own bar first appeared. Details + the full checklist: TODO-verify.md.
+
 - [ ] **`tiny.system.locale()`** — declared `false`; no locale arm in the
       launcher. `g_get_language_names()` is the route — it already does the
       `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG` fallback chain the OS itself

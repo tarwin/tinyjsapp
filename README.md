@@ -298,9 +298,13 @@ tiny.win.setChrome({ frame: false, windowControls: false, vibrancy: 'hud' });
 // (packaged apps apply it before first paint — no titlebar flash).
 tiny.win.startDrag();  tiny.win.zoom();   // manual equivalents
 
-// Resizing a frameless window: macOS and Windows keep their native resize
-// edges, but an undecorated GTK window has none — so on Linux the client adds
-// invisible 5px grips around the edge automatically. Nothing to do per app.
+// Resizing a frameless window: only macOS keeps native edges throughout. An
+// undecorated GTK window has none, and neither does a frameless SECONDARY
+// window on Windows (WebView2's child HWND covers the whole rect, so the
+// resize border is never hit-tested) — so on Linux, and for Windows
+// satellites, the client adds invisible 5px grips around the edge
+// automatically. Nothing to do per app. The Windows MAIN window is the
+// exception: it keeps real left/right/bottom borders, trading the top edge.
 tiny.win.startResize('se');   // 'n','ne','e','se','s','sw','w','nw' — for your own handle
 // A fixed-size window (a Winamp-style deck) opts out of the grips:
 //   <html data-tiny-noresize>   …or make it non-resizable:

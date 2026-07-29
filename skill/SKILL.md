@@ -29,7 +29,8 @@ same commands.
 Works on ALL THREE platforms: the whole bridge (api calls, push events,
 `tiny.fetch`/`proxyURL` streaming), dev/hot-reload, Vite `devUrl`,
 multi-window (`win.open` — per-window bridge everywhere), file/folder/save
-dialogs, alert/confirm/prompt, menu bar (+ `menu.update`/`get`, `key:`
+dialogs, alert/confirm/prompt, menu bar on EVERY window (+ `menu.update`/`get`,
+per-window `win.menu.*`, `chrome.menu:false` to hide one window's bar, `key:`
 accelerators — cmd on mac, Ctrl on win/linux), custom context menus +
 `contextMenu: false`, clipboard (text/html/files/image, read + write +
 watch), global hotkeys (`cmd` maps to Ctrl on win/linux; linux uses
@@ -158,7 +159,7 @@ tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
                        permissions?: { microphone?: "why", camera?: "why" },
                        audioTap?: "app" | "system",   // enable tiny.audioTap
                        contextMenu?: false,           // suppress WebKit's default right-click menu (default true)
-                       chrome?: { frame, windowControls, transparent, vibrancy, squareCorners, acceptsFirstMouse },
+                       chrome?: { frame, windowControls, transparent, vibrancy, squareCorners, acceptsFirstMouse, menu },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build: "npm run build", dist: "dist",
                                     dev: "npm run dev", devUrl: "http://127.0.0.1:5173" },
@@ -302,6 +303,19 @@ tiny.menu.on((id) => ...);                  // clicks (also a 'menu' api event)
 tiny.menu.update('mute', { checked: false, label: 'Unmuted' });  // patch live
 await tiny.menu.get('mute');                // { exists, label, checked, enabled }
 // same item shape + update/get work for tray and context menus
+// menu.set is the APP menu: EVERY window shows it, including windows opened
+// later. macOS has one bar for the whole app; win/linux draw a copy of it in
+// each window. So the menu just works in multi-window apps — no per-window
+// setup — and menu.update moves every window's copy of that id at once.
+tiny.win.menu.set(spec);        // THIS window says something else instead
+tiny.win.menu.update(id, patch);// …and patches only its own copy
+tiny.win.menu.reset();          // back to inheriting the app menu
+// Hiding a bar is CHROME, not menu — the app menu stays put elsewhere:
+tiny.win.setChrome({ menu: false });        // or "chrome": { "menu": false }
+// in tinyjs.json / win.open (applied before first paint). Accelerators keep
+// firing with no bar showing, `size` still means the page's box, and macOS
+// ignores the flag (a bar-less mac app isn't a thing). Frameless and
+// transparent windows never draw one on Windows: the bar is GDI.
 
 tiny.notify(title, body, { id, subtitle, sound });  // desktop notification
 // packaged + signed (even Apple Development): native Notification Center
@@ -316,7 +330,8 @@ await tiny.win.getState();  // { x, y, width, height, outer: { width, height },
 // take (set -> get round-trips); outer = footprint on screen, decorations in.
 tiny.win.setPosition(x, y);                 // top-left origin
 tiny.win.setChrome({ frame: false, windowControls: false,
-                     transparent: false, vibrancy: 'hud' });  // frameless etc.
+                     transparent: false, vibrancy: 'hud',
+                     menu: true });                          // frameless etc.
 // squareCorners: true drops macOS's rounded corners → BORDERLESS window
 // (square, no titlebar/traffic lights; no native titlebar drag — use
 // data-tiny-drag; resize/shadow/focus kept). Put it in tinyjs.json "chrome"
@@ -332,6 +347,12 @@ tiny.win.setAlwaysOnTop(v); tiny.win.setResizable(v);
 tiny.win.hide(); tiny.win.show(); tiny.win.setHideOnClose(v);
 // hide() hides the APP (NSApp hide) — focus returns to the previous app,
 // so palettes can hide() then app.paste() with no frontmost tracking.
+// setHideOnClose is a macOS idea: the app outlives its last window and the
+// Dock icon brings it back. Win/linux have nowhere to put that (a hidden
+// window takes its taskbar button with it), so there the flag holds only
+// while something can bring the app back — a tray icon, accessory mode, or
+// another window still up. Closing the LAST window of an ordinary app quits
+// it there, as every other app on those platforms does.
 tiny.win.show({ activate: false });  // surface WITHOUT stealing focus (HUDs)
 await tiny.app.mousePosition();      // { x, y, window: { x, y, inside },
                                      //   screen: { x, y, width, height,
@@ -583,7 +604,10 @@ Backend SQLite is built into txiki: `import { Database } from 'tjs:sqlite'`;
 
 An app menu (About + Quit) and an Edit menu (copy/paste shortcuts) always
 exist; `tiny.menu.set` adds menus after them. About shows name + version from
-tinyjs.json automatically.
+tinyjs.json automatically. The menu belongs to the APP, not to one window: it
+shows in every window, including ones opened later. Per-window differences go
+through `tiny.win.menu.*` (content) and `chrome.menu` (whether a bar shows at
+all) — see the menu section above.
 
 ## Rules of thumb
 

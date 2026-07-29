@@ -219,12 +219,40 @@ What was wrong before: `DRAGWIN` was matched with `line == "DRAGWIN"`, exact,
 so the per-window `DRAGWIN@<id>` form the bridge sends for satellites was
 dropped — a satellite's drag handle did nothing. `RESIZEWIN` was never handled
 at all, and tiny.js gives **every frameless window** invisible resize grips
-that call it, so custom grips were dead on Windows (native `WS_THICKFRAME`
-borders still worked, which is probably why nobody noticed).
+that call it, so custom grips were dead on Windows.
+
+The parenthetical that used to close that paragraph — "native `WS_THICKFRAME`
+borders still worked, which is probably why nobody noticed" — was the mistake.
+It holds for the MAIN window only. A frameless SECONDARY answers
+`WM_NCCALCSIZE` with no non-client area and then hands WebView2 the whole rect,
+so its child HWND owns every edge pixel, `WindowFromPoint` never resolves to
+us, and `WM_NCHITTEST` is never asked. Frameless satellites had **no grabbable
+edge at all** on Windows, and the grips that would have covered for that were
+gated on `__TINY_FRAMELESS`, which only the Linux launcher injected. Fixed
+2026-07-28: `sec_shim_js` now injects the marker for frameless secondaries
+(main deliberately stays unmarked — it has real side/bottom borders), and
+`do_ncdrag` grew the guards below.
 
 To check: a frameless window, drag it by a `data-tiny-drag` region and by a
 satellite's own handle; then drag each of the eight edge grips and confirm the
 right edge moves (a wrong `HT*` mapping resizes the opposite side).
+
+- [x] All eight edges/corners of a frameless satellite, each moving the edge
+      grabbed. Automated as far as it goes: a probe app confirms the marker is
+      a boolean and all 8 grips mount on a frameless secondary, mount on
+      neither a titled secondary nor main. The dragging itself needs a hand —
+      watched on Windows 2026-07-28 in amp, edge resize working.
+- [ ] **Click an edge without moving** — press and release in place. The window
+      must NOT follow the pointer afterwards. `xxxMoveSize` entered with the
+      button already up tracks until the next click; the trip from the grip's
+      `mousedown` to `do_ncdrag` is two process hops, so this is easy to hit.
+      Guarded with `GetAsyncKeyState(VK_LBUTTON)`, mirroring macOS.
+- [ ] `setResizable(false)` then drag an edge — must do nothing (the style bit
+      is read live, because tiny.js gates its grips on one `getState` at load).
+- [ ] Alive mid-drag: hold an edge and confirm posted work still lands (the
+      modal loop pumps `WM_APP`, so dispatch keeps running inside it).
+- [ ] A monitor LEFT of primary (negative screen x) — exercises the
+      `MAKELPARAM` sign path in the point now passed as `lParam`.
 
 ## ~~macOS — `startDrag` / `startResize` / `dragOut`~~ — done 2026-07-26
 
@@ -852,6 +880,50 @@ window, so the app's own logs can never confirm them:
 - `WM_GETICON` read off the live window separates "the call did nothing" from
   "the call worked and the shell ignored it". That distinction is the whole
   point of this file, and it is what caught the `app.icon` taskbar finding.
+
+## Per-window menu bars — Windows proven, macOS and Linux UNRUN (2026-07-28)
+
+`tiny.menu.set` became the APP menu (every window draws it), plus
+`tiny.win.menu.*` for one window's own and `chrome.menu:false` to hide one
+window's bar. Written on **Windows**, which is the only platform it has been
+compiled or run on.
+
+| check | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| a secondary window shows the app menu | ✅ seen — nib's doc window, plus a scripted app measuring its own frame | ⬜ (always did — one shared bar) | ⬜ never compiled |
+| `size` is still the page's box with a bar | ✅ declared 700x400 → 700x400 page, frame grew 19px | n/a (the bar isn't in the window) | ⬜ main was repaired before; secondaries are new code |
+| a window opened later inherits the app menu | ✅ seen | ⬜ | ⬜ |
+| `win.menu.set` overrides that window only | ✅ own id present, app id gone, other windows untouched | ⬜ **the focus swap is the risky part** | ⬜ |
+| `win.menu.reset` goes back to the app menu | ✅ seen | ⬜ | ⬜ |
+| `win.menu.update` moves one window's tick | ✅ seen | ⬜ | ⬜ |
+| `menu.update` moves every window's copy | ✅ seen | ⬜ | ⬜ |
+| `chrome.menu:false` hides one bar only | ✅ frame 19px shorter, page unchanged | n/a — no-op by design | ⬜ |
+| items survive a hidden bar (accelerators) | ✅ `menu.get` still answers | n/a | ⬜ |
+| a closed window's items leave the registry | ✅ by construction (WM_DESTROY) | ⬜ | ⬜ |
+| a menu declared before `{role:'edit'}` keeps its items | ✅ fixed + read back off the live `HMENU` — nib's File, 20 items | ✅ always worked | ✅ appends through a pointer, never flushes |
+| a page-gated menu action fires in a fresh window | ✅ fixed — `document.hasFocus()` is true from load now (was false until the first click) | ✅ webview is first responder at once | ⬜ **check this** — WebKitGTK may need `gtk_widget_grab_focus` on the webview the same way |
+| `setHideOnClose` + closing the last window quits | ✅ fixed (`can_live_hidden`) — process and backend both exit | n/a — the Dock is the way back, flag unchanged | ⬜ same rule written for GTK, unrun: check a tray app still survives, and that closing the last window exits |
+
+What to watch for on **macOS**: the bar now follows focus through an
+`NSWindowDidBecomeKeyNotification` observer, and per-window menus are only as
+good as that. Open two windows, give one its own menu, ⌘\` between them — the
+bar should swap and swap back, no flicker, no wrong bar left up. A save panel
+or an alert taking key must NOT swap it (`winid_for_window` answers "" for
+windows that aren't ours and the observer skips those). And a window with its
+own menu closing while key must put the app menu back.
+
+What to watch for on **Linux**: every secondary window now gets a `GtkBox` +
+`GtkMenuBar` + its own `GtkAccelGroup` at creation, where before the webview
+went straight into the toplevel. Confirm in this order — a plain secondary
+window still looks and behaves exactly as it did (nothing mis-packed, webview
+still fills), then the bar appears at all, then `win.open({ size })` still
+lands on the page's box once the bar has taken its row. That last one is the
+same repair main needed when its bar first appeared.
+
+The Windows numbers came from a scripted app that opens windows and reports
+`getState().outer.height - height` (the frame's share) for each. Worth
+rebuilding on the other two: it turns "is the bar there" into a number, which
+is the only way to tell a missing bar from one drawn over the page.
 
 [TODO-windows.md]: TODO-windows.md
 [TODO-linux.md]: TODO-linux.md
