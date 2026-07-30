@@ -90,6 +90,22 @@ names refer to the protocol table in the README; Windows handlers live in
 
 ## Still open
 
+- [ ] **Authenticode-sign the Windows binaries** (tjs.exe, launcher-win.exe,
+      and the per-app exes `tinyjs build` emits). 2026-07-30, releasing the
+      0.30.0 fleet: Defender's cloud heuristic (`Behavior:Win32/Execution.A!ml`,
+      severity "Severe") quarantined the freshly downloaded tjs.exe out of
+      `tinyjs update`'s staging dir mid-swap, then flagged builds inside the
+      examples checkout too — the dev box needed exclusions on
+      `%LOCALAPPDATA%\tinyjs`, `tinyjs.new`, AND the examples tree before the
+      release pass could run. The trigger is structural, not a bug: unsigned +
+      new hash + Mark-of-the-Web + spawns/executes = flagged, and every
+      release re-rolls it because every new build is an unknown hash. End
+      users downloading the example `-win.zip`s face the same dice. Fix is a
+      code-signing cert in the release CI (OV builds reputation per-cert over
+      time; EV starts trusted); until then, submit each release's tjs.exe as
+      a false positive at microsoft.com/wdsi/filesubmission — clears usually
+      propagate through cloud protection in a day or two.
+
 - [ ] **`tiny.system.locale()`** — declared `false`; no locale arm in the
       launcher. `GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, …)` is the
       route, with `GetUserDefaultLocaleName` for the region and
