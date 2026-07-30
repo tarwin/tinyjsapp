@@ -545,6 +545,16 @@ reader.cancel();  <i>// (or closing the window) tears the upstream connection do
     <p class="note">A page with CORS-free network reach has the app's full network
     reach — for tinyjs that's not a new trust boundary (every page already holds an
     RPC channel to a backend with full system access), but worth knowing.</p>
+    <p class="note"><b>Reachability:</b> <code>tiny.fetch</code> (and plain
+    <code>fetch()</code> in the backend) transparently hands two cases the bundled
+    runtime can't do on its own to the <b>system curl</b>: root-path URLs like
+    <code>https://feeds.example.com/</code> (the runtime emits <code>GET&nbsp;//</code>,
+    which strict CDNs answer with 404) and TLS&nbsp;1.2-only hosts (art19, anchor.fm —
+    the runtime's TLS stack requires 1.3). Redirects are followed hop by hop, so a
+    tracker URL that bounces into either case still lands. curl is only consulted when
+    the built-in path failed at the wire — a real HTTP error (404, 500) is returned
+    as-is, never retried. curl ships with macOS, Linux, and Windows&nbsp;10&nbsp;1803+;
+    without it those two cases fail as before.</p>
 
     <h3><code>tiny.proxyURL(url)</code> — a cross-origin stream into Web Audio</h3>
     <p>A <code>MediaElementSource</code> on a <b>cross-origin</b> <code>&lt;audio&gt;</code>

@@ -368,6 +368,17 @@ const radio = await tiny.fetch('https://ice1.somafm.com/groovesalad-128-mp3', { 
 const reader = radio.body.getReader();
 for (;;) { const { value, done } = await reader.read(); if (done) break; /* feed decodeAudioData, MediaSource, … */ }
 // reader.cancel() (or closing the window) tears the upstream connection down.
+//
+// Reachability: tiny.fetch (and plain fetch() in the backend) transparently
+// hands two cases the bundled runtime can't do on its own to the system curl:
+// root-path URLs like https://feeds.example.com/ (the runtime emits 'GET //',
+// which strict CDNs 404) and TLS 1.2-only hosts (art19, anchor.fm — the
+// runtime's TLS stack requires 1.3). Redirects are followed hop by hop so a
+// tracker that bounces into either case still lands. curl is only consulted
+// when the built-in path failed at the wire — a real HTTP error (404, 500)
+// is returned as-is, never retried. curl ships with macOS, Linux, and
+// Windows 10 1803+; without it those two cases fail as before. Details in
+// TODO-txiki.md (the plan is to fix the runtime itself and drop the shim).
 
 // tiny.proxyURL — get a cross-origin stream (internet radio) INTO Web Audio.
 // A MediaElementSource on a cross-origin <audio> outputs silence by spec;

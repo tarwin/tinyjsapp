@@ -992,5 +992,28 @@ knowing before trusting any multi-window store-choreographed page on Linux:
   previous run reads the OLD replies instantly and reports a full set of
   plausible, internally consistent, completely stale results.
 
+## The fetch repair shim — verified on macOS only, 2026-07-30
+
+bridge.js now wraps `globalThis.fetch` (search "fetch repair shim"): follows
+redirects hop-by-hop and hands exactly two broken cases to the system curl —
+root-path URLs (txiki emits `GET //`; strict CDNs 404) and TLS 1.2-only
+hosts (`mbedtls connect -1 5 0`). Full background: TODO-txiki.md. Every
+`tiny.fetch` and backend `fetch()` in every app now goes through it.
+
+Verified on macOS (unit via importing bridge.js under `tjs run`, then
+end-to-end: amp's podcast backend through a TINYJS_HTML driver page — the 8
+formerly-broken FAVES feeds all load, a real 404 stays 404, redirect chains
+report the final `res.url`, somafm streams live through it, POST bodies
+echo). Never run on:
+
+- [ ] **Windows** — the shim spawns `curl` (curl.exe ships since 10 1803,
+      but PATH in a packaged app is not a given), pipes a request body via
+      `stdin: 'pipe'` + `getWriter()`, and parses `-i` header blocks off the
+      stdout pipe. All txiki-API-level, none of it Windows-specific on
+      paper — which is exactly what this file is for. Check: the 8 feeds in
+      TODO-txiki.md through `tiny.fetch`, plus one internet-radio stream.
+- [ ] **Linux** — same checks; curl is effectively always there, so the
+      interesting bit is just spawn/pipe behavior matching macOS.
+
 [TODO-windows.md]: TODO-windows.md
 [TODO-linux.md]: TODO-linux.md

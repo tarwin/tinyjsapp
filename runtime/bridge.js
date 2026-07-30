@@ -38,6 +38,160 @@ const ON_X11 = IS_LINUX && (tjs.env.GDK_BACKEND === 'x11'
   || (!!tjs.env.DISPLAY && tjs.env.GDK_BACKEND !== 'wayland'
       && tjs.env.XDG_SESSION_TYPE !== 'wayland'));
 
+// ── fetch repair shim ───────────────────────────────────────────────────────
+// txiki v26.6.0's fetch has two wire-level bugs (repros + fix notes in
+// TODO-txiki.md; both verified against real hosts):
+//   A. a root-path URL goes out as 'GET //' — S3/CloudFront-backed hosts
+//      answer 404 to the double slash (Radiotopia's publicfeeds.net feeds,
+//      pdrl.fm's redirect targets)
+//   B. mbedtls never completes a handshake with TLS 1.2-only hosts
+//      ("mbedtls connect -1 5 0" — rss.art19.com, anchor.fm, Fastly's
+//      older TLS profiles)
+// Until a patched tjs ships, wrap fetch: follow redirects ourselves so every
+// hop is visible, and route EXACTLY the broken cases through the system curl
+// (always present on macOS/Linux; Windows ships curl.exe since 10 1803).
+// A real HTTP error from a working request is never retried — a genuine 404
+// stays a 404 — and curl bodies stream, so internet radio stays live. Both
+// backend fetch() and every page's tiny.fetch inherit this.
+const nativeFetch = globalThis.fetch?.bind(globalThis);
+let curlProbe = null;
+const haveCurl = () => (curlProbe ??= probeOk(['curl', '--version']));
+const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
+
+// One hop via curl, returned as a real Response with a streaming body.
+// -i puts the header block on stdout ahead of the body; no -L — the wrapper
+// follows redirects itself, so one call is always exactly one hop.
+async function curlFetch(url, init = {}) {
+  const method = (init.method || 'GET').toUpperCase();
+  // --proto locks curl to http(s) even if a caller slips something exotic
+  // past the wrapper; --proto-redir guards curl's own redirect handling
+  // (unused — we never pass -L — but belt and braces)
+  const args = ['curl', '-s', '-i', '--connect-timeout', '30',
+                '--proto', '=http,https', '--proto-redir', '=http,https'];
+  if (method === 'HEAD') args.push('--head');
+  else if (method !== 'GET') args.push('-X', method);
+  const pairs = [];
+  const H = init.headers;
+  if (H) {
+    if (typeof H.forEach === 'function') H.forEach((v, k) => pairs.push([k, v]));
+    else for (const k of Object.keys(H)) pairs.push([k, H[k]]);
+  }
+  // identity unless the caller asked for something: curl won't decode what we
+  // don't tell the server to send, and honest lengths beat saved bytes here
+  if (!pairs.some(([k]) => k.toLowerCase() === 'accept-encoding')) pairs.push(['accept-encoding', 'identity']);
+  for (const [k, v] of pairs) args.push('-H', k + ': ' + v);
+  const body = init.body;
+  if (body != null) {
+    if (typeof body !== 'string' && !(body instanceof Uint8Array))
+      throw new TypeError('fetch fallback: only string/Uint8Array bodies');
+    args.push('--data-binary', '@-');
+  }
+  args.push('--', url);   // never let a URL parse as a flag
+  const p = tjs.spawn(args, { stdin: body != null ? 'pipe' : 'ignore', stdout: 'pipe', stderr: 'ignore' });
+  if (body != null) {
+    const w = p.stdin.getWriter();
+    await w.write(typeof body === 'string' ? enc.encode(body) : body);
+    await w.close();
+  }
+  if (init.signal) {
+    const kill = () => { try { p.kill(); } catch {} };
+    init.signal.aborted ? kill() : init.signal.addEventListener('abort', kill);
+  }
+  const reader = p.stdout.getReader();
+  // accumulate until the end of the header block; 1xx interim blocks (100
+  // Continue from the --data-binary path) are skipped like a client should
+  let buf = new Uint8Array(0);
+  const blockEnd = (b, from) => {
+    for (let i = from; i + 3 < b.length; i++)
+      if (b[i] === 13 && b[i + 1] === 10 && b[i + 2] === 13 && b[i + 3] === 10) return i;
+    return -1;
+  };
+  let head = null, rest = null;
+  while (head === null) {
+    const { done, value } = await reader.read();
+    if (value) {
+      const n = new Uint8Array(buf.length + value.length);
+      n.set(buf); n.set(value, buf.length); buf = n;
+    }
+    let idx;
+    while ((idx = blockEnd(buf, 0)) !== -1) {
+      const block = dec.decode(buf.subarray(0, idx));
+      buf = buf.subarray(idx + 4);
+      const m = /^HTTP\/[\d.]+ (\d{3})(?: (.*))?/.exec(block);
+      if (!m) break;                       // not HTTP — fail below
+      if (+m[1] >= 200 || +m[1] < 100) { head = { status: +m[1], statusText: m[2] || '', block }; rest = buf; break; }
+    }
+    if (done) break;
+  }
+  if (!head) {
+    const st = await p.wait();
+    throw new TypeError('Network request failed (curl exit ' + (st.term_signal || st.exit_status) + ')');
+  }
+  const headers = [];
+  for (const line of head.block.split('\r\n').slice(1)) {
+    const c = line.indexOf(':');
+    if (c > 0) headers.push([line.slice(0, c).trim(), line.slice(c + 1).trim()]);
+  }
+  const noBody = method === 'HEAD' || head.status === 204 || head.status === 304 || head.status === 205;
+  const stream = noBody ? null : new ReadableStream({
+    start(c) { if (rest.length) c.enqueue(rest.slice()); },
+    async pull(c) {
+      const { done, value } = await reader.read();
+      if (done) { c.close(); p.wait().catch(() => {}); }
+      else c.enqueue(value);
+    },
+    cancel() { try { p.kill(); } catch {} },
+  });
+  return new Response(stream, { status: head.status, statusText: head.statusText, headers });
+}
+
+if (nativeFetch) globalThis.fetch = async function fetchRepaired(input, init = {}) {
+  // exotic inputs (Request objects, data:/file: urls, stream bodies) keep the
+  // native path untouched — the repair rules only understand plain http(s)
+  const url0 = typeof input === 'string' ? input : (input instanceof URL ? input.href : null);
+  if (url0 === null || !/^https?:\/\//i.test(url0)) return nativeFetch(input, init);
+  const mode = init.redirect || 'follow';
+  let url = url0;
+  let method = (init.method || 'GET').toUpperCase();
+  let body = init.body;
+  for (let hop = 0; ; hop++) {
+    let rootPath = false;
+    try { const u = new URL(url); rootPath = u.pathname === '/' || u.pathname === ''; } catch {}
+    let res;
+    if (rootPath && await haveCurl()) {
+      res = await curlFetch(url, { ...init, method, body });        // bug A
+    } else {
+      try {
+        res = await nativeFetch(url, { ...init, method, body, redirect: 'manual' });
+      } catch (e) {
+        if (!(await haveCurl())) throw e;
+        res = await curlFetch(url, { ...init, method, body });      // bug B — no response existed
+      }
+    }
+    const loc = REDIRECT_CODES.has(res.status) ? res.headers.get('location') : null;
+    if (!loc || mode === 'manual') {
+      // best effort: report the landing url like a spec fetch would
+      if (hop > 0) try {
+        Object.defineProperty(res, 'url', { get: () => url });
+        Object.defineProperty(res, 'redirected', { get: () => true });
+      } catch {}
+      return res;
+    }
+    if (mode === 'error') throw new TypeError('redirected (redirect: "error")');
+    if (hop >= 20) throw new TypeError('too many redirects');
+    try { res.body?.cancel(); } catch {}
+    // a hostile Location: must not walk us onto another scheme — curl would
+    // happily fetch file:///etc/passwd
+    const next = new URL(loc, url);
+    if (next.protocol !== 'http:' && next.protocol !== 'https:')
+      throw new TypeError('redirect to non-http(s) scheme blocked: ' + next.protocol);
+    url = next.href;
+    // 303 always becomes GET; 301/302 downgrade POST like browsers do;
+    // 307/308 keep the method and body
+    if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === 'POST')) { method = 'GET'; body = undefined; }
+  }
+};
+
 // ── system requirements ─────────────────────────────────────────────────────
 // Linux ships its media stack in pieces, and which pieces are present varies
 // by distro and install. Rather than let a feature fail mutely (silent audio,
