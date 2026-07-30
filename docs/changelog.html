@@ -134,6 +134,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.31.0 <span class="date">2026-07-30</span></h2>
+      <ul>
+        <li><b>Window-state transitions are events.</b> <code>tiny.win.onState(fn)</code> fires with <code>{ win, fullscreen, maximized, minimized, focused }</code> on every transition, whatever caused it — the green button, a menu item, a shortcut, or your own <code>setFullscreen</code> — so nobody has to fake it by debouncing <code>resize</code> and re-reading <code>getState()</code>, which can't tell a fullscreen transition from a manual resize to screen size. Same vocabulary as <code>getState()</code>, deduped in the launcher so a drag-resize never spams the wire, broadcast to every window with the id attached. Backend twin: <code>export function onWindowState(info, app)</code>. Like every <code>on…</code> since 0.30.0 it returns its own unsubscribe. Wayland never reports <code>minimized</code> — the compositor keeps minimize private.</li>
+        <li><b>The traffic lights can move (macOS).</b> <code>chrome.windowControlsPos: { x, y }</code> — offset from the window's top-left — recenters the close/minimize/zoom group in a taller custom titlebar, the thing every frameless app with its own header bar eventually wants. Works in <code>tinyjs.json "chrome"</code> (before first paint), <code>setChrome</code>, and <code>win.open</code>'s per-window chrome; <code>null</code> restores the OS layout and <code>getState().chrome</code> reports it back. AppKit re-lays-out the buttons on resizes, fullscreen round-trips and titlebar rebuilds, so the launcher re-applies the offset on those transitions — set it once. Ignored on Windows and Linux, whose window buttons live in a real titlebar.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.30.0 <span class="date">2026-07-30</span></h2>
       <ul>
         <li><b><code>setHideOnClose</code> no longer strands the app on Windows and Linux.</b> It's a macOS idea — there an app outlives its last window and the Dock brings it back. Neither other platform has anywhere to put that: a hidden window takes its taskbar button with it, so closing the last window of an app that set the flag left a process the user could neither see nor quit. The flag is now honoured only when there IS a way back — a tray icon, accessory mode, or another window still on screen — otherwise the close means what it means everywhere else on that OS. macOS unchanged, tray apps unchanged, programmatic <code>win.hide()</code> unchanged.</li>

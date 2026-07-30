@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.31.0 — 2026-07-30
 
 - **Window-state transitions are events now.** `tiny.win.onState(fn)` fires
   with `{ win, fullscreen, maximized, minimized, focused }` on every
