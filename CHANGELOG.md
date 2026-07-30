@@ -4,6 +4,32 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **Window-state transitions are events now.** `tiny.win.onState(fn)` fires
+  with `{ win, fullscreen, maximized, minimized, focused }` on every
+  transition, whatever caused it — the green button, a menu item, F11, or a
+  programmatic `setFullscreen` — so nobody has to fake it by debouncing
+  `resize` and re-reading `getState()` (which cannot tell a fullscreen
+  transition from a manual resize to screen size). Same vocabulary as
+  `getState()`, deduped in the launcher so live-resize spam never crosses the
+  wire, broadcast to every window with the id attached. Backend twin:
+  `export function onWindowState(info, app)`. Like every `on…` since
+  removable events landed, it returns its own unsubscribe. Wayland never
+  reports `minimized` — the compositor keeps minimize private, same honesty
+  rule as `mousePosition`.
+
+- **The traffic lights can move (macOS).** `chrome.windowControlsPos:
+  { x, y }` — offset from the window's top-left — recenters the
+  close/minimize/zoom group in a taller custom titlebar, the thing every
+  frameless app with its own header bar eventually wants. Works in
+  `tinyjs.json "chrome"` (applied before first paint), `setChrome`, and
+  `win.open`'s per-window chrome; `null` restores the OS layout, and
+  `getState().chrome` reports it back. AppKit re-lays-out the buttons on
+  resizes, fullscreen round-trips and titlebar rebuilds, so the launcher
+  re-applies the offset on those transitions — set it once. Ignored on
+  Windows and Linux, whose window buttons live in a real titlebar.
+
 ## 0.30.0 — 2026-07-30
 
 - **`setHideOnClose` no longer strands the app on Windows and Linux.** It is a

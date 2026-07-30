@@ -11,6 +11,9 @@
 //   backend -> launcher:  WINOPEN <id>\t<page>\t<title>\t<WxH> (create/focus)
 //                         WINCLOSE <id>
 //   launcher -> backend:  WINCLOSED <id>
+//                         WINSTATE <id> <json>  {fullscreen,maximized,
+//                                               minimized,focused} — deduped
+//                                               snapshot on any transition
 //
 //   launcher -> backend:  CALL <winid>:<seq> <json-args-array>
 //   backend -> launcher:  RET <id> <status> <json>   resolve/reject a call
@@ -428,6 +431,7 @@ static void reapply_window_overrides(webview_t w); // defined with chrome ops
 #ifdef __APPLE__
 static NSWindow *window_for_id(webview_t w, const std::string &id); // below
 static WKWebView *webview_for_id(webview_t w, const std::string &id); // below
+static std::string traffic_pos_json(const std::string &wid); // below
 #endif
 
 static void do_size(webview_t w, void *arg) {
@@ -3472,6 +3476,7 @@ static void do_get(webview_t w, void *arg) {
             "\"alwaysOnTop\":%s,\"resizable\":%s,"
             "\"clickThrough\":%s,\"level\":\"%s\",\"allSpaces\":%s,"
             "\"chrome\":{\"frame\":%s,\"windowControls\":%s,"
+            "\"windowControlsPos\":%s,"
             "\"transparent\":%s,\"vibrancy\":%s,\"squareCorners\":%s,"
             "\"acceptsFirstMouse\":%s},"
             "\"screen\":{\"width\":%d,\"height\":%d,\"scale\":%.2f}}",
@@ -3499,7 +3504,8 @@ static void do_get(webview_t w, void *arg) {
               win.titlebarAppearsTransparent))
                 ? "false"
                 : "true",
-            controls.c_str(), win.opaque ? "false" : "true",
+            controls.c_str(), traffic_pos_json(wid).c_str(),
+            win.opaque ? "false" : "true",
             // vibrancy name is tracked for main only; secondary → null.
             (wid == "main" && !g_chrome_vibrancy.empty())
                 ? json_escape(g_chrome_vibrancy).c_str()
@@ -4139,8 +4145,10 @@ static void do_voices(webview_t, void *arg) {
 #endif
 
 // --- window chrome: frameless / traffic lights / transparency / vibrancy ---------
-// CHROME <frame>\t<traffic>\t<transparent>\t<vibrancy> ('' = leave unchanged;
-// frame/traffic/transparent are 0|1; vibrancy is a material name or "none").
+// CHROME <frame>\t<traffic>\t<transparent>\t<vibrancy>\t<square>\t<firstMouse>
+//        \t<menu>\t<controlsPos> ('' = leave unchanged; frame/traffic/
+// transparent are 0|1; vibrancy is a material name or "none"; menu is not a
+// macOS question; controlsPos is 'x,y' or 'default').
 // "Frameless" keeps the window titled (fullSizeContentView + transparent,
 // hidden titlebar) so focus, resize edges, shadows, rounded corners, and
 // fullscreen all keep working — unlike true borderless. DRAGWIN starts a
@@ -4149,6 +4157,7 @@ static void do_voices(webview_t, void *arg) {
 struct ChromeReq {
   std::string win = "main";
   std::string frame, traffic, transparent, vibrancy, square, first_mouse;
+  std::string traffic_pos; // '' keep · 'default' OS layout · 'x,y' offset
 };
 
 #ifdef __APPLE__
@@ -4200,6 +4209,87 @@ static void relayout_titlebar(NSWindow *win) {
       [v setNeedsLayout:YES];
     }
   }
+}
+
+// windowControlsPos: a custom traffic-light offset ({x,y} in points from the
+// window's top-left) per window. AppKit re-lays-out the standard buttons on
+// resize, on the way out of fullscreen, and whenever the titlebar view is
+// rebuilt, so setting the frames once is not enough — the offset is stored
+// here and re-applied from those transitions (see the winstate observers)
+// as well as from apply_chrome_fields.
+static std::map<std::string, std::pair<double, double>> g_traffic_pos;
+// AppKit's own layout, captured per window before the first override so
+// windowControlsPos:null can put the buttons back without guessing what
+// this macOS version's defaults are.
+static std::map<std::string, std::pair<double, double>> g_traffic_default;
+
+static void apply_traffic_pos_xy(NSWindow *win, double x, double y) {
+  // In fullscreen the buttons belong to the auto-hiding menu bar — leave
+  // them alone; the exit-fullscreen observer re-applies the offset.
+  if (win.styleMask & NSWindowStyleMaskFullScreen)
+    return;
+  NSButton *close_b = [win standardWindowButton:NSWindowCloseButton];
+  NSButton *mini_b = [win standardWindowButton:NSWindowMiniaturizeButton];
+  NSButton *zoom_b = [win standardWindowButton:NSWindowZoomButton];
+  if (!close_b)
+    return;
+  // Only the group's origin moves; AppKit's inter-button spacing is kept.
+  CGFloat spacing = 20;
+  if (mini_b && mini_b.frame.origin.x > close_b.frame.origin.x)
+    spacing = mini_b.frame.origin.x - close_b.frame.origin.x;
+  NSView *bar = close_b.superview;
+  NSButton *btns[] = {close_b, mini_b, zoom_b};
+  int i = 0;
+  for (NSButton *btn : btns) {
+    if (!btn) { i++; continue; } // keep the slot so a subset stays spaced
+    NSRect f = btn.frame;
+    f.origin.x = x + spacing * i++;
+    f.origin.y = bar.isFlipped ? y : bar.bounds.size.height - y - f.size.height;
+    [btn setFrame:f];
+  }
+}
+
+static void apply_traffic_pos(NSWindow *win, const std::string &winid) {
+  auto it = g_traffic_pos.find(winid);
+  if (it != g_traffic_pos.end())
+    apply_traffic_pos_xy(win, it->second.first, it->second.second);
+}
+
+// GET win reports the custom offset (or null when AppKit's layout stands),
+// so chrome set -> get round-trips like every other chrome field.
+static std::string traffic_pos_json(const std::string &wid) {
+  auto it = g_traffic_pos.find(wid);
+  if (it == g_traffic_pos.end())
+    return "null";
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "{\"x\":%g,\"y\":%g}", it->second.first,
+                it->second.second);
+  return buf;
+}
+
+static void set_traffic_pos(NSWindow *win, const std::string &winid,
+                            const std::string &spec) {
+  if (spec == "default") {
+    g_traffic_pos.erase(winid);
+    auto d = g_traffic_default.find(winid);
+    if (d != g_traffic_default.end())
+      apply_traffic_pos_xy(win, d->second.first, d->second.second);
+    return;
+  }
+  double px = 0, py = 0;
+  if (std::sscanf(spec.c_str(), "%lf,%lf", &px, &py) != 2)
+    return;
+  if (!g_traffic_default.count(winid)) {
+    NSButton *cb = [win standardWindowButton:NSWindowCloseButton];
+    if (cb && cb.superview) {
+      NSView *bar = cb.superview;
+      double dy = bar.isFlipped ? cb.frame.origin.y
+                                : bar.bounds.size.height - NSMaxY(cb.frame);
+      g_traffic_default[winid] = {cb.frame.origin.x, dy};
+    }
+  }
+  g_traffic_pos[winid] = {px, py};
+  apply_traffic_pos(win, winid);
 }
 
 // Toggling fullSizeContentView grows the content view, but the webview's
@@ -5362,7 +5452,10 @@ static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
       set_titlebar_hidden(win, hide_bar);
       relayout_titlebar(win);
       extend_content(wv, win, *effect);
+      apply_traffic_pos(win, req->win); // relayout resets custom offsets
     }
+    if (!req->traffic_pos.empty())
+      set_traffic_pos(win, req->win, req->traffic_pos);
     if (!req->vibrancy.empty()) {
       if (*effect) {
         [*effect removeFromSuperview];
@@ -5443,6 +5536,7 @@ static void reapply_window_overrides(webview_t w) {
         w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
     extend_content(mwv, win, g_effect_view);
   }
+  apply_traffic_pos(win, "main");
 }
 
 static void do_dragwin(webview_t w, void *arg) {
@@ -5600,6 +5694,76 @@ static NSVisualEffectView **effect_slot_for(const std::string &id) {
   return it == g_windows.end() ? nullptr : &it->second.effect;
 }
 
+// --- window state events -----------------------------------------------------
+// WINSTATE <id> {"fullscreen":b,"maximized":b,"minimized":b,"focused":b} —
+// same vocabulary as GET win, deduped per window so live-resize spam (and
+// the many notifications one transition fans out into) stays off the wire.
+// The bridge broadcasts each line as a 'window-state' page event and the
+// onWindowState createApp option.
+static std::map<std::string, std::string> g_last_winstate;
+
+static std::string winid_for_nswindow(NSWindow *win) {
+  if (!win)
+    return "";
+  for (auto &kv : g_windows)
+    if (kv.second.win == win)
+      return kv.first;
+  if (g_w && win == (NSWindow *)webview_get_native_handle(
+                        g_w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW))
+    return "main";
+  return ""; // not ours: dialogs, panels, the devtools window
+}
+
+static void emit_winstate(NSWindow *win, const std::string &id) {
+  bool fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
+  auto b = [](bool v) { return v ? "true" : "false"; };
+  // zoomed IS true in fullscreen; report the pre-fullscreen sense instead so
+  // "maximized" means the green-button zoom state, matching Windows/Linux.
+  std::string s = std::string("{\"fullscreen\":") + b(fs) +
+                  ",\"maximized\":" + b(!fs && win.zoomed) +
+                  ",\"minimized\":" + b(win.miniaturized) +
+                  ",\"focused\":" + b(win.keyWindow) + "}";
+  auto it = g_last_winstate.find(id);
+  if (it != g_last_winstate.end() && it->second == s)
+    return;
+  g_last_winstate[id] = s;
+  sock_write_line("WINSTATE " + id + " " + s);
+}
+
+static void install_winstate_observers() {
+  NSArray<NSNotificationName> *names = @[
+    NSWindowDidEnterFullScreenNotification,
+    NSWindowDidExitFullScreenNotification,
+    NSWindowDidMiniaturizeNotification,
+    NSWindowDidDeminiaturizeNotification,
+    NSWindowDidBecomeKeyNotification,
+    NSWindowDidResignKeyNotification,
+    NSWindowDidResizeNotification,
+  ];
+  NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+  for (NSNotificationName name in names) {
+    [nc addObserverForName:name
+                    object:nil // every window; ours filtered below
+                     queue:[NSOperationQueue mainQueue]
+                usingBlock:^(NSNotification *n) {
+                  if (![n.object isKindOfClass:[NSWindow class]])
+                    return;
+                  NSWindow *win = (NSWindow *)n.object;
+                  std::string id = winid_for_nswindow(win);
+                  if (id.empty())
+                    return;
+                  // AppKit re-lays-out the standard buttons on resize, on
+                  // the way out of fullscreen, and on a fresh window's first
+                  // layout — cheapest correct answer is to put a custom
+                  // windowControlsPos back on every transition (three
+                  // setFrames, no-op when none is set; the fullscreen guard
+                  // lives in apply_traffic_pos_xy).
+                  apply_traffic_pos(win, id);
+                  emit_winstate(win, id);
+                }];
+  }
+}
+
 static NSString *tiny_shim_js(const std::string &winid) {
   std::string js =
       "(() => {"
@@ -5645,6 +5809,9 @@ static NSString *tiny_shim_js(const std::string &winid) {
 - (void)windowWillClose:(NSNotification *)n {
   std::string id = [self.winId UTF8String];
   sock_write_line("WINCLOSED " + id);
+  g_last_winstate.erase(id);
+  g_traffic_pos.erase(id);
+  g_traffic_default.erase(id);
   // A bar of its own goes with it; the next window to take focus puts up
   // whichever bar is then correct.
   apply_win_menu(id, {}, false);
@@ -5735,6 +5902,7 @@ struct WinOpenReq {
   int width = 600, height = 400;
   // Chrome + position applied BEFORE the window is shown (no titlebar flash).
   std::string frame, traffic, transparent, vibrancy, square, first_mouse; // '' = default
+  std::string traffic_pos;
   bool hasPos = false;
   int x = 0, y = 0;
 };
@@ -5801,7 +5969,8 @@ static void do_winopen(webview_t w, void *arg) {
     // jumps from center. The slot exists now (tw is in g_windows).
     if (!req->frame.empty() || !req->traffic.empty() ||
         !req->transparent.empty() || !req->vibrancy.empty() ||
-        !req->square.empty() || !req->first_mouse.empty()) {
+        !req->square.empty() || !req->first_mouse.empty() ||
+        !req->traffic_pos.empty()) {
       ChromeReq cr;
       cr.win = req->id;
       cr.frame = req->frame;
@@ -5810,6 +5979,7 @@ static void do_winopen(webview_t w, void *arg) {
       cr.vibrancy = req->vibrancy;
       cr.square = req->square;
       cr.first_mouse = req->first_mouse;
+      cr.traffic_pos = req->traffic_pos;
       NSVisualEffectView **effect = effect_slot_for(req->id);
       if (effect)
         apply_chrome_fields(win, wv, effect, false, &cr);
@@ -6497,6 +6667,8 @@ static void sock_read_loop() {
           wr->x = std::atoi(p[10].c_str());
           wr->y = std::atoi(p[11].c_str());
         }
+        // p[12] is chrome.menu (ignored on macOS), p[13] windowControlsPos.
+        wr->traffic_pos = p.size() > 13 ? p[13] : "";
         webview_dispatch(g_w, do_winopen, wr);
       } else if (line.rfind("WINCLOSE ", 0) == 0) {
         webview_dispatch(g_w, do_winclose, new std::string(line.substr(9)));
@@ -6715,6 +6887,9 @@ static void sock_read_loop() {
         req->vibrancy = p.size() > 3 ? p[3] : "";
         req->square = p.size() > 4 ? p[4] : "";
         req->first_mouse = p.size() > 5 ? p[5] : "";
+        // p[6] is chrome.menu — a Windows/Linux question, no bar per window
+        // on macOS. p[7] is windowControlsPos ('x,y' | 'default').
+        req->traffic_pos = p.size() > 7 ? p[7] : "";
         webview_dispatch(g_w, do_chrome, req);
       } else if (line.rfind("DRAGWIN", 0) == 0 &&
                  (line.size() == 7 || line[7] == '@')) {
@@ -7371,6 +7546,7 @@ int main(int argc, char *argv[]) {
   install_first_mouse_hook();
   install_ctx_hook();
   install_system_observers();
+  install_winstate_observers();
   install_open_handlers();
   // Packaged apps can declare chrome in the plist (TinyjsChrome, same
   // tab-separated fields as the CHROME command) so the window never flashes
@@ -7387,6 +7563,9 @@ int main(int argc, char *argv[]) {
       req->vibrancy = p.size() > 3 ? p[3] : "";
       req->square = p.size() > 4 ? p[4] : "";
       req->first_mouse = p.size() > 5 ? p[5] : "";
+      // The plist chrome has no menu field, so windowControlsPos is p[6]
+      // here (vs p[7] on the socket CHROME, where menu sits between).
+      req->traffic_pos = p.size() > 6 ? p[6] : "";
       do_chrome(g_w, req);
     }
   }

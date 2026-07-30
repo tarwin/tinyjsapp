@@ -491,6 +491,7 @@ const app = await createApp({
   onNotificationAction: appMod.onNotificationAction,
   onMediaKey: appMod.onMediaKey,
   onWindowClosed: appMod.onWindowClosed,
+  onWindowState: appMod.onWindowState,
   onClipboardChange: appMod.onClipboardChange,
   onUpdateAvailable: appMod.onUpdateAvailable,
   onAudioTap: appMod.onAudioTap,
@@ -1018,8 +1019,9 @@ async function cmdBuild() {
     const bit = (v) => (v === undefined ? '' : v ? '1' : '0');
     const ch = cfg.chrome;
     const vib = ch.vibrancy === undefined ? '' : (ch.vibrancy === null ? 'none' : ch.vibrancy);
+    const wcp = ch.windowControlsPos;
     extraKeys += `
-  <key>TinyjsChrome</key>        <string>${[bit(ch.frame), bit(ch.trafficLights), bit(ch.transparent), vib, bit(ch.squareCorners), bit(ch.acceptsFirstMouse)].join('&#9;')}</string>`;
+  <key>TinyjsChrome</key>        <string>${[bit(ch.frame), bit(ch.trafficLights), bit(ch.transparent), vib, bit(ch.squareCorners), bit(ch.acceptsFirstMouse), wcp ? `${wcp.x | 0},${wcp.y | 0}` : ''].join('&#9;')}</string>`;
   }
   const schemes = cfg.urlScheme ? [].concat(cfg.urlScheme) : [];
   if (schemes.length) {

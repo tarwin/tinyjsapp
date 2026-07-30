@@ -631,6 +631,12 @@ const screens = await <b>tiny.app.screens</b>();
 <i>// reaches the page (macOS swallows it by default). Good for palettes/toolbars</i>
 <i>// and DOM drag regions on unfocused windows.</i>
 <b>tiny.win.setChrome</b>({ acceptsFirstMouse: true });
+<i>// move the traffic lights: { x, y } from the window's top-left — for a</i>
+<i>// frameless window whose custom titlebar is taller than the default corner.</i>
+<i>// One call; the launcher re-applies it across resizes and fullscreen</i>
+<i>// round-trips. null = back to the OS layout. macOS only, ignored elsewhere;</i>
+<i>// getState().chrome reports it back.</i>
+<b>tiny.win.setChrome</b>({ windowControlsPos: { x: 12, y: 24 } });
 <i>// drag regions: &lt;header data-tiny-drag&gt; — drag moves, double-click zooms</i>
 <b>tiny.win.startDrag</b>();  <b>tiny.win.zoom</b>();
 <i>// begin a resize from an edge, for a handle you drew yourself. Frameless</i>
@@ -654,7 +660,15 @@ const s = await <b>tiny.win.getState</b>();
 <i>// win.open's size take, so reading the size and handing it back is a no-op.</i>
 <i>// outer is the footprint on screen, decorations in; for a frameless window</i>
 <i>// the two are equal. (window.outerWidth/outerHeight are 0 in a WKWebView.)</i>
-<i>// x/y are the window's top-left — the units setPosition takes.</i></pre>
+<i>// x/y are the window's top-left — the units setPosition takes.</i>
+
+<i>// …or don't poll: transitions arrive as events, whatever the cause</i>
+<i>// (green button, menu item, F11, your own setFullscreen). Same vocabulary</i>
+<i>// as getState(); `win` because events are broadcast — every page hears</i>
+<i>// about every window and filters by id. Backend twin: export</i>
+<i>// onWindowState(info, app). Wayland never reports `minimized`.</i>
+const off = <b>tiny.win.onState</b>(({ win, fullscreen, maximized, minimized, focused }) =&gt; …);
+off();                        <i>// every tiny on… returns its own unsubscribe</i></pre>
   </section>
 
   <section id="windows">

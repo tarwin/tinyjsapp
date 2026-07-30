@@ -1023,3 +1023,33 @@ echo). Never run on:
 
 [TODO-windows.md]: TODO-windows.md
 [TODO-linux.md]: TODO-linux.md
+
+## Window-state events + windowControlsPos — built 2026-07-30, macOS-verified only
+
+`tiny.win.onState` / `export onWindowState` (all three launchers) and
+`chrome.windowControlsPos` (macOS-only by design; the other two carry the
+wire field and ignore it). macOS proven end-to-end by a self-driving page:
+14/14 checks — enter/exit fullscreen, minimize/restore, disposer removes
+exactly its own handler, backend export sees the same stream, lights move
+9,9 → 40,30, survive a resize, report through `getState().chrome`, reset
+clean. Kitchen-sink has interactive cards for both (Window sub-tab: "Window
+state, pushed"; Chrome sub-tab: the windowControlsPos chips).
+
+The other two are compiled-never-watched (Windows: WM_SIZE/WM_ACTIVATE in
+both wndprocs + set_fullscreen; Linux: the already-connected
+window-state-event signal now emits):
+
+- [ ] **Windows** — kitchen-sink: toggle Listening on, then minimize,
+      maximize, restore, F11-style fullscreen (the Fullscreen buttons), and
+      click another app. Expect one feed line per transition, no spam while
+      drag-resizing (deduped), `maximized` true from the caption button too.
+      Secondary windows: open the inspector, minimize it — feed line says
+      `inspector`, not `main`.
+- [ ] **Linux (X11)** — same drill. All four flags should move.
+- [ ] **Linux (Wayland)** — same, EXPECT `minimized` to never report (the
+      compositor keeps it private; documented, not a bug). Fullscreen and
+      focus flags still move.
+- [ ] **Windows + Linux** — the windowControlsPos chips in kitchen-sink's
+      Chrome sub-tab must be a clean no-op: chrome line reports "(macOS
+      only — ignored here)", nothing breaks, and the extra tab-separated
+      CHROME/WINOPEN wire fields don't disturb the older parsers' fields.

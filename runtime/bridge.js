@@ -642,9 +642,16 @@ function chromeWire(opts = {}) {
   const vib = opts.vibrancy === undefined ? ''
             : opts.vibrancy === null || opts.vibrancy === false ? 'none'
             : String(opts.vibrancy);
+  // windowControlsPos: { x, y } from the window's top-left, or null to go
+  // back to the OS layout. macOS only (the buttons the other platforms draw
+  // sit in a real titlebar); elsewhere the field is carried and ignored.
+  const p = opts.windowControlsPos;
+  const pos = p === undefined ? ''
+            : p === null || p === false ? 'default'
+            : `${p.x | 0},${p.y | 0}`;
   return [bit(opts.frame), controlsWire(opts.windowControls),
           bit(opts.transparent), one(vib), bit(opts.squareCorners),
-          bit(opts.acceptsFirstMouse), bit(opts.menu)].join('\t');
+          bit(opts.acceptsFirstMouse), bit(opts.menu), pos].join('\t');
 }
 
 const DIALOG_OPS = {
@@ -727,7 +734,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -1143,8 +1150,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       if (!r?.ok) throw new Error(r?.error ?? 'unsupported');
       return r.paths ?? [];
     },
-    // Window chrome: { frame?, windowControls?, transparent?, vibrancy?,
-    // squareCorners?, acceptsFirstMouse?, menu? }. frame:false hides the titlebar
+    // Window chrome: { frame?, windowControls?, windowControlsPos?, transparent?,
+    // vibrancy?, squareCorners?, acceptsFirstMouse?, menu? }. frame:false hides the titlebar
     // (content extends under it; keep your own drag region via data-tiny-drag).
     // vibrancy: material name or null. squareCorners:true drops macOS's rounded
     // corners by making the window BORDERLESS — square, no titlebar, no traffic
@@ -1162,6 +1169,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // for the whole app and ignores the flag (a bar-less mac app isn't a
     // thing). Frameless and transparent windows never get a Win32 bar
     // regardless — GDI can't draw one over a cleared background.
+    //
+    // windowControlsPos: { x, y } moves the traffic-light group; the offset
+    // is from the window's top-left in points, null puts them back. macOS
+    // only (pair with frame:false, where the lights float over the page and
+    // a taller custom bar wants them recentered); ignored elsewhere. The
+    // launcher re-applies it across resizes and fullscreen round-trips —
+    // AppKit re-lays-out the buttons on those — so set it once, not per event.
     setChrome(opts = {}) {
       send('CHROME ' + chromeWire(opts));
     },
@@ -1633,8 +1647,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // runs the same tiny.* bridge; win.* calls from its page target itself.
     // `size` is the page's box: a frameless window is exactly that big, a
     // titled one is that plus a title bar.
-    // chrome ({ frame?, windowControls?, transparent?, vibrancy?,
-    // squareCorners?, acceptsFirstMouse?, menu? }) and position ({ x, y }) are
+    // chrome ({ frame?, windowControls?, windowControlsPos?, transparent?,
+    // vibrancy?, squareCorners?, acceptsFirstMouse?, menu? }) and position ({ x, y }) are
     // applied BEFORE the window paints — no titlebar flash for frameless
     // panels, no jump from center, and a window born with chrome.menu:false
     // never flickers a bar. A new window inherits the app menu (setMenu)
@@ -1651,11 +1665,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                 : c.vibrancy === null || c.vibrancy === false ? 'none'
                 : String(c.vibrancy);
       const hasPos = x != null && y != null;
+      const wcp = c.windowControlsPos;
       send('WINOPEN ' + [one(id), one(p), one(title ?? id), one(size ?? '600x400'),
                          bit(c.frame), controlsWire(c.windowControls), bit(c.transparent), one(vib),
                          bit(c.squareCorners), bit(c.acceptsFirstMouse),
                          hasPos ? (x | 0) : '', hasPos ? (y | 0) : '',
-                         bit(c.menu)].join('\t'));
+                         bit(c.menu),
+                         wcp ? `${wcp.x | 0},${wcp.y | 0}` : ''].join('\t'));
       // minSize: "WxH" — a floor under user resizes, so a layout with a
       // natural size can't be shrunk until content falls off the bottom.
       if (minSize) send('WINOP@' + id + ' minsize ' + one(minSize));
@@ -2141,6 +2157,20 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           if (audioTapOwner === id) stopAudioTap();
           push('window-closed', { id });
           if (onWindowClosed) onWindowClosed(id, app);
+        } else if (line.startsWith('WINSTATE ')) {
+          // Launcher-side deduped snapshot ({ fullscreen, maximized,
+          // minimized, focused }) — fires on transitions from ANY cause:
+          // green button / View menu / F11 / a programmatic setFullscreen.
+          const sp = line.indexOf(' ', 9);
+          if (sp !== -1) {
+            let st = null;
+            try { st = JSON.parse(line.slice(sp + 1)); } catch {}
+            if (st) {
+              const info = { win: line.slice(9, sp), ...st };
+              push('window-state', info);
+              if (onWindowState) onWindowState(info, app);
+            }
+          }
         } else if (line.startsWith('NOTIFYCLICK ')) {
           const id = line.slice(12);
           push('notification-click', { id });

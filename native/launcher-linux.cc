@@ -802,8 +802,40 @@ static void apply_chrome(const std::string& winid, const std::vector<std::string
 // per-window GdkWindowState tracking (minimized/fullscreen for GET win)
 static std::map<GtkWindow*, GdkWindowState> g_winstate;
 
+// WINSTATE <id> {"fullscreen":b,"maximized":b,"minimized":b,"focused":b} —
+// deduped snapshot per window; GTK hands all four bits in the one
+// window-state-event signal, already connected on main and every secondary.
+// Wayland caveat: ICONIFIED is never reported there (the compositor keeps
+// minimize private), so `minimized` stays false — same honesty rule as
+// mousePosition.
+static std::map<std::string, std::string> g_last_winstate;
+
+static std::string id_for_gtkwin(GtkWindow* win) {
+  if (win == g_win) return "main";
+  for (auto& kv : g_secwins)
+    if (kv.second && kv.second->win == win) return kv.first;
+  return "";
+}
+
 static gboolean on_window_state(GtkWidget* w, GdkEventWindowState* ev, gpointer) {
   g_winstate[GTK_WINDOW(w)] = ev->new_window_state;
+  std::string id = id_for_gtkwin(GTK_WINDOW(w));
+  if (!id.empty()) {
+    GdkWindowState st = ev->new_window_state;
+    bool fs = (st & GDK_WINDOW_STATE_FULLSCREEN) != 0;
+    auto b = [](bool v) { return v ? "true" : "false"; };
+    // GTK keeps MAXIMIZED set under fullscreen-from-maximized; report the
+    // green-button sense (maximized XOR fullscreen) like the other launchers.
+    std::string s = std::string("{\"fullscreen\":") + b(fs) +
+        ",\"maximized\":" + b(!fs && (st & GDK_WINDOW_STATE_MAXIMIZED)) +
+        ",\"minimized\":" + b((st & GDK_WINDOW_STATE_ICONIFIED) != 0) +
+        ",\"focused\":" + b((st & GDK_WINDOW_STATE_FOCUSED) != 0) + "}";
+    auto it = g_last_winstate.find(id);
+    if (it == g_last_winstate.end() || it->second != s) {
+      g_last_winstate[id] = s;
+      pipe_write_line("WINSTATE " + id + " " + s);
+    }
+  }
   return FALSE;
 }
 
@@ -4489,6 +4521,7 @@ static void on_secwin_destroy(GtkWidget*, gpointer data) {
   auto it = g_secwins.find(id);
   if (it != g_secwins.end()) {
     pipe_write_line(std::string("WINCLOSED ") + id);
+    g_last_winstate.erase(id);
     // This window's menu items go with it — their widgets are already gone,
     // and a later app-wide MENUUPD would otherwise walk into them.
     clear_registry_kind("menu", it->second->win);

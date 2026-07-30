@@ -337,17 +337,34 @@ tiny.win.setChrome({ squareCorners: true });
 // again to act"). Handy for palettes/toolbars and DOM drag regions.
 tiny.win.setChrome({ acceptsFirstMouse: true });
 
+// move the traffic lights (macOS): { x, y } from the window's top-left, for
+// frameless windows whose custom titlebar is taller than the default corner
+// assumes. One call — the launcher re-applies it across resizes and
+// fullscreen round-trips. null restores the OS layout. Ignored on Windows
+// and Linux. Also in tinyjs.json "chrome" so it applies before first paint.
+tiny.win.setChrome({ windowControlsPos: { x: 12, y: 24 } });
+
 // read the window back
 const s = await tiny.win.getState();
 // { x, y, width, height, outer: { width, height },
 //   fullscreen, minimized, visible, focused,
-//   alwaysOnTop, resizable, chrome: { frame, windowControls, transparent,
-//   vibrancy, squareCorners, acceptsFirstMouse },
+//   alwaysOnTop, resizable, chrome: { frame, windowControls,
+//   windowControlsPos, transparent, vibrancy, squareCorners,
+//   acceptsFirstMouse },
 //   screen: { width, height, scale } }
 // width/height are the page's box — hand them straight back to setSize and
 // nothing moves. outer is the footprint on screen, decorations in (the page
 // can't work that out itself: window.outerWidth is 0 in a WKWebView).
 // x/y are the window's top-left, the units setPosition takes.
+
+// …or don't poll it: window-state transitions arrive as events, whatever
+// the cause (green button, menu item, F11, your own setFullscreen call).
+const off = tiny.win.onState(({ win, fullscreen, maximized, minimized, focused }) => {
+  // same vocabulary as getState(); `win` because events are broadcast —
+  // every page hears about every window and filters by id ('main' or a
+  // win.open id). Wayland never reports `minimized` (compositor-private).
+});
+off();   // like every tiny on…, it returns its own unsubscribe
 
 // files dragged onto the window arrive with REAL filesystem paths
 tiny.win.onDrop((paths) => tiny.log(paths.join(', ')));
@@ -807,6 +824,10 @@ app.window('settings').setTitle('…');   // eval, push, close, hide/show,
 app.push('event', data);                // broadcasts to every window
 app.windows();
 export function onWindowClosed(id, app) {}   // also a 'window-closed' event
+export function onWindowState(info, app) {}  // { win, fullscreen, maximized,
+                                             // minimized, focused } on every
+                                             // transition — the backend twin
+                                             // of tiny.win.onState
 ```
 
 API handlers can tell who's calling: `myMethod: async (params, app, meta)

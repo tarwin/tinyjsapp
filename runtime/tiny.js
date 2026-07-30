@@ -309,6 +309,14 @@
       // are 0 in a WKWebView, so this is the only way to ask. x/y are the
       // window's top-left, which is what setPosition takes.
       getState: () => call('win.getState'),
+      // Window-state transitions as an event, no polling: fn gets { win,
+      // fullscreen, maximized, minimized, focused } whenever one of those
+      // flips, whatever the cause (green button, View menu, F11, a
+      // programmatic setFullscreen). Broadcast to every window — check
+      // data.win ('main' or a win.open id) if you only care about your own.
+      // Same vocabulary as getState(). Returns an unsubscribe function.
+      // Wayland never reports minimized (the compositor keeps it private).
+      onState: (fn) => window.tiny.api.on('window-state', fn),
       // true: the close button hides the window instead of quitting the app.
       // A macOS idea — there the app outlives its last window and the Dock
       // icon brings it back. Windows and Linux have nowhere to put that (a
@@ -317,12 +325,16 @@
       // another window still up. Closing the last window of an ordinary app
       // quits it, as it does in every other app on those platforms.
       setHideOnClose: (enabled) => call('win.setHideOnClose', { enabled }),
-      // { frame?, windowControls?, transparent?, vibrancy?, menu? } — frameless
-      // windows keep native resize/focus; mark your own titlebar with
-      // data-tiny-drag. windowControls is the close/minimize/maximize group
-      // (macOS's "traffic lights"): true | false | a subset array such as
-      // ['close'] | [] for none. What each OS can honour differs — ask
-      // tiny.system.capabilities().windowControls.
+      // { frame?, windowControls?, windowControlsPos?, transparent?, vibrancy?,
+      // menu? } — frameless windows keep native resize/focus; mark your own
+      // titlebar with data-tiny-drag. windowControls is the close/minimize/
+      // maximize group (macOS's "traffic lights"): true | false | a subset
+      // array such as ['close'] | [] for none. What each OS can honour
+      // differs — ask tiny.system.capabilities().windowControls.
+      // windowControlsPos: { x, y } from the window's top-left recenters the
+      // traffic lights in a custom titlebar (frameless apps); null restores
+      // the OS layout. macOS only, ignored elsewhere; survives resizes and
+      // fullscreen round-trips — the launcher re-applies it.
       // menu:false shows no menu bar on THIS window (the app menu carries on
       // everywhere else) — a Windows/Linux question, ignored on macOS, where
       // the bar belongs to the app. Frameless and transparent windows never

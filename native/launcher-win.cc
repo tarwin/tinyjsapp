@@ -160,6 +160,10 @@ struct TinyWin;
 static std::map<std::string, TinyWin *> g_windows;
 static TinyWin *win_for_id(const std::string &id);
 static HWND hwnd_for_win(const std::string &id);
+// focused: -1 derive from GetForegroundWindow(); 0/1 the WM_ACTIVATE truth
+// (during deactivation the foreground handoff hasn't happened yet, so
+// deriving would leave the losing window marked focused).
+static void emit_winstate(HWND hwnd, int focused = -1);
 static void route_ret(webview_t w, const std::string &composite, int status,
                       const std::string &json);
 static void secwin_eval(const std::string &id, const std::string &js);
@@ -1704,6 +1708,7 @@ static void set_fullscreen(bool on) {
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
   }
   g_fullscreen = on;
+  emit_winstate(g_hwnd);
 }
 
 static void do_center(HWND hwnd) {
@@ -4185,6 +4190,35 @@ static std::string id_for_hwnd(HWND h) {
   return "";
 }
 
+// --- window state events ----------------------------------------------------
+// WINSTATE <id> {"fullscreen":b,"maximized":b,"minimized":b,"focused":b} —
+// deduped per window, because WM_SIZE fires the whole way through a drag
+// resize and only the transitions belong on the wire. Fullscreen is the
+// launcher-managed main-window kind (set_fullscreen); a secondary's
+// "fullscreen" op maximizes, so it reports as maximized — honest, since
+// that's what the window actually did.
+static std::map<std::string, std::string> g_last_winstate;
+
+static void emit_winstate(HWND hwnd, int focused) {
+  if (!hwnd)
+    return;
+  std::string id = hwnd == g_hwnd ? "main" : id_for_hwnd(hwnd);
+  if (id.empty())
+    return;
+  bool fs = hwnd == g_hwnd && g_fullscreen;
+  bool foc = focused >= 0 ? focused != 0 : GetForegroundWindow() == hwnd;
+  auto b = [](bool v) { return v ? "true" : "false"; };
+  std::string s = std::string("{\"fullscreen\":") + b(fs) +
+                  ",\"maximized\":" + b(!fs && !!IsZoomed(hwnd)) +
+                  ",\"minimized\":" + b(!!IsIconic(hwnd)) +
+                  ",\"focused\":" + b(foc) + "}";
+  auto it = g_last_winstate.find(id);
+  if (it != g_last_winstate.end() && it->second == s)
+    return;
+  g_last_winstate[id] = s;
+  pipe_write_line("WINSTATE " + id + " " + s);
+}
+
 static ICoreWebView2Controller *ctrl_for_win(const std::string &id) {
   if (id.empty() || id == "main")
     return g_ctrl;
@@ -4502,8 +4536,12 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
       GetClientRect(hwnd, &rc);
       tw->ctrl->put_Bounds(rc);
     }
+    emit_winstate(hwnd); // maximize/minimize/restore land here
     break;
   }
+  case WM_ACTIVATE:
+    emit_winstate(hwnd, LOWORD(wp) != WA_INACTIVE);
+    break;
   case WM_SETFOCUS: {
     // Activation lands on the host window; pass it down to the page, or the
     // page believes it is unfocused until clicked (see the MoveFocus note in
@@ -4543,6 +4581,7 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
         DestroyMenu(tw->menu.bar);
       tw->menu.bar = nullptr;
       g_windows.erase(id);
+      g_last_winstate.erase(id);
       pipe_write_line("WINCLOSED " + id);
       if (tw->ctrl) {
         tw->ctrl->Close();
@@ -4786,6 +4825,14 @@ static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
     // page is handed the keyboard explicitly.
     if (g_ctrl)
       g_ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    break;
+  case WM_SIZE:
+    // The webview library's own proc does the bounds work for main; this is
+    // only the state event (maximize/minimize/restore, deduped in the emit).
+    emit_winstate(hwnd);
+    break;
+  case WM_ACTIVATE:
+    emit_winstate(hwnd, LOWORD(wp) != WA_INACTIVE);
     break;
   case WM_TINY_TRAY:
     switch (LOWORD(lp)) {
