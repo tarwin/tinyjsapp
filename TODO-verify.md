@@ -992,7 +992,7 @@ knowing before trusting any multi-window store-choreographed page on Linux:
   previous run reads the OLD replies instantly and reports a full set of
   plausible, internally consistent, completely stale results.
 
-## The fetch repair shim — verified on macOS only, 2026-07-30
+## The fetch repair shim — macOS + Linux verified, Windows owed
 
 bridge.js now wraps `globalThis.fetch` (search "fetch repair shim"): follows
 redirects hop-by-hop and hands exactly two broken cases to the system curl —
@@ -1012,8 +1012,9 @@ echo). Never run on:
       stdout pipe. All txiki-API-level, none of it Windows-specific on
       paper — which is exactly what this file is for. Check: the 8 feeds in
       TODO-txiki.md through `tiny.fetch`, plus one internet-radio stream.
-- [ ] **Linux** — same checks; curl is effectively always there, so the
-      interesting bit is just spawn/pipe behavior matching macOS.
+- [x] **Linux** — verified 2026-07-30 (Tarwin, by hand): the formerly
+      broken FAVES feeds load through amp's podcast window, which is the
+      full stack — page → tiny.api → backend fetch → shim → curl.
 
 [TODO-windows.md]: TODO-windows.md
 [TODO-linux.md]: TODO-linux.md

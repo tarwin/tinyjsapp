@@ -10,7 +10,9 @@ shim once a fixed tjs is pinned everywhere.
 
 Both bugs were found 2026-07-30 debugging amp podcast feeds that loaded in
 every browser and curl but not in the app. Neither is theoretical: eight of
-amp's ~60 baked-in FAVES feeds hit one or the other.
+amp's ~60 baked-in FAVES feeds hit one or the other. The shim is verified
+on macOS and Linux (amp's FAVES, full stack); Windows is still owed — see
+TODO-verify.md.
 
 ## Bug A — root-path URLs go out as `GET //`
 
