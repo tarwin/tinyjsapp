@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## 0.30.0 — upcoming
+## 0.30.0 — 2026-07-30
 
 - **`setHideOnClose` no longer strands the app on Windows and Linux.** It is a
   macOS idea — there an app outlives its last window and the Dock icon brings
@@ -429,6 +429,47 @@ are gone rather than deprecated.
   Windows, the freedesktop sound theme on Linux). Platform names and file
   paths still pass through untouched; a name from the wrong platform resolves
   `false`, as before.
+- **Feeds and hosts txiki's fetch couldn't reach now load.** The runtime's
+  `fetch` (txiki v26.6.0) has two wire bugs, repro'd in TODO-txiki.md: any
+  root-path URL goes out as `GET //` — S3/CloudFront-backed hosts answer 404 —
+  and mbedtls never completes a handshake with a TLS 1.2-only host
+  (rss.art19.com, anchor.fm). Eight of amp's ~60 baked-in podcast feeds hit one
+  or the other. bridge.js now wraps `globalThis.fetch`: redirects are followed
+  hop by hop, and exactly the broken cases route through the system curl — a
+  real HTTP error is never retried, bodies stream, and every hop is
+  re-validated as http(s) so a hostile `Location: file:///…` throws instead of
+  reaching curl. Both the backend's `fetch()` and every page's `tiny.fetch`
+  inherit it; a machine with no curl gets native behavior, bugs and all.
+  Verified end-to-end on all three platforms; the shim dies the day a patched
+  tjs ships (the plan is TODO-txiki.md).
+- **Event handlers can be removed.** `tiny.api.on(event, fn)` was push-only —
+  additive like `addEventListener` (N handlers per event, all fire), but
+  nothing could ever unhook one. It now returns an unsubscribe function, and
+  `tiny.api.off(event, fn)` removes by reference. Every `tiny.*.on` sugar
+  wrapper (`menu.on`, `tray.on`, `theme.on`, …) passes the unsubscribe through
+  — and for those it's the *only* way to unhook, since the sugar wraps your
+  callback and `off` can't match the wrapper by reference. A handler that
+  unsubscribes mid-dispatch no longer makes the one after it get skipped.
+- **Linux: `getUserMedia` works**, gated on the app's declared permissions.
+  WebKitGTK's default for an unhandled permission-request signal is deny, so
+  every camera/mic app failed with `NotAllowedError` while `permissions.check`
+  said `granted`. The launcher now answers the signal — but desktop Linux has
+  no consent layer underneath (no TCC, no WebView2 prompt; `/dev/video*` is
+  simply open to the session), so the grant is manifest-gated: only what an
+  app declares in tinyjs.json's `"permissions"` block is allowed.
+  `enumerateDevices` labels ride the same gate; `getDisplayMedia` stays
+  denied.
+- **Linux: `mousePosition().inside` is honest on Wayland, and outside tracking
+  is opt-in.** Wayland (and XWayland) hides the pointer once it leaves the
+  app, and the stale bounds check left `inside` stuck true. The
+  surface-under-pointer probe now vetoes it, so it goes honest-false instead.
+  New `tiny.app.mouseTracking.start()/stop()` for apps that need the pointer
+  outside their windows: a no-op `ok` where tracking is already global (macOS,
+  Windows, real X11); on Wayland sessions it arms a ScreenCast portal session
+  in cursor-metadata mode — pixels are never mapped — behind one consent
+  dialog, with the restore token round-tripping through the app's store so a
+  re-arm is dialog-free (24 ms measured). The desktop's sharing indicator
+  shows while armed, as it should.
 
 **Fixed**
 
@@ -455,6 +496,19 @@ are gone rather than deprecated.
 - **Linux `attention()` latched forever** — nothing cleared the urgency hint
   and Mutter doesn't clear it on focus, so one call left the window demanding
   attention for the rest of the run. A focus handler now drops it.
+- **Linux: every frameless window wore a full title bar** on X11 sessions.
+  `windowControls: false` replaced `_MOTIF_WM_HINTS` with a property declaring
+  only its functions section, and a property that doesn't declare decorations
+  means "WM default" — decorated — so it erased the `frame: false` GDK had
+  just written and Mutter wrapped the window in a frame. Frameless apps always
+  declare both, so the second request undid the first, every time. The
+  property now carries both sections. Startup chrome also rides the spawn env
+  now so it applies before first show — the socket line landed after the
+  window was mapped, which flashed a decorated frame at every frameless
+  launch.
+- **macOS `secrets.get` leaked its result.** The launcher builds without ARC,
+  so the `__bridge_transfer` on `SecItemCopyMatching`'s +1 return was a no-op
+  and the NSData leaked on every read. Autoreleased explicitly now.
 - **`win.setSize` → `getState` round-trips.** Both the Windows main window and
   macOS *titled satellites* reported a frame size while setting a content size,
   so any read-modify-write ratcheted up by the title bar every pass (measured on
