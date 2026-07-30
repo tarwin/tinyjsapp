@@ -80,7 +80,20 @@
   window.tiny = {
     api: {
       call,
-      on(event, fn) { (handlers[event] ||= []).push(fn); },
+      // Additive, like addEventListener: every fn registered for an event is
+      // called on each push. Returns an unsubscribe — keep it if the handler
+      // doesn't live as long as the page (all the tiny.*.on sugar returns it
+      // too, and there the returned fn is the ONLY way to unhook, because the
+      // sugar wraps your callback so off() can't match it by reference).
+      on(event, fn) {
+        (handlers[event] ||= []).push(fn);
+        return () => window.tiny.api.off(event, fn);
+      },
+      off(event, fn) {
+        const a = handlers[event];
+        const i = a ? a.indexOf(fn) : -1;
+        if (i !== -1) a.splice(i, 1);
+      },
     },
 
     // Backend-proxied fetch (no CORS/CSP). Same shape as window.fetch, returns
@@ -348,7 +361,7 @@
         get: (id) => call('win.menu.get', { id }),
       },
       // fn(paths): files dragged onto the window, as real filesystem paths.
-      onDrop(fn) { window.tiny.api.on('drop', ({ paths }) => fn(paths)); },
+      onDrop(fn) { return window.tiny.api.on('drop', ({ paths }) => fn(paths)); },
       // Native share sheet ({ text?, url?, paths?, x?, y? }) — anchor it at
       // the click: tiny.win.share({ url, x: e.clientX, y: e.clientY }).
       share: (opts) => call('win.share', opts ?? {}),
@@ -364,13 +377,13 @@
       // copy of it in each window.) For one window to differ, see
       // tiny.win.menu; for one window to show no bar, chrome.menu:false.
       set: (menus) => call('menu.set', { menus }),
-      on(fn) { window.tiny.api.on('menu', ({ id }) => fn(id)); },
+      on(fn) { return window.tiny.api.on('menu', ({ id }) => fn(id)); },
       // Patch one item in place: update('mute', { checked: true, label: 'Muted' })
       update: (id, patch = {}) => call('menu.update', { id, ...patch }),
       get: (id) => call('menu.get', { id }),   // { exists, label, checked, enabled }
       // Right-click menu: [{ id, label } | { separator: true }]; null restores default.
       setContext: (items) => call('menu.setContext', { items }),
-      onContext(fn) { window.tiny.api.on('contextmenu', ({ id }) => fn(id)); },
+      onContext(fn) { return window.tiny.api.on('contextmenu', ({ id }) => fn(id)); },
     },
 
     // Persistent settings (JSON, in ~/Library/Application Support/<app id>/).
@@ -385,7 +398,7 @@
     hotkey: {
       register: (id, combo) => call('hotkey.register', { id, combo }),
       unregister: (id) => call('hotkey.unregister', { id }),
-      on(fn) { window.tiny.api.on('hotkey', ({ id }) => fn(id)); },
+      on(fn) { return window.tiny.api.on('hotkey', ({ id }) => fn(id)); },
     },
 
     // Read the app's (or system's) rendered audio output as PCM — for VU
@@ -563,7 +576,7 @@
       stop: () => call('audioTap.stop'),
       // fn({ pcm, sampleRate, channels, frames, t }); pcm is base64 of
       // interleaved little-endian Int16.
-      on(fn) { window.tiny.api.on('audio-tap', fn); },
+      on(fn) { return window.tiny.api.on('audio-tap', fn); },
     },
 
     // Native clipboard (NSPasteboard in the launcher — no polling spawns).
@@ -579,7 +592,7 @@
       watch: (intervalMs) => call('clip.watch', { intervalMs }),
       unwatch: () => call('clip.unwatch'),
       // fn({ changeCount, self }) after watch(); self = our own write().
-      onChange(fn) { window.tiny.api.on('clipboard-change', fn); },
+      onChange(fn) { return window.tiny.api.on('clipboard-change', fn); },
     },
 
     // Calls with no equivalent anywhere else — not "not ported yet", but
@@ -639,7 +652,7 @@
     // System theme; also 'sleep'/'wake' events via tiny.api.on.
     theme: {
       get: () => call('theme.get'),                      // { dark } | null
-      on(fn) { window.tiny.api.on('theme', ({ dark }) => fn(dark)); },
+      on(fn) { return window.tiny.api.on('theme', ({ dark }) => fn(dark)); },
     },
 
     app: {
@@ -647,13 +660,13 @@
       info: () => call('app.info'),
       // Deep links + file associations (packaged .app; see tinyjs.json
       // "urlScheme" and "fileExtensions"). Cold-start events are buffered.
-      onOpenUrl(fn) { window.tiny.api.on('open-url', ({ url }) => fn(url)); },
-      onOpenFiles(fn) { window.tiny.api.on('open-files', ({ paths }) => fn(paths)); },
+      onOpenUrl(fn) { return window.tiny.api.on('open-url', ({ url }) => fn(url)); },
+      onOpenFiles(fn) { return window.tiny.api.on('open-files', ({ paths }) => fn(paths)); },
       // fn(id): a notification banner was clicked (packaged apps).
-      onNotificationClick(fn) { window.tiny.api.on('notification-click', ({ id }) => fn(id)); },
+      onNotificationClick(fn) { return window.tiny.api.on('notification-click', ({ id }) => fn(id)); },
       // fn({ id, action, reply }): a notification action button / reply field
       // was used (tiny.notify(t, b, { actions: [{ id, title, reply? }] })).
-      onNotificationAction(fn) { window.tiny.api.on('notification-action', fn); },
+      onNotificationAction(fn) { return window.tiny.api.on('notification-action', fn); },
       // Post a native keystroke (e.g. 'cmd+v') -> { ok, trusted }; needs the
       // Accessibility permission (which names your app, not osascript).
       keystroke: (combo) => call('app.keystroke', { combo }),
@@ -791,7 +804,7 @@
       },                                                     //  elapsed, playing }
       // fn({ command, time }): a media key / Control Center transport fired
       // (command: play|pause|toggle|next|previous|seek; time = seek target).
-      onMediaKey(fn) { window.tiny.api.on('media-key', fn); },
+      onMediaKey(fn) { return window.tiny.api.on('media-key', fn); },
       // Speak text with a system voice -> resolves when playback finishes.
       // opts: { voice (id from voices() or a lang like 'en-AU'), rate 0..1 }.
       say: (text, opts) => call('app.say', { text, ...(opts ?? {}) }),
@@ -809,13 +822,15 @@
       remove: () => call('tray.remove'),
       // The tray icon's on-screen rect { x, y, width, height } | null.
       position: () => call('tray.position'),
-      on(fn) { window.tiny.api.on('tray', ({ id }) => fn(id)); },          // menu item clicks
-      onClick(fn) { window.tiny.api.on('trayclick', () => fn()); },        // icon clicks
+      on(fn) { return window.tiny.api.on('tray', ({ id }) => fn(id)); },          // menu item clicks
+      onClick(fn) { return window.tiny.api.on('trayclick', () => fn()); },        // icon clicks
     },
   };
 
   window.__emit = (msg) => {
-    (handlers[msg.event] || []).forEach((fn) => fn(msg.data));
+    // Snapshot: a handler that unsubscribes (itself or a sibling) mid-dispatch
+    // must not make forEach skip the next one.
+    (handlers[msg.event] || []).slice().forEach((fn) => fn(msg.data));
   };
 
   // Drag regions for frameless windows: any element with data-tiny-drag acts

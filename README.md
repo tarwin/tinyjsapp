@@ -251,6 +251,12 @@ Frontend — the `tiny` global is injected into every page automatically:
 ```js
 const greeting = await tiny.api.call('hello', { name: 'world' });  // request/response
 tiny.api.on('tick', (t) => ...);                                   // backend push
+// on() is additive (addEventListener-style: N handlers, all fire) and returns
+// an unsubscribe; there's also tiny.api.off('tick', fn). The tiny.*.on sugar
+// (menu.on, tray.on, theme.on, …) returns the unsubscribe too — and since the
+// sugar wraps your callback, that return value is the only way to unhook it:
+const stop = tiny.api.on('tick', onTick);   stop();
+tiny.api.off('tick', onTick);               // same thing, by reference
 
 tiny.log('debug msg');  tiny.quit();
 // tiny.log prints from the BACKEND, tagged [web] — so the page's lines and

@@ -506,6 +506,12 @@ db.prepare('SELECT * FROM notes').all();  <i>// [{ id: 1, text: 'hello' }]</i></
     <h2>tiny.api <span class="tag">request/response + events</span></h2>
     <pre>const r = <b>await tiny.api.call</b>('method', { params });  <i>// → backend api.method</i>
 <b>tiny.api.on</b>('event-name', (data) =&gt; …);              <i>// ← app.push(...)</i>
+<i>// on() is additive (N handlers per event, all fire) and returns an</i>
+<i>// unsubscribe; tiny.api.off(event, fn) removes by reference. The tiny.*.on</i>
+<i>// sugar (menu.on, tray.on, theme.on, …) returns the unsubscribe too — and</i>
+<i>// since the sugar wraps your callback, that return is the only way to unhook:</i>
+const stop = <b>tiny.api.on</b>('tick', fn);  stop();
+<b>tiny.api.off</b>('tick', fn);
 
 <b>tiny.log</b>(msg);                     <i>// print in the backend terminal, tagged [web],</i>
 <i>// so the page's output and the backend's interleave in ONE place instead of</i>
