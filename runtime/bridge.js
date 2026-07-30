@@ -246,7 +246,11 @@ async function systemCapabilities(query, aiStatus) {
     // pointer, seeing other windows, or synthesising input. X11 allows all of
     // it — see the "windowPlacement" manifest key, which selects X11.
     windowPosition: ON_X11,
-    mousePosition: ON_X11,
+    // ON_X11 alone is not enough here: an XWayland app (windowPlacement) can
+    // place windows fine, but its pointer query is the xeyes problem — frozen
+    // whenever the cursor is over a native Wayland surface. Only a real X11
+    // session is fully sighted; everything else needs mouseTracking.start().
+    mousePosition: ON_X11 && !tjs.env.WAYLAND_DISPLAY,
     captureScreen: ON_X11,
     keystroke: ON_X11,
     // Claimed ON_X11 until 2026-07-27, but nothing implements them: the
@@ -1050,6 +1054,30 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // area (clientX/clientY units, even while the cursor is outside);
     // screen is the display the cursor is on.
     mousePosition: () => query('mouse'),
+    // Opt-in outside-the-window tracking. Everywhere but Linux-Wayland the
+    // coordinates above are global already, so start() is a cheap ok. On
+    // Wayland the compositor hides the pointer once it leaves the app;
+    // start() arms the one sanctioned route — the ScreenCast portal's
+    // cursor-metadata stream — which shows a consent dialog on first use
+    // (remembered: the grant's restore token is kept in the store) and the
+    // system's screen-sharing indicator while armed. Resolves { ok: true }
+    // or { ok: false, code: 'unsupported' | 'denied' | 'failed', message }.
+    mouseTracking: {
+      async start() {
+        if (!IS_LINUX) return { ok: true };
+        const KEY = '__tinyjs.mouseTracking.restoreToken';
+        const saved = await app.store.get(KEY);
+        const r = await ask('MOUSETRACK', one(saved ?? ''));
+        if (r?.ok && r.restoreToken && r.restoreToken !== saved) {
+          await app.store.set(KEY, r.restoreToken);
+        }
+        return r ?? { ok: false, code: 'failed' };
+      },
+      stop() {
+        if (IS_LINUX) send('MOUSETRACK STOP');
+        return true;
+      },
+    },
     // Every display, same top-left coordinates as setPosition / getState:
     // [{ id, name, x, y, width, height, visible: { x, y, width, height },
     //   scale, primary }] — visible excludes the menu bar and Dock; primary
@@ -1771,6 +1799,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'macos.quickLook': async ({ paths }) => (macosOnly('quickLook'), app.macos.quickLook(paths)),
     'app.captureScreen': async ({ screenId }) => app.captureScreen(screenId),
     'app.pickColor': async () => app.pickColor(),
+    'app.mouseTracking.start': async () => app.mouseTracking.start(),
+    'app.mouseTracking.stop': async () => app.mouseTracking.stop(),
     'macos.ocr': async ({ path }) => (macosOnly('ocr'), app.macos.ocr(path)),
     'app.thumbnail': async ({ path, size }) => app.thumbnail(path, size ?? 256),
     'secrets.get': async ({ key }) => app.secrets.get(key),

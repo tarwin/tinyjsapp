@@ -878,6 +878,15 @@ declare interface Tiny {
     };
     /** global cursor position + the screen it's on */
     mousePosition(): Promise<TinyMousePosition>;
+    /** opt-in outside-the-window tracking. Already global on macOS/Windows/
+     *  X11 (start() is a cheap ok); on Linux-Wayland it arms the ScreenCast
+     *  portal's cursor stream — one consent dialog, remembered across runs,
+     *  sharing indicator while armed. */
+    mouseTracking: {
+      start(): Promise<{ ok: boolean; code?: 'unsupported' | 'denied' | 'failed';
+                         message?: string; restoreToken?: string | null }>;
+      stop(): boolean;
+    };
     /** every display, same top-left coords as win.setPosition */
     screens(): Promise<TinyScreen[]>;
     /** standard per-app directories */
@@ -1094,6 +1103,15 @@ declare interface TinyApp {
   };
   /** global cursor position + the screen it's on */
   mousePosition(): Promise<TinyMousePosition>;
+  /** opt-in outside-the-window tracking. Already global on macOS/Windows/
+   *  X11 (start() resolves true untouched); on Linux-Wayland it arms the
+   *  ScreenCast portal's cursor stream — one consent dialog, remembered
+   *  across runs, sharing indicator while armed. start() resolves true or
+   *  throws an Error with .code: 'unsupported' | 'denied' | 'failed'. */
+  mouseTracking: {
+    start(): Promise<true>;
+    stop(): Promise<boolean>;
+  };
   /** every display, same top-left coords as setPosition */
   screens(): Promise<TinyScreen[]>;
   /** standard per-app directories */

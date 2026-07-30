@@ -82,10 +82,17 @@ if [ "$OS" = "Linux" ]; then
   XT_PKGS=""
   pkg-config --exists x11 xtst 2>/dev/null && { XT_PKGS="x11 xtst"; EXTRA_DEFS="$EXTRA_DEFS -DTINYJS_X11"; }
 
+  # Opt-in outside-the-window mouse tracking on Wayland rides the ScreenCast
+  # portal's cursor metadata over PipeWire; without the dev package the
+  # launcher builds fine and mouseTracking.start() answers 'unsupported'.
+  PW_PKGS=""
+  pkg-config --exists libpipewire-0.3 2>/dev/null && { PW_PKGS="libpipewire-0.3"; EXTRA_DEFS="$EXTRA_DEFS -DTINYJS_PIPEWIRE"; }
+  [ -z "$PW_PKGS" ] && echo "    (no libpipewire-0.3 dev package — Wayland mouseTracking disabled)"
+
   # shellcheck disable=SC2086
   c++ -std=c++17 -O2 native/launcher-linux.cc -o native/launcher-linux \
     $EXTRA_DEFS \
-    $(pkg-config --cflags --libs gtk+-3.0 webkit2gtk-4.1 $IND_PKG $XT_PKGS) -ldl
+    $(pkg-config --cflags --libs gtk+-3.0 webkit2gtk-4.1 $IND_PKG $XT_PKGS $PW_PKGS) -ldl
 
   echo "==> done"
   ./bin/tjs --version

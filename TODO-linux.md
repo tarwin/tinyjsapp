@@ -108,7 +108,30 @@ committed).
   again after a reboot, that's the autologin state above, not a regression.
 - **Wayland session**, so per the notes below: `mouse`/window x,y report 0,0,
   `captureScreen` rejects, `keystroke` is unsupported. An X11 session lights
-  those up.
+  those up. UPDATE 2026-07-29: `mousePosition().window.inside` is now HONEST
+  on Wayland — the frozen last-on-surface coords used to keep the bounds
+  check stuck `true` after the cursor left the app; `mouse_json` now lets
+  `gdk_device_get_window_at_position` (NULL = pointer not over any of our
+  surfaces) veto it, plus a `gdk_window_is_viewable` veto for hidden windows
+  (GDK never clears its Wayland pointer focus on unmap). Coords still freeze
+  (platform limit — no unprivileged global pointer query on Wayland).
+  UPDATE later that day: the sanctioned route IS now taken, as an OPT-IN —
+  `tiny.app.mouseTracking.start()/stop()` (MOUSETRACK on the wire) arms a
+  ScreenCast portal session with cursor_mode METADATA and reads
+  spa_meta_cursor off the PipeWire stream (pixels never mapped). Consent
+  dialog once (restore token round-trips through the app's store;
+  re-arm measured at 24ms, no dialog), sharing indicator while armed,
+  window-relative coords outside the window via origin calibration (real
+  origin = portal global − surface-local, re-pinned on every hover). Needs
+  libpipewire-0.3-dev at build time (setup.sh probes; without it start()
+  answers 'unsupported'). X11: start() is a no-op ok. Verified end-to-end
+  on this VM 2026-07-29 with a human click on the dialog + eyeball of the
+  live readout. Verified headlessly before that: fullscreen app sees
+  live coords + inside:true; a second fullscreen app covering it (real
+  wl_pointer.leave, no cursor motion needed) flips inside:false with coords
+  frozen in-bounds; uncover flips it back; hide() reads inside:false, show()
+  recovers. Apps can now trust `inside` to detect "lost the cursor" and
+  degrade (boo/kraa eyes, tray anchoring).
 - One harmless `Gtk-CRITICAL … gtk_widget_get_scale_factor` line at startup for
   any app with a tray. It comes from inside libayatana-appindicator (we never
   call it); setting the icon after the menu doesn't avoid it.

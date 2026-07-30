@@ -26,6 +26,10 @@
 #include <X11/extensions/XTest.h>
 #include <X11/keysym.h>
 #endif
+#ifdef TINYJS_PIPEWIRE
+#include <pipewire/pipewire.h>
+#include <spa/param/video/format-utils.h>
+#endif
 #ifdef TINYJS_APPINDICATOR
 #include <libayatana-appindicator/app-indicator.h>
 #endif
@@ -44,6 +48,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <atomic>
 #include <functional>
 
 #include "tiny_client.h"  // TINY_CLIENT_JS, generated from runtime/tiny.js
@@ -1728,6 +1733,19 @@ static std::string win_state_json(const std::string& winid) {
     ",\"scale\":" + std::to_string(scale) + "}}";
 }
 
+// --- opt-in outside-the-window cursor tracking: state ------------------------
+// Wayland only tells us where the pointer is while it's over our own surface.
+// MOUSETRACK (the portal + PipeWire plumbing lives with the other portals
+// below) arms the ScreenCast portal's cursor-metadata stream, which feeds
+// these atomics with REAL global coords from its own thread; unarmed they
+// stay false/zero and mouse_json keeps the plain on-surface behavior.
+static std::atomic<bool> g_mt_active{false};
+static std::atomic<bool> g_mt_have{false};       // ≥1 cursor fix received
+static std::atomic<int> g_mt_px{0}, g_mt_py{0};  // global, logical coords
+struct MtCalib { int ox = 0, oy = 0; bool ok = false; };
+static std::map<std::string, MtCalib> g_mt_calib;  // winid -> real window origin
+static bool mt_on() { return g_mt_active.load() && g_mt_have.load(); }
+
 static std::string mouse_json(const std::string& winid) {
   GdkDisplay* d = gdk_display_get_default();
   GdkSeat* seat = gdk_display_get_default_seat(d);
@@ -1745,11 +1763,54 @@ static std::string mouse_json(const std::string& winid) {
       int rx = gx - ox, ry = gy - oy;
       int w = gdk_window_get_width(gw), h = gdk_window_get_height(gw);
       bool inside = rx >= 0 && ry >= 0 && rx < w && ry < h;
+      // A hidden window can't contain the cursor — and GDK never clears its
+      // Wayland pointer focus on unmap, so the probe below misses this case.
+      if (inside && !gdk_window_is_viewable(gw)) inside = false;
+      // Wayland freezes get_position at the last on-surface coords once the
+      // cursor leaves the app, which leaves the bounds check stuck true. The
+      // surface-under-pointer probe still knows the truth (NULL = not over
+      // any of our windows, another toplevel = not this one), so let it veto.
+      GdkWindow* under = (!on_x11() && pointer)
+          ? gdk_device_get_window_at_position(pointer, nullptr, nullptr) : nullptr;
+      bool over_this = under &&
+          gdk_window_get_toplevel(under) == gdk_window_get_toplevel(gw);
+      if (inside && !on_x11() && !over_this) inside = false;
+      if (!on_x11() && mt_on()) {
+        // While the cursor is over this window both coordinate systems are
+        // live, which pins down the window's REAL origin (Wayland never says
+        // where a window is). Off the window, that calibration turns the
+        // portal's global fix into window-relative coords — it only goes
+        // stale if the window moves while the cursor is away, and the next
+        // hover re-pins it.
+        if (over_this) {
+          g_mt_calib[winid] = { g_mt_px.load() - rx, g_mt_py.load() - ry, true };
+        } else {
+          auto c = g_mt_calib.find(winid);
+          if (c != g_mt_calib.end() && c->second.ok) {
+            rx = g_mt_px.load() - c->second.ox;
+            ry = g_mt_py.load() - c->second.oy;
+          }
+        }
+      }
+      if (on_x11() && g_getenv("WAYLAND_DISPLAY") && mt_on()) {
+        // XWayland: X pointer coords freeze whenever the cursor is over a
+        // native Wayland surface (the xeyes problem), but window origins ARE
+        // real in X space — with the portal armed, its global fix maps to
+        // window-relative directly, no calibration needed.
+        rx = g_mt_px.load() - ox;
+        ry = g_mt_py.load() - oy;
+        inside = rx >= 0 && ry >= 0 && rx < w && ry < h &&
+                 gdk_window_is_viewable(gw);
+      }
       winpart = "{\"x\":" + std::to_string(rx) + ",\"y\":" + std::to_string(ry) +
                 ",\"inside\":" + (inside ? "true" : "false") + "}";
     }
   }
 
+  if (mt_on() && (!on_x11() || g_getenv("WAYLAND_DISPLAY"))) {
+    gx = g_mt_px.load();   // portal coords beat frozen ones (Wayland AND XWayland)
+    gy = g_mt_py.load();
+  }
   GdkMonitor* m = gdk_display_get_monitor_at_point(d, gx, gy);
   if (!m) m = monitor_for(d, nullptr);   // Wayland hides the pointer: 0,0 may match nothing
   GdkRectangle geo = {0, 0, 0, 0};
@@ -3406,6 +3467,340 @@ static void hotkey_unregister(const std::string& id) {
   if (!g_gs_session.empty()) gs_bind_shortcuts();
 }
 
+// --- opt-in outside-the-window mouse tracking: ScreenCast portal -------------
+// The one sanctioned route to global cursor coords on Wayland: a ScreenCast
+// session with cursor_mode METADATA — the compositor asks the user once (a
+// restore token round-trips through the backend's store so re-runs skip the
+// dialog), shows its sharing indicator while armed, and cursor positions ride
+// the PipeWire stream as spa_meta_cursor; the pixels are never mapped. Armed
+// ONLY by an explicit MOUSETRACK from mouseTracking.start(). On X11 the plain
+// path is already global, so start() is a cheap ok; built without libpipewire
+// it answers 'unsupported'.
+
+#ifdef TINYJS_PIPEWIRE
+
+static std::vector<std::string> g_mt_qids;  // starts awaiting the portal dance
+static std::string g_mt_session;            // portal session object path
+static std::string g_mt_token;              // restore token from the last grant
+static bool g_mt_starting = false;
+static pw_thread_loop* g_mt_pw_loop = nullptr;
+static pw_context* g_mt_pw_ctx = nullptr;
+static pw_core* g_mt_pw_core = nullptr;
+static pw_stream* g_mt_pw_stream = nullptr;
+static spa_hook g_mt_pw_listener;
+static std::atomic<int> g_mt_off_x{0}, g_mt_off_y{0};  // stream origin (logical)
+static std::atomic<int> g_mt_log_w{0}, g_mt_log_h{0};  // stream size (logical)
+static std::atomic<int> g_mt_buf_w{0}, g_mt_buf_h{0};  // negotiated buffer size
+
+static void mt_reply_all(const std::string& json) {
+  g_mt_starting = false;
+  for (auto& q : g_mt_qids) send_got(q, json);
+  g_mt_qids.clear();
+}
+static void mt_fail_all(const char* code, const std::string& msg) {
+  mt_reply_all("{\"ok\":false,\"code\":\"" + std::string(code) +
+               "\",\"message\":" + json_escape(msg) + "}");
+}
+static void mt_ok_all() {
+  mt_reply_all("{\"ok\":true,\"restoreToken\":" +
+               (g_mt_token.empty() ? "null" : json_escape(g_mt_token)) + "}");
+}
+
+// like portal_await_response, but the callback also sees denials (code != 0)
+struct MtWait {
+  GDBusConnection* bus;
+  guint sub;
+  std::function<void(guint32, GVariant*)> cb;
+};
+static void mt_await(GDBusConnection* bus, const std::string& request_path,
+                     std::function<void(guint32, GVariant*)> cb) {
+  auto* w = new MtWait{bus, 0, std::move(cb)};
+  w->sub = g_dbus_connection_signal_subscribe(bus, "org.freedesktop.portal.Desktop",
+      "org.freedesktop.portal.Request", "Response", request_path.c_str(), nullptr,
+      G_DBUS_SIGNAL_FLAGS_NONE,
+      [](GDBusConnection*, const gchar*, const gchar*, const gchar*, const gchar*,
+         GVariant* params, gpointer data) {
+        auto* w = (MtWait*)data;
+        guint32 code = 0;
+        GVariant* results = nullptr;
+        g_variant_get(params, "(u@a{sv})", &code, &results);
+        w->cb(code, results);
+        if (results) g_variant_unref(results);
+        g_dbus_connection_signal_unsubscribe(w->bus, w->sub);  // one-shot
+      }, w, [](gpointer data) { delete (MtWait*)data; });
+}
+
+static void mt_on_param_changed(void*, uint32_t id, const struct spa_pod* param) {
+  if (!param || id != SPA_PARAM_Format) return;
+  uint32_t mtype = 0, msub = 0;
+  if (spa_format_parse(param, &mtype, &msub) < 0 || mtype != SPA_MEDIA_TYPE_video)
+    return;
+  struct spa_video_info_raw raw;
+  memset(&raw, 0, sizeof raw);
+  if (spa_format_video_raw_parse(param, &raw) >= 0) {
+    g_mt_buf_w = (int)raw.size.width;
+    g_mt_buf_h = (int)raw.size.height;
+  }
+  // announce that we take cursor metadata on the buffers (bitmap included in
+  // the size range because compositors attach one whether or not we care)
+  uint8_t buf[1024];
+  struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
+  int base = (int)(sizeof(struct spa_meta_cursor) + sizeof(struct spa_meta_bitmap));
+  const struct spa_pod* params[1];
+  params[0] = (const struct spa_pod*)spa_pod_builder_add_object(&b,
+      SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+      SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Cursor),
+      SPA_PARAM_META_size,
+      SPA_POD_CHOICE_RANGE_Int(base + 64 * 64 * 4, base, base + 512 * 512 * 4));
+  pw_stream_update_params(g_mt_pw_stream, params, 1);
+}
+
+static void mt_on_process(void*) {
+  // drain the queue — only the newest cursor fix matters
+  struct pw_buffer* b = nullptr;
+  struct pw_buffer* last = nullptr;
+  while ((b = pw_stream_dequeue_buffer(g_mt_pw_stream))) {
+    if (last) pw_stream_queue_buffer(g_mt_pw_stream, last);
+    last = b;
+  }
+  if (!last) return;
+  struct spa_meta_cursor* mc = (struct spa_meta_cursor*)spa_buffer_find_meta_data(
+      last->buffer, SPA_META_Cursor, sizeof(struct spa_meta_cursor));
+  if (mc && spa_meta_cursor_is_valid(mc)) {
+    // metadata is in buffer pixels; the stream may be physical-resolution
+    // while the desktop talks logical — rescale by the portal-reported size
+    double x = mc->position.x, y = mc->position.y;
+    int bw = g_mt_buf_w.load(), bh = g_mt_buf_h.load();
+    int lw = g_mt_log_w.load(), lh = g_mt_log_h.load();
+    if (bw > 0 && lw > 0 && bw != lw) x = x * lw / bw;
+    if (bh > 0 && lh > 0 && bh != lh) y = y * lh / bh;
+    g_mt_px = g_mt_off_x.load() + (int)(x + 0.5);
+    g_mt_py = g_mt_off_y.load() + (int)(y + 0.5);
+    g_mt_have = true;
+  }
+  pw_stream_queue_buffer(g_mt_pw_stream, last);
+}
+
+static const struct pw_stream_events g_mt_stream_events = [] {
+  pw_stream_events ev{};
+  ev.version = PW_VERSION_STREAM_EVENTS;
+  ev.param_changed = mt_on_param_changed;
+  ev.process = mt_on_process;
+  return ev;
+}();
+
+static void mt_pw_teardown() {
+  if (g_mt_pw_loop) pw_thread_loop_stop(g_mt_pw_loop);
+  if (g_mt_pw_stream) { pw_stream_destroy(g_mt_pw_stream); g_mt_pw_stream = nullptr; }
+  if (g_mt_pw_core) { pw_core_disconnect(g_mt_pw_core); g_mt_pw_core = nullptr; }
+  if (g_mt_pw_ctx) { pw_context_destroy(g_mt_pw_ctx); g_mt_pw_ctx = nullptr; }
+  if (g_mt_pw_loop) { pw_thread_loop_destroy(g_mt_pw_loop); g_mt_pw_loop = nullptr; }
+}
+
+static bool mt_pw_connect(int fd, guint32 node) {
+  static bool pw_inited = false;
+  if (!pw_inited) { pw_init(nullptr, nullptr); pw_inited = true; }
+  g_mt_pw_loop = pw_thread_loop_new("tinyjs-mousetrack", nullptr);
+  if (!g_mt_pw_loop) return false;
+  g_mt_pw_ctx = pw_context_new(pw_thread_loop_get_loop(g_mt_pw_loop), nullptr, 0);
+  if (!g_mt_pw_ctx || pw_thread_loop_start(g_mt_pw_loop) < 0) { mt_pw_teardown(); return false; }
+  pw_thread_loop_lock(g_mt_pw_loop);
+  g_mt_pw_core = pw_context_connect_fd(g_mt_pw_ctx, fd, nullptr, 0);
+  if (!g_mt_pw_core) { pw_thread_loop_unlock(g_mt_pw_loop); mt_pw_teardown(); return false; }
+  g_mt_pw_stream = pw_stream_new(g_mt_pw_core, "tinyjs mouse tracking",
+      pw_properties_new(PW_KEY_MEDIA_TYPE, "Video", PW_KEY_MEDIA_CATEGORY, "Capture",
+                        PW_KEY_MEDIA_ROLE, "Screen", nullptr));
+  if (!g_mt_pw_stream) { pw_thread_loop_unlock(g_mt_pw_loop); mt_pw_teardown(); return false; }
+  pw_stream_add_listener(g_mt_pw_stream, &g_mt_pw_listener, &g_mt_stream_events, nullptr);
+  uint8_t buf[1024];
+  struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buf, sizeof buf);
+  struct spa_rectangle rdef{1920, 1080}, rmin{1, 1}, rmax{16384, 16384};
+  struct spa_fraction fdef{30, 1}, fmin{0, 1}, fmax{1000, 1};
+  const struct spa_pod* params[1];
+  params[0] = (const struct spa_pod*)spa_pod_builder_add_object(&b,
+      SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+      SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+      SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+      SPA_FORMAT_VIDEO_format, SPA_POD_CHOICE_ENUM_Id(5,
+          SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_RGBx,
+          SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBA),
+      SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&rdef, &rmin, &rmax),
+      SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_RANGE_Fraction(&fdef, &fmin, &fmax));
+  int rc = pw_stream_connect(g_mt_pw_stream, PW_DIRECTION_INPUT, node,
+                             PW_STREAM_FLAG_AUTOCONNECT, params, 1);
+  pw_thread_loop_unlock(g_mt_pw_loop);
+  if (rc < 0) { mt_pw_teardown(); return false; }
+  return true;
+}
+
+static void mt_open_remote(guint32 node) {
+  GDBusConnection* bus = session_bus();
+  GVariantBuilder opts;
+  g_variant_builder_init(&opts, G_VARIANT_TYPE("a{sv}"));
+  GError* err = nullptr;
+  GUnixFDList* fds = nullptr;
+  GVariant* r = g_dbus_connection_call_with_unix_fd_list_sync(bus,
+      "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+      "org.freedesktop.portal.ScreenCast", "OpenPipeWireRemote",
+      g_variant_new("(oa{sv})", g_mt_session.c_str(), &opts),
+      G_VARIANT_TYPE("(h)"), G_DBUS_CALL_FLAGS_NONE, 10000, nullptr, &fds,
+      nullptr, &err);
+  if (!r || !fds) {
+    mt_fail_all("failed", err ? err->message : "OpenPipeWireRemote failed");
+    g_clear_error(&err);
+    return;
+  }
+  gint32 hidx = -1;
+  g_variant_get(r, "(h)", &hidx);
+  g_variant_unref(r);
+  int fd = g_unix_fd_list_get(fds, hidx, nullptr);
+  g_object_unref(fds);
+  if (fd < 0) { mt_fail_all("failed", "no PipeWire fd in portal reply"); return; }
+  if (!mt_pw_connect(fd, node)) {  // connect_fd owns fd on success
+    mt_fail_all("failed", "PipeWire connect failed");
+    return;
+  }
+  g_mt_active = true;
+  mt_ok_all();
+}
+
+static void mt_portal_start(const std::string& restore) {
+  GDBusConnection* bus = session_bus();
+  if (!bus) { mt_fail_all("failed", "no session bus"); return; }
+  std::string session_token = "tjmt" + std::to_string(g_get_monotonic_time() % 1000000);
+  std::string handle_token;
+  std::string req = portal_sender_token(bus, "tjmtc", handle_token);
+  std::string restore_copy = restore;
+  mt_await(bus, req, [bus, restore_copy](guint32 code, GVariant* results) {
+    if (code != 0) { mt_fail_all("denied", "screen-cast session refused"); return; }
+    const gchar* handle = nullptr;
+    if (!results || !g_variant_lookup(results, "session_handle", "&s", &handle) || !handle) {
+      mt_fail_all("failed", "portal returned no session");
+      return;
+    }
+    g_mt_session = handle;
+    std::string tok2;
+    std::string req2 = portal_sender_token(bus, "tjmts", tok2);
+    mt_await(bus, req2, [bus](guint32 code2, GVariant*) {
+      if (code2 != 0) { mt_fail_all("denied", "source selection refused"); return; }
+      std::string tok3;
+      std::string req3 = portal_sender_token(bus, "tjmtg", tok3);
+      mt_await(bus, req3, [](guint32 code3, GVariant* res3) {
+        if (code3 != 0) { mt_fail_all("denied", "screen share not granted"); return; }
+        GVariant* streams = res3
+            ? g_variant_lookup_value(res3, "streams", G_VARIANT_TYPE("a(ua{sv})")) : nullptr;
+        guint32 node = 0;
+        bool got = false;
+        if (streams) {
+          GVariantIter it;
+          g_variant_iter_init(&it, streams);
+          GVariant* props = nullptr;
+          if (g_variant_iter_next(&it, "(u@a{sv})", &node, &props)) {
+            got = true;
+            // the source's place in the desktop's logical layout — maps
+            // stream coords to the same global space screens() speaks
+            gint32 sx = 0, sy = 0, sw = 0, sh = 0;
+            if (props && g_variant_lookup(props, "position", "(ii)", &sx, &sy)) {
+              g_mt_off_x = sx;
+              g_mt_off_y = sy;
+            }
+            if (props && g_variant_lookup(props, "size", "(ii)", &sw, &sh)) {
+              g_mt_log_w = sw;
+              g_mt_log_h = sh;
+            }
+            if (props) g_variant_unref(props);
+          }
+          g_variant_unref(streams);
+        }
+        const gchar* rtok = nullptr;
+        if (res3 && g_variant_lookup(res3, "restore_token", "&s", &rtok) && rtok)
+          g_mt_token = rtok;
+        if (!got) { mt_fail_all("failed", "no stream in portal response"); return; }
+        mt_open_remote(node);
+      });
+      GVariantBuilder o3;
+      g_variant_builder_init(&o3, G_VARIANT_TYPE("a{sv}"));
+      g_variant_builder_add(&o3, "{sv}", "handle_token", g_variant_new_string(tok3.c_str()));
+      g_dbus_connection_call(bus, "org.freedesktop.portal.Desktop",
+          "/org/freedesktop/portal/desktop", "org.freedesktop.portal.ScreenCast", "Start",
+          g_variant_new("(osa{sv})", g_mt_session.c_str(), "", &o3),
+          G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, 120000, nullptr, nullptr, nullptr);
+    });
+    GVariantBuilder o2;
+    g_variant_builder_init(&o2, G_VARIANT_TYPE("a{sv}"));
+    g_variant_builder_add(&o2, "{sv}", "handle_token", g_variant_new_string(tok2.c_str()));
+    g_variant_builder_add(&o2, "{sv}", "types", g_variant_new_uint32(1));        // MONITOR
+    g_variant_builder_add(&o2, "{sv}", "multiple", g_variant_new_boolean(FALSE));
+    g_variant_builder_add(&o2, "{sv}", "cursor_mode", g_variant_new_uint32(4));  // METADATA
+    g_variant_builder_add(&o2, "{sv}", "persist_mode", g_variant_new_uint32(2)); // until revoked
+    if (!restore_copy.empty())
+      g_variant_builder_add(&o2, "{sv}", "restore_token",
+                            g_variant_new_string(restore_copy.c_str()));
+    g_dbus_connection_call(bus, "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop", "org.freedesktop.portal.ScreenCast",
+        "SelectSources", g_variant_new("(oa{sv})", g_mt_session.c_str(), &o2),
+        G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, 30000, nullptr, nullptr, nullptr);
+  });
+  GVariantBuilder opts;
+  g_variant_builder_init(&opts, G_VARIANT_TYPE("a{sv}"));
+  g_variant_builder_add(&opts, "{sv}", "handle_token",
+                        g_variant_new_string(handle_token.c_str()));
+  g_variant_builder_add(&opts, "{sv}", "session_handle_token",
+                        g_variant_new_string(session_token.c_str()));
+  g_dbus_connection_call(bus, "org.freedesktop.portal.Desktop",
+      "/org/freedesktop/portal/desktop", "org.freedesktop.portal.ScreenCast",
+      "CreateSession", g_variant_new("(a{sv})", &opts),
+      G_VARIANT_TYPE("(o)"), G_DBUS_CALL_FLAGS_NONE, 30000, nullptr, nullptr, nullptr);
+}
+
+#endif  // TINYJS_PIPEWIRE
+
+static void mt_start(const std::string& qid, const std::string& restore) {
+  // A REAL X11 session tracks globally already — nothing to arm. XWayland
+  // (GDK on x11 with a Wayland compositor underneath, the windowPlacement
+  // case) does NOT count: its pointer query freezes whenever the cursor is
+  // over a native Wayland surface, so it takes the portal like everyone else.
+  if (on_x11() && !g_getenv("WAYLAND_DISPLAY")) {
+    send_got(qid, "{\"ok\":true,\"restoreToken\":null}");
+    return;
+  }
+#ifndef TINYJS_PIPEWIRE
+  (void)restore;
+  send_got(qid, "{\"ok\":false,\"code\":\"unsupported\",\"message\":"
+                "\"this launcher was built without PipeWire — install "
+                "libpipewire-0.3-dev (or your distro's equivalent) and re-run "
+                "setup.sh\"}");
+#else
+  if (g_mt_active) {
+    send_got(qid, "{\"ok\":true,\"restoreToken\":" +
+                  (g_mt_token.empty() ? "null" : json_escape(g_mt_token)) + "}");
+    return;
+  }
+  g_mt_qids.push_back(qid);
+  if (g_mt_starting) return;  // one dance; every waiter gets the answer
+  g_mt_starting = true;
+  mt_portal_start(restore);
+#endif
+}
+
+static void mt_stop() {
+#ifdef TINYJS_PIPEWIRE
+  g_mt_active = false;
+  g_mt_have = false;
+  g_mt_calib.clear();
+  mt_pw_teardown();
+  if (!g_mt_session.empty()) {
+    // closing the session stops the stream and drops the sharing indicator
+    GDBusConnection* bus = session_bus();
+    if (bus)
+      g_dbus_connection_call(bus, "org.freedesktop.portal.Desktop",
+          g_mt_session.c_str(), "org.freedesktop.portal.Session", "Close",
+          nullptr, nullptr, G_DBUS_CALL_FLAGS_NONE, 5000, nullptr, nullptr, nullptr);
+    g_mt_session.clear();
+  }
+#endif
+}
+
 // --- shell / login / sound / capture / pdf / thumb / say ---------------------
 
 static void do_shell(const std::string& qid, const std::string& rest) {
@@ -4567,6 +4962,8 @@ static void handle_line(const std::string& line) {
   }
   if (line == "AUDIOTAP STOP") { tap_stop(); return; }
   if (qid_op("AUDIOTAP", qid, body)) { do_audiotap(qid, body); return; }
+  if (line == "MOUSETRACK STOP") { mt_stop(); return; }
+  if (qid_op("MOUSETRACK", qid, body)) { mt_start(qid, body); return; }
   if (line.rfind("NOWPLAYING", 0) == 0) {
     do_nowplaying(line.size() > 11 ? line.substr(11) : "");
     return;

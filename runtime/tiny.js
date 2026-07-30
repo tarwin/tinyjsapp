@@ -670,6 +670,25 @@
       //   scale } } — window is relative to THIS window's content area
       // (clientX/clientY units, works even while the cursor is outside it)
       mousePosition: () => call('app.mouse'),
+      // Opt-in outside-the-window tracking. mousePosition() is global on
+      // macOS, Windows and X11 out of the box; on Linux-Wayland it only
+      // tracks while the cursor is over the app (window.inside goes false
+      // when it leaves). start() arms live global coords there via the
+      // ScreenCast portal: one system consent dialog (remembered across
+      // runs), and the screen-sharing indicator shows while armed. Resolves
+      // true, or throws an Error with .code: 'unsupported'|'denied'|'failed'.
+      mouseTracking: {
+        async start() {
+          const r = await call('app.mouseTracking.start');
+          if (!r || !r.ok) {
+            const e = new Error(r?.message || ('mouseTracking: ' + (r?.code || 'failed')));
+            e.code = r?.code || 'failed';
+            throw e;
+          }
+          return true;
+        },
+        stop: () => call('app.mouseTracking.stop'),
+      },
       // Every display (same top-left coords as win.setPosition): [{ id,
       // name, x, y, width, height, visible: {x,y,width,height}, scale,
       // primary }] — visible excludes the menu bar and Dock.
