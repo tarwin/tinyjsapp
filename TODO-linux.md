@@ -248,6 +248,20 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
 
 ## Done
 
+- [x] **getUserMedia / camera+mic (2026-07-29)** — the launcher now answers
+      WebKit's `permission-request` signal (previously unhandled = WebKit's
+      default deny, so every camera app failed with NotAllowedError while
+      PERMCHK said 'granted'). Because desktop Linux has NO consent layer
+      under us (no TCC, no WebView2 prompt — /dev/video* is open to the
+      session, which is why GNOME's own camera app never asks), the grant is
+      manifest-gated: cli.js forwards tinyjs.json's `"permissions"` block
+      into createApp, bridge.js exports it as `TINYJS_MEDIA=camera,microphone`
+      on the launcher spawn, and only what's declared is allowed (device-info
+      /enumerateDevices labels ride the same gate; getDisplayMedia stays
+      denied). Verified both ways on this VM 2026-07-29: undeclared app →
+      NotAllowedError; declared app → live "FaceTime HD Camera (V4L2)" +
+      "Built-in Audio Analog Stereo" with labels. Bonus finding: WebKitGTK
+      2.52's MediaRecorder records video/mp4 (like macOS), not webm.
 - [x] Core port: launcher (GTK3 + WebKitGTK 4.1, Unix socket — same
       protocol as macOS), bridge, CLI, `tinyjs dev`/`build`/`publish` +
       auto-update (per-arch `"linux": { "<arch>": { url, sha256 } }`

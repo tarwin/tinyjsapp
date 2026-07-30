@@ -538,6 +538,40 @@ static gboolean on_button_press(GtkWidget*, GdkEventButton* ev, gpointer) {
   return FALSE;  // let the WebView handle the click too
 }
 
+// getUserMedia: WebKit's default for an unhandled permission-request is deny,
+// so a camera app fails silently. Unlike macOS (TCC prompt) and Windows
+// (WebView2's own prompt) there is no OS consent layer underneath us here,
+// so the grant is gated on the app's manifest instead: the backend forwards
+// tinyjs.json's "permissions" block as TINYJS_MEDIA ("camera,microphone")
+// and only what the app declared is allowed. Device-info (enumerateDevices
+// labels, for camera pickers) rides the same gate.
+static gboolean on_permission_request(WebKitWebView*, WebKitPermissionRequest* req, gpointer) {
+  const char* env = g_getenv("TINYJS_MEDIA");
+  std::string declared = env ? env : "";
+  if (WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(req)) {
+    WebKitUserMediaPermissionRequest* um = WEBKIT_USER_MEDIA_PERMISSION_REQUEST(req);
+#if WEBKIT_CHECK_VERSION(2, 34, 0)
+    if (webkit_user_media_permission_is_for_display_device(um)) {
+      webkit_permission_request_deny(req);  // getDisplayMedia is not this gate
+      return TRUE;
+    }
+#endif
+    bool ok = true;
+    if (webkit_user_media_permission_is_for_video_device(um) &&
+        declared.find("camera") == std::string::npos) ok = false;
+    if (webkit_user_media_permission_is_for_audio_device(um) &&
+        declared.find("microphone") == std::string::npos) ok = false;
+    if (ok) webkit_permission_request_allow(req);
+    else webkit_permission_request_deny(req);
+    return TRUE;
+  }
+  if (WEBKIT_IS_DEVICE_INFO_PERMISSION_REQUEST(req) && !declared.empty()) {
+    webkit_permission_request_allow(req);
+    return TRUE;
+  }
+  return FALSE;  // everything else keeps WebKit's default (deny)
+}
+
 static WebKitSettings* make_settings() {
   WebKitSettings* s = webkit_settings_new();
   webkit_settings_set_enable_developer_extras(s, TRUE);
@@ -4434,6 +4468,7 @@ static WebKitWebView* make_webview(const std::string& winid) {
   g_object_unref(settings);
   g_object_unref(policies);
   g_signal_connect(wv, "context-menu", G_CALLBACK(on_context_menu), nullptr);
+  g_signal_connect(wv, "permission-request", G_CALLBACK(on_permission_request), nullptr);
   g_signal_connect_after(wv, "drag-data-received",
                          G_CALLBACK(on_drag_data_received), nullptr);
   // Track the live left-button press so DRAGWIN can start a real move-drag

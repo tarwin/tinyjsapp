@@ -450,6 +450,13 @@ await tiny.app.permissions.request('accessibility'); // prompts / opens Settings
 // (~/.tinyjs), not your app — all dev apps share them; packaged apps get
 // their own. 'screen' never reads 'undetermined' (macOS only exposes a
 // yes/no preflight for screen recording).
+// Linux mic/camera: getUserMedia works, but ONLY for what the same
+// "permissions" block declares — the launcher answers WebKit's
+// permission-request from the manifest (undeclared = NotAllowedError), and
+// there is NO system prompt underneath (desktop Linux doesn't gate
+// /dev/video*; permissions.check answers 'granted' meaning "not gated
+// here"). enumerateDevices labels ride the same gate. WebKitGTK's
+// MediaRecorder records video/mp4 like macOS (measured, webkit 2.52).
 
 // shell — the NSWorkspace verbs apps otherwise spawn `open` for; each
 // resolves true or rejects with the reason

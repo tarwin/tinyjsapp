@@ -547,7 +547,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -652,6 +652,14 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // suffix, so UA-sniffing sites reject it. Packaged apps use the
     // TinyjsUserAgent plist key instead (this env only applies to the dev spawn).
     if (userAgent) spawnEnv.TINYJS_UA = String(userAgent);
+    // Linux getUserMedia: WebKitGTK denies an unanswered permission-request,
+    // and there is no OS consent dialog underneath (no TCC, no WebView2
+    // prompt) — so the launcher grants exactly what tinyjs.json's
+    // "permissions" block declared, forwarded here.
+    if (IS_LINUX && permissions) {
+      const media = ['camera', 'microphone'].filter((k) => permissions[k]);
+      if (media.length) spawnEnv.TINYJS_MEDIA = media.join(',');
+    }
     // Windows built apps: hand the launcher our exe so taskbar pins and the
     // Start-Menu shortcut relaunch the APP — the visible window belongs to
     // launcher.exe, which can't start on its own, so a default pin would be
