@@ -38,6 +38,28 @@ const ON_X11 = IS_LINUX && (tjs.env.GDK_BACKEND === 'x11'
   || (!!tjs.env.DISPLAY && tjs.env.GDK_BACKEND !== 'wayland'
       && tjs.env.XDG_SESSION_TYPE !== 'wayland'));
 
+// Windows: argv transform that routes a console command through
+// `launcher --run` (CREATE_NO_WINDOW) so no terminal window flashes when a
+// GUI-subsystem app shells out — tjs.spawn has no flag for this. Identity
+// everywhere else. Module-scoped because the fetch shim's curl hops and
+// probeOk run outside createApp, where the launcher path is otherwise found.
+let runPrefix = null;               // ['<launcher>', '--run'] once known
+let runPrefixTried = false;
+const hiddenArgv = (args) => (runPrefix ? [...runPrefix, ...args] : args);
+// createApp sets runPrefix (it validates the path and honors the launcherPath
+// option), but a backend's module top level runs BEFORE createApp — and a
+// fetch there is exactly a case that can need curl. So resolve it on first
+// use too, with createApp's precedence minus the option it can't see.
+async function readyHiddenArgv() {
+  if (!IS_WIN || runPrefix || runPrefixTried) return;
+  runPrefixTried = true;
+  const cand = tjs.env.TINYJS_LAUNCHER || dirOf(tjs.exePath) + '/launcher.exe';
+  try {
+    await tjs.stat(cand);
+    runPrefix = [cand, '--run'];
+  } catch {}                        // no launcher yet: plain spawn, as before
+}
+
 // ── fetch repair shim ───────────────────────────────────────────────────────
 // txiki v26.6.0's fetch has two wire-level bugs (repros + fix notes in
 // TODO-txiki.md; both verified against real hosts):
@@ -87,7 +109,10 @@ async function curlFetch(url, init = {}) {
     args.push('--data-binary', '@-');
   }
   args.push('--', url);   // never let a URL parse as a flag
-  const p = tjs.spawn(args, { stdin: body != null ? 'pipe' : 'ignore', stdout: 'pipe', stderr: 'ignore' });
+  // hiddenArgv: on Windows every hop would otherwise flash a console window
+  // (curl.exe is a console app, the packaged app is GUI-subsystem)
+  await readyHiddenArgv();
+  const p = tjs.spawn(hiddenArgv(args), { stdin: body != null ? 'pipe' : 'ignore', stdout: 'pipe', stderr: 'ignore' });
   if (body != null) {
     const w = p.stdin.getWriter();
     await w.write(typeof body === 'string' ? enc.encode(body) : body);
@@ -221,7 +246,8 @@ async function distroId() {
 // does `argv` exit 0? used to ask gst-inspect whether a decoder exists
 async function probeOk(argv) {
   try {
-    const p = tjs.spawn(argv, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
+    await readyHiddenArgv();
+    const p = tjs.spawn(hiddenArgv(argv), { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
     return (await p.wait()).exit_status === 0;
   } catch { return false; }
 }
@@ -726,11 +752,6 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   let pagePath = null;
   let ownsPage = false; // true when the bridge materialized the page file
   let cleanup = async () => {};
-  // Windows: argv transform that routes a console command through
-  // `launcher --run` (CREATE_NO_WINDOW) so no terminal window flashes when a
-  // GUI-subsystem app shells out — tjs.spawn has no flag for this. Identity
-  // everywhere else; assigned once the launcher path is known.
-  let hiddenArgv = (args) => args;
 
   if (attachPath) {
     const conn = await tjs.connect('pipe', attachPath);
@@ -743,7 +764,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     if (!launcher || !(await exists(launcher))) {
       throw new Error('tinyjs launcher binary not found (looked at: ' + (launcher || exeDir + launcherName) + ')');
     }
-    if (IS_WIN) hiddenArgv = (args) => [launcher, '--run', ...args];
+    if (IS_WIN) { runPrefix = [launcher, '--run']; runPrefixTried = true; }
 
     // Private rendezvous dir for the materialized frontend. The transport is a
     // Unix domain socket inside it — or, on Windows, a named pipe whose name
@@ -818,7 +839,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Start-Menu shortcut relaunch the APP — the visible window belongs to
     // launcher.exe, which can't start on its own, so a default pin would be
     // dead on next launch. Dev spawns set nothing (nothing worth pinning).
-    if (IS_WIN && bundlePath()) spawnEnv.TINYJS_APP_EXE = tjs.exePath;
+    if (IS_WIN && (await bundlePath())) spawnEnv.TINYJS_APP_EXE = tjs.exePath;
     // Linux: the app id names the WM class (window ↔ .desktop matching) and
     // the notification identity. Dev sets it from the CLI; built apps here.
     if (IS_LINUX && id && !spawnEnv.TINYJS_APP_ID) spawnEnv.TINYJS_APP_ID = id;
@@ -2206,7 +2227,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // registered protocol/extension handler) forwards URLs and file paths
   // over it, starting the app first when needed. A second direct launch of
   // the exe detects the pipe, activates the running instance, and exits.
-  if ((IS_WIN || IS_LINUX) && bundlePath()) {
+  if ((IS_WIN || IS_LINUX) && (await bundlePath())) {
     const instPipe = IS_WIN
       ? '\\\\.\\pipe\\tinyjs-app-' + (id || 'tinyjs-app')
       : (tjs.env.XDG_RUNTIME_DIR || tjs.tmpDir) + '/tinyjs-app-' + (id || 'tinyjs-app') + '.sock';
@@ -2358,7 +2379,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // 0.0.0 version would flag every manifest as "available". Failures are
   // silent (offline is normal); the app decides the prompt UX.
   const auto = update?.auto;
-  if ((auto === 'launch' || auto === 'daily') && update?.url && bundlePath()) {
+  if ((auto === 'launch' || auto === 'daily') && update?.url && (await bundlePath())) {
     const autoCheck = async () => {
       try {
         const r = await app.update.check();

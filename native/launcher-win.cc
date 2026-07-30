@@ -6080,9 +6080,29 @@ static int run_hidden() {
   PROCESS_INFORMATION pi = {};
   std::vector<wchar_t> buf(cmd.begin(), cmd.end());
   buf.push_back(0);
+  // A job with KILL_ON_JOB_CLOSE ties the tool's life to this wrapper: the
+  // caller only holds OUR handle, so a kill() from the backend (an aborted
+  // curl-backed stream, say) must not leave the tool running with the pipe
+  // still open. Start suspended so the assignment lands before any code —
+  // and any grandchild — runs.
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  if (job) {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION li = {};
+    li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &li,
+                                 sizeof(li))) {
+      CloseHandle(job);
+      job = nullptr;
+    }
+  }
   if (!CreateProcessW(nullptr, buf.data(), nullptr, nullptr, TRUE,
-                      CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
+                      CREATE_NO_WINDOW | (job ? CREATE_SUSPENDED : 0), nullptr,
+                      nullptr, &si, &pi))
     return 127;
+  if (job) {
+    AssignProcessToJobObject(job, pi.hProcess); // nested jobs: Win8+
+    ResumeThread(pi.hThread);
+  }
   CloseHandle(pi.hThread);
   WaitForSingleObject(pi.hProcess, INFINITE);
   DWORD code = 1;

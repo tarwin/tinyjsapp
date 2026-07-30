@@ -96,17 +96,25 @@ async function exists(p) {
 // built app is a portable folder — the compiled backend with launcher(.exe)
 // beside it (the frontend rides inside the binary) — so that folder is the
 // "bundle". null when not packaged (dev / bare CLI).
-let portableBundle; // memoized (involves stat calls)
-export function bundlePath() {
+let portableBundle;  // memoized (involves stat calls)
+let portableProbe = null;
+export async function bundlePath() {
   const exe = tjs.exePath;
   if (!IS_WIN && !IS_LINUX) {
     const i = exe.indexOf('.app/Contents/MacOS/');
     return i < 0 ? null : exe.slice(0, i + 4);
   }
-  return portableBundle ?? null; // resolved async by portableBundleInit below
+  await (portableProbe ??= portableBundleInit());
+  return portableBundle ?? null;
 }
 
-// Windows/Linux bundle detection needs async stats; run once at import.
+// Windows/Linux bundle detection needs async stats. Probed on first ask, NOT
+// at import: a top-level await here makes this module async, which makes
+// bridge.js async, which lets an app's backend module body run BEFORE the
+// fetch repair shim is installed — its first fetch would get txiki's raw
+// broken one (measured: a top-level `fetch('https://rss.art19.com/')` failed
+// with "mbedtls connect -1 5 0" while the identical call one await later
+// succeeded).
 async function portableBundleInit() {
   if (!IS_WIN && !IS_LINUX) return;
   const dir = tjs.exePath.replace(/[\\/][^\\/]*$/, '');
@@ -116,7 +124,6 @@ async function portableBundleInit() {
     portableBundle = dir;
   }
 }
-await portableBundleInit();
 
 export async function checkForUpdate({ url, version }) {
   if (!url) throw new Error('no update url configured (tinyjs.json "update": { "url": … })');
@@ -170,7 +177,7 @@ export async function checkForUpdate({ url, version }) {
 // the caller is expected to relaunch() + quit. Throws with a human-readable
 // reason on any failure (the running app is untouched or rolled back).
 export async function installUpdate({ url, version, manifest }) {
-  const bundle = bundlePath();
+  const bundle = await bundlePath();
   if (!bundle) {
     throw new Error('auto-update only works from the packaged .app build');
   }
@@ -206,7 +213,7 @@ export async function installUpdate({ url, version, manifest }) {
     // (the updating app is a GUI-subsystem exe); plain tar on Linux (the
     // Linux asset is a .tar.gz).
     await tjs.makeDir(tmp + '/x', { recursive: true }).catch(() => {});
-    const winTar = (b => b ? [b + '/launcher.exe', '--run'] : [])(IS_WIN ? bundlePath() : null);
+    const winTar = (b => b ? [b + '/launcher.exe', '--run'] : [])(IS_WIN ? await bundlePath() : null);
     const extractOk = IS_WIN
       ? await runOk([...winTar, 'tar', '-xf', zipPath, '-C', tmp + '/x'])
       : IS_LINUX

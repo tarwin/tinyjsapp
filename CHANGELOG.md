@@ -549,6 +549,32 @@ are gone rather than deprecated.
 - **Fixed: `tinyjs build --cli` printed a Unix hint on Windows**, suggesting an
   `ln -sf` into `/usr/local/bin` — neither of which exists there. It now prints
   a `setx PATH` line.
+- **Fixed: the curl fallback flashed a terminal window on Windows**, once per
+  hop. The fetch repair shim routes exactly two cases through the system curl
+  — root-path URLs and TLS 1.2-only hosts — which is most podcast feeds
+  (art19, anchor.fm), and a console tool spawned from a GUI-subsystem exe pops
+  a console window for the life of the call. So loading a feed strobed one to
+  three of them, and amp made it look like the app was shelling out to
+  something. The curl hops and the `curl --version` probe now go through
+  `launcher --run` (`CREATE_NO_WINDOW`), the same route `reg add` and the
+  updater's `tar` already took; it was only ever missed here because the fetch
+  shim lives outside `createApp`, where the launcher path was resolved.
+  `--run` also puts the tool in a job object with `KILL_ON_JOB_CLOSE` now, so
+  killing the wrapper — what aborting a curl-backed stream does — takes curl
+  with it instead of leaving it downloading into a pipe nobody reads. Measured
+  against a built app with a console-window watcher: 19 curl children, not one
+  window; the same app spawning curl directly popped one per call.
+- **Fixed: an app's backend could run before the fetch repair was installed.**
+  `update.js` probed for its bundle with a top-level `await`, which makes it —
+  and `bridge.js`, which imports it — an *async* module, and ES module
+  evaluation lets a synchronous sibling run while an async one is still
+  pending. So a backend whose module body fetched before its own first `await`
+  got txiki's unrepaired `fetch`: measured, a top-level
+  `fetch('https://rss.art19.com/')` failed with `mbedtls connect -1 5 0` while
+  the identical call one `await` later returned 200. The probe is lazy now
+  (`bundlePath()` is async), nothing in bridge.js's import graph awaits at the
+  top level, and the first line of a backend gets the same `fetch` as the
+  hundredth.
 
 **Also**
 

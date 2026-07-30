@@ -992,7 +992,7 @@ knowing before trusting any multi-window store-choreographed page on Linux:
   previous run reads the OLD replies instantly and reports a full set of
   plausible, internally consistent, completely stale results.
 
-## The fetch repair shim — macOS + Linux verified, Windows owed
+## The fetch repair shim — verified on all three, POST bodies excepted
 
 bridge.js now wraps `globalThis.fetch` (search "fetch repair shim"): follows
 redirects hop-by-hop and hands exactly two broken cases to the system curl —
@@ -1006,12 +1006,17 @@ formerly-broken FAVES feeds all load, a real 404 stays 404, redirect chains
 report the final `res.url`, somafm streams live through it, POST bodies
 echo). Never run on:
 
-- [ ] **Windows** — the shim spawns `curl` (curl.exe ships since 10 1803,
-      but PATH in a packaged app is not a given), pipes a request body via
-      `stdin: 'pipe'` + `getWriter()`, and parses `-i` header blocks off the
-      stdout pipe. All txiki-API-level, none of it Windows-specific on
-      paper — which is exactly what this file is for. Check: the 8 feeds in
-      TODO-txiki.md through `tiny.fetch`, plus one internet-radio stream.
+- [x] **Windows** — verified 2026-07-30. Built amp: the podcasts all load
+      and streams play (Tarwin, by hand — page → tiny.fetch → backend →
+      shim → curl, plus a live stream, which is the streaming ReadableStream
+      end of it). Instrumented alongside, in a purpose-built GUI-subsystem
+      app: 19 curl hops to rss.art19.com + anchor.fm returning 200 with sane
+      body lengths, so curl resolves off PATH in a packaged app and the `-i`
+      header-block parse off the stdout pipe holds. Windows-only bug found
+      and fixed on the way — every hop flashed a console window until the
+      shim routed through `launcher --run` (CHANGELOG 0.30.0), which neither
+      other OS could have shown. NOT exercised anywhere in this: a request
+      body via `stdin: 'pipe'` + `getWriter()`, since nothing in amp POSTs.
 - [x] **Linux** — verified 2026-07-30 (Tarwin, by hand): the formerly
       broken FAVES feeds load through amp's podcast window, which is the
       full stack — page → tiny.api → backend fetch → shim → curl.

@@ -10,9 +10,11 @@ shim once a fixed tjs is pinned everywhere.
 
 Both bugs were found 2026-07-30 debugging amp podcast feeds that loaded in
 every browser and curl but not in the app. Neither is theoretical: eight of
-amp's ~60 baked-in FAVES feeds hit one or the other. The shim is verified
-on macOS and Linux (amp's FAVES, full stack); Windows is still owed — see
-TODO-verify.md.
+amp's ~60 baked-in FAVES feeds hit one or the other. The shim is verified on
+all three OSes through amp's full stack (Windows 2026-07-30: feeds and
+streams in the built app, plus the console-flash the curl spawns caused
+there, now fixed). POST request bodies are the one path nothing has
+exercised anywhere — see TODO-verify.md.
 
 ## Bug A — root-path URLs go out as `GET //`
 
@@ -104,3 +106,13 @@ follows the http→https redirect internally and then fails the handshake.
   after `--` so it can never parse as a flag. Verified with a local
   redirect-to-file:// server.
 - No curl on the machine → native behavior, bugs and all.
+- Windows: every curl spawn (and the `curl --version` probe) goes through
+  `launcher --run`, or each hop flashes a console window — a GUI-subsystem exe
+  has no console for a console child to attach to. The shim runs OUTSIDE
+  `createApp`, so it resolves the launcher itself (`readyHiddenArgv`, env
+  `TINYJS_LAUNCHER` or beside the exe) instead of using the path createApp
+  found; missing launcher → plain spawn, i.e. a flash, never a failed fetch.
+- Nothing in this file's import graph may take a TOP-LEVEL await before the
+  shim is installed: that makes bridge.js an async module, and an app's
+  backend module body then runs first and gets the raw fetch (this was real —
+  update.js's bundle probe did it, see CHANGELOG 0.30.0).
