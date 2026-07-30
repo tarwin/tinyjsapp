@@ -2730,7 +2730,10 @@ static void do_secret(webview_t, void *arg) {
       CFTypeRef data = NULL;
       OSStatus st = SecItemCopyMatching((__bridge CFDictionaryRef)q, &data);
       if (st == errSecSuccess && data) {
-        NSData *d = (__bridge_transfer NSData *)data;
+        // No ARC here, so __bridge_transfer would be a no-op and leak the
+        // +1 ref SecItemCopyMatching hands back. Autorelease it instead —
+        // we're inside this function's @autoreleasepool.
+        NSData *d = [(NSData *)data autorelease];
         NSString *s = [[NSString alloc] initWithData:d
                                             encoding:NSUTF8StringEncoding];
         out = "{\"ok\":true,\"value\":" +

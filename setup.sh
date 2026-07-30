@@ -155,7 +155,7 @@ if [ "$AI_BUILD" = "1" ]; then
   # -weak_framework through to the linker.
   echo "==> compiling with on-device AI (FoundationModels found in the SDK)"
   SWIFT_TARGET="$(uname -m)-apple-macos14.0"
-  c++ -std=c++17 -c -x objective-c++ -DTINYJS_AI $MIN_OS -Inative/include \
+  c++ -std=c++17 -c -x objective-c++ -DTINYJS_AI $MIN_OS -isystem native/include \
     native/launcher-macos.cc -o /tmp/tinyjs-launcher.o
   swiftc -parse-as-library -target "$SWIFT_TARGET" \
     -c native/tiny_ai.swift -o /tmp/tinyjs-ai.o
@@ -165,7 +165,7 @@ if [ "$AI_BUILD" = "1" ]; then
     -Xlinker -weak_framework -Xlinker FoundationModels -ldl
 else
   echo "==> compiling without on-device AI (no FoundationModels in this SDK)"
-  c++ -std=c++17 -x objective-c++ $MIN_OS -Inative/include native/launcher-macos.cc \
+  c++ -std=c++17 -x objective-c++ $MIN_OS -isystem native/include native/launcher-macos.cc \
     -o native/launcher-macos $FW -weak_framework ScreenCaptureKit -ldl
 fi
 
