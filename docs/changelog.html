@@ -134,6 +134,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.32.0 <span class="date">2026-07-30</span></h2>
+      <ul>
+        <li><b>Lost windows come back.</b> Apps restore saved positions blindly, and coordinates from an unplugged external display land a window in empty space nobody can see or grab. The launchers now know how to rescue one — clamp it onto the nearest screen, titlebar first — and the bridge decides when: it fingerprints the screen layout per app, and only a boot whose layout <em>changed</em> since the last run arms the rescue, chasing each window's first show / first position once. Unchanged screens (every ordinary day) mean zero interference — apps that fling windows off-screen on purpose never feel a thing. A display departing mid-session sweeps the visible windows too. Automatic parts opt out with <code>"offscreenRescue": false</code> in tinyjs.json; <code>tiny.win.ensureOnScreen()</code> (backend: <code>app.window(id).ensureOnScreen()</code>) is the manual one-shot that always works. Windows deliberately parked half-off-screen keep more than a sliver visible and are never touched.</li>
+        <li><b>Mission Control shows your windows now (macOS).</b> A window without the Titled style bit is silently excluded from Mission Control / Exposé, so every <code>squareCorners</code> app was invisible to the four-finger swipe. Membership now follows what the window <em>is</em>: normal and floating windows participate like documents; desktop-level windows (wallpaper pets), overlay-level ones (draw-on-screen HUDs) and click-through windows — which couldn't take the click Exposé would hand them — stay out. Re-derived whenever level, click-through or squareness changes, so call order doesn't matter, and nothing to change in any app.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.31.0 <span class="date">2026-07-30</span></h2>
       <ul>
         <li><b>Window-state transitions are events.</b> <code>tiny.win.onState(fn)</code> fires with <code>{ win, fullscreen, maximized, minimized, focused }</code> on every transition, whatever caused it — the green button, a menu item, a shortcut, or your own <code>setFullscreen</code> — so nobody has to fake it by debouncing <code>resize</code> and re-reading <code>getState()</code>, which can't tell a fullscreen transition from a manual resize to screen size. Same vocabulary as <code>getState()</code>, deduped in the launcher so a drag-resize never spams the wire, broadcast to every window with the id attached. Backend twin: <code>export function onWindowState(info, app)</code>. Like every <code>on…</code> since 0.30.0 it returns its own unsubscribe. Wayland never reports <code>minimized</code> — the compositor keeps minimize private.</li>

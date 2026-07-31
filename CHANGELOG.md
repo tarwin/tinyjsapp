@@ -4,6 +4,33 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.32.0 — 2026-07-30
+
+- **Lost windows come back.** Apps restore saved positions blindly, and
+  coordinates from an unplugged external display land a window in empty space
+  nobody can see or grab. The launchers now know how to rescue one — clamp it
+  onto the nearest screen, titlebar first — and the bridge decides when: it
+  fingerprints the screen layout per app, and only a boot whose layout
+  CHANGED since the last run arms the rescue, chasing each window's first
+  show / first position once. Unchanged screens (every ordinary day) mean
+  zero interference — apps that fling windows off-screen on purpose (coo3d's
+  pigeons) never feel a thing. A display departing mid-session sweeps the
+  visible windows too. Automatic parts opt out with `"offscreenRescue":
+  false` in tinyjs.json; `tiny.win.ensureOnScreen()` (backend:
+  `app.window(id).ensureOnScreen()`) is the manual one-shot that always
+  works. Windows deliberately parked half-off-screen keep more than a sliver
+  visible and are never touched.
+
+- **Mission Control shows your windows now (macOS).** A window without the
+  Titled style bit is silently excluded from Mission Control / Exposé, so
+  every `squareCorners` app was invisible to the four-finger swipe.
+  Membership now follows what the window IS: normal and floating windows
+  participate like documents; desktop-level windows (wallpaper pets),
+  overlay-level ones (draw-on-screen HUDs) and click-through windows — which
+  couldn't take the click Exposé would hand them — stay out. Re-derived
+  whenever level, click-through or squareness changes, so call order doesn't
+  matter, and nothing to change in any app.
+
 ## 0.31.0 — 2026-07-30
 
 - **Window-state transitions are events now.** `tiny.win.onState(fn)` fires

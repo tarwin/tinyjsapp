@@ -367,6 +367,10 @@
   "audioTap": "app",
   <i>// suppress WebKit's default right-click menu (default: true)</i>
   "contextMenu": false,
+  <i>// stale saved positions (an unplugged display) auto-rescue windows onto a</i>
+  <i>// live screen; false if your app parks windows off-screen on purpose —</i>
+  <i>// win.ensureOnScreen() stays available either way (default: true)</i>
+  "offscreenRescue": false,
   <i>// override the webview UA (UA-sniffing sites; wrapping a devUrl)</i>
   "userAgent": "Mozilla/5.0 …",
   <i>// frameless / translucent window</i>
@@ -1110,6 +1114,9 @@ const { path, duration } = await <b>tiny.macos.recorder.stop</b>();  <i>// final
 <i>// floating = what setAlwaysOnTop(true) sets. overlay clears fullscreen apps</i>
 <i>// and Mission Control on macOS; Windows and Linux have two bands, so overlay</i>
 <i>// lands on the same topmost as floating. desktop drops it onto the wallpaper.</i>
+<i>// Mission Control (macOS) follows from these: normal + floating windows</i>
+<i>// show in the four-finger swipe like any document; desktop, overlay and</i>
+<i>// click-through windows stay out of it — a pet is not a document.</i>
 <b>tiny.win.setAllSpaces</b>(true);      <i>// follow across Spaces + over fullscreen</i>
 <i>// macOS and X11 only — a no-op on Windows, and Wayland has no equivalent.</i>
 
