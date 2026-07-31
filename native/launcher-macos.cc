@@ -5440,6 +5440,11 @@ static void apply_square(NSWindow *win, bool square) {
     ensure_window_can_key(object_getClass(win));
     win.styleMask = NSWindowStyleMaskResizable; // no Titled bit → square
     win.hasShadow = YES;
+    // Borderless windows are excluded from Mission Control / Exposé unless
+    // they opt in — without this, every squareCorners app is invisible to
+    // the four-finger swipe. OR'd, so allspaces/ontop bits compose.
+    win.collectionBehavior |= NSWindowCollectionBehaviorManaged |
+                              NSWindowCollectionBehaviorParticipatesInCycle;
   } else {
     win.styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                     NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
