@@ -79,9 +79,15 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: ubuntu-24.04
+          # 22.04, NOT latest. The linker takes the newest symbol versions the
+          # build image offers, so building on 24.04 (glibc 2.39, gcc 13) put
+          # GLIBC_2.38 + GLIBCXX_3.4.32 in the shipped binaries and made them
+          # refuse to load on Ubuntu 22.04 (glibc 2.35) and Debian 12 (2.36).
+          # Nothing here needs a newer toolchain — jammy carries WebKitGTK 2.50,
+          # same API surface as noble. See the ABI floor check below.
+          - runner: ubuntu-22.04
             arch: x86_64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-22.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -90,19 +96,87 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
+          # libx11-dev/libxtst-dev are listed explicitly even though they arrive
+          # transitively today: setup.sh treats them as OPTIONAL and drops
+          # -DTINYJS_X11 (global hotkeys) with no build error if they're absent,
+          # so leaving them to chance means a runner image can quietly ship a
+          # release with the feature missing.
+          # libpipewire-0.3-dev: Wayland mouseTracking is compiled INTO the
+          # launcher (it consumes the ScreenCast portal's stream in-process),
+          # so unlike the EQ — which spawns pw-cli tools and can prompt the
+          # user to install them at runtime — a launcher built without this
+          # ships with the feature permanently absent. Every release before
+          # this line did.
           sudo apt-get install -y build-essential cmake ninja-build pkg-config \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            libwebkit2gtk-4.1-0 xvfb
+            libwebkit2gtk-4.1-0 libx11-dev libxtst-dev libpipewire-0.3-dev xvfb
 
       - name: Cache txiki.js build
         id: tjs-cache
         uses: actions/cache@v4
         with:
           path: bin/tjs
-          key: tjs-${{ env.TJS_VERSION }}-linux-${{ matrix.arch }}-v1
+          # v2: the key is version+arch only, so it does NOT notice the runner
+          # image changing. Without this bump a 22.04 run restores the tjs built
+          # on 24.04 and ships the exact binary this move exists to replace —
+          # green build, same broken download. Bump on every toolchain change.
+          key: tjs-${{ env.TJS_VERSION }}-linux-${{ matrix.arch }}-v2
 
       - name: Build (setup.sh — build tjs from source if uncached, compile launcher)
         run: TJS_BUILD=1 ./setup.sh
+
+      # Five assertions, because every one of these regressions is SILENT — the
+      # build succeeds and the break only shows up on a user's machine, which by
+      # definition isn't this runner. This is the Linux twin of the macOS
+      # "Verify the shipped launcher" step in the release job.
+      - name: Verify the shipped binaries
+        run: |
+          fail=0
+          # 1. the ABI floor. Ubuntu 22.04 ships glibc 2.35 and a libstdc++ with
+          #    GLIBCXX_3.4.30 / CXXABI_1.3.13; anything above is unloadable
+          #    there. A raised floor is not a build error, it's a bad download.
+          for f in bin/tjs native/launcher-linux; do
+            for pair in "GLIBC 2.35" "GLIBCXX 3.4.30" "CXXABI 1.3.13"; do
+              set -- $pair
+              # `|| true`: a binary with none of a given prefix makes grep exit
+              # 1, and under the runner's `bash -e` that aborts the whole step.
+              got=$(objdump -T "$f" | grep -oE "$1_[0-9]+(\.[0-9]+)*" | sed "s/^$1_//" | sort -uV || true)
+              top=$(printf '%s\n' $got "$2" | sort -uV | tail -1)
+              [ "$top" = "$2" ] ||
+                { echo "::error::$f needs $1_$top — floor is $1_$2"; fail=1; }
+            done
+          done
+          # 2/3/4. setup.sh degrades quietly when a dev package is missing: no
+          #      XTest means no global hotkeys, no AppIndicator means no tray,
+          #      no PipeWire means no Wayland mouseTracking — and the launcher
+          #      builds fine every time and answers 'unsupported' at runtime.
+          #      Released binaries must have all three. (Real, not theoretical:
+          #      the arm64 launcher in circulating downloads links no
+          #      AppIndicator while its x86_64 sibling does; nothing noticed.)
+          objdump -p native/launcher-linux | grep -q libXtst ||
+            { echo "::error::launcher has no XTest — global hotkeys disabled"; fail=1; }
+          objdump -p native/launcher-linux | grep -q appindicator ||
+            { echo "::error::launcher has no AppIndicator — tray disabled"; fail=1; }
+          objdump -p native/launcher-linux | grep -q libpipewire ||
+            { echo "::error::launcher has no PipeWire — Wayland mouseTracking disabled"; fail=1; }
+          # 5. the arch actually matches the matrix leg, so a runner-label typo
+          #    can't publish an x86_64 tarball under the arm64 name. readelf,
+          #    not `objdump -f` — objdump reports "architecture: UNKNOWN!" for a
+          #    binary its binutils wasn't built to target, which would read as a
+          #    failure rather than a mismatch.
+          case "${{ matrix.arch }}" in
+            x86_64) want=X86-64 ;;
+            arm64)  want=AArch64 ;;
+          esac
+          for f in bin/tjs native/launcher-linux; do
+            readelf -h "$f" | grep -q "Machine:.*$want" ||
+              { echo "::error::$f is not ${{ matrix.arch }}"; fail=1; }
+          done
+          echo "--- shipped ABI requirements ---"
+          for f in bin/tjs native/launcher-linux; do
+            echo "$f: $(objdump -T "$f" | grep -oE '(GLIBC|GLIBCXX|CXXABI)_[0-9.]+' | sort -uV | tr '\n' ' ')"
+          done
+          exit $fail
 
       - name: Stamp version
         run: printf '%s' "${GITHUB_REF_NAME}" > VERSION
