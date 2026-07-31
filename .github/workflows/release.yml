@@ -107,7 +107,12 @@ jobs:
           # user to install them at runtime — a launcher built without this
           # ships with the feature permanently absent. Every release before
           # this line did.
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config \
+          # g++-12: txiki's bundled ada URL parser uses constexpr std::string
+          # (C++20, GCC 12+); jammy's default GCC 11 fails hard on it. Using
+          # jammy's own gcc-12 does NOT raise the floor: 22.04's libstdc++6
+          # runtime is built from GCC 12 and ships GLIBCXX_3.4.30 — the exact
+          # ceiling the verify step asserts.
+          sudo apt-get install -y build-essential g++-12 cmake ninja-build pkg-config \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
             libwebkit2gtk-4.1-0 libx11-dev libxtst-dev libpipewire-0.3-dev xvfb
 
@@ -123,7 +128,10 @@ jobs:
           key: tjs-${{ env.TJS_VERSION }}-linux-${{ matrix.arch }}-v2
 
       - name: Build (setup.sh — build tjs from source if uncached, compile launcher)
-        run: TJS_BUILD=1 ./setup.sh
+        # CC/CXX reach cmake's first configure for the tjs build (see the
+        # g++-12 note on the deps step). The launcher line in setup.sh uses
+        # plain `c++` and stays on GCC 11 — it's C++17 and compiles there.
+        run: TJS_BUILD=1 CC=gcc-12 CXX=g++-12 ./setup.sh
 
       # Five assertions, because every one of these regressions is SILENT — the
       # build succeeds and the break only shows up on a user's machine, which by
