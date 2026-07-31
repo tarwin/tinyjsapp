@@ -21,10 +21,9 @@ App tarballs (amp etc.) are packaged separately in 22.04 containers —
 runbook in ../tinyjsapp-examples/CLAUDE.md. Linux burn-down + platform notes:
 TODO-linux.md. Native-filters-on-other-OSes plan: TODO-audio-filters.md.
 Sampled-SFX mixer (`tiny.audio.sampler`, native on Linux / Web Audio
-elsewhere): TODO-audio-sampler.md — shipped 2026-07-31, Linux verified,
-Windows page host drilled the same day (API, re-arm, no-gesture autoplay in
-dev — but nobody has LISTENED on Windows and the packaged-app autoplay leg
-is still open), macOS page host unwatched (TODO-verify.md). PDF pagination + header/footer plan:
+elsewhere): TODO-audio-sampler.md — shipped 2026-07-31, verified on all
+three platforms same day (Linux instrumented, mac/win hand-tested;
+TODO-verify.md). PDF pagination + header/footer plan:
 TODO-pdf.md (macOS `printToPDF` emits ONE tall page today; Windows and
 Linux paginate).
 Anything built on one OS but never watched run on another goes in

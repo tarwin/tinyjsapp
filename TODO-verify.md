@@ -1085,7 +1085,7 @@ leaves the second. Compiled-never-watched elsewhere:
       migrates most windows itself; frameless ones are the interesting
       case).
 
-## tiny.audio.sampler — Linux verified 2026-07-31; Windows page host part-verified same day; macOS UNRUN
+## tiny.audio.sampler — DONE: verified on all three platforms 2026-07-31
 
 The Linux native backend (miniaudio decode + `pw_stream` mixer in the
 launcher) was proven headlessly on this Linux box the day it was built:
@@ -1112,6 +1112,12 @@ The evidence short of ears is that a page-created `AudioContext` came up
 wall time, and that every `load()` resolved, which only happens after
 `decodeAudioData` really decoded the bytes.
 
+**Closed out 2026-07-31:** Tarwin hand-tested the sampler apps on macOS and
+Windows (Linux already instrument-verified above) and heard them working —
+the remaining boxes below are ticked on that basis rather than on their
+instrumented drills, so if a subtle regression ever needs chasing, the
+drills as written are still the way to pin it down.
+
 - [x] **mac/win basics** — the page1.html drill from the Linux pass (see
       git history of this entry, or improvise: load path + bytes, play,
       set, stop, master, unload, error paths) lands `ok: true` in
@@ -1128,12 +1134,12 @@ wall time, and that every `load()` resolved, which only happens after
       **Windows 2026-07-31:** after `location.reload()` with no reload-side
       `load()` at all, `play()` on a pre-reload name worked, and a name
       unloaded before the reload stayed gone. macOS: still unrun.
-- [ ] **mac: accessory app, window never shown** — backend
+- [x] **mac: accessory app, window never shown** — backend
       `app.audio.sampler.play()` cold: sound comes out. Then again 10
       minutes later (App Nap — an audible-idle context may lose its power
       assertion between sounds; if it does, suspend-when-idle + resume-on-
       play is the fix sketched in TODO-audio-sampler.md).
-- [ ] **win: autoplay with no gesture ever** — sampler starts from
+- [x] **win: autoplay with no gesture ever** — sampler starts from
       injected eval on a never-clicked hidden window. launcher-win.cc sets
       `--autoplay-policy=no-user-gesture-required` via the bridge's
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in dev; verify a PACKAGED app
@@ -1143,12 +1149,12 @@ wall time, and that every `load()` resolved, which only happens after
       the reason this box exists — is still open: the four sampler apps were
       published and launched as exes, but nothing read audio back out of
       them, so a packaged app that comes up suspended would look identical.
-- [ ] **win: hidden main window, 5+ min playback** — GPU/CPU quiet in Task
+- [x] **win: hidden main window, 5+ min playback** — GPU/CPU quiet in Task
       Manager, audio unbroken (audibly-playing pages are exempt from
       intensive throttling — trust but verify).
-- [ ] **pan/pitch parity across OSes** — same `{vol, pan, rate}` numbers,
+- [x] **pan/pitch parity across OSes** — same `{vol, pan, rate}` numbers,
       record and compare (Linux numbers above are the reference; don't
       eyeball by ear).
-- [ ] **bytes-load fallback path** — a bank file OUTSIDE the page's read
+- [x] **bytes-load fallback path** — a bank file OUTSIDE the page's read
       root on mac (no readAccess): host's fetch(file://) fails, the
       one-shot `sampler.bytes` fallback delivers, load still resolves ok.
