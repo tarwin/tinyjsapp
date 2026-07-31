@@ -83,10 +83,10 @@ const nodeToolArgv = (argv) => IS_WIN ? ['cmd', '/c', ...argv] : argv;
 // skill — in .claude/skills/ (Claude Code) and .agents/skills/ (the
 // tool-agnostic location other agents read).
 async function writeAgentSkill(dir) {
-  const skill = await tjs.readFile(TOOL_DIR + 'skill/SKILL.md');
+  // The whole skill dir: SKILL.md plus references/ (loaded on demand by the
+  // agent, so the core stays small while the deep material rides along).
   for (const base of ['/.claude/skills/tinyjs', '/.agents/skills/tinyjs']) {
-    await tjs.makeDir(dir + base, { recursive: true });
-    await tjs.writeFile(dir + base + '/SKILL.md', skill);
+    await copyTree(TOOL_DIR + 'skill', dir + base);
   }
 }
 

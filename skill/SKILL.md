@@ -1,136 +1,31 @@
 ---
 name: tinyjs
-description: Build and modify tinyjs desktop apps — tiny macOS (and beta Windows/Linux) apps with a txiki.js JavaScript backend and a native webview window. Use when working in a project with a tinyjs.json, or when the user mentions tinyjs, tiny.api, or tinyjs dev/build.
+description: Build and modify tinyjs desktop apps — tiny macOS (and beta Windows/Linux) apps with a txiki.js JavaScript backend and a native webview window. Use when working in a project with a tinyjs.json, when the user mentions tinyjs, tiny.api, or tinyjs dev/build, or when porting an Electron app to tinyjs.
 ---
 
 # Building tinyjs apps
 
 tinyjs (https://tinyjs.app, repo tarwin/tinyjsapp) makes ~6 MB desktop apps:
 a **txiki.js backend** (full system access: files, sockets, processes, FFI)
-+ a **native webview window** — WKWebView/WebKit on macOS, WebView2 on
-Windows, GTK3 + WebKitGTK 4.1 on Linux (both beta support). They talk
-JSON-RPC over a private Unix socket (macOS, Linux) or named pipe (Windows) —
-no HTTP server, no ports.
++ a **native webview window** — WKWebView on macOS, WebView2 on Windows,
+WebKitGTK 4.1 on Linux (both beta). They talk over a private socket — no
+HTTP server, no ports. The page NEVER has system access; everything
+privileged crosses `tiny.api`, which is why anything interpolated into
+`innerHTML` must be escaped.
 
-## Platforms
+Current release: 0.34.0. App floors: macOS 14+ (universal), Windows 10/11
+(WebView2), Linux glibc 2.35+ (Ubuntu 22.04 / Debian 12 / Mint 21 and up).
 
-macOS is the primary platform; Windows and Linux support are both in beta.
-The same project runs on all three — same tinyjs.json, same `tiny.*` api,
-same commands.
+## Read the reference for the job at hand
 
-| | macOS | Windows | Linux |
-|---|---|---|---|
-| toolchain to develop tinyjs ITSELF | Xcode CLT (`./setup.sh`) | MinGW-w64 g++ (`winget install BrechtSanders.WinLibs.POSIX.UCRT`) + WebView2 runtime (preinstalled on Win 11); run `setup.ps1`, use `tinyjs.cmd` | `apt install build-essential pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev` (Debian/Ubuntu); run the same `./setup.sh` as macOS |
-| app users need | macOS 14+ (Apple Silicon) | Windows 10/11 with the WebView2 runtime | Ubuntu 24.04+ / current distro with `webkit2gtk-4.1`, X11 or Wayland |
-| `tinyjs build` output | `dist/<Name>.app` (codesigned) + bare `dist/<name>` | portable `dist/` folder: `<name>.exe` + `launcher.exe` + `frontend/` | portable `dist/` folder: compiled backend binary (frontend + icon ride inside) + `launcher` + `icon.png` |
-| `publish` / auto-update | yes | yes (update swaps files in place, then relaunches) | yes (same file-swap + relaunch) |
-| `notarize` | yes | n/a (no codesigning; https+sha256 is the update trust anchor) | n/a (same https+sha256 trust anchor); a built app self-registers a `.desktop` entry on first run instead of an install step |
-
-Works on ALL THREE platforms: the whole bridge (api calls, push events,
-`tiny.fetch`/`proxyURL` streaming), dev/hot-reload, Vite `devUrl`,
-multi-window (`win.open` — per-window bridge everywhere), file/folder/save
-dialogs, alert/confirm/prompt, menu bar on EVERY window (+ `menu.update`/`get`,
-per-window `win.menu.*`, `chrome.menu:false` to hide one window's bar, `key:`
-accelerators — cmd on mac, Ctrl on win/linux), custom context menus +
-`contextMenu: false`, clipboard (text/html/files/image, read + write +
-watch), global hotkeys (`cmd` maps to Ctrl on win/linux; linux uses
-XGrabKey on X11 and the GlobalShortcuts portal on pure Wayland — the
-compositor prompts once to approve them), `keystroke`/`paste`
-(X11/XWayland only on linux — XTest, no pure-Wayland route),
-`shell.open/reveal/trash`, `secrets` (Keychain / Credential Manager / Secret
-Service), `power.preventSleep`, `theme` + sleep/wake events, `store`,
-`screens`/`mousePosition`/`paths`/`battery`/`idleTime` (linux: needs GNOME),
-`printToPDF`, `captureScreen` (win: no permission needed; linux: X11
-sessions only), `thumbnail` (linux: images only), `say`/`voices`/
-`stopSpeaking` (linux: via speech-dispatcher's `spd-say` when installed),
-`launchAtLogin` (built apps only on win/linux; linux = autostart
-`.desktop`), auto-update (`update.check/install` — linux ships a per-arch
-`"linux": { "<arch>": { url, sha256 } }` manifest block alongside mac/win),
-window ops (hide/show/center/minimize/fullscreen/ontop/resizable/pos/level/
-clickThrough/hideOnClose/zoom, `data-tiny-drag` regions,
-`chrome.frame`/`squareCorners`; win maps `transparent` to a clear WebView2
-background and vibrancy names to mica/acrylic backdrops on Win11 — BUT a
-transparent MAIN window on Windows must be declared in tinyjs.json
-`"chrome"` (or `win.open` options for secondaries), not just via a late
-`setChrome`, and transparency + a Win32 menu bar are mutually exclusive
-there; linux accepts frameless/transparent chrome too but `vibrancy` is a
-no-op), `app.attention` (taskbar flash on win, urgency hint on linux), sqlite.
-
-Windows-specific: drag & drop with real paths BOTH ways (`win.onDrop`,
-`startDrag({ files })`); tray + `notify` work (balloon notifications, no
-action buttons, no reply fields); `frontmostApp` works (rejects on Linux).
-
-Linux-specific: tray is AppIndicator/StatusNotifier — menu-based; a bare
-icon click (no menu set) is emulated via a synthetic menu entry, and
-`tray.position()` returns `null`. `notify` DOES support action buttons
-(`org.freedesktop.Notifications`), just no reply fields. `pickColor` works
-(portal-based) — unlike Windows. Deep links / file associations / single
-instance work — a built app self-registers its `.desktop` entry (app-menu
-listing, icon, `urlScheme`, `fileExtensions`, single-instance) on first run,
-no separate install step. `nowPlaying`/media keys work via MPRIS (shows in
-the GNOME/KDE media widget + lock screen; transport routes to `onMediaKey`).
-`audioTap` works for `scope:'system'` (the default sink's monitor via
-`parec`/`pw-cat`); `scope:'app'` is approximated by the system mix, same as
-Windows.
-
-macOS-only (on Windows these reject or answer `'unsupported'`/null — always
-feature-detect): notification action buttons, `proxyURL` media proxy,
-`permissions.*` TCC flow (Windows answers 'granted'), `recorder`,
-`pickColor`, `nowPlaying`/media keys, `share`, `setAllSpaces`, `wifi`,
-`spotlight`, `system.locale`, and the whole `tiny.macos.*` namespace —
-`quickLook`, `applescript`, `ocr`, `ai`,
-`selectedText`/`otherWindows`/`moveWindow`.
-Windows DOES have, despite older docs here saying otherwise: the whole app
-surface including `app.badge` (verified drawing 2026-07-28, alongside
-`app.icon`, `app.progress`, `app.attention` and `app.presence`),
-`authenticate` (Windows Hello via UserConsentVerifier — answers `false` where
-no Hello is enrolled), `audioTap` (WASAPI loopback, 'system' scope), deep
-links / file associations / single instance, and exe icons in built apps.
-(Windows plans: tarwin/tinyjsapp TODO-windows.md.)
-
-Not supported on Linux (reject or answer `'unsupported'`/`null` — always
-feature-detect): `recorder`, `ocr`, `app.badge` (`app.icon`/`app.presence`
-do work), the whole `tiny.macos.*` namespace,
-`share`, `wifi`, `selectedText`/`otherWindows`/`moveWindow`/`frontmostApp`,
-`authenticate`, `tiny.macos.ai`, `setAllSpaces` (maps to sticky windows
-instead of true per-Space follow). These fail cleanly — capability calls
-reject with a specific reason, query calls resolve `null`, fire-and-forget
-ones no-op — so nothing hangs. (`spotlight` DOES work: name search via
-`plocate`/`locate` or a bounded `find`.) (Linux plans: tarwin/tinyjsapp
-TODO-linux.md.)
-
-Files on the command line arrive via `onOpenFiles(paths, app)` — argv is
-parsed at startup on all three platforms (flags skipped, relative paths
-resolved, non-existent dropped), and on win/linux a second launch forwards
-its paths to the running copy over the instance pipe. `tinyjs build --cli
-[name]` emits `dist/bin/<name>`, a shim that is just `exec <backend> "$@"` —
-it targets the BARE dist/<name>, never the .app (whose main executable is the
-launcher and takes `<html> <socket>`). `"openFolders": true` adds a folder
-document type. `app.setAsDefaultHandler(ext)` -> 'ok'|'unsupported'|'failed'
-(Linux only; call it when the user asks, never on first run).
-
-`tiny.system.locale()` -> { language, languages, system, region, timeZone },
-read from the OS. In a PAGE you rarely need it — navigator.language(s), all of
-Intl and the 'languagechange' event work in the webview. On the BACKEND you do:
-txiki has NO Intl, and reading LANG is wrong (no such var on Windows; inherited
-elsewhere). `languages` is filtered to the app's bundle localizations, `system`
-is the raw user preference — they differ for an English-only app on a French
-Mac. Format in the page, branch on language in the backend.
-
-`tiny.system.capabilities()` lists only the EXCEPTIONS — on macOS it returns
-about seven keys, and every capability it doesn't name is supported. So test
-`caps.ocr !== false`, never `if (caps.ocr)`: the truthy form reports "no OCR"
-on the one OS that has it. (Two other reads of the same table: `granted` from
-`permissions.check` off macOS usually means "not gated here", not "consent
-given"; and `capabilities().ai` is a BUILD fact as much as an OS one — it is
-false unless the launcher was compiled against an SDK carrying
-FoundationModels, and it needs macOS 26 at runtime besides.)
-
-Cross-platform app pattern: gate features, don't fork code —
-`if ((await tiny.app.permissions.check('accessibility')) !== 'unsupported')`,
-`try { await tiny.win.printToPDF(p) } catch { /* fallback */ }`. Backend
-paths: use `app.paths` (per-OS correct) instead of hardcoding `~/Library` or
-`%APPDATA%`; join with '/' (works everywhere in tjs).
+| doing | read |
+|---|---|
+| any API beyond the basics below (windows, menus, tray, clipboard, audio, permissions, system…) | references/api.md |
+| per-OS support, Windows/Linux quirks, capability gating | references/platforms.md |
+| starting a tray app, desktop pet/overlay, media app, document app, site wrapper, agent app | references/recipes.md |
+| shipping: build/sign/notarize, per-OS packaging, auto-update manifests | references/release.md |
+| porting from Electron (API map, what won't work) | references/electron-migration.md |
+| deciding where code runs, wire/binary payloads, throttling, memory | references/performance.md |
 
 ## Commands
 
@@ -142,494 +37,120 @@ tinyjs new <dir> --template react-ts|vue-ts|svelte-ts|solid-ts|vanilla-ts|…
 tinyjs dev          # run with hot reload (frontend edits swap in place;
                     #   backend edits restart the process)
 tinyjs build        # dist/<name> binary + dist/<Name>.app (codesigned)
-                    #   --dmg: also dist/<name>-<ver>.dmg installer image
-tinyjs publish      # build + dist/publish/<name>-<ver>.zip + auto-update manifest
-tinyjs notarize     # notarytool submit + staple (needs Developer ID + profile)
-                    #   --dmg: rebuild the dmg from the stapled .app (else its
-                    #   ticket is missing; auto-rebuilt if a dmg already exists)
+                    #   --dmg installer image; --cli [name] terminal shim
+tinyjs publish      # build + dist/publish/<name>-<ver>.zip|tarball + manifest
+tinyjs notarize     # macOS: notarytool submit + staple (--dmg re-makes dmg)
+tinyjs update       # update tinyjs itself (--check); also: uninstall, version
 TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 ```
 
 ## Project layout
 
 ```
-tinyjs.json          { name, title, size, id, version, icon?, signIdentity?,
-                       update?: { url: "https://…/manifest.json" },
+tinyjs.json          { name, title, size, id, version, icon?,
+                       minTinyjsVersion?,     // refuse older runtimes with a
+                                              // real message — declare the
+                                              // newest API family you use
+                                              // (sampler → "0.34.0")
+                       update?: { url: "https://…/manifest.json", auto? },
                        urlScheme?: "myapp", fileExtensions?: ["md"],
-                       permissions?: { microphone?: "why", camera?: "why" },
-                       audioTap?: "app" | "system",   // enable tiny.audioTap
-                       contextMenu?: false,           // suppress WebKit's default right-click menu (default true)
-                       chrome?: { frame, windowControls, transparent, vibrancy, squareCorners, acceptsFirstMouse, menu },
+                       openFolders?: true, readAccess?: true | "/path",
+                       userAgent?: "…", activation?: "accessory",
+                       offscreenRescue?: false, windowPlacement?: true,
+                       contextMenu?: false, audioTap?: "app" | "system",
+                       permissions?: { microphone?: "why", camera?: "why",
+                                       speechRecognition?: "why" },
+                       chrome?: { frame, windowControls, windowControlsPos,
+                                  transparent, vibrancy, squareCorners,
+                                  acceptsFirstMouse, menu },
+                       signIdentity?, notarize?: { profile },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
-                       frontend?: { build: "npm run build", dist: "dist",
-                                    dev: "npm run dev", devUrl: "http://127.0.0.1:5173" },
-                       macos?/windows?/linux?: { ...keys merged on top for that OS },
-                       minTinyjsVersion?: "0.30.0"    // refuse to run on an older tinyjs }
+                       frontend?: { build, dist, dev, devUrl },
+                       macos?/windows?/linux?: { …merged on top per OS } }
 icon.png             1024×1024 app icon
-src/main.js          backend (see below)
-src/frontend/        index.html + js/css/images — served as real files
-                     (file:// document), so relative paths just work;
-                     multi-file frontends are fine
+src/main.js          backend
+src/frontend/        index.html + assets — served as real files (file://),
+                     so relative paths just work
 ```
 
 ## Backend (src/main.js)
 
 ```js
 export const api = {
-  // callable from the page as tiny.api.call('readNotes', {dir}) — return
-  // value resolves the page's promise; throwing rejects it
-  readNotes: async ({ dir }, app) => { ... },
+  // page calls tiny.api.call('readNotes', { dir }) — return resolves the
+  // page's promise, throwing rejects it; meta.window = calling window id
+  readNotes: async ({ dir }, app, meta) => { ... },
 };
-
 export function init(app) {
-  // runs once the window is up
-  app.push('event-name', data);      // push to the page (tiny.api.on)
-  app.setTitle(t); app.setSize(w, h); app.setMenu(menus); app.quit();
-  // also: notify({title, body}), hide()/show()/center()/minimize()/
-  // fullscreen(), setPosition(x, y), setAlwaysOnTop(v), setResizable(v),
-  // setHideOnClose(v), presence(mode), print(), tray.set/remove,
-  // store.get/set/delete/all, hotkey.register/unregister,
-  // setContextMenu(items), update.check()/update.install(),
-  // clipboard.read/write/changeCount/watch/unwatch, keystroke(combo),
-  // paste(), permissions.check/request, mousePosition(), screens(),
-  // paths, shell.open/reveal/trash, launchAtLogin.get/set,
-  // badge/attention/icon, power.preventSleep/allowSleep, frontmostApp(),
-  // beep()/playSound(target), window(id).share(opts), idleTime(),
-  // captureScreen(screenId), pickColor(), ocr(path),
-  // thumbnail(path, size), secrets.get/set/delete, authenticate(reason),
-  // macos.applescript/quickLook,
-  // nowPlaying.set/clear, say(text, opts), voices(),
-  // stopSpeaking(), show({ activate: false })
+  app.push('event-name', data);            // page: tiny.api.on('event-name')
+  // app mirrors the page surface: app.window(id).*, app.openWindow,
+  // app.tray.*, app.audio.sampler.*, app.clipboard.*, app.store.*,
+  // app.paths (plain object), notify, quit, …  — full tour: references/api.md
 }
-
-export function onMenu(id, app) { ... }  // optional: menu clicks, backend-side
-export function onTray(id, app) { ... }  // optional: tray clicks (id null = icon)
+// other exports the scaffold wires: onMenu, onTray, onContextMenu, onHotkey,
+// onSystem, onWindowState, onWindowClosed, onOpenUrl, onOpenFiles,
+// onMediaKey, onNotificationClick, onNotificationAction, onUpdateAvailable,
+// onClipboardChange — each (info, app)
 ```
 
 Runtime is txiki.js (`tjs` global): `tjs.readFile/writeFile/readDir/stat`,
-`tjs.spawn`, `tjs.watch`, `tjs.listen/connect`, `fetch`, `WebSocket`, sqlite,
-FFI. Docs: https://txikijs.org. Gotchas: streams need `getReader()` (no
-`for await`); `tjs.cwd` is a property; spawn stdio silencer is `'ignore'`.
+`tjs.spawn`, `tjs.watch`, `fetch`, `WebSocket`, `tjs:sqlite`, FFI. It is
+NOT Node (no require, no Node builtins, no native npm modules) and it has
+no JIT — compute-heavy work belongs in the page
+(references/performance.md). Streams need `getReader()` (no `for await`);
+`tjs.cwd` is a property; no Intl (format in the page).
 
-Webview gotchas: (1) occluded/off-screen windows are THROTTLED (WebKit
-starves rAF + timers), so a hidden window can't drive a visible one — do
-continuous work in the visible window or the (un-throttled) backend. (2)
-`file://` media (`<audio>`/`<img>`) only loads assets under the frontend
-dir by default; widen with `createApp({ readAccess: true | '/path' })` or
-`"readAccess"` in tinyjs.json — else `MEDIA_ERR_SRC_NOT_SUPPORTED`. (3) the
-default UA lacks `Version/x Safari/x`, so UA-sniffing sites reject it — set
-`createApp({ userAgent: '…' })` / `"userAgent"` in tinyjs.json (handy for
-wrapping a hosted site via `devUrl`, though many SaaS apps also feature-detect
-and refuse embedded webviews regardless).
-
-## Frontend
-
-The `tiny` global is injected into every page automatically (no script tag);
-TypeScript definitions live in types/tiny.d.ts (TinyApiHandler, TinyApp, …):
+## Frontend essentials
 
 ```js
-await tiny.api.call('method', { params })   // -> backend api.<method>
-tiny.api.on('event-name', (data) => ...)    // <- app.push from backend
-
-tiny.log(msg); tiny.quit();
-// file:// URL for a disk path — ALWAYS use this (never 'file://' + path,
-// which breaks on Windows: the drive letter becomes the URL host)
-audio.src = tiny.fileURL(backendProvidedPath);
-await tiny.app.info();   // { version: <app>, tinyjs: <built with>, runtime: <txiki> }
-
-// Backend-proxied fetch — NO CORS/CSP (runs in the native process). Like
-// window.fetch, returns a real Response. { stream: true } = live streaming
-// body (res.body.getReader()); required for endless sources (internet radio).
-const r = await tiny.fetch(url, { method, headers, body });     // buffered
-const s = await tiny.fetch(streamUrl, { stream: true });        // s.body.getReader()
-
-// Get a cross-origin stream (internet radio) INTO Web Audio — a
-// MediaElementSource on a cross-origin <audio> is silent by spec; proxyURL
-// streams it through the native layer with permissive CORS so it's untainted.
-audio.crossOrigin = 'anonymous';
-audio.src = tiny.proxyURL('https://host/stream.mp3');  // now drives EQ/analyser
-
-// tiny.audioTap — read the app's rendered OUTPUT as PCM (VU meters, viz),
-// including audio that bypasses Web Audio (native HLS, tainted streams). Needs
-// "audioTap":"app"|"system" in tinyjs.json. macOS 14.4+. Read-only.
-await tiny.audioTap.start({ scope: 'app', interval: 80 });  // true, or throws { code }
-tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
-  const bin = atob(pcm), n = bin.length >> 1;   // base64 -> interleaved LE Int16
-  // sample i: ((bin.charCodeAt(2*i) | bin.charCodeAt(2*i+1)<<8) << 16 >> 16) / 32768
-});                                              // tiny.audioTap.stop()
-// Auth is deferred to the FIRST start() (declaring the manifest does nothing
-// until then — lazy-arm friendly). That first start() prompts for "System
-// Audio Recording" even for scope:'app' (WKWebView audio is in a separate
-// com.apple.WebKit.GPU helper = cross-process). Under `tinyjs dev` the OWNER
-// is the terminal, so it delivers only if the terminal holds the grant, else
-// silent; a built .app owns its own grant. Denial surfaces as silent chunks.
-
-// tiny.audio — an EQ/DSP chain on the app's own output. Native (below the
-// browser: reaches native HLS/tainted streams, survives reload) on Linux +
-// macOS 14.2+; capabilities().audioFilters is FALSE on Windows (measured
-// permanent: the only silencing lever is persisted mixer state shared by all
-// WebView2 apps). pageChain(ctx) is the fallback: same verbs, same RBJ
-// curves, but PAGE-scoped — route your source through it. Pick a backend
-// once, use identically:
-const eq = caps.audioFilters ? tiny.audio : tiny.audio.pageChain(ctx);
-if (eq.input) { src.connect(eq.input); eq.output.connect(ctx.destination); }
-await eq.filters([{ type: 'gain', gain: 1 },              // linear preamp
-  { type: 'peaking', freq: 60, q: 1.1, gain: 4 }]);       // biquads: gain in dB
-eq.filter(1, { freq: 60, q: 1.1, gain: -3 });  // retune in place (slider drags)
-await eq.balance(-0.2); await eq.clear();
-// Types: peaking lowshelf highshelf lowpass highpass bandpass notch allpass
-// (freq/q/gain dB) + gain (linear). ≤28 filters (15 with gainR). pageChain
-// edges: shelf q and per-filter gainR ignored (use balance()); NEVER use
-// pageChain on Linux — Web Audio to ctx.destination crackles there, that's
-// why the native chain exists.
-
-tiny.win.setTitle(t); tiny.win.setSize(w, h);
-await tiny.dialog.openFile();                  // path | null (native panel)
-await tiny.dialog.openFiles();                 // paths[] | null
-await tiny.dialog.pickFolder();                // path | null
-await tiny.dialog.saveFile();                  // path | null
-await tiny.dialog.alert(message, detail);      // native alert, resolves true
-await tiny.dialog.confirm(message, { detail, ok, cancel });  // true | false
-await tiny.dialog.prompt(message, { default, ok, cancel });  // string | null
-
-tiny.menu.set([{ title: 'Actions', items: [
-  { id: 'open', label: 'Open…', key: 'o' },   // key = cmd+<key>
-  { id: 'mute', label: 'Mute', checked: true },     // checkmark
-  { id: 'no', label: 'Nope', enabled: false },      // grayed out
-  { separator: true },
-  { id: 'more', label: 'More', submenu: [{ id: 'a', label: 'Sub' }] },
-]}]);
-tiny.menu.on((id) => ...);                  // clicks (also a 'menu' api event)
-tiny.menu.update('mute', { checked: false, label: 'Unmuted' });  // patch live
-await tiny.menu.get('mute');                // { exists, label, checked, enabled }
-// same item shape + update/get work for tray and context menus
-// menu.set is the APP menu: EVERY window shows it, including windows opened
-// later. macOS has one bar for the whole app; win/linux draw a copy of it in
-// each window. So the menu just works in multi-window apps — no per-window
-// setup — and menu.update moves every window's copy of that id at once.
-tiny.win.menu.set(spec);        // THIS window says something else instead
-tiny.win.menu.update(id, patch);// …and patches only its own copy
-tiny.win.menu.reset();          // back to inheriting the app menu
-// Hiding a bar is CHROME, not menu — the app menu stays put elsewhere:
-tiny.win.setChrome({ menu: false });        // or "chrome": { "menu": false }
-// in tinyjs.json / win.open (applied before first paint). Accelerators keep
-// firing with no bar showing, `size` still means the page's box, and macOS
-// ignores the flag (a bar-less mac app isn't a thing). Frameless and
-// transparent windows never draw one on Windows: the bar is GDI.
-
-tiny.notify(title, body, { id, subtitle, sound });  // desktop notification
-// packaged + signed (even Apple Development): native Notification Center
-// banners with click routing: tiny.app.onNotificationClick((id) => ...) /
-// backend export onNotificationClick(id, app). Ad-hoc/dev: osascript fallback.
-tiny.win.center(); tiny.win.minimize(); tiny.win.restore();
-tiny.win.fullscreen(); tiny.win.setFullscreen(bool);   // toggle / absolute
-await tiny.win.getState();  // { x, y, width, height, outer: { width, height },
-                            //   fullscreen, minimized, visible, focused,
-                            //   alwaysOnTop, resizable, screen }
-// width/height = the PAGE's box, the same units setSize and win.open's `size`
-// take (set -> get round-trips); outer = footprint on screen, decorations in.
-tiny.win.setPosition(x, y);                 // top-left origin
-tiny.win.setChrome({ frame: false, windowControls: false,
-                     transparent: false, vibrancy: 'hud',
-                     menu: true });                          // frameless etc.
-// squareCorners: true drops macOS's rounded corners → BORDERLESS window
-// (square, no titlebar/traffic lights; no native titlebar drag — use
-// data-tiny-drag; resize/shadow/focus kept). Put it in tinyjs.json "chrome"
-// to apply before first paint (no rounded→square flash).
-tiny.win.setChrome({ squareCorners: true });
-// acceptsFirstMouse: true → the click that focuses an unfocused window also
-// reaches the page (macOS swallows it by default). Good for palettes/toolbars
-// and DOM drag regions on unfocused windows.
-tiny.win.setChrome({ acceptsFirstMouse: true });
-// drag regions: <header data-tiny-drag> — drag moves window, dblclick zooms;
-// interactive children excluded (data-tiny-nodrag to opt out manually)
-tiny.win.setAlwaysOnTop(v); tiny.win.setResizable(v);
-tiny.win.hide(); tiny.win.show(); tiny.win.setHideOnClose(v);
-// hide() hides the APP (NSApp hide) — focus returns to the previous app,
-// so palettes can hide() then app.paste() with no frontmost tracking.
-// setHideOnClose is a macOS idea: the app outlives its last window and the
-// Dock icon brings it back. Win/linux have nowhere to put that (a hidden
-// window takes its taskbar button with it), so there the flag holds only
-// while something can bring the app back — a tray icon, accessory mode, or
-// another window still up. Closing the LAST window of an ordinary app quits
-// it there, as every other app on those platforms does.
-tiny.win.show({ activate: false });  // surface WITHOUT stealing focus (HUDs)
-await tiny.app.mousePosition();      // { x, y, window: { x, y, inside },
-                                     //   screen: { x, y, width, height,
-                                     //   scale } } — global coords match
-                                     // win.setPosition; window is relative
-                                     // to this window's content area
-                                     // (clientX/Y units, valid even while
-                                     // the cursor is outside it)
-tiny.win.onDrop((paths) => ...);            // files dropped on the window: real paths
-
-// tray / menu-bar apps
-tiny.tray.set({ title, icon, tooltip, menu: [{ id, label }, { separator: true }] });
-// icon: png path OR 'sf:<name>' (SF Symbol, macOS) OR 'emoji:<glyph>' (Windows —
-// drawn as a mono tray silhouette); branch per-OS for asset-free icons on both
-// primaryAction: true → left click fires onClick, menu opens on right-click
-// Linux: AppIndicator/StatusNotifier, menu-based — a bare icon click (no menu
-// set) is emulated via a synthetic menu entry, and tray.position() -> null
-tiny.tray.on((id) => ...); tiny.tray.onClick(fn); tiny.tray.remove();
-tiny.app.presence('menubar');               // menu-bar-only app ('normal' back)
-// tray-app recipe: tinyjs.json { "activation": "accessory" } (launches with no
-// Dock icon and window hidden — no flash) + tray.set + win.setHideOnClose(true);
-// tiny.win.show() when needed. Without the config flag: tray.set +
-// win.setHideOnClose(true) + app.presence('menubar') in init().
-
-// auto-update (needs tinyjs.json "update".url; ships via `tinyjs publish`)
-const { available, latest } = await tiny.api.call('update.check');
-await tiny.api.call('update.install');      // verify + swap .app + relaunch
-
-// persistent settings (~/Library/Application Support/<app id>/store.json)
-await tiny.store.set('key', anyJsonValue);
-await tiny.store.get('key');                // value | null
-await tiny.store.delete('key'); await tiny.store.all();
-
-// global hotkeys (system-wide, fire even when unfocused)
-tiny.hotkey.register('boss', 'cmd+shift+k'); tiny.hotkey.on((id) => ...);
-tiny.hotkey.unregister('boss');             // backend: export onHotkey(id, app)
-
-// custom right-click menu (native; null restores WebKit default)
-tiny.menu.setContext([{ id, label }, { separator: true }]);
-tiny.menu.onContext((id) => ...);           // backend: export onContextMenu
-// "contextMenu": false in tinyjs.json hides WebKit's default menu entirely; setContext still overrides
-
-// theme + power events
-await tiny.theme.get();                     // { dark } | null
-tiny.theme.on((dark) => ...);               // live changes
-tiny.api.on('sleep', fn); tiny.api.on('wake', fn);  // backend: export onSystem
-
-// clipboard (native NSPasteboard in the launcher — no pbpaste/osascript spawns)
-await tiny.clipboard.read();   // { kind: 'files'|'image'|'color'|'text'|'empty',
-                               //   changeCount, text, html, paths, image,
-                               //   imageSize ({width,height} px), color,
-                               //   concealed (password-manager marker — history
-                               //   apps must skip), sourceApp ({name,bundleId},
-                               //   exact while watch() runs), sourceURL
-                               //   (Chromium copy's page url) }
-                               // image = png temp path, valid until the next
-                               // clipboard change (copy the file to keep it)
-tiny.clipboard.write({ text, html, paths, image, color });  // any combo;
-                               // image: png path, data: URL, or base64;
-                               // multiple paths all land (no flush race)
-await tiny.clipboard.changeCount();         // cheap change probe
-tiny.clipboard.watch(500); tiny.clipboard.unwatch();  // poll in the launcher
-tiny.clipboard.onChange(({ changeCount, self }) => ...);  // self = own write
-// backend: app.clipboard.* is the same api; passing onClipboardChange to
-// createApp auto-starts the watcher
-
-// drag files OUT of the app (into Finder/Slack/…): call from mousedown,
-// while the button is held; image: optional custom drag-image png
-el.addEventListener('mousedown', () => tiny.win.startDrag({ files: [path] }));
-
-// native keystrokes (CGEvent from the launcher — ONE permission,
-// Accessibility, and the prompt names your app, not osascript/terminal)
-await tiny.app.keystroke('cmd+v');          // -> { ok, trusted }
-await tiny.app.paste();                     // = keystroke('cmd+v'); hide() first
-                                            // to paste into the frontmost app
-
-// permissions — build onboarding instead of failing at first use
-await tiny.app.permissions.check('accessibility');  // 'granted'|'denied'|
-                                            // 'undetermined'|'unsupported'
-await tiny.app.permissions.request('accessibility'); // prompts / opens Settings
-// names: accessibility | screen | notifications | microphone | camera |
-//        automation[:<bundle-id>]
-// speech-to-text: the page's webkitSpeechRecognition (WebKit AND WebView2 have
-// it; it is NOT a tiny.* call) needs BOTH "microphone" and
-// "speechRecognition" usage strings in a BUILT app. Missing the second =
-// `service-not-allowed` with no prompt to accept. Dev has no Info.plist, so it
-// usually fails there — though dev TCC grants attach to the shared launcher
-// binary, so it can work once that's been allowed once.
-// mic/camera: getUserMedia() works in the page (launcher auto-grants WebKit's
-// per-origin prompt; only the system TCC dialog shows). Packaged apps must set
-// "permissions": {"microphone": "why", "camera": "why"} in tinyjs.json —
-// injected as Info.plist usage strings (required, or macOS kills the app) and,
-// when signIdentity is set, as hardened-runtime device entitlements.
-// dev-mode gotcha: TCC grants attach to the SHARED launcher binary
-// (~/.tinyjs), not your app — all dev apps share them; packaged apps get
-// their own. 'screen' never reads 'undetermined' (macOS only exposes a
-// yes/no preflight for screen recording).
-// Linux mic/camera: getUserMedia works, but ONLY for what the same
-// "permissions" block declares — the launcher answers WebKit's
-// permission-request from the manifest (undeclared = NotAllowedError), and
-// there is NO system prompt underneath (desktop Linux doesn't gate
-// /dev/video*; permissions.check answers 'granted' meaning "not gated
-// here"). enumerateDevices labels ride the same gate. WebKitGTK's
-// MediaRecorder records video/mp4 like macOS (measured, webkit 2.52).
-
-// shell — the NSWorkspace verbs apps otherwise spawn `open` for; each
-// resolves true or rejects with the reason
-await tiny.app.shell.open('https://x.com'); // URL (any scheme) or file path
-await tiny.app.shell.reveal(path);          // show in Finder
-await tiny.app.shell.trash(path);           // recoverable — prefer over delete
-
-await tiny.app.screens();  // every display, same coords as win.setPosition:
-                           // [{ id, name, x, y, width, height, scale,
-                           //    visible: {x,y,width,height} (minus menu bar/
-                           //    Dock), primary (menu-bar screen) }]
-
-await tiny.app.paths();    // { home, data, cache, logs, temp, downloads,
-                           //   desktop, documents } — data/cache/logs per
-                           // app id, create on first write; backend twin
-                           // app.paths is a plain object (no await)
-
-// launch at login (packaged .app on macOS 13+; dev mode -> 'unsupported')
-await tiny.app.launchAtLogin.get();         // 'enabled'|'disabled'|
-await tiny.app.launchAtLogin.set(true);     //  'requires-approval'|'unsupported'
-// 'requires-approval' = user must allow in System Settings > Login Items
-
-tiny.app.badge('3');                        // '' clears
-tiny.app.attention({ critical: false });    // bounce/flash until activated
-
-// keep the system awake (replaces caffeinate; auto-released on exit/crash)
-await tiny.app.power.preventSleep('reason', { display: false });
-await tiny.app.power.allowSleep();
-
-await tiny.app.frontmostApp();  // { name, bundleId, pid } | null — the
-                                // active app (focus target after hide())
-
-await tiny.app.beep();                   // system beep
-await tiny.app.playSound('Ping');        // system sound name or audio file
-                                         // path -> false if it didn't load
-
-// native share sheet — anchor at the click's clientX/clientY
-tiny.win.share({ text, url, paths, x: e.clientX, y: e.clientY });
-
-await tiny.system.idleTime();   // seconds since the user's last input
-tiny.macos.quickLook(pathOrArray); tiny.macos.quickLook();  // preview / close
-await tiny.app.captureScreen(screenId?);  // -> { path (png, yours), width,
-                                // height }; needs 'screen' perm + macOS 14,
-                                // rejects with the reason otherwise
-
-await tiny.app.pickColor();     // system eyedropper (NO screen-recording
-                                // perm) -> '#rrggbb' | null on cancel
-await tiny.macos.ocr(pngPath);    // on-device Vision OCR -> { text, blocks:
-                                // [{text, confidence, box (0..1 top-left)}] }
-// OCR transcribes, it doesn't photocopy: lookalike glyphs get normalised
-// (a '·' comes back '•'), so don't test with string equality. And give the
-// text margin — a glyph clipped at the image edge silently drops a digit.
-await tiny.app.thumbnail(path, size?);  // png for ANY path -> { path, width,
-                                // height }. Content preview where Quick Look
-// has a renderer, the document/app/FOLDER icon where it doesn't, so on macOS
-// it never fails on file type alone; Windows matches that (shell icons for
-// folders/exe/text), LINUX is images-only and rejects the rest with 'no
-// thumbnail'. Rejects if the path doesn't exist. Aspect preserved (a wide
-// image comes back wide, an icon square). Size: @2x on macOS/Linux (ask 64,
-// get 128), exact pixels on Windows — read width/height off the result.
-await tiny.app.secrets.get(key);        // Keychain (keytar role): tokens go
-await tiny.app.secrets.set(key, value); // here, NEVER in tiny.store;
-await tiny.app.secrets.delete(key);     // get -> string | null
-// set replaces (no duplicate items); delete of an absent key -> true; an
-// unsaved key reads null, not a throw. dev gotcha: macOS files the keychain
-// ACL against the BINARY that wrote the value, so a secret saved by
-// `tinyjs dev` prompts once when the built app first reads it.
-await tiny.app.authenticate(reason);    // Touch ID / Windows Hello / password
-                                        // sheet -> true | false. false covers
-// cancel AND unavailable, and Linux has no owner check at all (polkit
-// authorizes actions, not identity) so it answers false there — gate on it and
-// the gate fails closed.
-await tiny.macos.applescript(src);      // in-process, no osascript spawn;
-                                // 'automation' TCC; -> result string | null,
-                                // rejects with the script error
-
-// Now Playing (Control Center / lock screen) + hardware media keys
-tiny.app.nowPlaying.set({ title, artist, album, duration, elapsed, playing });
-tiny.app.onMediaKey(({ command, time }) => …);  // play|pause|toggle|next|
-tiny.app.nowPlaying.clear();                    // previous|seek (time=secs)
-// text-to-speech; say() resolves when playback ends (false if interrupted)
-await tiny.app.voices();        // [{ id, name, lang, quality }]
-await tiny.app.say(text, { voice, rate });  tiny.app.stopSpeaking();
-// notifications with buttons / a reply field (packaged apps)
-tiny.notify(title, body, { actions: [{ id, title, reply?, placeholder?,
-                                       destructive? }] });
-tiny.app.onNotificationAction(({ id, action, reply }) => …);  // reply=text
-// backend exports: onMediaKey(info, app), onNotificationAction(info, app)
-// record a display to .mp4 (SCStream→H.264, video only; 'screen' perm +
-// macOS 14; one at a time)
-await tiny.macos.recorder.start({ path, screenId });  // resolves once capturing
-const { path, duration } = await tiny.macos.recorder.stop();
-
-// window superpowers (overlays/HUDs/pets/cross-Space palettes)
-tiny.win.setClickThrough(true);   // mouse events pass through
-tiny.win.setLevel('overlay');     // 'normal'|'floating'|'overlay'|'desktop'
-tiny.win.setAllSpaces(true);      // follow across Spaces + over fullscreen
-// AX (Accessibility perm): grab selection anywhere + arrange other windows
-await tiny.macos.selectedText();    // string | null (frontmost app's selection)
-await tiny.macos.otherWindows();    // [{ app, pid, title, x,y,width,height }]|null
-await tiny.macos.moveWindow(pid, { x, y, width, height });  // resolves true/throws
-await tiny.tray.position();       // { x,y,width,height }|null (anchor dropdowns)
-// deep-Mac citizen
-await tiny.win.printToPDF(path);  // -> { path } (vector PDF; invoices/reports)
-tiny.app.icon(pngPath);           // '' resets (render a canvas for live tiles)
-await tiny.system.battery();      // { percent, charging, plugged, minutesRemaining }|null
-await tiny.system.wifi();         // { ssid, bssid, rssi, noise, txRate }|null (ssid→Location)
-await tiny.app.spotlight(query);  // find files by name/content -> up to 100 paths
-// on-device LLM (Apple FoundationModels; offline, no key). Needs macOS 26 +
-// Apple Intelligence ON at runtime, so ALWAYS guard on availability() —
-// three states, and only 'available' can generate.
-if (await tiny.macos.ai.availability() === 'available')   // |'unavailable'|'unsupported'
-  await tiny.macos.ai.generate(prompt, { instructions }); // instructions = system prompt
-// TOOL CALLING, backend only (run() is a real function — it can't cross the
-// bridge from a page). Schema is built at RUNTIME from `parameters`, so tools
-// are declared in plain JS:
-const { text, calls } = await app.macos.ai.generate(ask, { instructions, tools: [{
-  name: 'moveWindow', description: 'Move the window.',
-  parameters: { x: { type: 'integer', description: 'x in points' } },
-  run: ({ x }) => { app.window('main').setPosition(x, 0); return 'moved'; } }] });
-// READ `calls`, NOT `text`. Measured: asked for 3 tool calls in one turn it
-// made all 3 in ONE run of four, and its prose claimed all 3 EVERY time —
-// including runs where it skipped one. Confirm anything irreversible.
-
-tiny.win.print();                           // native print panel
-
-// auto-update: "update": { "url": …, "auto": "launch" | "daily" } checks in
-// the background (packaged apps) → 'update-available' page event /
-// onUpdateAvailable(info, app) export with { current, latest, notes };
-// notes come from `tinyjs publish --notes "…"` (or --notes-file FILE).
-// Then: await tiny.api.call('update.install')
-
-// multiple windows: any frontend html file can be a window
-tiny.win.open('settings', { page: 'settings.html', title: 'Settings', size: '420x300' });
-// chrome + x/y are applied BEFORE first paint (no titlebar flash / center-jump):
-tiny.win.open('hud', { page: 'hud.html', x: 40, y: 40, chrome: { frame: false } });
-tiny.win.id; tiny.win.close(); await tiny.win.windows();
-// win.* calls target the caller's window; backend: app.openWindow/app.window(id)
-// (eval/push/close/setTitle/setSize/chrome/getState…), app.push broadcasts,
-// export onWindowClosed(id, app); api handlers get meta: (params, app, meta)
-// where meta.window = calling window id
-
-// deep links + file associations (packaged .app only; cold-start buffered;
-// second `open` activates the running instance — single-instance is automatic)
-tiny.app.onOpenUrl((url) => ...);           // backend: export onOpenUrl(url, app)
-tiny.app.onOpenFiles((paths) => ...);       // backend: export onOpenFiles(paths, app)
+await tiny.api.call('method', { params });    // -> backend api.<method>
+const off = tiny.api.on('event', fn);         // <- app.push; returns unsubscribe
+audio.src = tiny.fileURL(path);   // ALWAYS this, never 'file://' + path
+                                  // (breaks on Windows drive letters)
+const r = await tiny.fetch(url, opts);        // backend-proxied, no CORS/CSP
+tiny.win.open('settings', { page: 'settings.html', size: '420x300',
+                            chrome: { frame: false } });
+// chrome/x/y/minSize in open() (or tinyjs.json "chrome" for main) apply
+// BEFORE first paint — a late setChrome flashes the default window.
 ```
 
-Backend SQLite is built into txiki: `import { Database } from 'tjs:sqlite'`;
-`new Database(path)`, `.exec(sql)`, `.prepare(sql).run(...)/.all()/.finalize()`,
-`.close()`. Use it over tiny.store for anything query-shaped.
+Everything else — windows/chrome/state events, menus (in every window),
+dialogs, tray, notifications, clipboard, hotkeys, audio (sampler / filters /
+audioTap / proxyURL), store/secrets, permissions, deep links, auto-update,
+`tiny.macos.*` — is in references/api.md with signatures and gotchas.
 
-An app menu (About + Quit) and an Edit menu (copy/paste shortcuts) always
-exist; `tiny.menu.set` adds menus after them. About shows name + version from
-tinyjs.json automatically. The menu belongs to the APP, not to one window: it
-shows in every window, including ones opened later. Per-window differences go
-through `tiny.win.menu.*` (content) and `chrome.menu` (whether a bar shows at
-all) — see the menu section above.
+## Cross-platform rules
+
+- Gate features, don't fork code. `capabilities()` lists only the
+  EXCEPTIONS: test `caps.x !== false`, never `if (caps.x)` (the truthy form
+  reports "unsupported" on the OS that has it). Query calls resolve `null`
+  where unsupported, capability calls reject with the reason,
+  fire-and-forget ones no-op — but `tiny.macos.*` off macOS REJECTS.
+  `caps.sampler` is a string ('native'|'page') — informational, don't
+  branch.
+- Use `app.paths` / `tiny.app.paths()` — never hardcode `~/Library` or
+  `%APPDATA%`; join with '/' (works everywhere).
+- `tiny.system.os()/isMacOS()/isWindows()/isLinux()` are synchronous;
+  `architecture()` must be awaited (navigator lies on Apple Silicon).
+- Missing system pieces (codecs, speech, tray…) →
+  `tiny.system.promptMissing([ids])` puts the fix in front of the user.
 
 ## Rules of thumb
 
-- Add backend capabilities as `api` methods; keep the frontend thin.
+- Backend capabilities go in `api` methods; keep the frontend thin — but
+  keep COMPUTE in the page and bytes off the wire (pass paths, not
+  ArrayBuffers; references/performance.md).
 - Escape anything interpolated into `innerHTML` — the page holds an RPC
-  channel with full system access, so a filename must never become markup.
-- Keep frontend asset references relative (they resolve against the page's
-  directory); no external fetches at runtime unless intended.
-- Never declare a top-level `chrome` identifier in frontend code.
-  `window.chrome` is a non-configurable browser global on WebView2, so a
-  top-level `const`/`let chrome` is a PARSE-time SyntaxError that kills the
-  entire script (and a `function chrome()` silently shadows it).
-- Verify changes with the smoke pattern: run
+  channel to full system access.
+- Never declare a top-level `chrome` identifier in frontend code:
+  `window.chrome` is a non-configurable global on WebView2, so a top-level
+  `const chrome` is a PARSE-time SyntaxError that kills the whole script.
+- Linux audio: never route Web Audio to `ctx.destination` (it crackles —
+  measured, unfixable page-side). SFX → `tiny.audio.sampler`; EQ →
+  `tiny.audio.filters`; details in references/platforms.md.
+- Occluded/hidden windows are throttled (rAF stops) — continuous work lives
+  in a visible window or the backend.
+- Verify changes with the smoke pattern:
   `TINYJS_HTML=<tinyjs-install>/test/smoke.html tinyjs dev` — expect a
   `[web] SMOKE RESULTS {...}` line with no FAIL entries and a clean exit.
-  A GUI window opens briefly; the page drives itself and quits.
-- `tinyjs build` output: `dist/<Name>.app` is the distributable (fully
-  codesigned); `dist/<name>` is a local-only single binary.
+- `dist/<Name>.app` is the distributable; bare `dist/<name>` is local-only.
