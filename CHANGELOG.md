@@ -4,6 +4,23 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.34.1 — 2026-07-31
+
+- **Packaged macOS apps keep their declared chrome.** A built app with
+  `windowControls: false` or `squareCorners` booted titled, traffic lights
+  and all, while `tinyjs dev` and the bare binary looked right — amp
+  shipped that way twice before anyone caught it. Two independent bugs,
+  either one sufficient: the build wrote the plist chrome from
+  `trafficLights`, the pre-0.30 name of `windowControls`, so the
+  buttons-off request never reached any packaged build; and bundle startup
+  applied the plist chrome and then called a set-size that rewrites the
+  styleMask wholesale, snapping the window straight back to titled. Dev
+  never showed either, because the bridge re-sends chrome over the socket
+  after boot — packaged apps have only the plist, so the wipe stuck. The
+  plist now carries the same tokens the socket does, and startup re-applies
+  it after the size call in the same runloop turn, so nothing ever paints
+  titled.
+
 ## 0.34.0 — 2026-07-31
 
 - **`tiny.audio.sampler` — sampled sound effects that work everywhere,
