@@ -32,6 +32,19 @@ https://tinyjs.app/changelog.
   care — the API is identical. Out of scope by design: sample-accurate
   scheduling, per-voice filters, music (that's `<audio>`).
 
+- **The agent skill is rebuilt: a thin core plus on-demand references.**
+  `tinyjs new` used to drop a single 635-line SKILL.md into the project;
+  a coding agent loaded all of it for every task. It's now a 156-line core
+  with a routing table and six reference files the agent reads only when
+  the job calls for them — the full API tour, per-OS truths, app-kind
+  recipes (tray, desktop pet, media, document, wrapper), shipping/notarize/
+  auto-update, an Electron porting map, and page-vs-backend performance
+  rules. The content was re-audited against the docs, which caught real
+  drift: the old skill still said Linux needed Ubuntu 24.04+ (the floor is
+  22.04/Debian 12), called builds Apple-Silicon-only (they're universal),
+  and had `app.badge` unsupported on Linux (it works on LauncherEntry
+  docks). Scaffolded projects get the whole skill dir now, not one file.
+
 ## 0.33.0 — 2026-07-31
 
 - **Linux downloads load on Ubuntu 22.04 and Debian 12 again.** A linked
