@@ -1054,21 +1054,33 @@ window-state-event signal now emits):
       only — ignored here)", nothing breaks, and the extra tab-separated
       CHROME/WINOPEN wire fields don't disturb the older parsers' fields.
 
-## Off-screen window rescue (2026-07-30, verified macOS only)
+## Off-screen window rescue (2026-07-30, policy verified macOS only)
 
-Launchers now rescue a window whose frame has less than a 24px-square
-sliver on any monitor's work area — after every `pos` and on `show` — by
-clamping it onto the nearest monitor, titlebar first. Repro: save a
-window position on an external display, unplug it, relaunch (amp restores
-`pos:main` blindly and used to vanish). Deliberate half-off-screen
-parking must survive untouched.
+The bridge arms rescue ONLY when the screen fingerprint (`__screens` in
+the app store) differs from the previous run; armed, each window's first
+show / first pos gets a `WINOP onscreen` chaser that clamps a window with
+less than a 24px-square sliver visible onto the nearest monitor. Ordinary
+off-screen moves are never touched (coo3d flings windows off-screen on
+purpose). `win.ensureOnScreen()` is the manual verb;
+`"offscreenRescue": false` kills the automatic parts. The launchers also
+sweep VISIBLE windows when a display departs mid-session
+(WM_DISPLAYCHANGE / GDK monitor-removed / NSScreen params notification —
+gated by the same manifest flag via `WINOP rescue 0`).
 
-- [ ] **Windows** — set an app's saved position beyond the monitor
-      (edit its store.json `pos:main` to x:9999), launch: window appears
-      clamped to the nearest monitor's work area. Then park a window
-      half-off-screen, restart: stays half-off.
-- [ ] **Linux (X11)** — same drill; also confirm a first-`show` of a
-      secondary window restored off-screen gets rescued (rescue runs
-      after `gtk_widget_show`, needs the realized GdkWindow).
+Verified on macOS headlessly: dormant boot leaves (5000,5000) alone,
+manual verb clamps, forged-fingerprint boot chases the first pos and
+leaves the second. Compiled-never-watched elsewhere:
+
+- [ ] **Windows** — forge `__screens` in store.json, set saved pos
+      x:9999, launch: window appears clamped. Unforged relaunch: an
+      off-screen setPosition sticks (dormant). Unplug a monitor with a
+      window on it mid-session: window comes back (WM_DISPLAYCHANGE).
+- [ ] **Linux (X11)** — same drill; also a secondary window restored
+      off-screen via win.open({x,y}) on a forged boot gets rescued (the
+      `onscreen` op realizes the widget first — check no GTK warnings).
 - [ ] **Linux (Wayland)** — clean no-op: gdk move/origin are compositor
       -owned; nothing breaks, no warnings.
+- [ ] **macOS live** — actually unplug an external display holding a
+      satellite mid-session: the 0.5s-delayed pass brings it back (AppKit
+      migrates most windows itself; frameless ones are the interesting
+      case).

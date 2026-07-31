@@ -590,6 +590,14 @@ audio.play();</pre>
 <i>// the same units tinyjs.json's "size" and win.open's size: 'WxH' take.</i>
 <b>tiny.win.setTitle</b>(t);  <b>tiny.win.setSize</b>(w, h);
 <b>tiny.win.center</b>();     <b>tiny.win.setPosition</b>(x, y);   <i>// top-left origin</i>
+<i>// clamp onto the nearest screen IF nobody could see or grab the window</i>
+<i>// (less than a sliver visible). Stale saved positions from an unplugged</i>
+<i>// display are rescued automatically: when the screen layout differs from</i>
+<i>// the app's previous run, each window's first show/setPosition gets this</i>
+<i>// check, and a display departing mid-session sweeps visible windows. Apps</i>
+<i>// that park windows off-screen on purpose set "offscreenRescue": false in</i>
+<i>// tinyjs.json (kills the automatic parts; this manual call always works).</i>
+<b>tiny.win.ensureOnScreen</b>();
 <b>tiny.win.minimize</b>();   <b>tiny.win.restore</b>();
 <b>tiny.win.fullscreen</b>();  <b>tiny.win.setFullscreen</b>(bool);  <i>// toggle / absolute</i>
 <b>tiny.win.setAlwaysOnTop</b>(bool);  <b>tiny.win.setResizable</b>(bool);

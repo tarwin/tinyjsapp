@@ -940,10 +940,17 @@ static void set_click_through(const std::string& winid, bool on) {
 // the window in empty space. Rule: if less than a 24px-square sliver of the
 // window overlaps any monitor's work area, pull it onto the nearest monitor,
 // titlebar first. Windows deliberately parked half-off-screen keep more than
-// a sliver and are never touched. Runs after every `pos` and before every
-// `show`. X11 semantics — under Wayland the compositor owns placement and
-// both the read and the move are no-ops, which is fine: Wayland never lets a
-// window get lost this way in the first place.
+// a sliver and are never touched.
+//
+// WHEN it runs is the bridge's call, not ours — some apps (coo3d) fling
+// windows off-screen on purpose, so nothing here fires on ordinary pos/show.
+// Triggers: the `onscreen` op (sent by the bridge on a boot whose screen
+// fingerprint changed, and by win.ensureOnScreen()), and a monitor
+// added/removed while running, gated by `rescue 0|1` ("offscreenRescue" in
+// tinyjs.json, default on). X11 semantics — under Wayland the compositor
+// owns placement and both the read and the move are no-ops, which is fine:
+// Wayland never lets a window get lost this way in the first place.
+static bool g_rescue_on = true;
 static void rescue_offscreen(GtkWindow* win) {
   if (!win) return;
   GdkWindow* gwin = gtk_widget_get_window(GTK_WIDGET(win));
@@ -988,17 +995,21 @@ static void do_winop(const std::string& winid, const std::string& op) {
   // ever been here (only macOS's main-window hide takes the app with it).
   if (op == "hide" || op == "hidewin") gtk_widget_hide(GTK_WIDGET(win));
   else if (op == "show" || op == "show 1") {
-    // rescue AFTER show: an unrealized window has no GdkWindow to measure,
-    // and a lost window mapping off-screen for a frame is invisible anyway
     gtk_widget_show(GTK_WIDGET(win));
-    rescue_offscreen(win);
     gtk_window_present(win);
   } else if (op == "show 0") {
     // surface without stealing focus
     gtk_window_set_focus_on_map(win, FALSE);
     gtk_widget_show(GTK_WIDGET(win));
-    rescue_offscreen(win);
     gtk_window_set_focus_on_map(win, TRUE);
+  } else if (op == "onscreen") {
+    // the bridge (or the app) decided this window must be reachable — see
+    // the note on rescue_offscreen. Realize first: an `onscreen` right after
+    // a boot restore may land before the window ever mapped.
+    gtk_widget_realize(GTK_WIDGET(win));
+    rescue_offscreen(win);
+  } else if (op == "rescue 0" || op == "rescue 1") {
+    g_rescue_on = op.back() == '1';
   } else if (op == "center") {
     GdkDisplay* d = gdk_display_get_default();
     GdkWindow* gw = gtk_widget_get_window(GTK_WIDGET(win));
@@ -1064,7 +1075,6 @@ static void do_winop(const std::string& winid, const std::string& op) {
       GdkWindow* gwin = gtk_widget_get_window(GTK_WIDGET(win));
       if (gwin) gdk_window_move(gwin, x, y);
       else gtk_window_move(win, x, y);   // not realized yet
-      rescue_offscreen(win);             // stale restore from a departed display
     }
   }
   else if (op == "hideonclose 1") { if (main_win) g_hide_on_close = true; }
@@ -5275,6 +5285,25 @@ int main(int argc, char** argv) {
   // before any webview exists
   webkit_web_context_register_uri_scheme(webkit_web_context_get_default(),
       "tiny-media", media_scheme_cb, nullptr, nullptr);
+
+  // A monitor departing mid-session can strand windows in space (X11 moves
+  // nothing on its own). One pass over what's VISIBLE when the topology
+  // changes; hidden windows get their chance from the bridge when shown.
+  {
+    auto on_monitors = +[](GdkDisplay*, GdkMonitor*, gpointer) {
+      if (!g_rescue_on) return;
+      if (g_win && gtk_widget_get_visible(GTK_WIDGET(g_win))) rescue_offscreen(g_win);
+      for (auto& kv : g_secwins)
+        if (kv.second && kv.second->win &&
+            gtk_widget_get_visible(GTK_WIDGET(kv.second->win)))
+          rescue_offscreen(kv.second->win);
+    };
+    GdkDisplay* disp = gdk_display_get_default();
+    if (disp) {
+      g_signal_connect(disp, "monitor-added", G_CALLBACK(on_monitors), nullptr);
+      g_signal_connect(disp, "monitor-removed", G_CALLBACK(on_monitors), nullptr);
+    }
+  }
 
   g_win = GTK_WINDOW(gtk_window_new(GTK_WINDOW_TOPLEVEL));
   gtk_window_set_title(g_win, g_app_name.c_str());

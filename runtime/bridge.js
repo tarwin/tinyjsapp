@@ -734,7 +734,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -1012,6 +1012,48 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     send('EVAL@* ' + esc('window.__emit && window.__emit(' + JSON.stringify({ event, data }) + ')'));
   }
 
+  // ── off-screen rescue policy ──────────────────────────────────────────────
+  // The launcher owns the geometry (WINOP `onscreen` clamps a window with
+  // less than a sliver visible on any screen onto the nearest one); THIS owns
+  // when it happens. Apps fling windows off-screen on purpose (coo3d), so
+  // ordinary moves must never be touched: rescue arms only when the screen
+  // fingerprint changed since the app last ran — the one situation where a
+  // restored position can point into empty space — and, armed, chases each
+  // window's first show and first pos with an `onscreen`. A display departing
+  // mid-session is the launcher's own pass, gated by `WINOP rescue 0|1`.
+  // "offscreenRescue": false in tinyjs.json turns all of the automatic parts
+  // off; win.ensureOnScreen() is the manual verb and always works.
+  const store = makeStore(id);
+  const rescueOn = offscreenRescue !== false;
+  let rescueArmed = null;                  // null = fingerprint still resolving
+  const rescuePending = new Set();         // first-moves seen while resolving
+  const rescueSeen = new Set();            // 'winid:pos' / 'winid:show' consumed
+  const sendOnscreen = (wid) => send(wid === 'main' ? 'WINOP onscreen' : 'WINOP@' + wid + ' onscreen');
+  function rescueNote(wid, kind) {
+    if (!rescueOn || rescueArmed === false) return;
+    const key = wid + ':' + kind;
+    if (rescueSeen.has(key)) return;
+    rescueSeen.add(key);
+    if (rescueArmed) sendOnscreen(wid);
+    else rescuePending.add(wid);
+  }
+  (async () => {
+    if (!rescueOn) { send('WINOP rescue 0'); rescueArmed = false; rescuePending.clear(); return; }
+    let armed = false;
+    try {
+      const fp = JSON.stringify(((await query('screens')) || [])
+        .map((s) => [s.x, s.y, s.width, s.height, s.scale]).sort());
+      const prev = await store.get('__screens');
+      armed = prev != null && prev !== fp;   // first run ever: nothing stale to fix
+      if (prev !== fp) store.set('__screens', fp);
+    } catch (e) {}
+    rescueArmed = armed;
+    // main is shown by the launcher itself, so its "first show" never routes
+    // through here — an armed boot checks it directly (a no-op when it's fine)
+    if (armed) { sendOnscreen('main'); for (const wid of rescuePending) sendOnscreen(wid); }
+    rescuePending.clear();
+  })();
+
   const app = {
     push,
     // tjs.spawn, minus the console window on Windows: console tools spawned
@@ -1074,7 +1116,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // that's [win orderOut:] instead of [NSApp hide:]; on Windows and Linux a
     // hide was always window-scoped, so the flag changes nothing there.
     hide(opts) { send('WINOP ' + (opts?.app === false ? 'hidewin' : 'hide')); },
-    show(opts) { send('WINOP show' + (opts?.activate === false ? ' 0' : '')); },
+    show(opts) { send('WINOP show' + (opts?.activate === false ? ' 0' : '')); rescueNote('main', 'show'); },
     center() { send('WINOP center'); },
     minimize() { send('WINOP minimize'); },
     // Toggles native fullscreen.
@@ -1091,7 +1133,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // Follow the user onto every Space and float over fullscreen apps.
     setAllSpaces(v) { send('WINOP allspaces ' + (v ? 1 : 0)); },
     // Top-left origin in screen points (CSS-style coordinates).
-    setPosition(x, y) { send(`WINOP pos ${x | 0} ${y | 0}`); },
+    setPosition(x, y) { send(`WINOP pos ${x | 0} ${y | 0}`); rescueNote('main', 'pos'); },
+    // Clamp this window onto the nearest screen if nobody could see or grab
+    // it (less than a sliver visible). The manual verb behind the automatic
+    // policy above — for apps that set "offscreenRescue": false but still
+    // want a one-shot rescue at a moment of their choosing.
+    ensureOnScreen() { send('WINOP onscreen'); },
     // 'menubar': no Dock icon / taskbar button / app-switcher entry;
     // 'normal': a normal app. Same name on both sides of the bridge.
     presence(mode) { send('WINOP presence ' + (mode === 'menubar' ? 0 : 1)); },
@@ -1625,7 +1672,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // 'debug.get' builtin).
     debug: (what) => query(String(what)),
     // Persistent settings (see makeStore).
-    store: makeStore(id),
+    store,
     // System-wide hotkeys; combos like 'cmd+shift+k'. Presses arrive as a
     // 'hotkey' page event and via the onHotkey option.
     hotkey: {
@@ -1675,6 +1722,9 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
       // minSize: "WxH" — a floor under user resizes, so a layout with a
       // natural size can't be shrunk until content falls off the bottom.
       if (minSize) send('WINOP@' + id + ' minsize ' + one(minSize));
+      // a window BORN at a restored position is the classic stale-coordinates
+      // case — same chase as a first setPosition (armed boots only)
+      if (hasPos) rescueNote(id, 'pos');
     },
     // Handle for any window ('main' or a secondary id).
     window(id) {
@@ -1688,12 +1738,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         close: () => { if (id !== 'main') send('WINCLOSE ' + id); },
         setTitle: (v) => t('TITLE', String(v).replace(/\n/g, ' ')),
         setSize: (w2, h2) => t('SIZE', `${w2 | 0} ${h2 | 0}`),
-        setPosition: (x, y) => t('WINOP', `pos ${x | 0} ${y | 0}`),
+        setPosition: (x, y) => { t('WINOP', `pos ${x | 0} ${y | 0}`); rescueNote(id, 'pos'); },
+        ensureOnScreen: () => t('WINOP', 'onscreen'),
         center: () => t('WINOP', 'center'),
         // hide({ app: false }) orders this window out on its own; a bare
         // hide() on 'main' still hides the whole app (see app.hide above).
         hide: (opts) => t('WINOP', opts?.app === false ? 'hidewin' : 'hide'),
-        show: (opts) => t('WINOP', 'show' + (opts?.activate === false ? ' 0' : '')),
+        show: (opts) => { t('WINOP', 'show' + (opts?.activate === false ? ' 0' : '')); rescueNote(id, 'show'); },
         minimize: () => t('WINOP', 'minimize'),
         restore: () => t('WINOP', 'restore'),
         zoom: () => t('WINOP', 'zoom'),
@@ -1855,6 +1906,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'win.hide': async (p, _a, m) => (forWin(m).hide(p), true),
     'win.show': async (p, _a, m) => (forWin(m).show(p), true),
     'win.center': async (_p, _a, m) => (forWin(m).center(), true),
+    'win.ensureOnScreen': async (_p, _a, m) => (forWin(m).ensureOnScreen(), true),
     'win.minimize': async (_p, _a, m) => (forWin(m).minimize(), true),
     'win.fullscreen': async (_p, _a, m) => (forWin(m).fullscreen(), true),
     'win.setAlwaysOnTop': async ({ enabled }, _a, m) => (forWin(m).setAlwaysOnTop(enabled), true),

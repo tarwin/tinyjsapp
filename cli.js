@@ -507,6 +507,7 @@ const app = await createApp({
   fileExtensions: ${JSON.stringify(cfg.fileExtensions ?? null)},
   openFolders: ${JSON.stringify(cfg.openFolders ?? false)},
   permissions: ${JSON.stringify(cfg.permissions ?? null)},
+  offscreenRescue: ${JSON.stringify(cfg.offscreenRescue ?? null)},
 });
 if (appMod.init) appMod.init(app);
 `;

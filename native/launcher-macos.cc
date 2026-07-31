@@ -1176,7 +1176,15 @@ struct WinopReq {
 // points). Rule: if less than a 24pt-square sliver of the window overlaps any
 // screen's visible area, pull it onto the nearest screen, titlebar first.
 // Windows deliberately parked half-off-screen keep more than a sliver and are
-// never touched. Runs after every `pos` and before every `show`.
+// never touched.
+//
+// WHEN it runs is the bridge's call, not ours — some apps (coo3d) fling
+// windows off-screen on purpose, so nothing here fires on ordinary pos/show.
+// Triggers: the `onscreen` op (sent by the bridge on a boot whose screen
+// fingerprint changed, and by win.ensureOnScreen()), and a display-topology
+// change while running (below), gated by `rescue 0|1` ("offscreenRescue" in
+// tinyjs.json, default on).
+static bool g_rescue_on = true;
 static void rescue_offscreen(NSWindow *win) {
   if (!win)
     return;
@@ -1236,7 +1244,6 @@ static void do_winop(webview_t w, void *arg) {
       // document windows are up — without deactivating the app around them.
       [win orderOut:nil];
     } else if (*op == "show" || *op == "show 1") {
-      rescue_offscreen(win);
       [NSApp unhide:nil];
       [NSApp activateIgnoringOtherApps:YES];
       [win makeKeyAndOrderFront:nil];
@@ -1245,7 +1252,6 @@ static void do_winop(webview_t w, void *arg) {
       // but the active app keeps keyboard focus; clicking it activates
       // normally. (True non-activating click-through needs an NSPanel with
       // NSWindowStyleMaskNonactivatingPanel — not what webview creates.)
-      rescue_offscreen(win);
       [NSApp unhideWithoutActivation];
       [win orderFrontRegardless];
     } else if (*op == "presence 0") {
@@ -1344,8 +1350,12 @@ static void do_winop(webview_t w, void *arg) {
       if (std::sscanf(op->c_str() + 4, "%d %d", &x, &y) == 2 && win) {
         CGFloat screenTop = NSMaxY([[NSScreen screens][0] frame]);
         [win setFrameTopLeftPoint:NSMakePoint(x, screenTop - y)];
-        rescue_offscreen(win); // stale restore from a departed display
       }
+    } else if (*op == "onscreen") {
+      rescue_offscreen(win); // the bridge (or the app) decided this window
+                             // must be reachable — see the note on the helper
+    } else if (*op == "rescue 0" || *op == "rescue 1") {
+      g_rescue_on = op->back() == '1';
     }
   }
 #endif
@@ -1652,6 +1662,29 @@ static void install_system_observers() {
                     object:nil
                      queue:[NSOperationQueue mainQueue]
                 usingBlock:^(NSNotification *) { sock_write_line("SYS wake"); }];
+  // A display departing mid-session can strand windows in space AppKit
+  // doesn't reclaim (it migrates some, not all — especially frameless ones).
+  // Half a second after the topology settles, rescue whatever is VISIBLE and
+  // lost; hidden windows get their chance from the bridge when shown.
+  [[NSNotificationCenter defaultCenter]
+      addObserverForName:NSApplicationDidChangeScreenParametersNotification
+                  object:nil
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *) {
+                dispatch_after(
+                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                    dispatch_get_main_queue(), ^{
+                      if (!g_rescue_on)
+                        return;
+                      NSWindow *main = (NSWindow *)webview_get_native_handle(
+                          g_w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WINDOW);
+                      if (main && [main isVisible])
+                        rescue_offscreen(main);
+                      for (auto &kv : g_windows)
+                        if (kv.second.win && [kv.second.win isVisible])
+                          rescue_offscreen(kv.second.win);
+                    });
+              }];
   send_theme(); // initial state
 }
 #endif

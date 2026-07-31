@@ -299,6 +299,12 @@
       // toplevels, so this (and center()) do nothing there — check
       // getWinState().canPosition and fall back to startDrag() for dragging.
       setPosition: (x, y) => call('win.setPosition', { x, y }),
+      // Clamp this window onto the nearest screen if nobody could see or
+      // grab it (less than a sliver visible on any display). One-shot manual
+      // form of the automatic stale-position rescue — mainly for apps that
+      // set "offscreenRescue": false and place windows off-screen on purpose,
+      // at the one moment they DO want a window back (e.g. after a restore).
+      ensureOnScreen: () => call('win.ensureOnScreen'),
       restore: () => call('win.restore'),
       setFullscreen: (enabled) => call('win.setFullscreen', { enabled }),
       // { x, y, width, height, outer: { width, height }, fullscreen,

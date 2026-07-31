@@ -1730,8 +1730,15 @@ static void set_min_size(const std::string &id, int w, int h);
 // the window in empty space. Rule: if less than a 24px-square sliver of the
 // window overlaps any monitor's work area, pull it onto the nearest monitor,
 // title bar first. Windows deliberately parked half-off-screen keep more
-// than a sliver and are never touched. Runs after every `pos` and before
-// every `show`.
+// than a sliver and are never touched.
+//
+// WHEN it runs is the bridge's call, not ours — some apps (coo3d) fling
+// windows off-screen on purpose, so nothing here fires on ordinary pos/show.
+// Triggers: the `onscreen` op (sent by the bridge on a boot whose screen
+// fingerprint changed, and by win.ensureOnScreen()), and WM_DISPLAYCHANGE
+// while running, gated by `rescue 0|1` ("offscreenRescue" in tinyjs.json,
+// default on).
+static bool g_rescue_on = true;
 static void rescue_offscreen(HWND hwnd) {
   if (!hwnd || IsZoomed(hwnd) || IsIconic(hwnd))
     return;
@@ -1780,7 +1787,6 @@ static void do_winop(webview_t, void *arg) {
   if (op == "hide" || op == "hidewin") {
     ShowWindow(hwnd, SW_HIDE);
   } else if (starts("show")) {
-    rescue_offscreen(hwnd);
     bool activate = op != "show 0";
     ShowWindow(hwnd, activate ? SW_SHOW : SW_SHOWNA);
     if (activate)
@@ -1849,7 +1855,11 @@ static void do_winop(webview_t, void *arg) {
     // without it every move steals activation and the drag crawls.
     SetWindowPos(hwnd, nullptr, (int)lround(x * s), (int)lround(y * s), 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-    rescue_offscreen(hwnd); // stale restore from a departed display
+  } else if (op == "onscreen") {
+    rescue_offscreen(hwnd); // the bridge (or the app) decided this window
+                            // must be reachable — see the note on the helper
+  } else if (starts("rescue ")) {
+    g_rescue_on = op.substr(7) == "1";
   } else if (starts("hideonclose ") && main) {
     g_hide_on_close = op.substr(12) == "1";
   } else if (starts("presence ") && main) {
@@ -4871,6 +4881,19 @@ static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
     break;
   case WM_ACTIVATE:
     emit_winstate(hwnd, LOWORD(wp) != WA_INACTIVE);
+    break;
+  case WM_DISPLAYCHANGE:
+    // A monitor departed (or the layout changed) mid-session: windows it was
+    // holding are now stranded in space. One pass over what's VISIBLE — the
+    // main wndproc alone handles this so N windows don't run N passes.
+    // Hidden windows get their chance from the bridge when shown.
+    if (g_rescue_on) {
+      if (IsWindowVisible(hwnd))
+        rescue_offscreen(hwnd);
+      for (auto &kv : g_windows)
+        if (kv.second && kv.second->hwnd && IsWindowVisible(kv.second->hwnd))
+          rescue_offscreen(kv.second->hwnd);
+    }
     break;
   case WM_TINY_TRAY:
     switch (LOWORD(lp)) {
