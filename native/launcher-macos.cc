@@ -1218,6 +1218,31 @@ static void rescue_offscreen(NSWindow *win) {
 }
 #endif
 
+#ifdef __APPLE__
+// Whether a window belongs in Mission Control / Exposé is decided by what
+// the window IS, not asked of the app: desktop-level windows (wallpaper
+// pets), overlay-level ones (draw-on-screen HUDs) and click-through windows
+// (can't take the click Exposé would hand them) stay out; everything else —
+// including borderless squareCorners windows, which macOS would otherwise
+// silently exclude — participates like a normal document window. Re-derived
+// whenever level, clickthrough or squareness changes; the allspaces bits
+// live in a different group and are left alone.
+static void apply_expose_policy(NSWindow *win) {
+  bool out = win.ignoresMouseEvents || win.level < NSNormalWindowLevel ||
+             win.level > NSFloatingWindowLevel;
+  NSWindowCollectionBehavior b = win.collectionBehavior;
+  b &= ~(NSWindowCollectionBehaviorManaged |
+         NSWindowCollectionBehaviorParticipatesInCycle |
+         NSWindowCollectionBehaviorTransient |
+         NSWindowCollectionBehaviorIgnoresCycle);
+  b |= out ? (NSWindowCollectionBehaviorTransient |
+              NSWindowCollectionBehaviorIgnoresCycle)
+           : (NSWindowCollectionBehaviorManaged |
+              NSWindowCollectionBehaviorParticipatesInCycle);
+  win.collectionBehavior = b;
+}
+#endif
+
 static void do_winop(webview_t w, void *arg) {
   WinopReq *wr = static_cast<WinopReq *>(arg);
   std::string *op = &wr->opstr;
@@ -1296,8 +1321,10 @@ static void do_winop(webview_t w, void *arg) {
       // Mouse events pass straight through to whatever is behind the window
       // (draw-on-screen overlays, HUDs that must not intercept clicks).
       win.ignoresMouseEvents = YES;
+      apply_expose_policy(win);   // unclickable → out of Mission Control
     } else if (*op == "clickthrough 0") {
       win.ignoresMouseEvents = NO;
+      apply_expose_policy(win);
     } else if (op->rfind("level ", 0) == 0) {
       // Stack the window in a whole band of the screen. 'desktop' pins it
       // behind normal windows (wallpaper/pets); 'overlay' floats above
@@ -1308,6 +1335,7 @@ static void do_winop(webview_t w, void *arg) {
                   : lv == "overlay" ? kCGScreenSaverWindowLevel
                   : lv == "floating" ? NSFloatingWindowLevel
                                      : NSNormalWindowLevel;
+      apply_expose_policy(win);   // desktop/overlay bands sit Exposé out
     } else if (*op == "allspaces 1") {
       // Follow the user onto every Space (and appear over fullscreen apps).
       win.collectionBehavior |= NSWindowCollectionBehaviorCanJoinAllSpaces |
@@ -5442,9 +5470,8 @@ static void apply_square(NSWindow *win, bool square) {
     win.hasShadow = YES;
     // Borderless windows are excluded from Mission Control / Exposé unless
     // they opt in — without this, every squareCorners app is invisible to
-    // the four-finger swipe. OR'd, so allspaces/ontop bits compose.
-    win.collectionBehavior |= NSWindowCollectionBehaviorManaged |
-                              NSWindowCollectionBehaviorParticipatesInCycle;
+    // the four-finger swipe. The policy helper keeps pets/overlays out.
+    apply_expose_policy(win);
   } else {
     win.styleMask = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                     NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
