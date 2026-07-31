@@ -9,7 +9,16 @@ global app handle.
 
 Releases are git tags (`vX.Y.Z` on main); a tag push builds macOS + Windows
 + linux-x86_64 + linux-arm64 in CI. Update CHANGELOG.md AND
-docs/changelog.html before tagging. Linux burn-down + platform notes:
+docs/changelog.html before tagging. Linux legs build on ubuntu-22.04
+runners ON PURPOSE — the linker bakes the build image's glibc floor into
+tjs and the launcher, and 24.04-built binaries refuse to load on Ubuntu
+22.04 / Debian 12 (shipped broken through v0.32.0). A verify step asserts
+the floor (GLIBC ≤ 2.35, GLIBCXX ≤ 3.4.30), the arch, and the
+optionally-linked features before packaging; tjs needs gcc-12 + the
+#pragma region strip in setup.sh (details in release.yml's comments).
+Never "modernize" the runners or the cache key without re-reading those.
+App tarballs (amp etc.) are packaged separately in 22.04 containers —
+runbook in ../tinyjsapp-examples/CLAUDE.md. Linux burn-down + platform notes:
 TODO-linux.md. Native-filters-on-other-OSes plan: TODO-audio-filters.md.
 PDF pagination + header/footer plan: TODO-pdf.md (macOS `printToPDF` emits
 ONE tall page today; Windows and Linux paginate).
