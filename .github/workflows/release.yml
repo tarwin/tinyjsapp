@@ -112,9 +112,13 @@ jobs:
           # jammy's own gcc-12 does NOT raise the floor: 22.04's libstdc++6
           # runtime is built from GCC 12 and ships GLIBCXX_3.4.30 — the exact
           # ceiling the verify step asserts.
+          # libffi-dev: tjs links system libffi. The runner image happens to
+          # preinstall it; pinned here so a slimmer image can't break the
+          # build — same implicit-dependency trap as libx11/libxtst above.
           sudo apt-get install -y build-essential g++-12 cmake ninja-build pkg-config \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            libwebkit2gtk-4.1-0 libx11-dev libxtst-dev libpipewire-0.3-dev xvfb
+            libwebkit2gtk-4.1-0 libx11-dev libxtst-dev libpipewire-0.3-dev \
+            libffi-dev xvfb
 
       - name: Cache txiki.js build
         id: tjs-cache

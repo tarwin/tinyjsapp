@@ -55,6 +55,14 @@ if [ "$OS" = "Linux" ]; then
       rm -rf /tmp/txiki-src-$$
       git clone --depth 1 --branch "$TJS_VERSION" --recurse-submodules --shallow-submodules -j4 \
         https://github.com/saghul/txiki.js /tmp/txiki-src-$$
+      # txiki uses #pragma region folding markers and builds -Werror; GCC 12
+      # (Ubuntu 22.04's newest — release builds pin 22.04 for the glibc
+      # floor) doesn't know that pragma and errors out. They're editor
+      # decoration — stripping them changes nothing. Swept, not listed per
+      # file, so a new one upstream can't resurface the break. No-op for
+      # GCC 13+/clang, so it runs unconditionally.
+      grep -rl '#pragma region' /tmp/txiki-src-$$ --include='*.c' --include='*.h' --include='*.cc' --include='*.cpp' 2>/dev/null \
+        | xargs -r sed -i 's/^[[:space:]]*#pragma[[:space:]]\{1,\}\(end\)\{0,1\}region.*$//'
       GEN="Unix Makefiles"; command -v ninja >/dev/null && GEN=Ninja
       cmake -S /tmp/txiki-src-$$ -B /tmp/txiki-src-$$/build -DCMAKE_BUILD_TYPE=Release -G "$GEN"
       cmake --build /tmp/txiki-src-$$/build --target tjs -j"$(nproc)"
