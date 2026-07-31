@@ -1085,7 +1085,7 @@ leaves the second. Compiled-never-watched elsewhere:
       migrates most windows itself; frameless ones are the interesting
       case).
 
-## tiny.audio.sampler — Linux built AND verified 2026-07-31; mac/win page host UNRUN
+## tiny.audio.sampler — Linux verified 2026-07-31; Windows page host part-verified same day; macOS UNRUN
 
 The Linux native backend (miniaudio decode + `pw_stream` mixer in the
 launcher) was proven headlessly on this Linux box the day it was built:
@@ -1103,16 +1103,31 @@ linear chain), and kill -9 mid-playback leaves zero orphaned
 sweep needed).
 
 The macOS/Windows page host (Web Audio in the main window, bridge re-arms
-on client hello) is written to the same verbs but has NEVER RUN on either
-OS:
+on client hello) is written to the same verbs. **Windows ran it 2026-07-31**
+(drill page + `tinyjs dev` from coo3d/, results via `tiny.store.set`) — the
+first two boxes below are ticked there, macOS still hasn't run at all. What
+Windows has NOT proven is that sound leaves the speakers: nobody listened.
+The evidence short of ears is that a page-created `AudioContext` came up
+`running` with no gesture ever and its clock advanced 0.71s in 0.7s of
+wall time, and that every `load()` resolved, which only happens after
+`decodeAudioData` really decoded the bytes.
 
-- [ ] **mac/win basics** — the page1.html drill from the Linux pass (see
+- [x] **mac/win basics** — the page1.html drill from the Linux pass (see
       git history of this entry, or improvise: load path + bytes, play,
       set, stop, master, unload, error paths) lands `ok: true` in
       store.json with `cap: 'page'`.
-- [ ] **mac/win: main-window reload mid-playback** — bank re-arms without
+      **Windows 2026-07-31:** `cap: 'page'`; load by ArrayBuffer and by path
+      (real mp3) both ok; play → handle, live `set({pan})`, `stop`,
+      `master`, `loop` (a 1.6s sample held 2.5s), `stopAll`; 40 concurrent
+      plays steal rather than reject; all three error paths reject with the
+      real message (unknown name, missing file, play-after-unload).
+      macOS: still unrun.
+- [x] **mac/win: main-window reload mid-playback** — bank re-arms without
       app code (client hello → bridge replays loads); next `play()` works;
       the voices that were sounding die, documented.
+      **Windows 2026-07-31:** after `location.reload()` with no reload-side
+      `load()` at all, `play()` on a pre-reload name worked, and a name
+      unloaded before the reload stayed gone. macOS: still unrun.
 - [ ] **mac: accessory app, window never shown** — backend
       `app.audio.sampler.play()` cold: sound comes out. Then again 10
       minutes later (App Nap — an audible-idle context may lose its power
@@ -1123,6 +1138,11 @@ OS:
       `--autoplay-policy=no-user-gesture-required` via the bridge's
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in dev; verify a PACKAGED app
       gets it too (attach mode doesn't go through the bridge's spawn env).
+      **Half done 2026-07-31:** under `tinyjs dev` a never-clicked window's
+      AudioContext reached `running` and kept rendering. The PACKAGED half —
+      the reason this box exists — is still open: the four sampler apps were
+      published and launched as exes, but nothing read audio back out of
+      them, so a packaged app that comes up suspended would look identical.
 - [ ] **win: hidden main window, 5+ min playback** — GPU/CPU quiet in Task
       Manager, audio unbroken (audibly-playing pages are exempt from
       intensive throttling — trust but verify).
