@@ -5225,7 +5225,17 @@ static int open_mode(int argc, char** argv) {
       return false;
     }
     std::string line = json + "\n";
-    write(fd, line.data(), line.size());
+    const char* p = line.data();
+    size_t left = line.size();
+    while (left > 0) {
+      ssize_t n = write(fd, p, left);
+      if (n <= 0) {
+        close(fd);
+        return false;
+      }
+      p += n;
+      left -= (size_t)n;
+    }
     close(fd);
     return true;
   };
