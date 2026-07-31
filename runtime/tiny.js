@@ -194,7 +194,8 @@
       // install is null when it's already there, or when nothing installable
       // would fix it (windowPosition on Wayland is the session, not a package).
       // Ids: media.aac, media.h264, media.mp3, speech, spotlight.index,
-      // audioTap, tray, windowPosition. Everything reports ok on macOS/Windows.
+      // audioTap, mouseTracking, tray, windowPosition. Everything reports ok
+      // on macOS/Windows.
       // Probes are cached for the life of the app, so a missing package stays
       // "missing" even after the user installs it — pass { refresh: true } to
       // re-probe, e.g. when they come back from a terminal and retry.
