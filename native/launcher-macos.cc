@@ -1168,6 +1168,48 @@ struct WinopReq {
   std::string win, opstr;
 };
 
+#ifdef __APPLE__
+// A window nobody can see or grab is a lost window: apps restore saved
+// positions blindly, and coordinates from an unplugged external display land
+// the window in empty space (macOS only migrates windows when a display goes
+// away WHILE the app runs — a stale frame applied at launch stays wherever it
+// points). Rule: if less than a 24pt-square sliver of the window overlaps any
+// screen's visible area, pull it onto the nearest screen, titlebar first.
+// Windows deliberately parked half-off-screen keep more than a sliver and are
+// never touched. Runs after every `pos` and before every `show`.
+static void rescue_offscreen(NSWindow *win) {
+  if (!win)
+    return;
+  NSRect f = win.frame;
+  for (NSScreen *s in [NSScreen screens]) {
+    NSRect r = NSIntersectionRect(f, s.visibleFrame);
+    if (r.size.width >= 24 && r.size.height >= 24)
+      return; // reachable — leave it exactly where the app put it
+  }
+  NSScreen *best = nil;
+  CGFloat bestD = CGFLOAT_MAX;
+  NSPoint c = NSMakePoint(NSMidX(f), NSMidY(f));
+  for (NSScreen *s in [NSScreen screens]) {
+    NSPoint sc = NSMakePoint(NSMidX(s.visibleFrame), NSMidY(s.visibleFrame));
+    CGFloat d = (c.x - sc.x) * (c.x - sc.x) + (c.y - sc.y) * (c.y - sc.y);
+    if (d < bestD) {
+      bestD = d;
+      best = s;
+    }
+  }
+  if (!best)
+    return; // no screens at all (headless): nothing sane to do
+  NSRect v = best.visibleFrame;
+  // wider than the screen pins the LEFT edge; taller pins the TOP (titlebar)
+  f.origin.x = fmax(v.origin.x, fmin(f.origin.x, NSMaxX(v) - f.size.width));
+  CGFloat topY = fmin(NSMaxY(f), NSMaxY(v));
+  if (topY - f.size.height < v.origin.y && f.size.height <= v.size.height)
+    topY = v.origin.y + f.size.height;
+  f.origin.y = topY - f.size.height;
+  [win setFrame:f display:YES];
+}
+#endif
+
 static void do_winop(webview_t w, void *arg) {
   WinopReq *wr = static_cast<WinopReq *>(arg);
   std::string *op = &wr->opstr;
@@ -1194,6 +1236,7 @@ static void do_winop(webview_t w, void *arg) {
       // document windows are up — without deactivating the app around them.
       [win orderOut:nil];
     } else if (*op == "show" || *op == "show 1") {
+      rescue_offscreen(win);
       [NSApp unhide:nil];
       [NSApp activateIgnoringOtherApps:YES];
       [win makeKeyAndOrderFront:nil];
@@ -1202,6 +1245,7 @@ static void do_winop(webview_t w, void *arg) {
       // but the active app keeps keyboard focus; clicking it activates
       // normally. (True non-activating click-through needs an NSPanel with
       // NSWindowStyleMaskNonactivatingPanel — not what webview creates.)
+      rescue_offscreen(win);
       [NSApp unhideWithoutActivation];
       [win orderFrontRegardless];
     } else if (*op == "presence 0") {
@@ -1300,6 +1344,7 @@ static void do_winop(webview_t w, void *arg) {
       if (std::sscanf(op->c_str() + 4, "%d %d", &x, &y) == 2 && win) {
         CGFloat screenTop = NSMaxY([[NSScreen screens][0] frame]);
         [win setFrameTopLeftPoint:NSMakePoint(x, screenTop - y)];
+        rescue_offscreen(win); // stale restore from a departed display
       }
     }
   }

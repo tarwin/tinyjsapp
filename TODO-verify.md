@@ -1053,3 +1053,22 @@ window-state-event signal now emits):
       Chrome sub-tab must be a clean no-op: chrome line reports "(macOS
       only — ignored here)", nothing breaks, and the extra tab-separated
       CHROME/WINOPEN wire fields don't disturb the older parsers' fields.
+
+## Off-screen window rescue (2026-07-30, verified macOS only)
+
+Launchers now rescue a window whose frame has less than a 24px-square
+sliver on any monitor's work area — after every `pos` and on `show` — by
+clamping it onto the nearest monitor, titlebar first. Repro: save a
+window position on an external display, unplug it, relaunch (amp restores
+`pos:main` blindly and used to vanish). Deliberate half-off-screen
+parking must survive untouched.
+
+- [ ] **Windows** — set an app's saved position beyond the monitor
+      (edit its store.json `pos:main` to x:9999), launch: window appears
+      clamped to the nearest monitor's work area. Then park a window
+      half-off-screen, restart: stays half-off.
+- [ ] **Linux (X11)** — same drill; also confirm a first-`show` of a
+      secondary window restored off-screen gets rescued (rescue runs
+      after `gtk_widget_show`, needs the realized GdkWindow).
+- [ ] **Linux (Wayland)** — clean no-op: gdk move/origin are compositor
+      -owned; nothing breaks, no warnings.

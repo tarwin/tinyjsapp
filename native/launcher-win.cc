@@ -1725,6 +1725,42 @@ static void do_center(HWND hwnd) {
 static ICoreWebView2Controller *ctrl_for_win(const std::string &id);
 static void set_min_size(const std::string &id, int w, int h);
 
+// A window nobody can see or grab is a lost window: apps restore saved
+// positions blindly, and coordinates from an unplugged external display land
+// the window in empty space. Rule: if less than a 24px-square sliver of the
+// window overlaps any monitor's work area, pull it onto the nearest monitor,
+// title bar first. Windows deliberately parked half-off-screen keep more
+// than a sliver and are never touched. Runs after every `pos` and before
+// every `show`.
+static void rescue_offscreen(HWND hwnd) {
+  if (!hwnd || IsZoomed(hwnd) || IsIconic(hwnd))
+    return;
+  RECT r;
+  if (!GetWindowRect(hwnd, &r))
+    return;
+  HMONITOR on = MonitorFromRect(&r, MONITOR_DEFAULTTONULL);
+  if (on) {
+    MONITORINFO mi = {sizeof(mi)};
+    RECT ix;
+    if (GetMonitorInfoW(on, &mi) && IntersectRect(&ix, &r, &mi.rcWork) &&
+        ix.right - ix.left >= 24 && ix.bottom - ix.top >= 24)
+      return; // reachable — leave it exactly where the app put it
+  }
+  MONITORINFO mi = {sizeof(mi)};
+  if (!GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi))
+    return;
+  const RECT &v = mi.rcWork;
+  int w = r.right - r.left, h = r.bottom - r.top;
+  int x = r.left > v.right - w ? v.right - w : r.left;
+  if (x < v.left)
+    x = v.left; // wider than the monitor pins the LEFT edge
+  int y = r.top > v.bottom - h ? v.bottom - h : r.top;
+  if (y < v.top)
+    y = v.top; // taller pins the TOP (title bar)
+  SetWindowPos(hwnd, nullptr, x, y, 0, 0,
+               SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 struct WinopReq {
   std::string win, op;
 };
@@ -1744,6 +1780,7 @@ static void do_winop(webview_t, void *arg) {
   if (op == "hide" || op == "hidewin") {
     ShowWindow(hwnd, SW_HIDE);
   } else if (starts("show")) {
+    rescue_offscreen(hwnd);
     bool activate = op != "show 0";
     ShowWindow(hwnd, activate ? SW_SHOW : SW_SHOWNA);
     if (activate)
@@ -1812,6 +1849,7 @@ static void do_winop(webview_t, void *arg) {
     // without it every move steals activation and the drag crawls.
     SetWindowPos(hwnd, nullptr, (int)lround(x * s), (int)lround(y * s), 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    rescue_offscreen(hwnd); // stale restore from a departed display
   } else if (starts("hideonclose ") && main) {
     g_hide_on_close = op.substr(12) == "1";
   } else if (starts("presence ") && main) {

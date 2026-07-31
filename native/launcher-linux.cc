@@ -935,6 +935,50 @@ static void set_click_through(const std::string& winid, bool on) {
   else if (g_secwins.count(winid)) g_secwins[winid]->click_through = on;
 }
 
+// A window nobody can see or grab is a lost window: apps restore saved
+// positions blindly, and coordinates from an unplugged external display land
+// the window in empty space. Rule: if less than a 24px-square sliver of the
+// window overlaps any monitor's work area, pull it onto the nearest monitor,
+// titlebar first. Windows deliberately parked half-off-screen keep more than
+// a sliver and are never touched. Runs after every `pos` and before every
+// `show`. X11 semantics — under Wayland the compositor owns placement and
+// both the read and the move are no-ops, which is fine: Wayland never lets a
+// window get lost this way in the first place.
+static void rescue_offscreen(GtkWindow* win) {
+  if (!win) return;
+  GdkWindow* gwin = gtk_widget_get_window(GTK_WIDGET(win));
+  GdkDisplay* d = gdk_display_get_default();
+  if (!gwin || !d) return;   // not realized yet — the show-path runs us again
+  // same space the `pos` op moves in (gdk_window_move / gdk_window_get_origin)
+  int x = 0, y = 0;
+  gdk_window_get_origin(gwin, &x, &y);
+  int w = gdk_window_get_width(gwin), h = gdk_window_get_height(gwin);
+  int n = gdk_display_get_n_monitors(d);
+  for (int i = 0; i < n; i++) {
+    GdkRectangle wa;
+    gdk_monitor_get_workarea(gdk_display_get_monitor(d, i), &wa);
+    int iw = (x + w < wa.x + wa.width ? x + w : wa.x + wa.width) - (x > wa.x ? x : wa.x);
+    int ih = (y + h < wa.y + wa.height ? y + h : wa.y + wa.height) - (y > wa.y ? y : wa.y);
+    if (iw >= 24 && ih >= 24) return;   // reachable — leave it alone
+  }
+  // nearest monitor by center distance, then clamp inside its work area
+  GdkRectangle v = {0, 0, 0, 0};
+  long best = -1;
+  for (int i = 0; i < n; i++) {
+    GdkRectangle wa;
+    gdk_monitor_get_workarea(gdk_display_get_monitor(d, i), &wa);
+    long dx = (x + w / 2) - (wa.x + wa.width / 2), dy = (y + h / 2) - (wa.y + wa.height / 2);
+    long dist = dx * dx + dy * dy;
+    if (best < 0 || dist < best) { best = dist; v = wa; }
+  }
+  if (best < 0) return;   // no monitors (headless): nothing sane to do
+  int nx = x > v.x + v.width - w ? v.x + v.width - w : x;
+  if (nx < v.x) nx = v.x;               // wider than the monitor pins the LEFT edge
+  int ny = y > v.y + v.height - h ? v.y + v.height - h : y;
+  if (ny < v.y) ny = v.y;               // taller pins the TOP (titlebar)
+  if (nx != x || ny != y) gdk_window_move(gwin, nx, ny);
+}
+
 static void do_winop(const std::string& winid, const std::string& op) {
   GtkWindow* win = win_for(winid);
   if (!win) return;
@@ -944,12 +988,16 @@ static void do_winop(const std::string& winid, const std::string& op) {
   // ever been here (only macOS's main-window hide takes the app with it).
   if (op == "hide" || op == "hidewin") gtk_widget_hide(GTK_WIDGET(win));
   else if (op == "show" || op == "show 1") {
+    // rescue AFTER show: an unrealized window has no GdkWindow to measure,
+    // and a lost window mapping off-screen for a frame is invisible anyway
     gtk_widget_show(GTK_WIDGET(win));
+    rescue_offscreen(win);
     gtk_window_present(win);
   } else if (op == "show 0") {
     // surface without stealing focus
     gtk_window_set_focus_on_map(win, FALSE);
     gtk_widget_show(GTK_WIDGET(win));
+    rescue_offscreen(win);
     gtk_window_set_focus_on_map(win, TRUE);
   } else if (op == "center") {
     GdkDisplay* d = gdk_display_get_default();
@@ -1016,6 +1064,7 @@ static void do_winop(const std::string& winid, const std::string& op) {
       GdkWindow* gwin = gtk_widget_get_window(GTK_WIDGET(win));
       if (gwin) gdk_window_move(gwin, x, y);
       else gtk_window_move(win, x, y);   // not realized yet
+      rescue_offscreen(win);             // stale restore from a departed display
     }
   }
   else if (op == "hideonclose 1") { if (main_win) g_hide_on_close = true; }
