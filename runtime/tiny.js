@@ -576,6 +576,56 @@
         chain.filters([]);
         return chain;
       },
+
+      // One sampled-SFX mixer per app: short decoded sounds (wav/mp3/flac
+      // guaranteed) fired with per-voice volume, pan and pitch, mixed into
+      // one output. Game/UI sound effects — not streaming, not music (that's
+      // <audio>), not a sequencer.
+      //
+      //   const s = tiny.audio.sampler;
+      //   await s.load('coo', '/abs/path/coo.mp3');   // or an ArrayBuffer
+      //   const v = await s.play('coo', { vol: 0.8, pan: -0.3, rate: 1.06 });
+      //   v.set({ pan: 0.1 });      // live, no restart
+      //   v.stop();                 // short fade-out, no click
+      //   s.master(0.5);
+      //   s.unload('coo');          // frees the decoded PCM; cuts its voices
+      //
+      // vol is linear 0..1, pan −1..1 equal-power (StereoPanner's law), rate
+      // a playbackRate-style ratio (pitch and speed together). Up to 32
+      // voices; past that play() steals the oldest rather than failing.
+      // App-scoped: every window and the backend (app.audio.sampler) drive
+      // the SAME mixer. On macOS/Windows it mixes in the main window's page
+      // via Web Audio (a reload re-arms the bank by itself; playing voices
+      // die); on Linux the launcher mixes natively, because Web Audio
+      // crackles under WebKitGTK — capabilities().sampler says which, but
+      // the API is identical. Load by path when you can: bytes are written
+      // to the app cache once and loaded from disk, never streamed around.
+      // Out of scope: sample-accurate scheduling (`start(when)`), per-voice
+      // filters, MediaStreams.
+      sampler: {
+        async load(name, source) {
+          const params = { name: String(name) };
+          if (typeof source === 'string') params.path = source;
+          else if (source instanceof ArrayBuffer) params.bytesB64 = u8ToB64(new Uint8Array(source));
+          else if (ArrayBuffer.isView(source)) params.bytesB64 = u8ToB64(new Uint8Array(source.buffer, source.byteOffset, source.byteLength));
+          else if (typeof Blob !== 'undefined' && source instanceof Blob) params.bytesB64 = u8ToB64(new Uint8Array(await source.arrayBuffer()));
+          else throw new Error('sampler.load: pass a path or an ArrayBuffer');
+          return call('sampler.load', params);
+        },
+        // opts: { vol?, pan?, rate?, loop? } -> a voice handle
+        // { id, set({ vol?, pan?, rate? }), stop() }.
+        async play(name, opts = {}) {
+          const { id } = await call('sampler.play', { name: String(name), ...opts });
+          return {
+            id,
+            set: (patch) => call('sampler.set', { id, ...(patch ?? {}) }),
+            stop: () => call('sampler.stop', { id }),
+          };
+        },
+        stopAll: () => call('sampler.stopAll'),
+        master: (v) => call('sampler.master', { value: v }),
+        unload: (name) => call('sampler.unload', { name: String(name) }),
+      },
     },
 
     audioTap: {
@@ -850,6 +900,114 @@
     // must not make forEach skip the next one.
     (handlers[msg.event] || []).slice().forEach((fn) => fn(msg.data));
   };
+
+  // The tiny.audio.sampler HOST — the Web Audio mixer the bridge drives by
+  // eval into the MAIN window on macOS/Windows (Linux mixes in the launcher
+  // instead; there this object is simply never called). Defined on every
+  // page for uniformity, used only where the bridge points at it. Not API:
+  // pages call tiny.audio.sampler, which routes through the bridge so every
+  // window and the backend share one mixer and one state owner.
+  {
+    let sctx = null, smaster = null, smval = 1, sseq = 1;
+    const sbufs = {};    // name -> AudioBuffer
+    const svoices = {};  // id -> { src, g, p, name, t }
+    const ensure = () => {
+      if (!sctx) {
+        sctx = new AudioContext();
+        smaster = sctx.createGain();
+        smaster.gain.value = smval;
+        smaster.connect(sctx.destination);
+      }
+      // Injected evals are never a user gesture; resume() covers a context
+      // that came up suspended (autoplay policy) — it's ~ms when allowed.
+      if (sctx.state === 'suspended') sctx.resume().catch(() => {});
+      return sctx;
+    };
+    const glide = (param, v) => param.setTargetAtTime(v, sctx.currentTime, 0.005);
+    const kill = (id, fade) => {
+      const v = svoices[id];
+      if (!v) return;
+      delete svoices[id];
+      try {
+        if (fade) { glide(v.g.gain, 0); v.src.stop(sctx.currentTime + 0.05); }
+        else v.src.stop();
+      } catch {}
+    };
+    window.__tinySampler = {
+      async load(name, path) {
+        try {
+          const ctx = ensure();
+          let bytes;
+          // Fast path: read the bank file directly (zero bytes over any
+          // wire). Files outside the page's read root can't be — fall back
+          // to asking the bridge for the bytes once.
+          try {
+            const r = await fetch(window.tiny.fileURL(path));
+            if (!r.ok) throw new Error('http ' + r.status);
+            bytes = await r.arrayBuffer();
+          } catch {
+            const { b64 } = await call('sampler.bytes', { name });
+            bytes = b64ToU8(b64).buffer;
+          }
+          sbufs[name] = await ctx.decodeAudioData(bytes);
+          call('sampler.hostResult', { name, ok: true });
+        } catch (e) {
+          call('sampler.hostResult', { name, ok: false, error: String((e && e.message) || e) });
+        }
+      },
+      play(id, name, vol, pan, rate, loop) {
+        const buf = sbufs[name];
+        if (!buf) return;
+        const ctx = ensure();
+        // Voice cap with oldest-first stealing — the same 32 as the Linux
+        // native mixer, so an app hears the same behavior everywhere.
+        const ids = Object.keys(svoices);
+        if (ids.length >= 32) {
+          let oldest = null;
+          for (const k of ids) if (!oldest || svoices[k].t < svoices[oldest].t) oldest = k;
+          kill(+oldest, true);
+        }
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.playbackRate.value = rate;
+        src.loop = !!loop;
+        const g = ctx.createGain();
+        g.gain.value = vol;
+        const p = ctx.createStereoPanner();
+        p.pan.value = pan;
+        src.connect(g); g.connect(p); p.connect(smaster);
+        src.onended = () => {
+          delete svoices[id];
+          try { src.disconnect(); g.disconnect(); p.disconnect(); } catch {}
+        };
+        svoices[id] = { src, g, p, name, t: sseq++ };
+        src.start();
+      },
+      set(id, vol, pan, rate) {
+        const v = svoices[id];
+        if (!v) return;
+        if (vol != null) glide(v.g.gain, vol);
+        if (pan != null) glide(v.p.pan, pan);
+        if (rate != null) v.src.playbackRate.value = rate;
+      },
+      stop(id) { kill(id, true); },
+      stopAll() { for (const k of Object.keys(svoices)) kill(+k, true); },
+      master(v) {
+        smval = v;
+        if (smaster) glide(smaster.gain, v);
+      },
+      unload(name) {
+        delete sbufs[name];
+        // Cut, not fade: matches the native backend's documented unload.
+        for (const k of Object.keys(svoices)) if (svoices[k].name === name) kill(+k, false);
+      },
+    };
+  }
+
+  // Announce this page to the backend once tiny is up. First boot and every
+  // reload land here; the bridge uses the MAIN window's hello to re-arm the
+  // sampler host on macOS/Windows (a reload wiped its decoded bank).
+  call('client.hello').catch(() => {});
 
   // Drag regions for frameless windows: any element with data-tiny-drag acts
   // as a titlebar — drag moves the window, double-click zooms. Interactive

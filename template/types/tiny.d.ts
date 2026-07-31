@@ -190,6 +190,15 @@ declare interface TinyPageChain {
   clear(): boolean;
 }
 
+/** A playing sampler voice (tiny.audio.sampler.play). Fire-and-forget with
+ *  live updates: set() retunes without a restart, stop() fades out quickly
+ *  with no click. */
+declare interface TinySamplerVoice {
+  id: number;
+  set(patch: { vol?: number; pan?: number; rate?: number }): Promise<any>;
+  stop(): Promise<any>;
+}
+
 /** A window belonging to another app (accessibility), top-left coords. */
 declare interface TinyOtherWindow {
   app: string;
@@ -734,6 +743,37 @@ declare interface Tiny {
      *  reaching ctx.destination crackles there, which is why the native
      *  chain exists. */
     pageChain(ctx: BaseAudioContext): TinyPageChain;
+    /**
+     * One sampled-SFX mixer per app: short decoded sounds (wav/mp3/flac
+     * guaranteed) fired with per-voice volume, pan and pitch, mixed into one
+     * output. Game/UI sound effects — not streaming, not music (that's
+     * <audio>), not a sequencer. Works on Linux (native mix in the launcher —
+     * Web Audio crackles there) and macOS/Windows (Web Audio in the main
+     * window's page) with identical behavior; `capabilities().sampler`
+     * reports 'native' | 'page' but apps shouldn't need to care. App-scoped:
+     * every window and the backend (app.audio.sampler) drive the SAME mixer.
+     */
+    sampler: {
+      /** Decode a sound into the bank. `source` is an absolute path (best —
+       *  zero copies over any wire) or an ArrayBuffer/typed array/Blob,
+       *  which is written to the app cache once and loaded from there.
+       *  Rejects if the file can't be decoded. Reloading a name replaces it. */
+      load(name: string, source: string | ArrayBuffer | ArrayBufferView | Blob): Promise<true>;
+      /** Fire a voice. vol linear 0..1 (default 1), pan −1..1 equal-power
+       *  (StereoPanner's law, same numbers = same sound on every OS), rate a
+       *  playbackRate-style ratio (pitch and speed together, default 1). Up
+       *  to 32 voices — past that the oldest is stolen; play() never rejects
+       *  for "too many" (it does for an unknown name). */
+      play(name: string, opts?: {
+        vol?: number; pan?: number; rate?: number; loop?: boolean;
+      }): Promise<TinySamplerVoice>;
+      stopAll(): Promise<any>;
+      /** One master gain over the whole mixer (linear, default 1). */
+      master(v: number): Promise<any>;
+      /** Drop a sound and free its decoded PCM. Voices still playing it are
+       *  cut (not faded). */
+      unload(name: string): Promise<any>;
+    };
   };
 
   /**

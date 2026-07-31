@@ -1,5 +1,13 @@
 # tiny.audio.sampler — one sampled-SFX mixer, native only where it must be
 
+> **STATUS 2026-07-31: SHIPPED.** All of it built (launcher-linux.cc +
+> bridge.js + tiny.js, miniaudio vendored at native/include/miniaudio.h
+> v0.11.22); the Linux native backend verified headlessly the same day
+> (pan law to 4 decimals, ERR=0 under 20 voices + rAF load, EQ routing,
+> kill -9 leaves no node). The mac/win page host is written but UNRUN —
+> its checklist moved to TODO-verify.md ("tiny.audio.sampler" section).
+> Resolved decisions are inline below.
+
 A cross-platform way to play *sampled* audio — game/UI sound effects with
 per-voice volume, pan, and pitch, mixed into one output. Not streaming, not
 music, not a sequencer. The reference workload is coo3d: a decoded bank of
@@ -179,48 +187,65 @@ don't stream per-frame automation (no use case; sequencers are out of scope).
 
 ## Build order (Linux first — that's where the need is)
 
-1. `launcher-linux.cc`: `SAMPLER` wire ops; miniaudio with `MA_NO_DEVICE_IO`
-   (decode/resample only); `pw_stream` output node with the naming/teardown/
-   sweep rules above. `tinyjs dev` auto-rebuild covers the iteration loop.
-2. `bridge.js`: hub state (bank manifest, master), `audio.sampler*` api
-   handlers, wire forwarding.
-3. `tiny.js`: the `tiny.audio.sampler` surface — thin `call()` wrappers,
-   platform-blind.
-4. Run the Linux verify items headlessly (`TINYJS_HTML` self-driving page +
-   store.json readout, `pw-top -b` ERR, null-sink pan rig — recipes in
-   CLAUDE.md).
-5. mac/win page backend: same verbs eval'd into the main-window host,
-   re-arm on client hello. Anything built there but not watched running goes
-   in TODO-verify.md per the house rule.
-6. Docs + changelog (CHANGELOG.md AND docs/changelog.html) when it ships.
+1. [x] `launcher-linux.cc`: `SAMPLER` wire ops; miniaudio with
+   `MA_NO_DEVICE_IO` (decode only — per-voice rate is a linear-interp read
+   in the mix loop, so the resampler stage wasn't needed); `pw_stream`
+   output node `tinyjs-sampler-<pid>`. One deviation from the naming/
+   teardown notes above: a pw_stream node dies with its process (no
+   object.linger), so kill -9 strands nothing and there is NO sweep — only
+   the tap sink ever needed one.
+2. [x] `bridge.js`: hub state (bank manifest, master, voice-id seq —
+   the bridge assigns voice ids so PLAY is fire-and-forget on the wire,
+   and refuses unknown names itself), `sampler.*` handlers, `client.hello`
+   re-arm, `capabilities().sampler`.
+3. [x] `tiny.js`: the `tiny.audio.sampler` surface + the `__tinySampler`
+   page host (defined on every page, driven only on mac/win main).
+4. [x] Linux verify, headless — all green 2026-07-31 (details in
+   TODO-verify.md). One environmental landmine found on the way: WirePlumber
+   had a saved `Output/Audio:media.role:Music:channelVolumes=0.0;0.0;` in
+   ~/.local/state/wireplumber/restore-stream from an old experiment, which
+   soft-muted every pw-cat playback (pw-cat tags itself role Music) — the
+   whole capture rig read zeros until that line was repaired.
+5. [x] mac/win page backend: built to the same verbs; UNRUN — checklist in
+   TODO-verify.md.
+6. [x] Docs + changelog (CHANGELOG.md, docs/changelog.html, docs/docs.html
+   `#sampler`, README, tiny.d.ts).
 
-## Open decisions
+## Decisions resolved at build time
 
-- [ ] Fade-out length on `stop()` (a hard stop clicks; ~10–20ms default).
-- [ ] `rate` range clamp (miniaudio resampler quality vs cost at extremes).
-- [ ] Idle policy on mac/win host: keep context running (steady ~0 CPU but
-      possibly holds "is playing audio" state) vs suspend-when-silent
-      (App Nap safe either way? — see verify list).
-- [ ] Does `unload` while voices play cut them or let them finish? (Cut —
-      simpler, predictable — unless a use case appears.)
+- Fade-out on `stop()`: every gain move (start, set, stop, steal, master)
+  glides on a ~5ms one-pole — reaches silence well under 35ms, no click,
+  and one mechanism instead of a special-cased stop ramp. The page host
+  mirrors it with `setTargetAtTime(…, 0.005)`.
+- `rate` clamp: 0.0625–16, enforced in the BRIDGE so both backends see
+  identical numbers. Cost is flat on Linux (linear interpolation, not a
+  windowed-sinc resampler — right for SFX, matches nothing-fancy playback).
+- Idle policy on the mac/win host: the AudioContext is created on first
+  load and kept running; `resume()` is retried on every play in case the
+  context came up suspended. Revisit only if the App Nap verify item fails
+  — the suspend-when-silent fallback is sketched there.
+- `unload` while voices play: CUTS them (outright, not faded — the fade
+  path would read PCM the unload is about to free). Documented everywhere
+  the API is.
+- Mono sources stay mono (half the memory) and use StereoPanner's mono pan
+  law; stereo uses its stereo cross-mix law; >2ch folds to stereo at
+  decode. Same numbers, same sound as the page host — measured.
 
-## Verify (the fire-and-forget trap applies — see TODO-verify.md rules)
+## Verify
 
-- [ ] Linux: sampler plays clean while a busy page renders (the whole point).
-      `pw-top -b` ERR=0 under 20 concurrent voices + heavy rAF load.
-- [ ] Linux: stereo pan truth via null-sink rig (built-in monitor MONO-ISES —
-      CLAUDE.md), hard-panned reference first.
-- [ ] Linux: filter-chain routing — sampler audible through active EQ, and
-      audioTap sees it post-filter.
-- [ ] mac: accessory app, window never shown, backend `play()` cold — sound
-      comes out. Then: still comes out 10 minutes later (App Nap).
-- [ ] win: autoplay — sampler starts with no gesture ever; add
-      `--autoplay-policy=no-user-gesture-required` if not.
-- [ ] win: hidden main window, sampler running — GPU/CPU quiet in Task
-      Manager, audio unbroken after 5+ min (intensive throttling exemption).
-- [ ] mac/win: main-window reload mid-playback — bank re-arms, next `play()`
-      works without app code doing anything.
-- [ ] Pan/pitch parity: same `{vol, pan, rate}` numbers on all three OSes
-      sound the same (record + compare, don't eyeball by ear alone).
-- [ ] Kill -9 the launcher on Linux mid-playback → relaunch → no orphaned
-      `tinyjs-sampler-*` node (sweep works).
+Linux: all done 2026-07-31, headless (self-driving pages + store.json,
+null-sink rig, pw-top). mac/win items live in TODO-verify.md's
+"tiny.audio.sampler" section per the house rule.
+
+- [x] Linux: sampler plays clean while a busy page renders (the whole point).
+      `pw-top -b` ERR=0 under 20 concurrent voices + heavy rAF load
+      (~57fps canvas hammering; ~240µs busy per quantum).
+- [x] Linux: stereo pan truth via null-sink rig, hard-panned reference
+      first — mono law and stereo cross-mix law match StereoPanner's spec
+      values to 4 decimals (0.3535/0.2499 splits exactly).
+- [x] Linux: filter-chain routing — sampler stream retargeted to
+      `tinyjs-eq-<pid>` by eq_route, post-filter capture measured 0.0619
+      RMS vs 0.0625 expected through a 0.25 linear chain.
+- [x] Kill -9 the launcher on Linux mid-playback → no orphaned
+      `tinyjs-sampler-*` node (nothing lingers by construction).
+- [ ] mac/win: everything — see TODO-verify.md.

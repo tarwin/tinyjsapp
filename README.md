@@ -113,6 +113,12 @@ if (tiny.system.isLinux()) {
 by your app's ports), so playback is unaffected and you don't hear the rest of
 the desktop. What you lose is anything that *was* a graph node — an equalizer,
 a `StereoPanner` — so tell the user rather than leaving dead controls on screen.
+
+For **sound effects** none of this applies: `tiny.audio.sampler` mixes decoded
+samples with per-voice volume/pan/pitch natively in the launcher on Linux
+(PipeWire's real-time data path — clean under any page load) and via Web Audio
+on macOS/Windows, same API, same equal-power pan numbers. Use it instead of
+`createBufferSource` graphs.
 See `examples/amp` for the whole pattern, visualisers included.
 
 Analysis-only graphs are fine: a `MediaElementSource` feeding nothing but an
@@ -424,6 +430,19 @@ audio.play();
 tiny.hotkey.register('boss', 'cmd+shift+k');
 tiny.hotkey.on((id) => tiny.win.show());
 tiny.hotkey.unregister('boss');
+
+// tiny.audio.sampler — sampled sound effects (game/UI SFX): a bank of short
+// decoded sounds (wav/mp3/flac) fired with per-voice vol/pan/rate, one mixed
+// output, 32 voices with oldest-stealing. Works on Linux (native mix in the
+// launcher — Web Audio crackles there) and macOS/Windows (Web Audio in the
+// main window's page) with identical behavior; backend twin app.audio.sampler
+// drives the same mixer. Not for music — that's <audio>.
+const s = tiny.audio.sampler;
+await s.load('coo', '/abs/path/coo.mp3');       // or an ArrayBuffer
+const v = await s.play('coo', { vol: 0.8, pan: -0.3, rate: 1.06 });
+v.set({ pan: 0.1 });                            // live, no restart
+v.stop();                                       // short fade, no click
+s.master(0.5); s.stopAll(); s.unload('coo');
 
 // tiny.audioTap — read the app's rendered audio OUTPUT as PCM (VU meters,
 // visualizers) — including audio that bypasses Web Audio (native HLS,

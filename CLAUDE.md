@@ -11,8 +11,9 @@ Releases are git tags (`vX.Y.Z` on main); a tag push builds macOS + Windows
 + linux-x86_64 + linux-arm64 in CI. Update CHANGELOG.md AND
 docs/changelog.html before tagging. Linux burn-down + platform notes:
 TODO-linux.md. Native-filters-on-other-OSes plan: TODO-audio-filters.md.
-Sampled-SFX mixer plan (`tiny.audio.sampler`, native on Linux / Web Audio
-elsewhere): TODO-audio-sampler.md. PDF pagination + header/footer plan:
+Sampled-SFX mixer (`tiny.audio.sampler`, native on Linux / Web Audio
+elsewhere): TODO-audio-sampler.md — shipped 2026-07-31, Linux verified,
+mac/win page host unwatched (TODO-verify.md). PDF pagination + header/footer plan:
 TODO-pdf.md (macOS `printToPDF` emits ONE tall page today; Windows and
 Linux paginate).
 Anything built on one OS but never watched run on another goes in
@@ -60,3 +61,9 @@ history 2026-07-25) — runbook in ../tinyjsapp-examples/CLAUDE.md.
   it via `pw-metadata <id> target.object <name>`, capture ITS monitor —
   and validate the rig with a hard-panned reference first.
   Xruns: `pw-top -b` ERR column. Destroy test sinks when done.
+  If EVERY capture reads pure zeros (rig included): check
+  `~/.local/state/wireplumber/restore-stream` for a stale
+  `Output/Audio:media.role:Music:channelVolumes=0.0;0.0;` — pw-cat tags its
+  playback `media.role Music`, WirePlumber restores the saved zero onto it,
+  and nothing anywhere says so (links active, volume 1.0, mute false — the
+  zeros ride channelVolumes). Cost hours on 2026-07-31.

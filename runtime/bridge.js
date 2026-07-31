@@ -487,6 +487,11 @@ async function systemCapabilities(query, aiStatus) {
     // it too (process tap); Windows is a measured permanent no — see the
     // windows block below and TODO-audio-filters.md.
     audioFilters: true,
+    // tiny.audio.sampler mixes in the launcher (miniaudio decode + a
+    // pw_stream on PipeWire's RT data loop) for the same reason audioFilters
+    // is native here: Web Audio reaching ctx.destination crackles under
+    // WebKitGTK. Informational — the API is identical either way.
+    sampler: 'native',
   };
   const windows = {
     // Permanent, not pending: measured 2026-07-28. Process-loopback capture is
@@ -542,6 +547,9 @@ async function systemCapabilities(query, aiStatus) {
     // it resolved true while doing nothing. It wants the WinRT
     // SystemMediaTransportControls — see TODO-windows.md.
     nowPlaying: false,
+    // tiny.audio.sampler mixes in the main window's page (Web Audio is
+    // RT-scheduled on Chromium's audio service) — see TODO-audio-sampler.md.
+    sampler: 'page',
   };
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
     // Native DSP on our own output, via a muted Core Audio process tap fed
@@ -557,7 +565,10 @@ async function systemCapabilities(query, aiStatus) {
     // Guarded like hasMacAudioFilters: this object is built on every OS, so
     // without the check every Linux/Windows capabilities() call would spend a
     // round trip asking about a model that isn't there.
-    ai: OS === 'macos' && aiStatus ? (await aiStatus()) !== 'unsupported' : false };
+    ai: OS === 'macos' && aiStatus ? (await aiStatus()) !== 'unsupported' : false,
+    // tiny.audio.sampler mixes in the main window's page (Web Audio rides
+    // Core Audio's RT render thread) — see TODO-audio-sampler.md.
+    sampler: 'page' };
   const table = IS_LINUX ? linux : IS_WIN ? windows : macos;
   return { os: OS, ...table };
 }
@@ -1893,6 +1904,162 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     return { done: false, bodyB64: u8ToB64(r.value) };
   }
 
+  // ── tiny.audio.sampler hub ────────────────────────────────────────────────
+  // One sampled-SFX mixer per app; the bridge owns its state (bank manifest
+  // name→path, master volume, voice-id sequence) whichever backend mixes:
+  // the Linux launcher (native — Web Audio crackles under WebKitGTK) or a
+  // Web Audio host armed in the MAIN window's page on macOS/Windows (always
+  // exists, can't close — see TODO-audio-sampler.md). One state owner means
+  // page calls and backend calls are a single code path, and a main-page
+  // reload on mac/win re-arms the bank from here (playing voices die at
+  // reload — documented). Voice ids are assigned HERE so play() is one
+  // fire-and-forget line to either backend; the bridge can refuse unknown
+  // names itself because it holds the manifest.
+  const sampler = {
+    bank: new Map(),         // name -> absolute path (the decode source of truth)
+    master: 1,
+    seq: 1,
+    pending: new Map(),      // name -> [{ resolve, timer }] awaiting the mac/win host
+  };
+  const smpNum = (v, lo, hi, dflt) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+  };
+  // Inject into the main-window host. The guard makes a line landing before
+  // tiny.js has run (or after a reload wiped the page) a silent no-op — the
+  // client hello replays the bank once the page is back.
+  const smpHost = (js) => send('EVAL ' + esc('window.__tinySampler&&window.__tinySampler.' + js));
+  const smpHostLoad = (name, path) =>
+    smpHost('load(' + JSON.stringify(name) + ',' + JSON.stringify(path) + ')');
+  function samplerResolve(name, result) {
+    const waiters = sampler.pending.get(name);
+    if (!waiters) return;
+    sampler.pending.delete(name);
+    for (const w of waiters) { clearTimeout(w.timer); w.resolve(result); }
+  }
+  // load(name, path | bytes). Bytes are spilled to the cache dir once and
+  // loaded by path from there — the wire never carries sample data, and the
+  // mac/win re-arm can replay the load from the file (binary rules in
+  // TODO-audio-sampler.md).
+  async function samplerLoad(name, source) {
+    name = String(name);
+    let path;
+    if (typeof source === 'string') {
+      path = source;
+      if (!isAbs(path)) path = tjs.cwd + '/' + path;
+    } else {
+      let bytes = source;
+      if (bytes instanceof ArrayBuffer) bytes = new Uint8Array(bytes);
+      else if (ArrayBuffer.isView(bytes)) bytes = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (!(bytes instanceof Uint8Array)) throw new Error('sampler.load: pass a path or an ArrayBuffer');
+      const dir = app.paths.cache + '/sampler';
+      await tjs.makeDir(dir, { recursive: true }).catch(() => {});
+      path = dir + '/' + encodeURIComponent(name);
+      await tjs.writeFile(path, bytes);
+    }
+    if (IS_LINUX) {
+      const r = await ask('SAMPLER', 'LOAD\t' + esc(name) + '\t' + esc(path));
+      if (!r?.ok) throw new Error(r?.error ?? 'sampler: load failed');
+      sampler.bank.set(name, path);
+      return true;
+    }
+    // mac/win: the host decodes and answers back via 'sampler.hostResult'.
+    // The bank entry goes in FIRST so a load racing the main page's boot
+    // still lands: the eval is lost on a page that isn't there yet, but the
+    // client hello that follows replays the whole bank, and the host's
+    // answer resolves this same waiter (pending is keyed by name).
+    sampler.bank.set(name, path);
+    const result = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        samplerResolve(name, { ok: false, error: 'sampler: no answer from the main window (is its page loaded?)' });
+      }, 15000);
+      (sampler.pending.get(name) ?? sampler.pending.set(name, []).get(name)).push({ resolve, timer });
+      smpHostLoad(name, path);
+    });
+    if (!result.ok) {
+      sampler.bank.delete(name);
+      throw new Error(result.error ?? 'sampler: decode failed');
+    }
+    return true;
+  }
+  function samplerPlay(name, opts = {}) {
+    name = String(name);
+    if (!sampler.bank.has(name)) throw new Error('sampler: no sound named "' + name + '" (load it first)');
+    const vol = smpNum(opts.vol, 0, 8, 1);
+    const pan = smpNum(opts.pan, -1, 1, 0);
+    const rate = smpNum(opts.rate, 0.0625, 16, 1);
+    const loop = opts.loop ? 1 : 0;
+    const id = sampler.seq++;
+    if (IS_LINUX) {
+      send('SAMPLER PLAY ' + id + '\t' + esc(name) + '\t' + vol + '\t' + pan + '\t' + rate + '\t' + loop);
+    } else {
+      smpHost('play(' + id + ',' + JSON.stringify(name) + ',' + vol + ',' + pan + ',' + rate + ',' + loop + ')');
+    }
+    return id;
+  }
+  function samplerSet(id, patch = {}) {
+    const vol = patch.vol == null ? null : smpNum(patch.vol, 0, 8, null);
+    const pan = patch.pan == null ? null : smpNum(patch.pan, -1, 1, null);
+    const rate = patch.rate == null ? null : smpNum(patch.rate, 0.0625, 16, null);
+    if (IS_LINUX) {
+      send('SAMPLER SET ' + (id | 0) + '\t' + (vol ?? '_') + '\t' + (pan ?? '_') + '\t' + (rate ?? '_'));
+    } else {
+      smpHost('set(' + (id | 0) + ',' + vol + ',' + pan + ',' + rate + ')');
+    }
+  }
+  function samplerStop(id) {
+    if (IS_LINUX) send('SAMPLER STOP ' + (id | 0));
+    else smpHost('stop(' + (id | 0) + ')');
+  }
+  function samplerStopAll() {
+    if (IS_LINUX) send('SAMPLER STOPALL');
+    else smpHost('stopAll()');
+  }
+  function samplerMaster(v) {
+    sampler.master = smpNum(v, 0, 8, 1);
+    if (IS_LINUX) send('SAMPLER MASTER ' + sampler.master);
+    else smpHost('master(' + sampler.master + ')');
+  }
+  function samplerUnload(name) {
+    name = String(name);
+    if (!sampler.bank.delete(name)) return;
+    if (IS_LINUX) send('SAMPLER UNLOAD ' + esc(name));
+    else smpHost('unload(' + JSON.stringify(name) + ')');
+  }
+  // Re-arm the mac/win host: the main page just said hello (first boot or a
+  // reload), so its Web Audio state is blank — replay master + the bank.
+  // Loads still pending resolve off these replays' answers.
+  function samplerRearm() {
+    if (IS_LINUX || (!sampler.bank.size && sampler.master === 1)) return;
+    if (sampler.master !== 1) smpHost('master(' + sampler.master + ')');
+    for (const [name, path] of sampler.bank) smpHostLoad(name, path);
+  }
+  // The host couldn't read the bank file directly (outside the page's
+  // read-access root) — hand it the bytes once, over the call channel. Not
+  // the wire between bridge and launcher, and only on the fallback path;
+  // the fast path stays fetch(file://).
+  async function samplerBytes(name) {
+    const path = sampler.bank.get(String(name));
+    if (!path) throw new Error('sampler: unknown sound');
+    return { b64: u8ToB64(await tjs.readFile(path)) };
+  }
+  const samplerVoice = (id) => ({
+    id,
+    set: (patch) => (samplerSet(id, patch), true),
+    stop: () => (samplerStop(id), true),
+  });
+  // Backend-side surface (same mixer, same state as the pages' calls).
+  app.audio = {
+    sampler: {
+      load: (name, source) => samplerLoad(name, source),
+      play: async (name, opts) => samplerVoice(samplerPlay(name, opts)),
+      stop: (id) => (samplerStop(id | 0), true),
+      stopAll: () => (samplerStopAll(), true),
+      master: (v) => (samplerMaster(v), true),
+      unload: (name) => (samplerUnload(name), true),
+    },
+  };
+
   const builtins = {
     fetch: doFetch,
     'fetch.pull': pullFetchStream,
@@ -1995,6 +2162,29 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'audio.filters': async ({ filters }) => (app.setAudioFilters(filters), true),
     'audio.filterSet': async ({ index, filter }) => (app.setAudioFilter(index, filter ?? {}), true),
     'audio.balance': async ({ value }) => (app.setAudioBalance(value), true),
+    // tiny.audio.sampler (hub above). Pages send a path or the bytes as
+    // base64 — bytes are spilled to the cache dir and loaded by path.
+    'sampler.load': async ({ name, path, bytesB64 }) =>
+      samplerLoad(name, path != null ? String(path) : b64ToU8(String(bytesB64 ?? ''))),
+    'sampler.play': async ({ name, ...opts }) => ({ id: samplerPlay(name, opts) }),
+    'sampler.set': async ({ id, ...patch }) => (samplerSet(id, patch), true),
+    'sampler.stop': async ({ id }) => (samplerStop(id), true),
+    'sampler.stopAll': async () => (samplerStopAll(), true),
+    'sampler.master': async ({ value }) => (samplerMaster(value), true),
+    'sampler.unload': async ({ name }) => (samplerUnload(name), true),
+    // The two host-only calls: the main window's Web Audio host answering a
+    // load, and asking for bytes when the bank file sits outside its
+    // file:// read root.
+    'sampler.hostResult': async ({ name, ok, error }) =>
+      (samplerResolve(String(name), { ok: !!ok, error }), true),
+    'sampler.bytes': async ({ name }) => samplerBytes(name),
+    // Every page announces itself once tiny.js is up. The main window's
+    // hello doubles as the sampler re-arm signal on mac/win: a reload wiped
+    // the host's decoded bank, so replay it (TODO-audio-sampler.md).
+    'client.hello': async (_p, _a, m) => {
+      if ((m?.window || 'main') === 'main') samplerRearm();
+      return true;
+    },
     'win.startDrag': async (_p, _a, m) => (forWin(m).startDrag(), true),
     'win.startResize': async ({ edge } = {}, _a, m) => (forWin(m).startResize(edge), true),
     'win.zoom': async (_p, _a, m) => (forWin(m).zoom(), true),

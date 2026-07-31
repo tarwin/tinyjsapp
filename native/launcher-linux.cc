@@ -29,6 +29,18 @@
 #ifdef TINYJS_PIPEWIRE
 #include <pipewire/pipewire.h>
 #include <spa/param/video/format-utils.h>
+#include <spa/param/audio/format-utils.h>
+// tiny.audio.sampler decode: miniaudio's WAV/MP3/FLAC decoders + resampler
+// only — MA_NO_DEVICE_IO drops its device layer (PipeWire is the output).
+// Vendored at native/include/miniaudio.h (v0.11.22); -isystem in setup.sh.
+#define MA_NO_DEVICE_IO
+#define MA_NO_ENCODING
+#define MA_NO_GENERATION
+#define MA_NO_ENGINE
+#define MA_NO_NODE_GRAPH
+#define MA_NO_RESOURCE_MANAGER
+#define MINIAUDIO_IMPLEMENTATION
+#include <miniaudio.h>
 #endif
 #ifdef TINYJS_APPINDICATOR
 #include <libayatana-appindicator/app-indicator.h>
@@ -43,6 +55,8 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
+#include <memory>
 #include <string>
 #include <vector>
 #include <map>
@@ -2774,6 +2788,11 @@ static int g_tap_rate = 44100, g_tap_channels = 2, g_tap_interval = 80;
 // stops and starts). Empty name = not an app-scope tap.
 static std::string g_tap_sink;       // "tinyjs-tap-<pid>" while an app tap runs
 static guint g_tap_link_timer = 0;
+// "tinyjs-sampler-<pid>" while the sampler's pw_stream runs (see the sampler
+// section below). Declared here because the app-scope tap and the EQ router
+// must treat that node as one of ours: it plays this app's audio but can't
+// share node.name with the WebKit streams (teardown is by exact-name match).
+static std::string g_smp_node;
 
 // Fire-and-forget a pw-* helper; errors (a port not there yet, a link that
 // already exists) are the normal case here, so ignore them.
@@ -2795,6 +2814,9 @@ static gboolean tap_link_tick(gpointer) {
   if (g_tap_sink.empty() || g_app_id.empty()) return G_SOURCE_CONTINUE;
   for (const char* ch : {"FL", "FR"}) {
     pw_run({"pw-link", g_app_id + ":output_" + ch, g_tap_sink + ":playback_" + ch});
+    // The sampler's stream is this app's audio too, under its own node name.
+    if (!g_smp_node.empty())
+      pw_run({"pw-link", g_smp_node + ":output_" + ch, g_tap_sink + ":playback_" + ch});
   }
   return G_SOURCE_CONTINUE;
 }
@@ -2889,12 +2911,16 @@ static std::string eq_num(double v) {
 // handle audioTap links by. Runs on a timer because a stream that appears
 // later — a second window, a page reload — must be routed too.
 static void eq_route(const std::string& sink) {
-  if (g_app_id.empty()) return;
+  if (g_app_id.empty() && g_smp_node.empty()) return;
   std::string val = sink.empty() ? "" : sink;
+  // Everything this app plays: the WebKit streams (node.name == app id) and
+  // the sampler's own stream, when it exists — awk alternation matches both.
+  std::string names = g_app_id.empty() ? g_smp_node
+      : g_smp_node.empty() ? g_app_id : g_app_id + "|" + g_smp_node;
   std::string script =
       "pw-cli ls Node 2>/dev/null | awk '/^[[:space:]]*id [0-9]+/{id=$2; "
-      "gsub(/[^0-9]/,\"\",id)} /node\\.name = \"" + g_app_id +
-      "\"/{print id}' | while read n; do pw-metadata \"$n\" target.object \"" +
+      "gsub(/[^0-9]/,\"\",id)} /node\\.name = \"(" + names +
+      ")\"/{print id}' | while read n; do pw-metadata \"$n\" target.object \"" +
       val + "\" >/dev/null 2>&1; done";
   const gchar* argv[] = {"sh", "-c", script.c_str(), nullptr};
   g_spawn_async(nullptr, (gchar**)argv, nullptr,
@@ -3098,6 +3124,424 @@ static void eq_push_soon() {
     eq_push_params(-1);
     return G_SOURCE_REMOVE;
   }, nullptr);
+}
+
+// -------------------------------------------------- tiny.audio.sampler ------
+// A native sampled-SFX mixer: decoded banks of short sounds, fired with
+// per-voice vol/pan/rate, summed in a pw_stream process callback. It exists
+// because Web Audio is unusable on WebKitGTK (the graph renders on a
+// normal-priority thread and crackles — measured, TODO-linux.md), while
+// PipeWire's client data loop IS RT-scheduled (rtkit promotes it). macOS and
+// Windows run the same verbs in a page-side Web Audio host instead; the wire
+// ops here are the Linux backend (TODO-audio-sampler.md).
+//
+// The stream node dies with the process — no object.linger, so unlike the
+// tap sink a kill -9 strands nothing and there is no sweep to run.
+//
+// Threading: LOAD decodes on a detached thread (bank map under its own
+// mutex); PLAY/SET/STOP arrive on the GTK thread and the process callback
+// runs on PipeWire's RT data thread (PW_STREAM_FLAG_RT_PROCESS), so voice
+// state is shared under g_smp_mutex. Control-side critical sections are
+// plain field writes — bounded µs, never an allocation or syscall — and the
+// RT side holds the lock only while mixing one quantum.
+
+#ifdef TINYJS_PIPEWIRE
+
+static const int SMP_RATE = 48000;
+static const int SMP_MAX_VOICES = 32;  // live cap — above it play() steals
+static const int SMP_SLOTS = 48;       // + headroom so stolen voices can fade
+
+struct SmpSound {
+  std::vector<float> pcm;   // interleaved f32 @48k; 1ch (mono kept mono) or 2
+  int channels = 2;
+  size_t frames = 0;
+};
+
+// Per-voice mixing coefficients follow StereoPannerNode's equal-power law so
+// the same {vol, pan} numbers sound the same as the mac/win page backend:
+//   mono   x=(pan+1)/2:  L = m·cos(xπ/2)          R = m·sin(xπ/2)
+//   pan≤0  x=pan+1:      L = l + r·cos(xπ/2)      R = r·sin(xπ/2)
+//   pan>0  x=pan:        L = l·cos(xπ/2)          R = r + l·sin(xπ/2)
+// cXY = source channel X into output Y; targets move on set(), the cur*
+// values chase them per-sample in the callback (~5ms one-pole) so a live
+// set()/stop() never clicks.
+struct SmpVoice {
+  bool active = false;
+  bool fading = false;      // targets forced 0; slot frees at silence
+  std::shared_ptr<SmpSound> snd;
+  uint32_t vid = 0;
+  uint64_t serial = 0;      // steal order (oldest live voice goes first)
+  double pos = 0;           // fractional frame; += rate per output frame
+  double rate = 1;
+  bool loop = false;
+  float vol = 1, pan = 0;
+  float tLL = 0, tRL = 0, tLR = 0, tRR = 0;  // targets
+  float cLL = 0, cRL = 0, cLR = 0, cRR = 0;  // smoothed (start 0: fade-in declick)
+};
+
+static std::mutex g_smp_mutex;             // voices + master (GTK ↔ RT thread)
+static SmpVoice g_smp_voices[SMP_SLOTS];
+static uint64_t g_smp_serial = 1;
+static float g_smp_master_target = 1.0f, g_smp_master_cur = 1.0f;
+static std::mutex g_smp_bank_mutex;        // bank map (GTK ↔ decode threads)
+static std::map<std::string, std::shared_ptr<SmpSound>> g_smp_bank;
+
+static pw_thread_loop* g_smp_loop = nullptr;
+static pw_context* g_smp_ctx = nullptr;
+static pw_core* g_smp_core = nullptr;
+static pw_stream* g_smp_stream = nullptr;
+static spa_hook g_smp_listener;
+
+static void smp_voice_targets(SmpVoice& v) {
+  float pan = v.pan < -1 ? -1.0f : v.pan > 1 ? 1.0f : v.pan;
+  float vol = v.vol < 0 ? 0.0f : v.vol;
+  const float H = (float)M_PI / 2;
+  if (v.snd && v.snd->channels == 1) {
+    float x = (pan + 1) * 0.5f;
+    v.tLL = vol * cosf(x * H); v.tRR = vol * sinf(x * H);
+    v.tRL = v.tLR = 0;
+  } else if (pan <= 0) {
+    float x = pan + 1;
+    v.tLL = vol; v.tRL = vol * cosf(x * H);
+    v.tRR = vol * sinf(x * H); v.tLR = 0;
+  } else {
+    v.tLL = vol * cosf(pan * H); v.tRL = 0;
+    v.tRR = vol; v.tLR = vol * sinf(pan * H);
+  }
+}
+
+static void smp_on_process(void*) {
+  pw_buffer* b = pw_stream_dequeue_buffer(g_smp_stream);
+  if (!b) return;
+  spa_data& d = b->buffer->datas[0];
+  float* dst = (float*)d.data;
+  uint32_t max_frames = d.maxsize / (2 * sizeof(float));
+  uint32_t frames = max_frames;
+  if (b->requested && b->requested < max_frames) frames = (uint32_t)b->requested;
+  if (!dst || !frames) { pw_stream_queue_buffer(g_smp_stream, b); return; }
+  memset(dst, 0, frames * 2 * sizeof(float));
+
+  // ~5ms one-pole for every gain move (start, set(), stop() fade, master).
+  const float A = 0.99584f;  // expf(-1 / (0.005 * 48000))
+  {
+    std::lock_guard<std::mutex> lock(g_smp_mutex);
+    for (SmpVoice& v : g_smp_voices) {
+      if (!v.active || !v.snd) continue;
+      const SmpSound& s = *v.snd;
+      if (!s.frames) { v.active = false; continue; }
+      const float* pcm = s.pcm.data();
+      for (uint32_t f = 0; f < frames; f++) {
+        if (v.pos >= (double)s.frames) {
+          if (!v.loop) { v.active = false; break; }
+          v.pos = fmod(v.pos, (double)s.frames);
+        }
+        size_t i0 = (size_t)v.pos;
+        float frac = (float)(v.pos - (double)i0);
+        size_t i1 = i0 + 1;
+        if (i1 >= s.frames) i1 = v.loop ? 0 : i0;
+        v.cLL = v.tLL + (v.cLL - v.tLL) * A;
+        v.cRL = v.tRL + (v.cRL - v.tRL) * A;
+        v.cLR = v.tLR + (v.cLR - v.tLR) * A;
+        v.cRR = v.tRR + (v.cRR - v.tRR) * A;
+        if (s.channels == 1) {
+          float m = pcm[i0] + (pcm[i1] - pcm[i0]) * frac;
+          dst[2 * f] += m * v.cLL;
+          dst[2 * f + 1] += m * v.cRR;
+        } else {
+          float l = pcm[2 * i0] + (pcm[2 * i1] - pcm[2 * i0]) * frac;
+          float r = pcm[2 * i0 + 1] + (pcm[2 * i1 + 1] - pcm[2 * i0 + 1]) * frac;
+          dst[2 * f] += l * v.cLL + r * v.cRL;
+          dst[2 * f + 1] += r * v.cRR + l * v.cLR;
+        }
+        v.pos += v.rate;
+      }
+      // A fade-out that has reached silence frees its slot. Only the flag
+      // flips here — the shared_ptr is control-thread property, so decoded
+      // PCM is never freed on the RT thread.
+      if (v.fading && v.cLL + v.cRL + v.cLR + v.cRR < 1e-4f) v.active = false;
+    }
+    for (uint32_t f = 0; f < frames; f++) {
+      g_smp_master_cur = g_smp_master_target + (g_smp_master_cur - g_smp_master_target) * A;
+      dst[2 * f] *= g_smp_master_cur;
+      dst[2 * f + 1] *= g_smp_master_cur;
+    }
+  }
+
+  d.chunk->offset = 0;
+  d.chunk->stride = 2 * sizeof(float);
+  d.chunk->size = frames * 2 * sizeof(float);
+  pw_stream_queue_buffer(g_smp_stream, b);
+}
+
+static const struct pw_stream_events g_smp_stream_events = [] {
+  pw_stream_events ev{};
+  ev.version = PW_VERSION_STREAM_EVENTS;
+  ev.process = smp_on_process;
+  return ev;
+}();
+
+static void smp_stop() {
+  if (g_smp_loop) pw_thread_loop_stop(g_smp_loop);
+  if (g_smp_stream) { pw_stream_destroy(g_smp_stream); g_smp_stream = nullptr; }
+  if (g_smp_core) { pw_core_disconnect(g_smp_core); g_smp_core = nullptr; }
+  if (g_smp_ctx) { pw_context_destroy(g_smp_ctx); g_smp_ctx = nullptr; }
+  if (g_smp_loop) { pw_thread_loop_destroy(g_smp_loop); g_smp_loop = nullptr; }
+  g_smp_node.clear();
+  std::lock_guard<std::mutex> lock(g_smp_bank_mutex);
+  g_smp_bank.clear();
+}
+
+// Bring the output stream up (first LOAD). One stream for the app's whole
+// bank; PW_STREAM_FLAG_RT_PROCESS runs smp_on_process on the RT data loop —
+// the entire reason this backend exists.
+static bool smp_stream_start() {
+  if (g_smp_stream) return true;
+  static bool pw_inited = false;
+  if (!pw_inited) { pw_init(nullptr, nullptr); pw_inited = true; }
+  g_smp_node = "tinyjs-sampler-" + std::to_string(getpid());
+  g_smp_loop = pw_thread_loop_new("tinyjs-sampler", nullptr);
+  if (!g_smp_loop) { g_smp_node.clear(); return false; }
+  g_smp_ctx = pw_context_new(pw_thread_loop_get_loop(g_smp_loop), nullptr, 0);
+  if (!g_smp_ctx || pw_thread_loop_start(g_smp_loop) < 0) { smp_stop(); return false; }
+  pw_thread_loop_lock(g_smp_loop);
+  g_smp_core = pw_context_connect(g_smp_ctx, nullptr, 0);
+  if (!g_smp_core) { pw_thread_loop_unlock(g_smp_loop); smp_stop(); return false; }
+  pw_properties* props = pw_properties_new(
+      PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CATEGORY, "Playback",
+      PW_KEY_MEDIA_ROLE, "Game", PW_KEY_NODE_NAME, g_smp_node.c_str(),
+      PW_KEY_APP_NAME, (g_app_id.empty() ? g_app_name : g_app_id).c_str(),
+      nullptr);
+  // A filter chain already up: route through it from the first buffer, so
+  // tiny.audio.filters keeps its "applies to everything the app plays"
+  // contract (eq_route's timer would catch it anyway, seconds later).
+  if (!g_eq_sink.empty())
+    pw_properties_set(props, PW_KEY_TARGET_OBJECT, g_eq_sink.c_str());
+  g_smp_stream = pw_stream_new(g_smp_core, "tinyjs sampler", props);
+  if (!g_smp_stream) { pw_thread_loop_unlock(g_smp_loop); smp_stop(); return false; }
+  pw_stream_add_listener(g_smp_stream, &g_smp_listener, &g_smp_stream_events, nullptr);
+  uint8_t pod[1024];
+  spa_pod_builder pb = SPA_POD_BUILDER_INIT(pod, sizeof pod);
+  spa_audio_info_raw info{};
+  info.format = SPA_AUDIO_FORMAT_F32;
+  info.rate = SMP_RATE;
+  info.channels = 2;
+  info.position[0] = SPA_AUDIO_CHANNEL_FL;
+  info.position[1] = SPA_AUDIO_CHANNEL_FR;
+  const spa_pod* params[1];
+  params[0] = spa_format_audio_raw_build(&pb, SPA_PARAM_EnumFormat, &info);
+  int rc = pw_stream_connect(g_smp_stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
+      (pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS |
+                        PW_STREAM_FLAG_RT_PROCESS),
+      params, 1);
+  pw_thread_loop_unlock(g_smp_loop);
+  if (rc < 0) { smp_stop(); return false; }
+  return true;
+}
+
+// SAMPLER <qid> LOAD\t<name>\t<path> — decode off-thread, answer when done.
+// The decoder sniffs content (extension irrelevant); mono stays mono (half
+// the memory, and the mono pan law — see smp_voice_targets), >2ch folds to
+// stereo. Decoded PCM is the only copy that exists; the compressed source
+// stays on disk (the bridge owns the path).
+static void smp_err(const std::string& qid, const std::string& why) {
+  send_got(qid, "{\"ok\":false,\"error\":" + json_escape(why) + "}");
+}
+
+static void do_sampler_load(const std::string& qid, const std::string& body) {
+  auto f = split_tabs(body);
+  std::string name = wire_unescape(tab_field(f, 1));
+  std::string path = wire_unescape(tab_field(f, 2));
+  if (name.empty() || path.empty()) { smp_err(qid, "sampler: LOAD needs a name and a path"); return; }
+  if (!smp_stream_start()) {
+    smp_err(qid, "sampler: PipeWire output unavailable");
+    return;
+  }
+  std::thread([qid, name, path]() {
+    auto snd = std::make_shared<SmpSound>();
+    ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, SMP_RATE);
+    ma_decoder dec;
+    if (ma_decoder_init_file(path.c_str(), &cfg, &dec) != MA_SUCCESS) {
+      smp_err(qid, "sampler: can't decode " + path + " (wav/mp3/flac)");
+      return;
+    }
+    if (dec.outputChannels > 2) {          // fold surround down to stereo
+      ma_decoder_uninit(&dec);
+      cfg = ma_decoder_config_init(ma_format_f32, 2, SMP_RATE);
+      if (ma_decoder_init_file(path.c_str(), &cfg, &dec) != MA_SUCCESS) {
+        smp_err(qid, "sampler: can't decode " + path);
+        return;
+      }
+    }
+    snd->channels = (int)dec.outputChannels;
+    const ma_uint64 CHUNK = 4096;
+    std::vector<float> buf(CHUNK * snd->channels);
+    for (;;) {
+      ma_uint64 got = 0;
+      ma_result r = ma_decoder_read_pcm_frames(&dec, buf.data(), CHUNK, &got);
+      if (got > 0) snd->pcm.insert(snd->pcm.end(), buf.data(), buf.data() + got * snd->channels);
+      if (r != MA_SUCCESS || got < CHUNK) break;
+    }
+    ma_decoder_uninit(&dec);
+    snd->frames = snd->pcm.size() / snd->channels;
+    if (!snd->frames) { smp_err(qid, "sampler: " + path + " decoded to no audio"); return; }
+    {
+      std::lock_guard<std::mutex> lock(g_smp_bank_mutex);
+      g_smp_bank[name] = snd;              // replacing re-decodes; old PCM freed here
+    }
+    send_got(qid, "{\"ok\":true,\"frames\":" + std::to_string(snd->frames) +
+                  ",\"channels\":" + std::to_string(snd->channels) + "}");
+  }).detach();
+}
+
+// PLAY <vid>\t<name>\t<vol>\t<pan>\t<rate>\t<loop> — fire-and-forget: the
+// bridge assigns voice ids (it owns the manifest and can refuse unknown
+// names itself), so a play is one wire line with no round trip.
+static void smp_play(const std::string& rest) {
+  auto f = split_tabs(rest);
+  uint32_t vid = (uint32_t)strtoul(tab_field(f, 0).c_str(), nullptr, 10);
+  std::string name = wire_unescape(tab_field(f, 1));
+  std::shared_ptr<SmpSound> snd;
+  {
+    std::lock_guard<std::mutex> lock(g_smp_bank_mutex);
+    auto it = g_smp_bank.find(name);
+    if (it == g_smp_bank.end()) return;    // bridge-side check makes this rare
+    snd = it->second;
+  }
+  double vol = atof(tab_field(f, 2).c_str());
+  double pan = atof(tab_field(f, 3).c_str());
+  double rate = atof(tab_field(f, 4).c_str());
+  bool loop = tab_field(f, 5) == "1";
+  if (rate <= 0) rate = 1;
+  std::lock_guard<std::mutex> lock(g_smp_mutex);
+  // Voice cap with oldest-first stealing: play() never fails for "too many".
+  // The stolen voice fades (~5ms) in its slot; the new one takes a free slot.
+  int live = 0;
+  for (SmpVoice& v : g_smp_voices) if (v.active && !v.fading) live++;
+  if (live >= SMP_MAX_VOICES) {
+    SmpVoice* oldest = nullptr;
+    for (SmpVoice& v : g_smp_voices)
+      if (v.active && !v.fading && (!oldest || v.serial < oldest->serial)) oldest = &v;
+    if (oldest) {
+      oldest->fading = true;
+      oldest->tLL = oldest->tRL = oldest->tLR = oldest->tRR = 0;
+    }
+  }
+  SmpVoice* slot = nullptr;
+  for (SmpVoice& v : g_smp_voices) if (!v.active) { slot = &v; break; }
+  if (!slot) {                             // every slot fading too — hard steal
+    for (SmpVoice& v : g_smp_voices)
+      if (!slot || v.serial < slot->serial) slot = &v;
+  }
+  SmpVoice& v = *slot;
+  v.snd = snd;
+  v.vid = vid;
+  v.serial = g_smp_serial++;
+  v.pos = 0;
+  v.rate = rate;
+  v.loop = loop;
+  v.vol = (float)vol;
+  v.pan = (float)pan;
+  v.fading = false;
+  v.cLL = v.cRL = v.cLR = v.cRR = 0;       // ramp in from silence (declick)
+  smp_voice_targets(v);
+  v.active = true;
+}
+
+// SET <vid>\t<vol|_>\t<pan|_>\t<rate|_> — live, no restart; '_' leaves a
+// field alone. Gains glide (~5ms); rate steps outright (a step is a pitch
+// change, not a click).
+static void smp_set(const std::string& rest) {
+  auto f = split_tabs(rest);
+  uint32_t vid = (uint32_t)strtoul(tab_field(f, 0).c_str(), nullptr, 10);
+  std::lock_guard<std::mutex> lock(g_smp_mutex);
+  for (SmpVoice& v : g_smp_voices) {
+    if (!v.active || v.vid != vid || v.fading) continue;
+    if (tab_field(f, 1) != "_") v.vol = (float)atof(tab_field(f, 1).c_str());
+    if (tab_field(f, 2) != "_") v.pan = (float)atof(tab_field(f, 2).c_str());
+    if (tab_field(f, 3) != "_") {
+      double r = atof(tab_field(f, 3).c_str());
+      if (r > 0) v.rate = r;
+    }
+    smp_voice_targets(v);
+    return;
+  }
+}
+
+static void smp_stop_voice(uint32_t vid) {
+  std::lock_guard<std::mutex> lock(g_smp_mutex);
+  for (SmpVoice& v : g_smp_voices) {
+    if (!v.active || v.vid != vid) continue;
+    v.fading = true;
+    v.tLL = v.tRL = v.tLR = v.tRR = 0;     // short fade-out, no click
+    return;
+  }
+}
+
+static void smp_stop_all() {
+  std::lock_guard<std::mutex> lock(g_smp_mutex);
+  for (SmpVoice& v : g_smp_voices) {
+    if (!v.active) continue;
+    v.fading = true;
+    v.tLL = v.tRL = v.tLR = v.tRR = 0;
+  }
+}
+
+static void smp_master(double val) {
+  std::lock_guard<std::mutex> lock(g_smp_mutex);
+  g_smp_master_target = val < 0 ? 0.0f : val > 8 ? 8.0f : (float)val;
+}
+
+// UNLOAD cuts voices still playing the sound (documented; simpler and
+// predictable) — outright, because the fade path would read PCM the erase
+// below is about to free. The shared_ptr swap means the actual free happens
+// here on the control thread, never on the RT thread.
+static void smp_unload(const std::string& name) {
+  std::shared_ptr<SmpSound> snd;
+  {
+    std::lock_guard<std::mutex> lock(g_smp_bank_mutex);
+    auto it = g_smp_bank.find(name);
+    if (it == g_smp_bank.end()) return;
+    snd = it->second;
+    g_smp_bank.erase(it);
+  }
+  std::lock_guard<std::mutex> lock(g_smp_mutex);
+  for (SmpVoice& v : g_smp_voices) {
+    if (v.snd == snd) { v.active = false; v.fading = false; v.snd.reset(); }
+  }
+}
+
+#else  // !TINYJS_PIPEWIRE
+
+static void smp_stop() {}
+
+#endif
+
+// Dispatch for both wire shapes: "SAMPLER <qid> LOAD\t…" (qid-answered — the
+// caller must learn whether the decode worked) and the fire-and-forget verbs
+// "SAMPLER PLAY|SET|STOP|STOPALL|MASTER|UNLOAD …".
+static void do_sampler_line(const std::string& rest) {
+#ifdef TINYJS_PIPEWIRE
+  if (rest.rfind("PLAY ", 0) == 0) { smp_play(rest.substr(5)); return; }
+  if (rest.rfind("SET ", 0) == 0) { smp_set(rest.substr(4)); return; }
+  if (rest.rfind("STOPALL", 0) == 0) { smp_stop_all(); return; }
+  if (rest.rfind("STOP ", 0) == 0) {
+    smp_stop_voice((uint32_t)strtoul(rest.c_str() + 5, nullptr, 10));
+    return;
+  }
+  if (rest.rfind("MASTER ", 0) == 0) { smp_master(atof(rest.c_str() + 7)); return; }
+  if (rest.rfind("UNLOAD ", 0) == 0) { smp_unload(wire_unescape(rest.substr(7))); return; }
+  size_t sp = rest.find(' ');
+  if (sp == std::string::npos) return;
+  do_sampler_load(rest.substr(0, sp), rest.substr(sp + 1));
+#else
+  // Fire-and-forget verbs drop silently; LOAD must answer so the app's
+  // await doesn't hang.
+  const char* verbs[] = {"PLAY ", "SET ", "STOP", "MASTER ", "UNLOAD "};
+  for (const char* v : verbs) if (rest.rfind(v, 0) == 0) return;
+  size_t sp = rest.find(' ');
+  if (sp != std::string::npos)
+    got_unsupported(rest.substr(0, sp), "sampler: launcher built without PipeWire");
+#endif
 }
 
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -5089,6 +5533,7 @@ static void handle_line(const std::string& line) {
   }
   if (line == "AUDIOTAP STOP") { tap_stop(); return; }
   if (qid_op("AUDIOTAP", qid, body)) { do_audiotap(qid, body); return; }
+  if (line.rfind("SAMPLER ", 0) == 0) { do_sampler_line(line.substr(8)); return; }
   if (line == "MOUSETRACK STOP") { mt_stop(); return; }
   if (qid_op("MOUSETRACK", qid, body)) { mt_start(qid, body); return; }
   if (line.rfind("NOWPLAYING", 0) == 0) {
@@ -5389,6 +5834,7 @@ int main(int argc, char** argv) {
   if (g_inhibit_fd >= 0) close(g_inhibit_fd);
   eq_stop();
   tap_stop();
+  smp_stop();
   remove_tray();
   _exit(0);
 }

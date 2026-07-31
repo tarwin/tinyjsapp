@@ -248,6 +248,7 @@
     <a href="#clipboard">clipboard</a>
     <a href="#hotkeys">hotkeys</a>
     <a href="#audio">audio filters</a>
+    <a href="#sampler">sampler</a>
     <a href="#audiotap">audioTap</a>
     <a href="#keystrokes">keystrokes</a>
     <a href="#permissions">permissions</a>
@@ -856,6 +857,46 @@ await <b>eq.clear</b>();                              <i>// unprocessed output r
     (use <code>balance()</code>). Don't use it on Linux: Web Audio reaching
     <code>ctx.destination</code> crackles there, which is exactly why the
     native chain exists.</p>
+  </section>
+
+  <section id="sampler">
+    <h2>tiny.audio.sampler <span class="tag">sound effects</span></h2>
+    <p>One sampled-SFX mixer per app: a bank of <b>short decoded sounds</b>
+    (wav/mp3/flac guaranteed) fired with per-voice volume, pan and pitch,
+    mixed into one output. Game and UI sound effects — not streaming, not
+    music (that's <code>&lt;audio&gt;</code>), not a sequencer. It exists so
+    SFX work on <b>Linux</b>, where Web Audio reaching
+    <code>ctx.destination</code> crackles (see <a href="#audio">audio
+    filters</a>): there the launcher decodes and mixes natively in PipeWire's
+    real-time data path. On macOS/Windows it mixes in the main window's page
+    via Web Audio, which is already real-time there.
+    <code>capabilities().sampler</code> reports <code>'native'</code> |
+    <code>'page'</code>, but the API is identical — don't branch.</p>
+    <pre>const s = tiny.audio.sampler;
+await <b>s.load</b>('coo', '/abs/path/coo.mp3');   <i>// by path; ArrayBuffer also accepted</i>
+const v = await <b>s.play</b>('coo', { vol: 0.8, pan: -0.3, rate: 1.06, loop: false });
+<b>v.set</b>({ pan: 0.1 });                        <i>// live, no restart</i>
+<b>v.stop</b>();                                   <i>// short fade-out, no click</i>
+<b>s.master</b>(0.5);                              <i>// one master gain</i>
+<b>s.stopAll</b>();
+<b>s.unload</b>('coo');                            <i>// frees the decoded PCM; cuts its voices</i></pre>
+    <p class="note"><code>vol</code> is linear 0..1, <code>pan</code> −1..1
+    <b>equal-power</b> (StereoPanner's law — the native mixer matches it, so
+    the same numbers sound the same everywhere), <code>rate</code> a
+    playbackRate-style ratio (pitch and speed together). Up to <b>32
+    voices</b>; past that <code>play()</code> steals the oldest rather than
+    failing. App-scoped: every window and the backend
+    (<code>app.audio.sampler</code>) drive the SAME mixer with the same
+    state.</p>
+    <p class="note">Load by path when you can — bytes are written to the app
+    cache once and loaded from disk, never streamed around. Decoded audio is
+    the real memory (48kHz stereo ≈ 375KB per second), which is why this API
+    is samples-only. On macOS/Windows a main-window reload re-arms the bank
+    automatically; voices playing at that moment die. On Linux the launcher
+    decodes, so effects can't be broken by missing GStreamer plugins, and an
+    active <a href="#audio">filter chain</a> applies to the sampler like
+    everything else the app plays. Out of scope: sample-accurate scheduling
+    (<code>start(when)</code>), per-voice filters, MediaStreams.</p>
   </section>
 
   <section id="audiotap">

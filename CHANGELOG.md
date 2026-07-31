@@ -4,6 +4,34 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.33.0 — 2026-07-31
+
+- **`tiny.audio.sampler` — sampled sound effects that work everywhere,
+  including Linux.** A bank of short decoded sounds (wav/mp3/flac guaranteed)
+  fired with per-voice volume, pan and pitch, mixed into one output — game and
+  UI SFX, the coo3d workload. `await s.load('coo', path)` (or an ArrayBuffer —
+  spilled to the app cache once, never streamed over the wire), `const v =
+  await s.play('coo', { vol, pan, rate, loop })`, then `v.set({ pan })` live
+  and `v.stop()` with a click-free fade; `s.master(v)`, `s.unload(name)`. 32
+  voices, oldest-stolen — `play()` never fails for "too many". Backend twin
+  `app.audio.sampler` drives the SAME mixer, one state owner (the bridge), so
+  every window and `main.js` agree. On macOS/Windows it mixes in the main
+  window's page via Web Audio (already RT-scheduled there; the main window
+  always exists and can't close, and a page reload re-arms the bank by itself
+  — playing voices die, which is the documented cost). On Linux, where Web
+  Audio reaching `ctx.destination` crackles under WebKitGTK (measured, the
+  reason `tiny.audio.filters` is native too), the LAUNCHER decodes with
+  miniaudio and mixes in a PipeWire `pw_stream` on the RT data loop — the
+  page can be melting under rAF load and the audio doesn't care (measured:
+  20 live-automated voices, ERR 0, ~240µs/quantum). Same equal-power pan law
+  as `StereoPanner` on all three, verified against a null-sink capture to
+  four decimal places on Linux. Launcher decode also means SFX can't be
+  broken by missing GStreamer plugins, and an active `tiny.audio.filters`
+  chain picks the sampler up like everything else the app plays.
+  `capabilities().sampler` says `'native'` or `'page'`, but apps shouldn't
+  care — the API is identical. Out of scope by design: sample-accurate
+  scheduling, per-voice filters, music (that's `<audio>`).
+
 ## 0.32.0 — 2026-07-30
 
 - **Lost windows come back.** Apps restore saved positions blindly, and

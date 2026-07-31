@@ -89,8 +89,10 @@ if [ "$OS" = "Linux" ]; then
   pkg-config --exists libpipewire-0.3 2>/dev/null && { PW_PKGS="libpipewire-0.3"; EXTRA_DEFS="$EXTRA_DEFS -DTINYJS_PIPEWIRE"; }
   [ -z "$PW_PKGS" ] && echo "    (no libpipewire-0.3 dev package — Wayland mouseTracking disabled)"
 
+  # -isystem native/include: miniaudio.h (tiny.audio.sampler decoders) is
+  # vendored there; system-include keeps its warnings out of our build.
   # shellcheck disable=SC2086
-  c++ -std=c++17 -O2 native/launcher-linux.cc -o native/launcher-linux \
+  c++ -std=c++17 -O2 -isystem native/include native/launcher-linux.cc -o native/launcher-linux \
     $EXTRA_DEFS \
     $(pkg-config --cflags --libs gtk+-3.0 webkit2gtk-4.1 $IND_PKG $XT_PKGS $PW_PKGS) -ldl
 

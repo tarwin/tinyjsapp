@@ -1084,3 +1084,51 @@ leaves the second. Compiled-never-watched elsewhere:
       satellite mid-session: the 0.5s-delayed pass brings it back (AppKit
       migrates most windows itself; frameless ones are the interesting
       case).
+
+## tiny.audio.sampler — Linux built AND verified 2026-07-31; mac/win page host UNRUN
+
+The Linux native backend (miniaudio decode + `pw_stream` mixer in the
+launcher) was proven headlessly on this Linux box the day it was built:
+load/play/set/stop/stopAll/master/unload round-trips from page AND backend
+(one shared hub — voice ids interleave), error paths (unknown name, bad
+file, play-after-unload) reject with real messages, equal-power pan law
+matches StereoPanner's spec numbers to 4 decimals via the null-sink rig
+(mono −1/0/+1 and the stereo cross-mix law), 20 looping voices with 50ms
+pan automation under a ~57fps rAF-hammered canvas run at ERR=0 /
+~240µs-per-quantum in `pw-top`, an active `tiny.audio.filters` chain picks
+the sampler stream up (metadata `target.object` → `tinyjs-eq-<pid>`, and
+post-filter capture measured 0.0619 RMS against 0.0625 expected for a 0.25
+linear chain), and kill -9 mid-playback leaves zero orphaned
+`tinyjs-sampler-*` nodes (a pw_stream dies with its process — no linger, no
+sweep needed).
+
+The macOS/Windows page host (Web Audio in the main window, bridge re-arms
+on client hello) is written to the same verbs but has NEVER RUN on either
+OS:
+
+- [ ] **mac/win basics** — the page1.html drill from the Linux pass (see
+      git history of this entry, or improvise: load path + bytes, play,
+      set, stop, master, unload, error paths) lands `ok: true` in
+      store.json with `cap: 'page'`.
+- [ ] **mac/win: main-window reload mid-playback** — bank re-arms without
+      app code (client hello → bridge replays loads); next `play()` works;
+      the voices that were sounding die, documented.
+- [ ] **mac: accessory app, window never shown** — backend
+      `app.audio.sampler.play()` cold: sound comes out. Then again 10
+      minutes later (App Nap — an audible-idle context may lose its power
+      assertion between sounds; if it does, suspend-when-idle + resume-on-
+      play is the fix sketched in TODO-audio-sampler.md).
+- [ ] **win: autoplay with no gesture ever** — sampler starts from
+      injected eval on a never-clicked hidden window. launcher-win.cc sets
+      `--autoplay-policy=no-user-gesture-required` via the bridge's
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in dev; verify a PACKAGED app
+      gets it too (attach mode doesn't go through the bridge's spawn env).
+- [ ] **win: hidden main window, 5+ min playback** — GPU/CPU quiet in Task
+      Manager, audio unbroken (audibly-playing pages are exempt from
+      intensive throttling — trust but verify).
+- [ ] **pan/pitch parity across OSes** — same `{vol, pan, rate}` numbers,
+      record and compare (Linux numbers above are the reference; don't
+      eyeball by ear).
+- [ ] **bytes-load fallback path** — a bank file OUTSIDE the page's read
+      root on mac (no readAccess): host's fetch(file://) fails, the
+      one-shot `sampler.bytes` fallback delivers, load still resolves ok.
