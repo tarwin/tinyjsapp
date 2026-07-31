@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## 0.33.0 — 2026-07-31
+## 0.34.0 — 2026-07-31
 
 - **`tiny.audio.sampler` — sampled sound effects that work everywhere,
   including Linux.** A bank of short decoded sounds (wav/mp3/flac guaranteed)
@@ -31,6 +31,45 @@ https://tinyjs.app/changelog.
   `capabilities().sampler` says `'native'` or `'page'`, but apps shouldn't
   care — the API is identical. Out of scope by design: sample-accurate
   scheduling, per-voice filters, music (that's `<audio>`).
+
+## 0.33.0 — 2026-07-31
+
+- **Linux downloads load on Ubuntu 22.04 and Debian 12 again.** A linked
+  binary requires the newest glibc symbol versions its build machine offers,
+  and the Linux release builds ran on Ubuntu 24.04 — so every download
+  quietly demanded glibc 2.38 and refused to load on anything older
+  (``version `GLIBC_2.38' not found``: Ubuntu 22.04, Debian 12, Mint 21,
+  Pop!_OS 22.04). CI builds on Ubuntu 22.04 runners now; the floor is glibc
+  2.35, which those distros and everything newer all clear. And because a
+  raised floor is not a build error — the build stays green and the break
+  only ever shows on a user's machine — the release now asserts the ABI
+  floor, the architecture, and every optionally-linked feature on both
+  arches before anything is packaged. That last check is earning its keep
+  already: amp 0.8.0's arm64 launcher linked no AppIndicator, so its tray
+  was silently dead on arm64 while working on x86_64. Both arches ship
+  complete from here on, and none of this can regress without turning the
+  build red.
+
+- **Wayland mouseTracking is actually in the Linux downloads now.** Unlike
+  the EQ, which spawns PipeWire's command-line tools and can therefore ask
+  the user to install what's missing, mouseTracking consumes the ScreenCast
+  portal's stream in-process — the PipeWire library is compiled into the
+  launcher, or the feature doesn't exist in that binary at all. setup.sh
+  treats the dev package as optional and skips it quietly, the CI machines
+  didn't have it, and so every released launcher shipped with
+  `mouseTracking.start()` answering `unsupported`. The build machines
+  install it now, the release check refuses a launcher without PipeWire
+  linked in, and the one piece a user's machine can genuinely be missing —
+  a ScreenCast-capable portal — joined `tiny.system.requirements` as
+  `'mouseTracking'`, so `promptMissing` can put the fix in front of the
+  user the same way it does for codecs.
+
+- **Linux: opening a file into an already-running app can't silently drop
+  the payload.** The single-instance handoff wrote the deep-link / file-open
+  line to the socket once and ignored the result, so a partial or failed
+  write reported success while the running app never got the whole message.
+  It now loops until the line is fully sent and falls back to spawning the
+  app when it can't be.
 
 ## 0.32.0 — 2026-07-30
 

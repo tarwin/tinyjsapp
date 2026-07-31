@@ -4335,10 +4335,16 @@ static void mt_start(const std::string& qid, const std::string& restore) {
   }
 #ifndef TINYJS_PIPEWIRE
   (void)restore;
+  // Compiled out, not missing at runtime — no package the USER installs can
+  // add code to this binary, so unlike the EQ's spawned pw-cli tools there is
+  // nothing for system.requirements to prompt for. Name both fixes: a source
+  // build wants the dev package + rebuild; a download this old wants updating
+  // (CI ships PipeWire compiled in now).
   send_got(qid, "{\"ok\":false,\"code\":\"unsupported\",\"message\":"
-                "\"this launcher was built without PipeWire — install "
-                "libpipewire-0.3-dev (or your distro's equivalent) and re-run "
-                "setup.sh\"}");
+                "\"this launcher was built without PipeWire — for a source "
+                "build, install libpipewire-0.3-dev (or your distro's "
+                "equivalent) and re-run setup.sh; for a downloaded tinyjs, "
+                "update it (current releases ship with PipeWire)\"}");
 #else
   if (g_mt_active) {
     send_got(qid, "{\"ok\":true,\"restoreToken\":" +

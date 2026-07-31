@@ -299,6 +299,28 @@ const REQUIREMENTS = {
     packages: { apt: ['pipewire-bin'], dnf: ['pipewire-utils'], pacman: ['pipewire'],
                 zypper: ['pipewire-tools'] },
   },
+  'mouseTracking': {
+    feature: 'tiny.app.mouseTracking (Wayland)',
+    detail: 'Outside-the-window tracking on Wayland rides the ScreenCast '
+      + 'portal\'s cursor metadata; without a portal answering ScreenCast, '
+      + 'start() fails. (The PipeWire side is compiled into the launcher — '
+      + 'nothing to install for that.) Real X11 sessions track globally and '
+      + 'need none of this.',
+    // A property read, not NameHasOwner: the portal is D-Bus-activatable, so
+    // the name can be unowned right up until someone talks to it. This call
+    // both activates it and proves the ScreenCast interface is really there
+    // (a portal whose backend lacks ScreenCast answers with an error).
+    probe: async () => (ON_X11 && !tjs.env.WAYLAND_DISPLAY) || probeOk(['gdbus', 'call',
+      '--session', '-d', 'org.freedesktop.portal.Desktop',
+      '-o', '/org/freedesktop/portal/desktop',
+      '-m', 'org.freedesktop.DBus.Properties.Get',
+      'org.freedesktop.portal.ScreenCast', 'version']),
+    // The base service; the ScreenCast BACKEND ships with the desktop
+    // (portal-gnome, -kde, -wlr…), so on the big desktops installing this is
+    // either enough or already done.
+    packages: { apt: ['xdg-desktop-portal'], dnf: ['xdg-desktop-portal'],
+                pacman: ['xdg-desktop-portal'], zypper: ['xdg-desktop-portal'] },
+  },
   'tray': {
     feature: 'tiny.tray',
     detail: 'The tray needs an AppIndicator/StatusNotifier host. GNOME needs the '
