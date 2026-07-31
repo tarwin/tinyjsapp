@@ -3217,7 +3217,15 @@ static void smp_on_process(void*) {
   float* dst = (float*)d.data;
   uint32_t max_frames = d.maxsize / (2 * sizeof(float));
   uint32_t frames = max_frames;
+#if PW_CHECK_VERSION(0, 3, 49)
   if (b->requested && b->requested < max_frames) frames = (uint32_t)b->requested;
+#else
+  // pw_buffer.requested arrived in 0.3.49; the release floor (Ubuntu 22.04)
+  // builds against 0.3.48. Cap the fill instead so gain moves (set(), the
+  // stop() fade, master) stay responsive rather than riding a maxsize
+  // buffer — short fills are legal for a playback stream.
+  if (frames > 1024) frames = 1024;
+#endif
   if (!dst || !frames) { pw_stream_queue_buffer(g_smp_stream, b); return; }
   memset(dst, 0, frames * 2 * sizeof(float));
 
