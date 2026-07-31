@@ -1021,8 +1021,20 @@ async function cmdBuild() {
     const ch = cfg.chrome;
     const vib = ch.vibrancy === undefined ? '' : (ch.vibrancy === null ? 'none' : ch.vibrancy);
     const wcp = ch.windowControlsPos;
+    // windowControls: same tokens the bridge's controlsWire sends over the
+    // socket — '' keep, 'all', 'none', or a comma list. This field read
+    // `trafficLights` (the pre-0.30 name) long after the rename, so every
+    // PACKAGED app with `windowControls: false` still showed the buttons
+    // while dev and the bare binary — whose chrome rides the socket — hid
+    // them. amp shipped that way twice before anyone caught it.
+    const names = { close: 'close', minimize: 'minimize', maximize: 'maximize', zoom: 'maximize' };
+    const wc = ch.windowControls;
+    const controls = wc === undefined ? '' : wc === true ? 'all' : wc === false ? 'none'
+      : Array.isArray(wc)
+        ? ([...new Set(wc.map((n) => names[String(n).toLowerCase()]).filter(Boolean))].join(',') || 'none')
+        : '';
     extraKeys += `
-  <key>TinyjsChrome</key>        <string>${[bit(ch.frame), bit(ch.trafficLights), bit(ch.transparent), vib, bit(ch.squareCorners), bit(ch.acceptsFirstMouse), wcp ? `${wcp.x | 0},${wcp.y | 0}` : ''].join('&#9;')}</string>`;
+  <key>TinyjsChrome</key>        <string>${[bit(ch.frame), controls, bit(ch.transparent), vib, bit(ch.squareCorners), bit(ch.acceptsFirstMouse), wcp ? `${wcp.x | 0},${wcp.y | 0}` : ''].join('&#9;')}</string>`;
   }
   const schemes = cfg.urlScheme ? [].concat(cfg.urlScheme) : [];
   if (schemes.length) {

@@ -7661,24 +7661,25 @@ int main(int argc, char *argv[]) {
   // Packaged apps can declare chrome in the plist (TinyjsChrome, same
   // tab-separated fields as the CHROME command) so the window never flashes
   // its default titlebar.
-  if (bundle_mode) {
-    NSString *cs = [[NSBundle mainBundle]
+  NSString *plist_chrome = nil;
+  if (bundle_mode)
+    plist_chrome = [[NSBundle mainBundle]
         objectForInfoDictionaryKey:@"TinyjsChrome"];
-    if (cs) {
-      std::vector<std::string> p = split_tabs([cs UTF8String]);
-      ChromeReq *req = new ChromeReq;
-      req->frame = p.size() > 0 ? p[0] : "";
-      req->traffic = p.size() > 1 ? p[1] : "";
-      req->transparent = p.size() > 2 ? p[2] : "";
-      req->vibrancy = p.size() > 3 ? p[3] : "";
-      req->square = p.size() > 4 ? p[4] : "";
-      req->first_mouse = p.size() > 5 ? p[5] : "";
-      // The plist chrome has no menu field, so windowControlsPos is p[6]
-      // here (vs p[7] on the socket CHROME, where menu sits between).
-      req->traffic_pos = p.size() > 6 ? p[6] : "";
-      do_chrome(g_w, req);
-    }
-  }
+  auto plist_chrome_req = [&]() -> ChromeReq * {
+    std::vector<std::string> p = split_tabs([plist_chrome UTF8String]);
+    ChromeReq *req = new ChromeReq;
+    req->frame = p.size() > 0 ? p[0] : "";
+    req->traffic = p.size() > 1 ? p[1] : "";
+    req->transparent = p.size() > 2 ? p[2] : "";
+    req->vibrancy = p.size() > 3 ? p[3] : "";
+    req->square = p.size() > 4 ? p[4] : "";
+    req->first_mouse = p.size() > 5 ? p[5] : "";
+    // The plist chrome has no menu field, so windowControlsPos is p[6]
+    // here (vs p[7] on the socket CHROME, where menu sits between).
+    req->traffic_pos = p.size() > 6 ? p[6] : "";
+    return req;
+  };
+  if (plist_chrome) do_chrome(g_w, plist_chrome_req());
 #endif
 
   webview_set_title(g_w, title.c_str());
@@ -7704,6 +7705,14 @@ int main(int argc, char *argv[]) {
       [mw center];
     }
   }
+  // webview_set_size above rewrites the styleMask WHOLESALE (the reason the
+  // SETSIZE op avoids it) — which just wiped everything TinyjsChrome
+  // applied: a packaged squareCorners app snapped back to titled, traffic
+  // lights and all. Dev never showed it because the bridge re-sends chrome
+  // over the socket after boot; packaged apps have only the plist, so amp
+  // shipped with window buttons twice before this was caught. Re-apply the
+  // same request now, in the same runloop turn, so nothing paints titled.
+  if (plist_chrome) do_chrome(g_w, plist_chrome_req());
   // Unified page RPC for every window, the main one included (replaces
   // webview_bind: the shim's __invoke wins because nothing else defines it).
   {
