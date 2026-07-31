@@ -151,8 +151,8 @@ jobs:
           #      no PipeWire means no Wayland mouseTracking — and the launcher
           #      builds fine every time and answers 'unsupported' at runtime.
           #      Released binaries must have all three. (Real, not theoretical:
-          #      the arm64 launcher in circulating downloads links no
-          #      AppIndicator while its x86_64 sibling does; nothing noticed.)
+          #      amp 0.8.0's arm64 launcher linked no AppIndicator while its
+          #      x86_64 sibling did; nothing noticed until an audit.)
           objdump -p native/launcher-linux | grep -q libXtst ||
             { echo "::error::launcher has no XTest — global hotkeys disabled"; fail=1; }
           objdump -p native/launcher-linux | grep -q appindicator ||

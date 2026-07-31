@@ -17,10 +17,10 @@ https://tinyjs.app/changelog.
   only ever shows on a user's machine — the release now asserts the ABI
   floor, the architecture, and every optionally-linked feature on both
   arches before anything is packaged. That last check is earning its keep
-  already: the arm64 launcher in circulating downloads links no
-  AppIndicator, so the tray has been silently dead on arm64 while working on
-  x86_64. Both arches ship complete from here on, and none of this can
-  regress without turning the build red.
+  already: amp 0.8.0's arm64 launcher linked no AppIndicator, so its tray
+  was silently dead on arm64 while working on x86_64. Both arches ship
+  complete from here on, and none of this can regress without turning the
+  build red.
 
 - **Wayland mouseTracking is actually in the Linux downloads now.** Unlike
   the EQ, which spawns PipeWire's command-line tools and can therefore ask
