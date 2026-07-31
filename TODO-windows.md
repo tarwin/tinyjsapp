@@ -151,6 +151,12 @@ names refer to the protocol table in the README; Windows handlers live in
       shipped the `EyeDropper` API since 95. Worth chasing; it would close the
       gap without writing any colour-picking code at all.
 
+      Present here, confirmed 2026-07-30: `typeof window.EyeDropper` is
+      **`'function'`** in the shipping WebView2 (Chrome 150 / Edg 150), read
+      off the amp fetch probe. That settles only that the constructor EXISTS —
+      the three differences below are all about behaviour and none of them are
+      answered by it.
+
       Windows-only, though. Measured 2026-07-27: `typeof window.EyeDropper` is
       **`undefined`** in the macOS WKWebView (WebKit has never implemented it),
       so this is a fallback for the Chromium webview specifically, not a
