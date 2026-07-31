@@ -550,8 +550,18 @@ the x86_64 tarballs. **Yes — that one VM can build BOTH arches:**
      x86-64 binaries"**; in the guest, `systemd-binfmt` registers the
      interpreter (check `ls /proc/sys/fs/binfmt_misc | grep rosetta`).
   2. Cleanest route: an amd64 container —
-     `docker run --platform linux/amd64 -v $PWD:/work ubuntu:24.04` (or a
-     `debootstrap --arch=amd64` chroot). Inside: apt the deps `setup.sh`
+     `docker run --platform linux/amd64 -v $PWD:/work ubuntu:22.04` (or a
+     `debootstrap --arch=amd64` chroot). **22.04, NOT newer, and not the
+     host**: the linker bakes the build userspace's glibc floor into tjs and
+     the launcher, and a tarball packaged from 24.04 refuses to load on
+     Ubuntu 22.04 / Debian 12 (`GLIBC_2.38 not found` — how amp 0.8.0
+     shipped broken). Same rule for the **arm64 pass**: this VM is 24.04, so
+     don't package from the host — use a native `ubuntu:22.04` arm64
+     container, or take `bin/tjs` + `native/launcher-linux` from the current
+     tinyjs release (CI builds them on 22.04 and asserts the floor).
+     Before uploading any tarball, check it:
+     `objdump -T <bin> | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1`
+     must answer ≤ 2.35. Inside the container: apt the deps `setup.sh`
      names, build `bin/tjs` and the launcher (both come out x86_64 because
      the toolchain itself is x86_64-under-Rosetta), then `tinyjs publish`
      per app as usual. Multiarch apt on the host
