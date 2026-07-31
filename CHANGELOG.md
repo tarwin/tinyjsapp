@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.33.0 — 2026-07-31
 
 - **Linux downloads load on Ubuntu 22.04 and Debian 12 again.** A linked
   binary requires the newest glibc symbol versions its build machine offers,
@@ -35,6 +35,13 @@ https://tinyjs.app/changelog.
   a ScreenCast-capable portal — joined `tiny.system.requirements` as
   `'mouseTracking'`, so `promptMissing` can put the fix in front of the
   user the same way it does for codecs.
+
+- **Linux: opening a file into an already-running app can't silently drop
+  the payload.** The single-instance handoff wrote the deep-link / file-open
+  line to the socket once and ignored the result, so a partial or failed
+  write reported success while the running app never got the whole message.
+  It now loops until the line is fully sent and falls back to spawning the
+  app when it can't be.
 
 ## 0.32.0 — 2026-07-30
 
