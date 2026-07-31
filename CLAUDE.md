@@ -11,8 +11,10 @@ Releases are git tags (`vX.Y.Z` on main); a tag push builds macOS + Windows
 + linux-x86_64 + linux-arm64 in CI. Update CHANGELOG.md AND
 docs/changelog.html before tagging. Linux burn-down + platform notes:
 TODO-linux.md. Native-filters-on-other-OSes plan: TODO-audio-filters.md.
-PDF pagination + header/footer plan: TODO-pdf.md (macOS `printToPDF` emits
-ONE tall page today; Windows and Linux paginate).
+Sampled-SFX mixer plan (`tiny.audio.sampler`, native on Linux / Web Audio
+elsewhere): TODO-audio-sampler.md. PDF pagination + header/footer plan:
+TODO-pdf.md (macOS `printToPDF` emits ONE tall page today; Windows and
+Linux paginate).
 Anything built on one OS but never watched run on another goes in
 TODO-verify.md — tick a box there only after seeing it work on that OS,
 since a fire-and-forget op a shell ignores looks just like an unimplemented
