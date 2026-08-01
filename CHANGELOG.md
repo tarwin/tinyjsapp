@@ -4,6 +4,20 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.35.0 — 2026-07-31
+
+- **File pickers take a type filter.** `tiny.dialog.openFile({ types:
+  ['md', 'markdown', 'txt'] })` — and the same on `openFiles` and
+  `saveFile` — limits what's choosable, mapped natively on each OS:
+  `allowedContentTypes` on macOS, a `COMDLG_FILTERSPEC` on Windows,
+  `GtkFileFilter` on Linux. Windows and Linux keep an explicit "All files"
+  entry so a filter never hard-hides the disk; `saveFile` on Windows also
+  appends the first extension by default. Extensions only, dots and case
+  forgiven; omit `types` and nothing changes. Filtering is always explicit
+  and per-call — deliberately not defaulted from the manifest's
+  `fileExtensions`, so a picker never silently narrows because of an
+  unrelated file-association declaration.
+
 ## 0.34.1 — 2026-07-31
 
 - **Packaged macOS apps keep their declared chrome.** A built app with
