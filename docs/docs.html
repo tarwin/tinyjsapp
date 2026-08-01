@@ -368,6 +368,9 @@
   "audioTap": "app",
   <i>// suppress WebKit's default right-click menu (default: true)</i>
   "contextMenu": false,
+  <i>// macOS About menu item fires onMenu('about') / the 'menu' event instead of</i>
+  <i>// showing the standard panel ('about' becomes a reserved menu-item id)</i>
+  "about": "menu",
   <i>// stale saved positions (an unplugged display) auto-rescue windows onto a</i>
   <i>// live screen; false if your app parks windows off-screen on purpose —</i>
   <i>// win.ensureOnScreen() stays available either way (default: true)</i>
@@ -405,6 +408,7 @@
                    "speechRecognition": "why" },
   "audioTap": "app",
   "contextMenu": false,
+  "about": "menu",
   "userAgent": "Mozilla/5.0 …",
   "chrome": { "frame": false, "vibrancy": "hud" },
   "backend": "backend/main.ts",
@@ -694,6 +698,11 @@ await <b>tiny.win.windows</b>();     <i>// ['main', 'settings', …]</i>
 <i>// chrome + x/y apply BEFORE first paint — no titlebar flash, no center-jump</i>
 <b>tiny.win.open</b>('hud', { page: 'hud.html', x: 40, y: 40,
                      chrome: { frame: false, windowControls: false, vibrancy: 'hud' } });
+
+<i>// parent: stays above that window of YOURS (not above other apps), hides/</i>
+<i>// minimizes/closes with it; no own taskbar entry on win/linux. Open-time</i>
+<i>// only; on macOS it also moves with its parent. true = 'main', or a win id.</i>
+<b>tiny.win.open</b>('about', { page: 'about.html', size: '360x420', parent: true });
 
 <i>// every window runs the full tiny.* bridge; win.* targets its own window.</i>
 <i>// backend: app.openWindow(id, opts), app.window(id).setTitle/push/close/…,</i>

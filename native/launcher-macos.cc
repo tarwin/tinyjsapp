@@ -78,6 +78,10 @@
 //                                                    right-click menu
 //                         CTXSUPPRESS <0|1>          suppress WebKit's default
 //                                                    right-click menu
+//                         ABOUTHOOK <0|1>            1: the About menu item
+//                                                    reports `MENU about`
+//                                                    instead of showing the
+//                                                    standard panel
 //                         HKREG <id>\t<combo> /
 //                         HKUNREG <id>               global hotkeys
 //                         AUDIOTAP <qid> <scope>\t<excludeSelf>\t<interval> /
@@ -257,7 +261,9 @@
 //                                                    previous/seek)
 //
 // A default app menu (About + Quit) is always present; About shows the
-// standard panel with the app name, version, and a tinyjs credit.
+// standard panel with the app name, version, and a tinyjs credit — unless
+// ABOUTHOOK 1 arrived, in which case the click reports `MENU about` and the
+// app draws its own.
 //
 // Built as Objective-C++ on macOS (needs AppKit for NSOpenPanel/NSSavePanel).
 //
@@ -328,6 +334,9 @@ static std::mutex g_write_mutex;
 static std::string g_html_path; // empty when target is an http(s) URL
 static std::string g_app_name = "tinyjs";
 static std::string g_app_version = "0.0.0";
+// ABOUTHOOK: About reports `MENU about` instead of the standard panel.
+// Written by the socket reader thread, read on the main thread at click time.
+static std::atomic<bool> g_about_to_app{false};
 static bool g_bundle_mode = false; // launcher IS the .app executable (attach mode)
 #ifdef __APPLE__
 // Secondary windows (the main window lives in the webview library).
@@ -788,6 +797,10 @@ static NSMenu *g_tray_menu = nil;
   sock_write_line("TRAYCLICK");
 }
 - (void)showAbout:(id)sender {
+  if (g_about_to_app) {
+    sock_write_line("MENU about");
+    return;
+  }
   [NSApp orderFrontStandardAboutPanelWithOptions:@{
     @"ApplicationName" : ns(g_app_name),
     @"ApplicationVersion" : ns("Version " + g_app_version),
@@ -5949,6 +5962,23 @@ static NSString *tiny_shim_js(const std::string &winid) {
 @end
 @implementation TinyWinDelegate
 - (void)windowWillClose:(NSNotification *)n {
+  // Attached windows (win.open parent:) don't outlive their parent. Windows
+  // destroys owned windows and GTK has destroy-with-parent; AppKit just
+  // orphans children on screen, so close them here — deferred, since closing
+  // a window inside another window's close notification invites reentrancy.
+  NSWindow *closing = (NSWindow *)n.object;
+  NSArray *kids = [closing.childWindows copy];
+  if (kids.count) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      for (NSWindow *k in kids) {
+        [closing removeChildWindow:k];
+        [k close];
+      }
+      [kids release];
+    });
+  } else {
+    [kids release];
+  }
   std::string id = [self.winId UTF8String];
   sock_write_line("WINCLOSED " + id);
   g_last_winstate.erase(id);
@@ -6047,6 +6077,7 @@ struct WinOpenReq {
   std::string traffic_pos;
   bool hasPos = false;
   int x = 0, y = 0;
+  std::string parent; // '' | 'main' | a win id: attach above it (child window)
 };
 
 static void enable_webgpu_prefs(id preferences); // defined in WebGPU section
@@ -6135,6 +6166,17 @@ static void do_winopen(webview_t w, void *arg) {
     }
 
     [win makeKeyAndOrderFront:nil];
+
+    // parent: the native child-window relation — stays above its parent (but
+    // not above other apps), hides/minimizes with it. Attached after ordering
+    // front; a parent that doesn't exist just means an unattached window.
+    // Note AppKit children also MOVE with the parent, unlike the Windows
+    // owner / GTK transient twins — documented, not fought.
+    if (!req->parent.empty()) {
+      NSWindow *pw = window_for_id(w, req->parent);
+      if (pw && pw != win)
+        [pw addChildWindow:win ordered:NSWindowAbove];
+    }
   }
   delete req;
 }
@@ -6790,7 +6832,7 @@ static void sock_read_loop() {
         webview_dispatch(g_w, do_size, s);
       } else if (line.rfind("WINOPEN ", 0) == 0) {
         // <id>\t<page>\t<title>\t<WxH>[\t<frame>\t<traffic>\t<transp>\t<vib>
-        //   \t<square>\t<firstMouse>\t<x>\t<y>]
+        //   \t<square>\t<firstMouse>\t<x>\t<y>\t<menu>\t<wcPos>\t<parent>]
         std::vector<std::string> p = split_tabs(line.substr(8));
         WinOpenReq *wr = new WinOpenReq;
         wr->id = p.size() > 0 ? p[0] : "";
@@ -6811,6 +6853,7 @@ static void sock_read_loop() {
         }
         // p[12] is chrome.menu (ignored on macOS), p[13] windowControlsPos.
         wr->traffic_pos = p.size() > 13 ? p[13] : "";
+        wr->parent = p.size() > 14 ? p[14] : "";
         webview_dispatch(g_w, do_winopen, wr);
       } else if (line.rfind("WINCLOSE ", 0) == 0) {
         webview_dispatch(g_w, do_winclose, new std::string(line.substr(9)));
@@ -6938,6 +6981,8 @@ static void sock_read_loop() {
       } else if (line.rfind("CTXSUPPRESS ", 0) == 0) {
         webview_dispatch(g_w, apply_ctx_suppress,
                          new CtxSuppressReq{line.substr(12) == "1"});
+      } else if (line.rfind("ABOUTHOOK ", 0) == 0) {
+        g_about_to_app = line.substr(10) == "1";
       } else if (line.rfind("HKREG ", 0) == 0) {
         std::vector<std::string> p = split_tabs(line.substr(6));
         if (p.size() >= 2)

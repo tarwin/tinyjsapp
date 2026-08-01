@@ -1182,3 +1182,59 @@ usual "written, compiled at best, never seen".
       "All files" entry, uppercase-named files (NOTES.MD) still match
       (patterns are case-sensitive; both cases are added), and `pickFolder`
       is unaffected.
+
+## `"about": "menu"` — the click itself, 2026-08-01
+
+macOS-only by design (the other launchers have no default About item). The
+manifest flag turns the About menu item into a `MENU about` line instead of
+the standard panel; the app draws its own via `onMenu('about')` / the page
+`menu` event.
+
+Machine-checked same day: launcher rebuilt with the `ABOUTHOOK` handler, a
+scratch app with `"about": "menu"` ran under `tinyjs dev` and `TINYJS_DEBUG`
+showed `>> ABOUTHOOK 1` on the wire, and `MENU <id>` → onMenu is the
+long-standing path every custom menu item already exercises. What nobody has
+watched is the click itself — System Events was TCC-denied for the driving
+terminal, and a menu-item click can't be synthesized without it.
+
+- [ ] **Click "About <app>" in an app with `"about": "menu"`** — no standard
+      panel; `onMenu` receives `'about'` (and the page `menu` event fires
+      with `{ id: 'about' }`).
+- [ ] **Click it in an app WITHOUT the flag** — the standard panel still
+      shows (the flag defaults off; a regression here would take the free
+      panel from every existing app).
+
+## `win.open({ parent })` — above-your-own-windows, 2026-08-01
+
+New open-time option: `parent: true` (= 'main') or a win id keeps the window
+above that one via the native relation — macOS `addChildWindow`, Win32 owner
+(`CreateWindowExW` hWndParent), GTK `set_transient_for` +
+`destroy_with_parent`. Wire: WINOPEN field 14.
+
+macOS machine-checked same day (launcher rebuilt, scratch app, CGWindowList
+z-order probe — no TCC needed): the child stays ABOVE main after
+`app.show()` raises and focuses main, and closing a parent satellite closes
+its attached child (`onWindowClosed` fired for both — the deferred
+child-close added to `windowWillClose`, since AppKit otherwise orphans
+children where Win32/GTK destroy them). Not eyeballed on macOS: the window
+riding along when its parent is dragged (child windows move with the parent
+— documented difference vs the other two), and parent minimize taking the
+child with it.
+
+Windows and Linux are **written, never compiled** (no cross-toolchain on
+this box):
+
+- [ ] **Windows — compiles**; a `parent: true` satellite stays above main
+      when main is clicked, has NO taskbar button of its own, minimizes away
+      with main, and dies when its owner window is destroyed (Win32 does
+      this itself — nothing was added). An owned+frameless window still gets
+      its WM_NCCALCSIZE treatment (owner is a new combination with the
+      WS_POPUP style path).
+- [ ] **Linux — compiles**; Mutter/KWin keep the transient above its parent
+      on both sessions, taskbar skips it, and `destroy_with_parent` closes
+      it with the parent — check `WINCLOSED` arrives for the child too, so
+      the backend's registry doesn't leak. Lighter WMs may ignore
+      transient-above entirely; that's the WM, not a bug.
+- [ ] **All three — `parent` naming a nonexistent id** opens a normal
+      unattached window rather than failing (macOS machine-checked; the
+      other two follow the same null-check shape).

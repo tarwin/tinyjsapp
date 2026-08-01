@@ -353,6 +353,13 @@ declare interface TinyOpenWindowOptions {
   /** top-left screen position, applied before the window is shown */
   x?: number;
   y?: number;
+  /** keep this window above another of YOUR windows (true = 'main', or a
+   *  win.open id) without floating over other apps the way
+   *  setLevel('floating') does. Native owner/transient/child relation: it
+   *  minimizes/hides with its parent, closes when the parent closes, and on
+   *  Windows/Linux gets no taskbar entry. Open-time only — it can't be set
+   *  later. macOS difference: the window also MOVES with its parent. */
+  parent?: true | string;
 }
 
 declare interface TinyClipboardData {
@@ -692,6 +699,9 @@ declare interface Tiny {
      *  it inside each window.) For one window to differ, see tiny.win.menu;
      *  for one window to show no bar at all, chrome.menu:false. */
     set(menus: TinyMenu[]): Promise<any>;
+    /** With `"about": "menu"` in tinyjs.json, the macOS About menu item fires
+     *  here with the reserved id 'about' instead of showing the standard
+     *  panel. */
     on(fn: (id: string) => void): void;
     /** patch a live item without redeclaring the menu — every window's copy of
      *  the id moves. tiny.win.menu.update patches just one window's. */

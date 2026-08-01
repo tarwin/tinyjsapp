@@ -775,7 +775,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -1741,7 +1741,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // panels, no jump from center, and a window born with chrome.menu:false
     // never flickers a bar. A new window inherits the app menu (setMenu)
     // unless it opts out that way or declares its own.
-    openWindow(id, { page, title, size, minSize, chrome, x, y } = {}) {
+    // parent: true (= 'main') or a window id keeps this window above that one
+    // — the native owner/transient/child relation, so it stays over its parent
+    // without sitting over other apps the way setLevel('floating') would. It
+    // also minimizes/hides with the parent, closes when the parent closes, and
+    // on Windows/Linux gets no taskbar entry of its own. Open-time only, like
+    // `transparent` — ownership doesn't retrofit on Windows.
+    openWindow(id, { page, title, size, minSize, chrome, x, y, parent } = {}) {
       let p = String(page ?? 'index.html');
       if (!isUrl(p) && !isAbs(p)) {
         if (!frontendDir) throw new Error('win.open needs an absolute page path or URL here');
@@ -1759,7 +1765,8 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
                          bit(c.squareCorners), bit(c.acceptsFirstMouse),
                          hasPos ? (x | 0) : '', hasPos ? (y | 0) : '',
                          bit(c.menu),
-                         wcp ? `${wcp.x | 0},${wcp.y | 0}` : ''].join('\t'));
+                         wcp ? `${wcp.x | 0},${wcp.y | 0}` : '',
+                         one(parent === true ? 'main' : parent || '')].join('\t'));
       // minSize: "WxH" — a floor under user resizes, so a layout with a
       // natural size can't be shrunk until content falls off the bottom.
       if (minSize) send('WINOP@' + id + ' minsize ' + one(minSize));
@@ -2497,6 +2504,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // contextMenu:false in the manifest suppresses WebKit's default right-click
   // menu (Reload/Back/Inspect Element…). A custom setContextMenu() still wins.
   if (contextMenu === false) send('CTXSUPPRESS 1');
+
+  // about:'menu' turns the macOS About item into a plain menu click — the
+  // launcher sends `MENU about`, so it lands in onMenu('about') and the page
+  // 'menu' event like any other item ('about' is a reserved id). Windows and
+  // Linux have no default About item, so there's nothing to hook there.
+  if (about === 'menu' && !IS_WIN && !IS_LINUX) send('ABOUTHOOK 1');
 
   // A clipboard handler implies watching; apps needing a custom interval can
   // call app.clipboard.watch(ms) on top (idempotent).

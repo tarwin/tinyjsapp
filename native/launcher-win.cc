@@ -4684,6 +4684,7 @@ struct WinOpenReq {
   std::string frame, traffic, transparent, vibrancy, square, first_mouse, menu;
   bool hasPos = false;
   int x = 0, y = 0;
+  std::string parent; // '' | 'main' | a win id: owner window (stays above it)
 };
 
 static void do_winopen(webview_t, void *arg) {
@@ -4756,11 +4757,18 @@ static void do_winopen(webview_t, void *arg) {
   DWORD exStyle = (wr->transparent == "1" || frameless)
                       ? WS_EX_NOREDIRECTIONBITMAP
                       : 0;
+  // parent (win.open parent:) becomes the Win32 OWNER — for top-level windows
+  // the hWndParent argument means owner, not parent. Owned windows stay above
+  // their owner, minimize/hide with it, are destroyed with it, and get no
+  // taskbar button of their own. Owner is create-time only (retrofitting via
+  // GWLP_HWNDPARENT half-works and is officially discouraged), which is why
+  // the bridge documents `parent` as open-time only.
+  HWND owner = wr->parent.empty() ? nullptr : hwnd_for_win(wr->parent);
   HWND hwnd = CreateWindowExW(
       exStyle, L"TinyjsSecondary",
       widen(wr->title.empty() ? wr->id : wr->title).c_str(),
       style, px, py, rc.right - rc.left,
-      rc.bottom - rc.top, nullptr, nullptr, GetModuleHandleW(nullptr),
+      rc.bottom - rc.top, owner, nullptr, GetModuleHandleW(nullptr),
       nullptr);
   if (!hwnd) {
     delete wr;
@@ -5600,7 +5608,7 @@ static void pipe_read_loop() {
         webview_dispatch(g_w, do_size, s);
       } else if (line.rfind("WINOPEN ", 0) == 0) {
         // <id>\t<page>\t<title>\t<WxH>[\t<frame>\t<traffic>\t<transp>\t<vib>
-        //   \t<square>\t<firstMouse>\t<x>\t<y>\t<menu>]
+        //   \t<square>\t<firstMouse>\t<x>\t<y>\t<menu>\t<wcPos>\t<parent>]
         std::vector<std::string> p = split_tabs(line.substr(8));
         WinOpenReq *wr = new WinOpenReq;
         wr->id = p.size() > 0 ? p[0] : "";
@@ -5620,6 +5628,8 @@ static void pipe_read_loop() {
           wr->y = std::atoi(p[11].c_str());
         }
         wr->menu = p.size() > 12 ? p[12] : "";
+        // p[13] is windowControlsPos (macOS-only), p[14] parent.
+        wr->parent = p.size() > 14 ? p[14] : "";
         webview_dispatch(g_w, do_winopen, wr);
       } else if (line.rfind("WINCLOSE ", 0) == 0) {
         webview_dispatch(g_w, do_winclose, new std::string(line.substr(9)));

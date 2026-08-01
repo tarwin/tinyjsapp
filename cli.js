@@ -503,6 +503,7 @@ const app = await createApp({
   audioTap: ${JSON.stringify(cfg.audioTap ?? null)},
   windowPlacement: ${JSON.stringify(cfg.windowPlacement ?? null)},
   contextMenu: ${JSON.stringify(cfg.contextMenu ?? true)},
+  about: ${JSON.stringify(cfg.about ?? null)},
   urlScheme: ${JSON.stringify(cfg.urlScheme ?? null)},
   fileExtensions: ${JSON.stringify(cfg.fileExtensions ?? null)},
   openFolders: ${JSON.stringify(cfg.openFolders ?? false)},

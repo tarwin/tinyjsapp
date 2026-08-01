@@ -5138,6 +5138,24 @@ static void do_winopen(const std::string& rest) {
   if (has_pos) gtk_window_move(sec->win, atoi(xs.c_str()), atoi(ys.c_str()));
   else gtk_window_set_position(sec->win, GTK_WIN_POS_CENTER);
 
+  // Field 14: parent (win.open parent:) — the WM keeps a transient above its
+  // parent (but not above other apps), skips the taskbar for it, and
+  // destroy-with-parent matches Win32 owned-window teardown. Field 13 is
+  // windowControlsPos (macOS-only).
+  std::string parent = tab_field(f, 14);
+  if (!parent.empty()) {
+    GtkWindow* pw = nullptr;
+    if (parent == "main") pw = g_win;
+    else {
+      auto pit = g_secwins.find(parent);
+      if (pit != g_secwins.end()) pw = pit->second->win;
+    }
+    if (pw && pw != sec->win) {
+      gtk_window_set_transient_for(sec->win, pw);
+      gtk_window_set_destroy_with_parent(sec->win, TRUE);
+    }
+  }
+
   load_target_into(sec->wv, page);
   gtk_widget_show_all(GTK_WIDGET(sec->win));
   // show_all just revealed the bar too. Fill it in from the app menu (or

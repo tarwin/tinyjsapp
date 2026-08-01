@@ -817,6 +817,13 @@ tiny.menu.set([
 Windows and Linux have no launcher-owned menu, so they skip the entry and keep
 the order you declared.
 
+The macOS **About** item normally shows the standard panel (app name, version,
+a tinyjs credit) for free. To draw your own instead, set `"about": "menu"` in
+tinyjs.json — the click then arrives like any other menu item, with the
+reserved id `'about'`, in `tiny.menu.on` / the backend's `onMenu`. Apps that
+don't opt in keep the free panel; Windows and Linux have no default About
+item, so there the flag changes nothing.
+
 The dialogs and menus are native: the backend hands the work to the launcher,
 which runs panels/menus on the UI thread and answers the page's promise
 directly via `webview_return`.
@@ -836,6 +843,15 @@ await tiny.win.windows();          // ['main', 'settings', ...]
 // center-then-jump):
 tiny.win.open('hud', { page: 'hud.html', size: '300x120', x: 40, y: 40,
                        chrome: { frame: false, windowControls: false, vibrancy: 'hud' } });
+
+// parent keeps a window above another of YOUR windows — an about box or tool
+// panel that can't get lost behind the window it belongs to, without floating
+// over other apps the way setLevel('floating') would. true = 'main', or name
+// a win.open id. It also minimizes/hides with its parent, closes when the
+// parent closes, and on Windows/Linux gets no taskbar entry of its own.
+// Open-time only (Windows ownership can't be set later). One cross-OS
+// difference: on macOS the window also MOVES with its parent.
+tiny.win.open('about', { page: 'about.html', size: '360x420', parent: true });
 ```
 
 Every window runs the full `tiny.*` bridge, and `tiny.win.*` calls from a
