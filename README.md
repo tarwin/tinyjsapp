@@ -759,6 +759,11 @@ const file  = await tiny.dialog.openFile();     // path | null
 const files = await tiny.dialog.openFiles();    // paths[] | null
 const dir   = await tiny.dialog.pickFolder();   // path | null
 const dest  = await tiny.dialog.saveFile();     // path | null
+// openFile/openFiles/saveFile take { types: ['md', 'txt'] } — extensions,
+// no dots — to limit what's choosable (allowedContentTypes on macOS,
+// COMDLG_FILTERSPEC on Windows, GtkFileFilter on Linux; the latter two add
+// an "All files" escape hatch). Omit types and everything is selectable.
+const md = await tiny.dialog.openFile({ types: ['md', 'markdown', 'txt'] });
 
 // native system dialogs (NSAlert)
 await tiny.dialog.alert('Heads up', 'optional detail');

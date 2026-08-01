@@ -1521,6 +1521,44 @@ static void do_dialog(const std::string& callid, const std::string& body) {
     if (op == "save") {
       gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
     }
+    // Field 1 (open/openmulti/save): comma-separated extensions from the
+    // bridge, pre-normalized to lowercase. GTK patterns are case-sensitive,
+    // so each extension gets a lowercase and an uppercase pattern. An "All
+    // files" filter is always added so the filter never hard-hides the disk.
+    std::string types = tab_field(f, 1);
+    if (!types.empty() && op != "dir") {
+      GtkFileFilter* filt = gtk_file_filter_new();
+      std::string label;
+      size_t start = 0;
+      while (start <= types.size()) {
+        size_t comma = types.find(',', start);
+        std::string ext = types.substr(
+            start, comma == std::string::npos ? std::string::npos
+                                              : comma - start);
+        if (!ext.empty()) {
+          if (!label.empty()) label += ", ";
+          label += "*." + ext;
+          gtk_file_filter_add_pattern(filt, ("*." + ext).c_str());
+          std::string upper = ext;
+          for (auto& c : upper) c = g_ascii_toupper(c);
+          if (upper != ext)
+            gtk_file_filter_add_pattern(filt, ("*." + upper).c_str());
+        }
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+      }
+      if (!label.empty()) {
+        gtk_file_filter_set_name(filt, label.c_str());
+        gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), filt);
+        GtkFileFilter* all = gtk_file_filter_new();
+        gtk_file_filter_set_name(all, "All files");
+        gtk_file_filter_add_pattern(all, "*");
+        gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), all);
+      } else {
+        g_object_ref_sink(filt);
+        g_object_unref(filt);
+      }
+    }
     gint res = gtk_native_dialog_run(GTK_NATIVE_DIALOG(dlg));
     if (res != GTK_RESPONSE_ACCEPT) {
       reply_to_call(callid, 0, "null");

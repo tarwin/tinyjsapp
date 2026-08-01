@@ -276,6 +276,7 @@
 #import <Vision/Vision.h>             // on-device OCR
 #import <ScreenCaptureKit/ScreenCaptureKit.h> // weak-linked; macOS 14+ used
 #import <ServiceManagement/ServiceManagement.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h> // file-picker type filters
 #import <UserNotifications/UserNotifications.h>
 #import <WebKit/WebKit.h>
 #import <CoreWLAN/CoreWLAN.h> // Wi-Fi info
@@ -602,6 +603,32 @@ struct DlgReq {
 static NSString *ns(const std::string &s) {
   return [NSString stringWithUTF8String:s.c_str()];
 }
+
+// Comma-separated extensions (bridge sends them pre-normalized: lowercase, no
+// dots) → allowedContentTypes. Unknown extensions still filter — UTType mints
+// a dynamic type for them. NSOpenPanel subclasses NSSavePanel, so this covers
+// open/openmulti/save alike. Empty csv leaves the panel unrestricted.
+static void apply_type_filter(NSSavePanel *panel, const std::string &csv) {
+  if (csv.empty())
+    return;
+  NSMutableArray<UTType *> *types = [NSMutableArray array];
+  size_t start = 0;
+  while (start <= csv.size()) {
+    size_t comma = csv.find(',', start);
+    std::string ext = csv.substr(
+        start, comma == std::string::npos ? std::string::npos : comma - start);
+    if (!ext.empty()) {
+      UTType *t = [UTType typeWithFilenameExtension:ns(ext)];
+      if (t)
+        [types addObject:t];
+    }
+    if (comma == std::string::npos)
+      break;
+    start = comma + 1;
+  }
+  if (types.count)
+    panel.allowedContentTypes = types;
+}
 #endif
 
 static void do_dialog(webview_t w, void *arg) {
@@ -611,7 +638,9 @@ static void do_dialog(webview_t w, void *arg) {
 #ifdef __APPLE__
   @autoreleasepool {
     if (req->op == "save") {
+      // args: typeFilter (comma-separated extensions, may be empty)
       NSSavePanel *panel = [NSSavePanel savePanel];
+      apply_type_filter(panel, a(0));
       if ([panel runModal] == NSModalResponseOK && panel.URL != nil) {
         json = json_escape([panel.URL.path UTF8String]);
       }
@@ -642,10 +671,13 @@ static void do_dialog(webview_t w, void *arg) {
         json = json_escape([field.stringValue UTF8String]);
       }
     } else {
+      // args (open/openmulti): typeFilter (comma-separated extensions)
       NSOpenPanel *panel = [NSOpenPanel openPanel];
       panel.canChooseFiles = (req->op != "dir");
       panel.canChooseDirectories = (req->op == "dir");
       panel.allowsMultipleSelection = (req->op == "openmulti");
+      if (req->op != "dir")
+        apply_type_filter(panel, a(0));
       if ([panel runModal] == NSModalResponseOK && panel.URLs.count > 0) {
         if (req->op == "openmulti") {
           json = "[";

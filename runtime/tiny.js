@@ -709,10 +709,13 @@
     // message dialogs on Linux. They're application-modal rather than
     // attached to a window, which is why they aren't on tiny.win.
     dialog: {
-      openFile: () => call('dialog.openFile'),               // path | null
-      openFiles: () => call('dialog.openFiles'),             // paths[] | null
-      pickFolder: () => call('dialog.pickFolder'),           // path | null
-      saveFile: () => call('dialog.saveFile'),               // path | null
+      // File pickers take { types: ['md', 'txt', ...] } — extensions, no dots —
+      // to filter what's choosable (allowedContentTypes / COMDLG_FILTERSPEC /
+      // GtkFileFilter). Omit types and everything is selectable.
+      openFile: (opts = {}) => call('dialog.openFile', { types: opts.types }),    // path | null
+      openFiles: (opts = {}) => call('dialog.openFiles', { types: opts.types }),  // paths[] | null
+      pickFolder: () => call('dialog.pickFolder'),                                // path | null
+      saveFile: (opts = {}) => call('dialog.saveFile', { types: opts.types }),    // path | null
       alert: (message, detail) => call('dialog.alert', { message, detail }),
       confirm: (message, opts = {}) => call('dialog.confirm', { message, ...opts }), // true | false
       prompt: (message, opts = {}) => call('dialog.prompt', { message, ...opts }),   // string | null

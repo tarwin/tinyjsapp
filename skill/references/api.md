@@ -148,6 +148,10 @@ tiny.menu.onContext((id) => ...);       // backend: export onContextMenu
 ```js
 await tiny.dialog.openFile();     // path | null       openFiles() -> paths[]
 await tiny.dialog.pickFolder();   // path | null       saveFile() -> path|null
+// File pickers take { types: ['md', 'txt'] } (extensions, no dots) to limit
+// what's choosable — allowedContentTypes / COMDLG_FILTERSPEC / GtkFileFilter.
+// Windows and Linux also show an "All files" escape hatch. Omit for no filter.
+await tiny.dialog.openFile({ types: ['md', 'markdown', 'txt'] });
 await tiny.dialog.alert(message, detail);
 await tiny.dialog.confirm(message, { detail, ok, cancel });   // true | false
 await tiny.dialog.prompt(message, { default, ok, cancel });   // string | null

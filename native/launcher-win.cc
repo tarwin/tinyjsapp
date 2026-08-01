@@ -1555,7 +1555,8 @@ static std::string run_prompt(const std::string &message,
   return st.ok ? json_escape(narrow(st.value)) : "null";
 }
 
-static std::string run_file_dialog(const std::string &op) {
+static std::string run_file_dialog(const std::string &op,
+                                   const std::string &types) {
   std::string json = "null";
   bool save = op == "save";
   IFileDialog *dlg = nullptr;
@@ -1571,6 +1572,37 @@ static std::string run_file_dialog(const std::string &op) {
   if (op == "openmulti")
     opts |= FOS_ALLOWMULTISELECT;
   dlg->SetOptions(opts);
+  // types: comma-separated extensions from the bridge (pre-normalized). One
+  // combined filter plus an explicit "All files" — a lone filter would
+  // hard-hide everything else, which openFile() without types never did.
+  std::wstring pattern, first_ext;
+  if (!types.empty() && op != "dir") {
+    size_t start = 0;
+    while (start <= types.size()) {
+      size_t comma = types.find(',', start);
+      std::string ext = types.substr(
+          start,
+          comma == std::string::npos ? std::string::npos : comma - start);
+      if (!ext.empty()) {
+        if (first_ext.empty())
+          first_ext = widen(ext);
+        if (!pattern.empty())
+          pattern += L";";
+        pattern += L"*." + widen(ext);
+      }
+      if (comma == std::string::npos)
+        break;
+      start = comma + 1;
+    }
+    if (!pattern.empty()) {
+      COMDLG_FILTERSPEC specs[2] = {{pattern.c_str(), pattern.c_str()},
+                                    {L"All files", L"*.*"}};
+      dlg->SetFileTypes(2, specs);
+      dlg->SetFileTypeIndex(1);
+      if (save)
+        dlg->SetDefaultExtension(first_ext.c_str());
+    }
+  }
   hr = dlg->Show(g_hwnd);
   if (SUCCEEDED(hr)) {
     if (op == "openmulti") {
@@ -1633,7 +1665,8 @@ static void do_dialog(webview_t w, void *arg) {
   } else if (req->op == "prompt") {
     json = run_prompt(a(0).empty() ? g_app_name : a(0), a(1));
   } else {
-    json = run_file_dialog(req->op);
+    // args (open/openmulti/save): typeFilter (comma-separated extensions)
+    json = run_file_dialog(req->op, a(0));
   }
   route_ret(w, req->id, 0, json);
   delete req;

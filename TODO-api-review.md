@@ -217,3 +217,33 @@ itself — claiming `audioTap` works on Windows in one paragraph and listing it
 as macOS-only in the next. Both files corrected, and the Windows gap list
 rewritten around what's actually missing (`app.badge`, `nowPlaying`/media keys,
 `otherWindows`/`moveWindow`, `pickColor`, `spotlight`, `system.locale`).
+
+**6. ~~`tiny.dialog.openFile({ types: ['md','markdown','txt'] })` — native
+file-type filters~~ — BUILT 2026-07-31, same day.** Decision: `{ types }` is
+**explicit only** — the proposed fileExtensions-as-default was rejected
+(owner's call: an open panel that silently narrows because of an unrelated
+file-association declaration is confusing, and the app can always pass its
+own manifest values by hand). Shipped on all three launchers per the
+mapping below; macOS machine-verified, Windows/Linux boxes in
+TODO-verify.md. Original write-up, kept for the evidence:
+
+Raised 2026-07-31. Today every open panel shows every file: `openFile`/`openFiles`/
+`saveFile` take no arguments (`runtime/tiny.js:712`), and `DIALOG_OPS` in
+`bridge.js:690` sends `DLG <id> open` with an empty arg list. All three
+launchers run their dialog with no filter attached — NSOpenPanel at
+`launcher-macos.cc:645` never sets `allowedContentTypes`, `run_file_dialog`
+in `launcher-win.cc` never calls `SetFileTypes`, and the
+`gtk_file_chooser_native_new` at `launcher-linux.cc:1516` adds no
+`GtkFileFilter`. Each platform has a first-class mapping waiting:
+`allowedContentTypes` (UTType from extension) on macOS, a
+`COMDLG_FILTERSPEC` array on Windows, `GtkFileFilter` +
+`gtk_file_filter_add_pattern` on Linux. The wire change is one extra
+tab-separated field on the `DLG` line, and the default costs nothing new:
+`createApp` already receives the manifest's `fileExtensions`
+(`bridge.js:770`), which declares exactly this information — so an app that
+registered `.md`/`.txt` associations gets a matching open panel for free,
+and `{ types }` overrides per call. `saveFile` should take the same option
+(NSSavePanel's `allowedContentTypes` and the same `COMDLG_FILTERSPEC` /
+`GtkFileFilter` paths cover save too). Include an implicit "All files"
+escape hatch on Windows/Linux, where a filter otherwise hard-hides
+everything else.

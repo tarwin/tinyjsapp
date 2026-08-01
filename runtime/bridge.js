@@ -687,11 +687,19 @@ function chromeWire(opts = {}) {
           bit(opts.acceptsFirstMouse), bit(opts.menu), pos].join('\t');
 }
 
+// File-type filter for the pickers: extensions only, dots and case forgiven,
+// anything that couldn't be an extension dropped. Rides the wire as one
+// comma-separated field; empty means no filter.
+const extList = (types) => (Array.isArray(types) ? types : [])
+  .map((t) => String(t).trim().replace(/^\./, '').toLowerCase())
+  .filter((t) => /^[a-z0-9][a-z0-9+._-]*$/.test(t))
+  .join(',');
+
 const DIALOG_OPS = {
-  'dialog.openFile': { op: 'open', args: () => [] },
-  'dialog.openFiles': { op: 'openmulti', args: () => [] },
+  'dialog.openFile': { op: 'open', args: (p) => [extList(p.types)] },
+  'dialog.openFiles': { op: 'openmulti', args: (p) => [extList(p.types)] },
   'dialog.pickFolder': { op: 'dir', args: () => [] },
-  'dialog.saveFile': { op: 'save', args: () => [] },
+  'dialog.saveFile': { op: 'save', args: (p) => [extList(p.types)] },
   // A dialog's detail is the one field where line breaks earn their keep — a
   // list of what's missing, or a command on a line of its own. The wire is
   // newline-delimited, so they ride across escaped and the launcher puts them

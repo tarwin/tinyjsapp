@@ -1158,3 +1158,27 @@ drills as written are still the way to pin it down.
 - [x] **bytes-load fallback path** — a bank file OUTSIDE the page's read
       root on mac (no readAccess): host's fetch(file://) fails, the
       one-shot `sampler.bytes` fallback delivers, load still resolves ok.
+
+## Dialog file-type filters (`{ types }`) — written 2026-07-31, macOS-built only
+
+`openFile`/`openFiles`/`saveFile` take `{ types: ['md','txt'] }`; the bridge
+sends one comma-separated field on the `DLG` line, each launcher maps it
+natively. macOS machine-checked same day: launcher rebuilt and ran the panel
+off the new wire field without crashing, and a standalone harness proved the
+exact `apply_type_filter` mapping (`md` → `net.daringfireball.markdown`,
+`markdown` → dynamic UTType, `txt` → `public.plain-text`; `.png`/`.bin` don't
+conform → filtered). Windows and Linux are written, never compiled — the
+usual "written, compiled at best, never seen".
+
+- [ ] **macOS — eyeball the grey-out.** `openFile({ types: ['md','txt'] })`
+      in a dir with mixed files: non-matching entries dim and refuse
+      selection; a call with no `types` still shows everything; `saveFile`
+      with types appends the extension.
+- [ ] **Windows — compiles, filter dropdown shows** the pattern entry plus
+      "All files (*.*)", and the pattern entry actually hides non-matching
+      files. `saveFile` gets the default extension appended
+      (`SetDefaultExtension`).
+- [ ] **Linux — compiles, chooser shows** the "*.md, *.txt" filter and an
+      "All files" entry, uppercase-named files (NOTES.MD) still match
+      (patterns are case-sensitive; both cases are added), and `pickFolder`
+      is unaffected.
