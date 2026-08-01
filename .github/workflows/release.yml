@@ -248,7 +248,10 @@ jobs:
       - name: Build universal launcher (with FoundationModels)
         run: |
           ./native/gen-client.sh
-          FW="-framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -framework AVFoundation -framework ServiceManagement -framework IOKit -framework Quartz -framework Vision -framework QuickLookThumbnailing -framework Security -framework LocalAuthentication -framework MediaPlayer -framework CoreMedia -framework CoreWLAN -framework CoreAudio -framework AudioToolbox"
+          # Keep in sync with setup.sh's FW — the v0.35.0 tag failed to link
+          # here (undefined _OBJC_CLASS_$_UTType) because only setup.sh
+          # gained UniformTypeIdentifiers.
+          FW="-framework WebKit -framework AppKit -framework Carbon -framework UserNotifications -framework AVFoundation -framework ServiceManagement -framework IOKit -framework Quartz -framework Vision -framework QuickLookThumbnailing -framework Security -framework LocalAuthentication -framework MediaPlayer -framework CoreMedia -framework CoreWLAN -framework CoreAudio -framework AudioToolbox -framework UniformTypeIdentifiers"
           for ARCH in arm64 x86_64; do
             TGT="$ARCH-apple-macos14.0"
             # -mmacosx-version-min / -target macos14.0: REQUIRED, not

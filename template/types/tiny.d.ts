@@ -841,10 +841,14 @@ declare interface Tiny {
    *  message dialogs on Linux. Application-modal rather than attached to a
    *  window, which is why they aren't on `win`. */
   dialog: {
-    openFile(): Promise<string | null>;
-    openFiles(): Promise<string[] | null>;
+    /** `types`: extensions without dots (`['md', 'txt']`) limiting what's
+     *  choosable — allowedContentTypes / COMDLG_FILTERSPEC / GtkFileFilter.
+     *  Windows and Linux also show an "All files" escape hatch. Omit for
+     *  no filter. */
+    openFile(opts?: { types?: string[] }): Promise<string | null>;
+    openFiles(opts?: { types?: string[] }): Promise<string[] | null>;
     pickFolder(): Promise<string | null>;
-    saveFile(): Promise<string | null>;
+    saveFile(opts?: { types?: string[] }): Promise<string | null>;
     alert(message: string, detail?: string): Promise<true>;
     confirm(message: string, opts?: { detail?: string; ok?: string; cancel?: string }): Promise<boolean>;
     prompt(message: string, opts?: { default?: string; ok?: string; cancel?: string }): Promise<string | null>;
