@@ -2332,6 +2332,26 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     send(`RET ${id} ${status} ${JSON.stringify(result === undefined ? null : result)}`);
   }
 
+  // An app's own event handler must never take the read loop down with it.
+  // The loop is one async IIFE: anything an onX callback threw propagated out
+  // of it, hit the .catch below and called markEof(), leaving the app DEAF —
+  // no further events, no api calls, no store writes, and nothing on screen
+  // to say why. (Measured on Windows 2026-08-01 with a one-line bug in an
+  // app's onWindowClosed: the whole app stopped answering.) A handler's
+  // mistake is now reported and stepped over, whether it throws synchronously
+  // or returns a promise that rejects — an async handler's rejection would
+  // otherwise have been an unhandled rejection nobody sees either.
+  function fire(name, fn, ...args) {
+    if (!fn) return;
+    try {
+      const r = fn(...args);
+      if (r && typeof r.then === 'function')
+        r.then(undefined, (e) => console.log(`tinyjs ${name} handler failed:`, e));
+    } catch (e) {
+      console.log(`tinyjs ${name} handler failed:`, e);
+    }
+  }
+
   (async () => {
     const reader = readable.getReader();
     let buf = '';
@@ -2348,38 +2368,38 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         else if (line.startsWith('MENU ')) {
           const id = line.slice(5);
           push('menu', { id });
-          if (onMenu) onMenu(id, app);
+          fire('onMenu', onMenu, id, app);
         } else if (line.startsWith('TRAY ')) {
           const id = line.slice(5);
           push('tray', { id });
-          if (onTray) onTray(id, app);
+          fire('onTray', onTray, id, app);
         } else if (line === 'TRAYCLICK') {
           push('trayclick', {});
-          if (onTray) onTray(null, app);
+          fire('onTray', onTray, null, app);
         } else if (line.startsWith('DROP ')) {
           // Files dragged onto the window; real filesystem paths.
           try { push('drop', { paths: JSON.parse(line.slice(5)) }); } catch {}
         } else if (line.startsWith('HOTKEY ')) {
           const id = line.slice(7);
           push('hotkey', { id });
-          if (onHotkey) onHotkey(id, app);
+          fire('onHotkey', onHotkey, id, app);
         } else if (line.startsWith('AUDIOTAP ')) {
           // A tap PCM chunk: AUDIOTAP <pcmB64>\t<sampleRate>\t<channels>\t<frames>\t<t>
           const [pcm, sr, ch, frames, t] = line.slice(9).split('\t');
           const chunk = { pcm, sampleRate: +sr, channels: +ch, frames: +frames, t: +t };
           push('audio-tap', chunk);
-          if (onAudioTap) onAudioTap(chunk, app);
+          fire('onAudioTap', onAudioTap, chunk, app);
         } else if (line.startsWith('CTX ')) {
           const id = line.slice(4);
           push('contextmenu', { id });
-          if (onContextMenu) onContextMenu(id, app);
+          fire('onContextMenu', onContextMenu, id, app);
         } else if (line.startsWith('SYSLOCALE ')) {
           let info = null;
           try { info = JSON.parse(line.slice(10)); } catch {}
           if (info) {
             lastLocale = info;
             push('locale', info);
-            if (onLocale) onLocale(info, app);
+            fire('onLocale', onLocale, info, app);
           }
         } else if (line.startsWith('SYS ')) {
           const [kind, value] = line.slice(4).split(' ');
@@ -2389,7 +2409,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           } else {
             push(kind, {}); // 'sleep' | 'wake'
           }
-          if (onSystem) onSystem(kind, value ?? null, app);
+          fire('onSystem', onSystem, kind, value ?? null, app);
         } else if (line.startsWith('AITOOL ')) {
           // The model wants a tool run. The launcher thread that asked is
           // BLOCKED until we answer, so answer on every path — including a
@@ -2427,7 +2447,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           const [count, selfFlag] = line.slice(11).split(' ');
           const info = { changeCount: parseInt(count, 10), self: selfFlag === '1' };
           push('clipboard-change', info);
-          if (onClipboardChange) onClipboardChange(info, app);
+          fire('onClipboardChange', onClipboardChange, info, app);
         } else if (line.startsWith('WINCLOSED ')) {
           const id = line.slice(10);
           // Tear down any streaming tiny.fetch the closed window still owns.
@@ -2435,7 +2455,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
           // …and the audio tap, if this was the window that started it.
           if (audioTapOwner === id) stopAudioTap();
           push('window-closed', { id });
-          if (onWindowClosed) onWindowClosed(id, app);
+          fire('onWindowClosed', onWindowClosed, id, app);
         } else if (line.startsWith('WINSTATE ')) {
           // Launcher-side deduped snapshot ({ fullscreen, maximized,
           // minimized, focused }) — fires on transitions from ANY cause:
@@ -2447,34 +2467,34 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
             if (st) {
               const info = { win: line.slice(9, sp), ...st };
               push('window-state', info);
-              if (onWindowState) onWindowState(info, app);
+              fire('onWindowState', onWindowState, info, app);
             }
           }
         } else if (line.startsWith('NOTIFYCLICK ')) {
           const id = line.slice(12);
           push('notification-click', { id });
-          if (onNotificationClick) onNotificationClick(id, app);
+          fire('onNotificationClick', onNotificationClick, id, app);
         } else if (line.startsWith('NOTIFYACTION ')) {
           const [id, action, reply] = line.slice(13).split('\t');
           const info = { id, action, reply: unesc(reply ?? '') };
           push('notification-action', info);
-          if (onNotificationAction) onNotificationAction(info, app);
+          fire('onNotificationAction', onNotificationAction, info, app);
         } else if (line.startsWith('MEDIAKEY ')) {
           const [command, secs] = line.slice(9).split('\t');
           const info = { command, time: secs != null ? +secs : undefined };
           push('media-key', info);
-          if (onMediaKey) onMediaKey(info, app);
+          fire('onMediaKey', onMediaKey, info, app);
         } else if (line.startsWith('OPENURL ')) {
           // Deep link (custom URL scheme; packaged .app only).
           const url = line.slice(8);
           push('open-url', { url });
-          if (onOpenUrl) onOpenUrl(url, app);
+          fire('onOpenUrl', onOpenUrl, url, app);
         } else if (line.startsWith('OPENFILES ')) {
           // "Open With" / Dock drop / file association (packaged .app only).
           try {
             const paths = JSON.parse(line.slice(10));
             push('open-files', { paths });
-            if (onOpenFiles) onOpenFiles(paths, app);
+            fire('onOpenFiles', onOpenFiles, paths, app);
           } catch {}
         }
       }
@@ -2586,10 +2606,10 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
               app.show();
               if (msg.url) {
                 push('open-url', { url: msg.url });
-                if (onOpenUrl) onOpenUrl(msg.url, app);
+                fire('onOpenUrl', onOpenUrl, msg.url, app);
               } else if (msg.paths?.length) {
                 push('open-files', { paths: msg.paths });
-                if (onOpenFiles) onOpenFiles(msg.paths, app);
+                fire('onOpenFiles', onOpenFiles, msg.paths, app);
               }
             }
           })().catch(() => {});
@@ -2686,7 +2706,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   // or read them from the backend instead.
   if (cliPaths.length) {
     push('open-files', { paths: cliPaths });
-    if (onOpenFiles) onOpenFiles(cliPaths, app);
+    fire('onOpenFiles', onOpenFiles, cliPaths, app);
   }
 
   // Background update checks ("update": { "auto": "launch" | "daily" }).
@@ -2701,7 +2721,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         if (!r.available) return;
         const info = { current: r.current, latest: r.latest, notes: r.notes ?? null };
         push('update-available', info);
-        if (onUpdateAvailable) onUpdateAvailable(info, app);
+        fire('onUpdateAvailable', onUpdateAvailable, info, app);
       } catch {}
     };
     setTimeout(autoCheck, 5000); // let the window come up first

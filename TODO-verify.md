@@ -392,13 +392,18 @@ TODO-linux.md).
 
 ## Needs a hand on the mouse — kitchen-sink, 2026-07-26
 
-- [ ] **`dialog.openFiles`** — the deck's Storage ▸ Files "Open many…" button.
+- [~] **`dialog.openFiles`** — the deck's Storage ▸ Files "Open many…" button.
       A native panel can't be driven from the page, so only the wiring either
       side of it is checked: multi-select on, an array back, `null` for a
       cancel. NSOpenPanel, the Windows common item dialog and GTK's chooser
       each need their own look, because "multi-select on" is a different flag
       in all three and a panel that quietly allows only one file returns a
       one-element array that looks entirely correct.
+      **Windows done 2026-08-01** — and it does not need a mouse after all:
+      naming two files in the File name box the way the shell itself does
+      (`"alpha.md" "bravo.txt"`) returned a **2-element** array of absolute
+      paths, so `FOS_ALLOWMULTISELECT` is really set, and a cancel resolved
+      `null` rather than `[]`. macOS and Linux panels still unwatched.
 - [ ] **`macos.applescript` under the Automation permission** — the deck's
       *frontmost app* and *Finder window* samples. Verified by driving:
       arithmetic returns `42`, and a broken script comes back with
@@ -898,6 +903,29 @@ window, so the app's own logs can never confirm them:
 - `WM_GETICON` read off the live window separates "the call did nothing" from
   "the call worked and the shell ignored it". That distinction is the whole
   point of this file, and it is what caught the `app.icon` taskbar finding.
+- **Window relations are Win32 questions, not page questions** (2026-08-01):
+  `GetWindow(h, GW_OWNER)` for a `parent:` relation, `EnumWindows` order for
+  z-order (front to back), `IsWindowVisible`/`IsIconic` for what a minimize
+  did, and the taskbar's own **button count via UI Automation** over
+  `Shell_TrayWnd` for "does this window get a button" — a launcher with 7
+  windows and 3 owned ones reads "launcher-win - 4 running windows", which is
+  the claim stated as a number.
+- **The common file dialog and UI Automation, the parts that cost time:** the
+  dialog is NOT reachable as a child of the UIA root element (a scan of the
+  desktop's children never finds it, though the taskbar is right there);
+  `AutomationElement.FromHandle()` on its `#32770` HWND works fine, so find
+  the HWND with `EnumWindows` first. Inside it, the file-type filter is a
+  **Pane** with AutomationId `1136` whose *Name* is the live pattern
+  (`*.md;*.txt`) — a `ControlType.ComboBox` query returns NOTHING and reads
+  exactly like a missing filter. The file list is the `UIItemsView` element
+  and its children are the visible names, i.e. the filter's effect as data
+  rather than pixels. To drive one: `WM_SETTEXT` the visible `Edit` child and
+  `BM_CLICK` the `&Open`/`&Save` button (both marshal cross-process);
+  **SendKeys does not reach it** from a background script, and neither does
+  `SetWindowText`. A folder path in the name box navigates there; `"a" "b"`
+  in it multi-selects. Expanding the dropdown for a photograph needs a real
+  click at the combo's `GetWindowRect` centre — and `SetProcessDPIAware()`
+  first, or the coordinates are scaled wrong (this box is a 2x display).
 
 ## Per-window menu bars — Windows proven, macOS and Linux UNRUN (2026-07-28)
 
@@ -1174,10 +1202,22 @@ usual "written, compiled at best, never seen".
       in a dir with mixed files: non-matching entries dim and refuse
       selection; a call with no `types` still shows everything; `saveFile`
       with types appends the extension.
-- [ ] **Windows — compiles, filter dropdown shows** the pattern entry plus
-      "All files (*.*)", and the pattern entry actually hides non-matching
-      files. `saveFile` gets the default extension appended
-      (`SetDefaultExtension`).
+- [x] **Windows — verified 2026-08-01**, launcher rebuilt from source first.
+      `openFile({ types: ['md','txt'] })`: the type dropdown reads
+      `*.md;*.txt` and holds exactly two entries — that pattern and
+      `All files (*.*)` — photographed with the list expanded. In a dir of six
+      mixed files it lists **alpha.md, bravo.txt, NOTES.MD** and the subdir
+      only: `charlie.png` and `delta.bin` are hidden, and so is
+      **`echo.markdown`** — `*.md` is not `*.markdown`, so spell both if you
+      want both. Uppercase `NOTES.MD` matches without help (Win32 patterns are
+      case-insensitive — the Linux add-both-cases workaround is a Linux
+      problem only). Switching the dropdown to All files brings all six back,
+      which is what proves the filter is filtering rather than the folder
+      merely looking that way. `openFile()` with NO types has **no type
+      dropdown at all** and shows everything. A cancel resolves `null`.
+      `saveFile({ types: ['md'] })`: "Save as type" reads `*.md`, and a name
+      typed with no extension came back as `…\untitled-note.md` —
+      `SetDefaultExtension` lands.
 - [ ] **Linux — compiles, chooser shows** the "*.md, *.txt" filter and an
       "All files" entry, uppercase-named files (NOTES.MD) still match
       (patterns are case-sensitive; both cases are added), and `pickFolder`
@@ -1224,17 +1264,33 @@ child with it.
 Windows and Linux are **written, never compiled** (no cross-toolchain on
 this box):
 
-- [ ] **Windows — compiles**; a `parent: true` satellite stays above main
-      when main is clicked, has NO taskbar button of its own, minimizes away
-      with main, and dies when its owner window is destroyed (Win32 does
-      this itself — nothing was added). An owned+frameless window still gets
-      its WM_NCCALCSIZE treatment (owner is a new combination with the
-      WS_POPUP style path).
+- [x] **Windows — verified 2026-08-01**, launcher rebuilt from source first
+      (the checked-in exe was a day stale again). None of this is visible to
+      the pages, so it was measured from outside with Win32 + UI Automation:
+      `parent: true` really is the Win32 OWNER relation (`GetWindow GW_OWNER`
+      answers main), the owned window sits **above** main in the z-order after
+      main is raised and focused (`SetForegroundWindow` succeeded; owned
+      windows at z-index 11 and 10 against main's 12), and the taskbar shows
+      **4 buttons for 7 windows** — the three owned ones have none.
+      Minimizing main takes both owned windows with it, and restoring brings
+      them back still above main. Note they are **hidden, not iconic**
+      (`IsWindowVisible` false, `IsIconic` false), so a `win.onState`
+      listener sees no `minimized` for a child riding its parent down.
+      An owned+frameless satellite still gets its WM_NCCALCSIZE treatment:
+      declared 150x150 → client 150x150, frame 150x150, `outer` == the page
+      box. A satellite owning a satellite (`parent: 'mid'`) works the same,
+      and closing the owner destroyed the child with it — `WINCLOSED` arrived
+      for **both**, `onWindowClosed` seeing `grand` then `mid` (child first),
+      and `win.windows()` afterwards lists neither, so nothing leaks in the
+      backend registry.
 - [ ] **Linux — compiles**; Mutter/KWin keep the transient above its parent
       on both sessions, taskbar skips it, and `destroy_with_parent` closes
       it with the parent — check `WINCLOSED` arrives for the child too, so
       the backend's registry doesn't leak. Lighter WMs may ignore
       transient-above entirely; that's the WM, not a bug.
-- [ ] **All three — `parent` naming a nonexistent id** opens a normal
+- [~] **All three — `parent` naming a nonexistent id** opens a normal
       unattached window rather than failing (macOS machine-checked; the
-      other two follow the same null-check shape).
+      other two follow the same null-check shape). **Windows confirmed
+      2026-08-01**: `parent: 'nosuchwin'` gave a window with owner `(none)`,
+      its own taskbar button, and the declared page box — indistinguishable
+      from a plain satellite. Linux still unrun.
