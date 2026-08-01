@@ -40,17 +40,17 @@ Added 2026-07-25 (the dock→intent-verb rename + `progress`).
 
 | check | macOS | Windows | Linux |
 | --- | --- | --- | --- |
-| `badge('3')` shows a count | ✅ seen | ✅ seen — red disc, white '3' (2026-07-28) | 🔶 signal correct, drawing unseen |
+| `badge('3')` shows a count | ✅ seen | ✅ seen — red disc, white '3' (2026-07-28) | ✅ seen — Tarwin, 2026-08-01 |
 | `badge('NEW')` (non-numeric) | ✅ arbitrary text | ✅ collapses to a bullet (2026-07-28) | 🔶 hides: dbus shows count-visible=false (2026-07-28) |
 | `attention()` | ✅ bounces | ✅ flashes the taskbar button | ✅ X11 urgency bit / ❌ Wayland |
 | `icon(png)` replaces the icon | ✅ seen | ✅ seen (fixed 2026-07-25) | ✅ X11 (fixed 2026-07-26) / ❌ Wayland |
 | `icon(ico)` replaces the icon | n/a | ✅ seen | n/a |
 | `icon` reaches the taskbar button | ✅ Dock icon | ❌ **title bar + Alt-Tab only** | ⬜ dock uses the .desktop icon |
 | `icon('')` restores | ✅ seen | ✅ back to icon.png (fixed 2026-07-25) | ✅ byte-identical restore |
-| `progress(0..1)` draws a bar | ✅ seen | ✅ seen — 45% then 90% | 🔶 signal correct, drawing unseen |
+| `progress(0..1)` draws a bar | ✅ seen | ✅ seen — 45% then 90% | ✅ seen — Tarwin, 2026-08-01 |
 | `progress` + `icon` compose | ✅ seen — the macOS-specific risk | n/a | n/a |
-| `badge` + `progress` compose | n/a | ✅ seen together (2026-07-28) | 🔶 one signal carries both |
-| `progress(null)` clears | ✅ seen | ✅ bar goes, button stays | 🔶 signal correct |
+| `badge` + `progress` compose | n/a | ✅ seen together (2026-07-28) | ✅ one signal carries both — seen 2026-08-01 |
+| `progress(null)` clears | ✅ seen | ✅ bar goes, button stays | 🔶 signal correct, clearing unseen |
 | `presence('menubar')` hides it | ✅ seen | ✅ button vanishes | ✅ X11 skip-taskbar / ❌ Wayland |
 | `presence('normal')` restores | ✅ seen | ✅ button comes back | ✅ X11 / ❌ Wayland |
 
@@ -109,9 +109,14 @@ asks the bus via the existing `busNameOwned()` helper instead of regexing
 GNOME with Dash-to-Dock added, true for an Ubuntu session with the dock
 removed. The old guess survives only as the fallback where there is no `gdbus`.
 
-Still genuinely needing eyes on Linux: whether Ubuntu Dock *draws* the badge
-and progress bar for a built app, and `badge('NEW')` hiding rather than
-showing something wrong.
+**Ubuntu Dock really does draw them — Tarwin, 2026-08-01.** The badge and the
+progress bar both appear on the dock icon, so the LauncherEntry signal this
+whole column was settled at the protocol layer actually lands somewhere. The
+🔶 rows above are now ✅. Still unwatched, and both are narrow: `progress(null)`
+*clearing* the bar (only the outgoing signal is proven), and `badge('NEW')`
+hiding rather than drawing something wrong — dbus says `count-visible=false`,
+which is the right instruction, but nobody has looked at the icon while it is
+in force.
 
 Windows column checked 2026-07-25 on Windows 11 Pro 26200, launcher rebuilt
 from current source first — the checked-in `launcher-win.exe` was three days
@@ -369,8 +374,19 @@ TODO-linux.md).
       rewrites _MOTIF_WM_HINTS over the launcher's request**, and under CSD
       the WM doesn't draw the buttons anyway. So on GNOME, minimize/maximize
       removal is structurally a no-op; only the `set_deletable` half (the
-      close button, which GTK itself draws) can work — and that half still
-      needs eyes. A real fix would drive the CSD title bar, not MWM.
+      close button, which GTK itself draws) can work — and **that half is now
+      seen, 2026-08-01**. Photographed the window's FRAME (the close button
+      lives in mutter's frame window, not our client window — find it with
+      `xwininfo -id <client> -tree`'s "Parent window id"):
+      `setChrome({ windowControls: false })` **removes the close button** —
+      502 changed pixels in the titlebar, minimize and maximize still there.
+      `setChrome({ windowControls: ['close'] })` — asking to keep close and
+      drop the other two — changes **nothing at all** (0 changed titlebar
+      pixels, all three buttons still up), which is the MWM half being a
+      no-op exactly as described. So on GNOME the honest summary is: you can
+      take the close button away, you cannot take minimize/maximize away, and
+      `getState().chrome.windowControls` reports `null` rather than echoing
+      either request. A real fix would drive the CSD title bar, not MWM.
 
       **2026-07-29: this arm carried a serious side effect, now fixed — it
       RE-FRAMED frameless windows.** `set_mwm_buttons` replaced the whole
@@ -403,7 +419,15 @@ TODO-linux.md).
       naming two files in the File name box the way the shell itself does
       (`"alpha.md" "bravo.txt"`) returned a **2-element** array of absolute
       paths, so `FOS_ALLOWMULTISELECT` is really set, and a cancel resolved
-      `null` rather than `[]`. macOS and Linux panels still unwatched.
+      `null` rather than `[]`.
+      **Linux done 2026-08-01**, also without a mouse: in the GTK chooser the
+      selection extends from the keyboard, so Down, Down, **Shift+Down**
+      (posted through the launcher's own XTest `keystroke`, which reaches a
+      modal chooser fine) then Return returned a **2-element** array —
+      `alpha.md` and `NOTES.MD`, absolute paths — so
+      `gtk_file_chooser_set_select_multiple` really is set. Cancel → `null`
+      was checked on the single-file chooser in the `{ types }` section.
+      macOS's panel is the last one unwatched.
 - [ ] **`macos.applescript` under the Automation permission** — the deck's
       *frontmost app* and *Finder window* samples. Verified by driving:
       arithmetic returns `42`, and a broken script comes back with
@@ -557,9 +581,11 @@ elsewhere:
       prompt to unlock, and it's worth knowing whether that blocks the call
       or fails. (Earlier this VM DID report IsLocked while autologin'd, per
       TODO-linux.md, so the locked case is real.)
-- [ ] **Linux — `authenticate` answers `false`.** Deliberate: no portable owner
-      check exists, so the gate fails closed. The card claims this in prose;
-      confirm the button actually says so rather than looking broken.
+- [x] **Linux — `authenticate` answers `false`.** Deliberate: no portable owner
+      check exists, so the gate fails closed. Verified 2026-08-01:
+      `tiny.app.authenticate('…')` **resolves `false`** (it does not throw, and
+      it does not hang), and `capabilities().authenticate` is `false` on both
+      sessions — so an app can feature-detect instead of calling and guessing.
 
 ## The hands-free AI loop — half confirmed by a human
 
@@ -769,11 +795,19 @@ launchers were edited to match but not compiled:
       `SetWindowPos` per frame smooth, or does it stutter/trail? And does
       `chrome: { transparent: true }` on a WebView2 child window give a real
       circle, or a black square behind it?
-- [~] **Linux/X11** — mechanics verified 2026-07-28, pixels not: opened the
-      way the deck opens it, the ball lived the full 10s flight (present at
-      7.5s, gone by 13s), i.e. per-frame setPosition ran to completion.
-      Whether it's SMOOTH, and whether the RGBA visual gives a real circle
-      rather than a black square, still needs eyes.
+- [x] **Linux/X11** — mechanics verified 2026-07-28; **the pixels and the
+      motion settled 2026-08-01.** A frameless `chrome:{transparent:true}`
+      satellite drawing a `border-radius:50%` div was captured with `xwd`
+      (depth **32**, so the RGBA visual really was granted) and its alpha
+      channel composited against magenta: a clean circle with genuinely
+      transparent corners. **Not a black square.**
+      Motion, measured rather than eyeballed: a rAF loop calling
+      `win.setPosition` for 6s managed **356 frames, 356 completed moves
+      (59.3/s, zero dropped)** with round-trip latency **p50 1ms, p95 2ms,
+      max 3ms**, and sampling the window's absolute X from outside every
+      120ms showed even ~44px steps with a clean bounce at the edge. That is
+      as close to "smooth" as anything short of an eye can get — the only
+      thing left is a human saying it looks smooth.
 - [x] **Linux/Wayland** — the honest-failure path works as written (blind):
       same probe, the ball closed itself between 2s and 7.5s — the 6s
       `no setPosition` path, not the 10s countdown. Verified 2026-07-28.
@@ -927,6 +961,49 @@ window, so the app's own logs can never confirm them:
   click at the combo's `GetWindowRect` centre — and `SetProcessDPIAware()`
   first, or the coordinates are scaled wrong (this box is a 2x display).
 
+## Photographing a window on Linux — the rig this file waited for (2026-08-01)
+
+Every Linux entry above this date says "pixels unseen", because GNOME's
+screenshot and `Shell.Introspect` D-Bus APIs are locked to portal callers on
+this box. They are not the only way in. **Run the app under XWayland
+(`GDK_BACKEND=x11`) and every window becomes an X11 window that `xwd` can
+dump**, with no portal, no permission and no compositor cooperation:
+
+```sh
+xprop -root _NET_CLIENT_LIST          # window ids; _NET_WM_NAME to tell them apart
+xwd -id 0x80002e -out shot.xwd        # the window's own pixels
+python3 xwd2png.py shot.xwd shot.png  # ~40 lines: 25 big-endian header ints,
+                                      # then rows of bytes_per_line, masks for RGB
+```
+
+What it cost to learn:
+
+- **The window must be unobscured.** `XGetImage` on a covered window returns
+  whatever is in the backing store — a satellite behind another window came
+  out a flat fill of the WRONG page's background colour, which looks exactly
+  like a page that failed to load. Raise it first, and sanity-check that the
+  capture has more than one colour.
+- **Decorations live in mutter's FRAME window, not ours.** Our client window
+  is exactly the page box (that's how the size contract reads on X11), so a
+  titlebar capture needs the parent: `xwininfo -id <client> -tree` →
+  "Parent window id". That is how the close-button check above got its
+  before/after.
+- **Alpha survives.** A transparent window dumps at depth 32 with a real
+  alpha byte, so compositing it over a lurid colour separates "transparent
+  corners" from "black square" — the ball question, closed at last.
+- **The dock is still out of reach.** Ubuntu Dock is a GNOME Shell surface,
+  not an X window, so badge and progress remain the one thing here that
+  genuinely needs a human's eye.
+
+Also worth knowing, learned the same day: **the launcher's XTest
+`keystroke` reaches a modal native dialog.** `gtk_native_dialog_run` spins a
+nested main loop and the socket dispatch keeps running inside it, so a page
+awaiting `dialog.openFile()` can still be told to press Escape, Tab, arrows
+or Shift+Down at the chooser — which is how the file-type filter and
+multi-select got driven with no hands. GNOME's own shortcuts (super+up to
+maximize) are compositor-level and do NOT arrive this way; use the app's own
+verbs (`win.zoom()`) for those.
+
 ## Per-window menu bars — Windows proven, macOS and Linux UNRUN (2026-07-28)
 
 `tiny.menu.set` became the APP menu (every window draws it), plus
@@ -1073,14 +1150,39 @@ window-state-event signal now emits):
       drag-resizing (deduped), `maximized` true from the caption button too.
       Secondary windows: open the inspector, minimize it — feed line says
       `inspector`, not `main`.
-- [ ] **Linux (X11)** — same drill. All four flags should move.
-- [ ] **Linux (Wayland)** — same, EXPECT `minimized` to never report (the
-      compositor keeps it private; documented, not a bug). Fullscreen and
-      focus flags still move.
-- [ ] **Windows + Linux** — the windowControlsPos chips in kitchen-sink's
+- [x] **Linux (X11)** — verified 2026-08-01, launcher rebuilt from source.
+      All four flags move: `setFullscreen(true/false)` → `fullscreen`
+      true/false; `win.zoom()` → `maximized` true then false (cross-checked
+      against `_NET_WM_STATE_MAXIMIZED_HORZ/VERT` on the live window);
+      `minimize()` → `minimized:true`; and focus moves both ways with the
+      right `win` field — opening a satellite gave `other focused:true` +
+      `main focused:false`, closing it handed focus back. Deduped: one event
+      per transition, no repeats.
+      **Found a real bug doing it: `win.restore()` does not restore on
+      GNOME.** `do_winop`'s `restore` is a bare `gtk_window_deiconify()`,
+      which Mutter's focus-stealing prevention ignores — measured twice, the
+      window stayed `_NET_WM_STATE_HIDDEN` and merely gained
+      `_NET_WM_STATE_DEMANDS_ATTENTION`, while the call resolved `true` and
+      no window-state event followed (correctly — nothing changed). This is
+      exactly the fire-and-forget trap this file exists for.
+      `win.show({ activate: true })` DOES un-minimize (HIDDEN → FOCUSED,
+      with `minimized:false` then `focused:true` arriving), and its op is
+      `gtk_widget_show` + **`gtk_window_present`** — so the fix shape is to
+      give `restore` the same present (ideally `present_with_time`).
+      Until then, un-minimize via `show({activate:true})`.
+- [x] **Linux (Wayland)** — verified 2026-08-01, same drill. Fullscreen and
+      focus flags move, `win.zoom()` moves `maximized`, and `minimize()`
+      resolves `true` while `minimized` NEVER reports — the only event it
+      produces is `focused:false`. Documented behaviour, not a bug.
+- [~] **Windows + Linux** — the windowControlsPos chips in kitchen-sink's
       Chrome sub-tab must be a clean no-op: chrome line reports "(macOS
       only — ignored here)", nothing breaks, and the extra tab-separated
       CHROME/WINOPEN wire fields don't disturb the older parsers' fields.
+      **Linux half done 2026-08-01**: `setChrome({ windowControlsPos: {x:40,
+      y:30} })` resolves `true`, `getState().chrome` comes back with no
+      `windowControlsPos` key at all (no echo of a thing that didn't
+      happen), and every other chrome field reads normally afterwards — the
+      wider CHROME line didn't disturb the parse. Windows still unchecked.
 
 ## Off-screen window rescue (2026-07-30, policy verified macOS only)
 
@@ -1103,11 +1205,28 @@ leaves the second. Compiled-never-watched elsewhere:
       x:9999, launch: window appears clamped. Unforged relaunch: an
       off-screen setPosition sticks (dormant). Unplug a monitor with a
       window on it mid-session: window comes back (WM_DISPLAYCHANGE).
-- [ ] **Linux (X11)** — same drill; also a secondary window restored
-      off-screen via win.open({x,y}) on a forged boot gets rescued (the
-      `onscreen` op realizes the widget first — check no GTK warnings).
-- [ ] **Linux (Wayland)** — clean no-op: gdk move/origin are compositor
-      -owned; nothing breaks, no warnings.
+- [~] **Linux (X11)** — run 2026-08-01, and the interesting part is that
+      **the policy is unobservable on GNOME, because Mutter never lets a
+      window off-screen in the first place.** `setPosition(5000,5000)` on a
+      960x640 window came back 264,128 — i.e. exactly `screen − window`
+      (1224−960, 768−640), Mutter's own constrain pass parking it flush in
+      the corner; a secondary opened at `x:9999,y:9999` likewise landed at
+      924,568 (1224−300, 768−200). That happens identically on a DORMANT
+      boot and on a forged-fingerprint ARMED one, so armed-vs-dormant can't
+      be told apart here by geometry, and note the corollary: **the "apps
+      fling windows off-screen on purpose" case (coo3d) simply doesn't work
+      on GNOME** — the WM refuses regardless of what we do.
+      What IS settled: the armed path runs clean — the forged `__screens`
+      was detected and rewritten to the real fingerprint, the `WINOP
+      onscreen` chasers fired against both main and a secondary, and the
+      launcher logged **zero GTK warnings/criticals** (only the unrelated
+      libEGL DRI3 lines XWayland always prints). Whether the clamp
+      arithmetic is right needs a WM that permits off-screen windows.
+- [x] **Linux (Wayland)** — verified 2026-08-01: a clean no-op. Every
+      `getState()` reports 0,0 (gdk has no global origin there),
+      `setPosition` changes nothing, and a forged-fingerprint armed boot
+      firing `onscreen` at main and a secondary produced no warnings, no
+      criticals and no geometry damage.
 - [ ] **macOS live** — actually unplug an external display holding a
       satellite mid-session: the 0.5s-delayed pass brings it back (AppKit
       migrates most windows itself; frameless ones are the interesting
@@ -1218,10 +1337,34 @@ usual "written, compiled at best, never seen".
       `saveFile({ types: ['md'] })`: "Save as type" reads `*.md`, and a name
       typed with no extension came back as `…\untitled-note.md` —
       `SetDefaultExtension` lands.
-- [ ] **Linux — compiles, chooser shows** the "*.md, *.txt" filter and an
-      "All files" entry, uppercase-named files (NOTES.MD) still match
-      (patterns are case-sensitive; both cases are added), and `pickFolder`
-      is unaffected.
+- [x] **Linux — verified 2026-08-01**, launcher rebuilt from source, and for
+      once **with pixels**: an X11 window (the app runs under XWayland with
+      `GDK_BACKEND=x11`) can be dumped with `xwd -id` and turned into a PNG,
+      so the chooser was photographed rather than inferred — see
+      "Photographing a window on Linux" below.
+      `openFile({ types: ['md','txt'] })` in a dir of six mixed files: the
+      filter combo reads **"*.md, *.txt"**, and the list holds **alpha.md,
+      bravo.txt, NOTES.MD** and the two subdirs only — `charlie.png`,
+      `delta.bin` and **`echo.markdown`** are hidden, exactly as on Windows
+      (`*.md` is not `*.markdown`; spell both if you want both). Uppercase
+      `NOTES.MD` matches, so the add-both-cases workaround for GTK's
+      case-sensitive patterns does its job.
+      The **"All files" entry exists and works**: one Tab + Down off the file
+      list moves the combo to it (photographed reading "All files") and all
+      six files come back — which is what proves the filter was filtering
+      rather than the folder merely looking that way.
+      `openFile()` with NO types has **no filter combo at all** and lists
+      everything. A cancel (driven with the launcher's own XTest
+      `keystroke('escape')` — it reaches the chooser, because the modal runs a
+      nested main loop and the socket dispatch keeps running inside it)
+      resolves **`null`**. `pickFolder` is unaffected: no combo, files greyed
+      out and unselectable, folders live.
+      **One real difference from Windows, and it's a gap:** `saveFile({ types:
+      ['md'] })` does **not** append the extension. The combo reads `*.md` and
+      the list filters, but a name typed as `untitled-note` came back as
+      `…/untitled-note`, where Windows' `SetDefaultExtension` returns
+      `untitled-note.md`. GTK has no equivalent, so if that contract is meant
+      to hold everywhere, the launcher has to append it by hand.
 
 ## `"about": "menu"` — the click itself, 2026-08-01
 
@@ -1283,14 +1426,44 @@ this box):
       for **both**, `onWindowClosed` seeing `grand` then `mid` (child first),
       and `win.windows()` afterwards lists neither, so nothing leaks in the
       backend registry.
-- [ ] **Linux — compiles**; Mutter/KWin keep the transient above its parent
-      on both sessions, taskbar skips it, and `destroy_with_parent` closes
-      it with the parent — check `WINCLOSED` arrives for the child too, so
-      the backend's registry doesn't leak. Lighter WMs may ignore
-      transient-above entirely; that's the WM, not a bug.
-- [~] **All three — `parent` naming a nonexistent id** opens a normal
+- [x] **Linux — verified 2026-08-01**, first-ever compile of this code
+      (launcher rebuilt from source; the checked-in binary was a day stale).
+      Driven by a scratch app opening five satellites — `child` (parent:
+      true), `plain` (none), `orphan` (parent: 'nosuchwin'), `mid` (parent:
+      true) and `grand` (parent: 'mid') — and settled from OUTSIDE, since
+      none of this is visible to a page.
+      **X11**: `xprop WM_TRANSIENT_FOR` answers main's window id for `child`
+      and `mid`, and mid's id for `grand`; `plain` and `orphan` have no such
+      property at all. Z-order from `_NET_CLIENT_LIST_STACKING` AFTER main
+      was raised and focused (`_NET_WM_STATE_FOCUSED` on main, so the raise
+      really happened): plain, orphan, **main**, child, mid, grand — every
+      transient above its parent, the unattached ones below.
+      **Wayland**: measured at the protocol layer with `WAYLAND_DEBUG=1` —
+      `xdg_toplevel@41(child).set_parent(@39)` and
+      `@69(mid).set_parent(@39)` where @39 is main, `@81(grand).set_parent
+      (@69)`, and `set_parent(nil)` for main, plain and orphan. Z-order
+      isn't a client's business there, so the request is the claim.
+      **Close cascade, both sessions**: closing `mid` destroyed `grand` with
+      it and **`WINCLOSED` arrived for BOTH** (`onWindowClosed` fired twice,
+      mid then grand), and `win.windows()` afterwards read
+      `["main","child","orphan","plain"]` — nothing leaks in the backend
+      registry.
+      **Bonus, matching the Windows finding**: minimizing main took `child`
+      down with it (both `_NET_WM_STATE_HIDDEN`) while `plain` and `orphan`
+      stayed up.
+      NOT settled: **taskbar skipping**. GTK's `set_transient_for` sets no
+      `_NET_WM_STATE_SKIP_TASKBAR` (measured: `_NET_WM_STATE` is empty on
+      the transients), so whether a transient gets its own entry is purely
+      the shell's convention, and Ubuntu Dock groups by app rather than
+      per-window — there is nothing here to observe it with. Unlike Win32,
+      where an owned window provably has no button, treat "no taskbar entry"
+      as unproven on Linux.
+- [x] **All three — `parent` naming a nonexistent id** opens a normal
       unattached window rather than failing (macOS machine-checked; the
       other two follow the same null-check shape). **Windows confirmed
       2026-08-01**: `parent: 'nosuchwin'` gave a window with owner `(none)`,
       its own taskbar button, and the declared page box — indistinguishable
-      from a plain satellite. Linux still unrun.
+      from a plain satellite. **Linux confirmed 2026-08-01**, both sessions:
+      `orphan` had no `WM_TRANSIENT_FOR` on X11 and got `set_parent(nil)` on
+      Wayland — byte-for-byte the same treatment as the satellite opened
+      with no `parent` at all.
