@@ -134,6 +134,14 @@
   <section>
 
     <div class="rel">
+      <h2>Unreleased</h2>
+      <ul>
+        <li><b><code>saveFile({ types })</code> appends the extension on Linux too.</b> 0.35.0 shipped that as a Windows-only nicety — <code>SetDefaultExtension</code> there, nothing on Linux, because GTK has no equivalent — so the same call answered <code>…/untitled-note</code> on one OS and <code>…/untitled-note.md</code> on the other, and an app that trusted the extension wrote a file the picker had just filtered out. The Linux chooser now appends the first declared extension by hand, and only where it can't surprise anyone: the name must carry no extension at all (<code>notes.md</code> is left alone, never doubled), the type filter rather than "All files" must be the one selected, and a call with no <code>types</code> appends nothing. One difference from Windows remains and is unavoidable without reimplementing the dialog: GTK's overwrite confirmation runs before the extension goes on, so it prompts about the name as typed.</li>
+        <li><b><code>tiny.win.restore()</code> really un-minimizes on Linux.</b> It was a bare <code>gtk_window_deiconify()</code>, which Mutter drops on the floor when the client has no user timestamp to prove the request came from a person — the window stayed minimized and merely started demanding attention, while the call resolved <code>true</code>. Nothing in an app's own logs could tell that apart from a working restore. It now deiconifies and presents, with a real server timestamp on X11, and the <code>win.onState</code> listener sees the <code>minimized:false</code> it should always have seen.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.35.0 <span class="date">2026-07-31</span></h2>
       <ul>
         <li><b>File pickers take a type filter.</b> <code>tiny.dialog.openFile({ types: ['md', 'markdown', 'txt'] })</code> — and the same on <code>openFiles</code> and <code>saveFile</code> — limits what's choosable, mapped natively on each OS: <code>allowedContentTypes</code> on macOS, a <code>COMDLG_FILTERSPEC</code> on Windows, <code>GtkFileFilter</code> on Linux. Windows and Linux keep an explicit "All files" entry so a filter never hard-hides the disk; <code>saveFile</code> on Windows also appends the first extension by default. Extensions only, dots and case forgiven; omit <code>types</code> and nothing changes. Filtering is always explicit and per-call — deliberately not defaulted from the manifest's <code>fileExtensions</code>, so a picker never silently narrows because of an unrelated file-association declaration.</li>

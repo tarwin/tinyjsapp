@@ -4,6 +4,29 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **`saveFile({ types })` appends the extension on Linux too.** 0.35.0 shipped
+  that as a Windows-only nicety — `SetDefaultExtension` there, nothing on
+  Linux, because GTK has no equivalent — so the same call answered
+  `…/untitled-note` on one OS and `…/untitled-note.md` on the other, and an
+  app that trusted the extension wrote a file the picker had just filtered
+  out. The Linux chooser now appends the first declared extension by hand,
+  and only where it can't surprise anyone: the name must carry no extension
+  at all (`notes.md` is left alone, never doubled), the type filter rather
+  than "All files" must be the one selected, and a call with no `types`
+  appends nothing. One difference from Windows remains and is unavoidable
+  without reimplementing the dialog: GTK's overwrite confirmation runs before
+  the extension goes on, so it prompts about the name as typed.
+- **`tiny.win.restore()` really un-minimizes on Linux.** It was a bare
+  `gtk_window_deiconify()`, which Mutter drops on the floor when the client
+  has no user timestamp to prove the request came from a person — the window
+  stayed minimized and merely started demanding attention, while the call
+  resolved `true`. Nothing in an app's own logs could tell that apart from a
+  working restore. It now deiconifies and presents, with a real server
+  timestamp on X11, and the `win.onState` listener sees the `minimized:false`
+  it should always have seen.
+
 ## 0.35.0 — 2026-07-31
 
 - **File pickers take a type filter.** `tiny.dialog.openFile({ types:
