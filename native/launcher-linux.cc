@@ -1037,7 +1037,25 @@ static void do_winop(const std::string& winid, const std::string& op) {
     }
   }
   else if (op == "minimize") gtk_window_iconify(win);
-  else if (op == "restore") gtk_window_deiconify(win);
+  else if (op == "restore") {
+    // deiconify alone is NOT enough: Mutter's focus-stealing prevention drops
+    // a bare deiconify from a client that has no user timestamp, leaving the
+    // window _NET_WM_STATE_HIDDEN and merely setting DEMANDS_ATTENTION —
+    // measured on GNOME 46, and the call still resolved true, so it looked
+    // exactly like a working restore (TODO-verify.md). present() is what the
+    // `show` arm above already does, and that path was measured to really
+    // un-minimize; present_with_time carries a server timestamp on X11 so the
+    // WM has no reason to treat it as a steal.
+    gtk_window_deiconify(win);
+#ifdef GDK_WINDOWING_X11
+    GdkWindow* gw = gtk_widget_get_window(GTK_WIDGET(win));
+    if (gw && GDK_IS_X11_WINDOW(gw)) {
+      gtk_window_present_with_time(win, gdk_x11_get_server_time(gw));
+      return;
+    }
+#endif
+    gtk_window_present(win);
+  }
   else if (op == "zoom") {
     GdkWindowState st = g_winstate.count(win) ? g_winstate[win] : (GdkWindowState)0;
     if (st & GDK_WINDOW_STATE_MAXIMIZED) gtk_window_unmaximize(win);
@@ -1526,6 +1544,11 @@ static void do_dialog(const std::string& callid, const std::string& body) {
     // so each extension gets a lowercase and an uppercase pattern. An "All
     // files" filter is always added so the filter never hard-hides the disk.
     std::string types = tab_field(f, 1);
+    // Kept for the save arm's default extension: which filter the user has
+    // selected, and the first declared extension (the one Windows'
+    // SetDefaultExtension would append).
+    GtkFileFilter* type_filter = nullptr;
+    std::string first_ext;
     if (!types.empty() && op != "dir") {
       GtkFileFilter* filt = gtk_file_filter_new();
       std::string label;
@@ -1537,6 +1560,7 @@ static void do_dialog(const std::string& callid, const std::string& body) {
                                               : comma - start);
         if (!ext.empty()) {
           if (!label.empty()) label += ", ";
+          else first_ext = ext;
           label += "*." + ext;
           gtk_file_filter_add_pattern(filt, ("*." + ext).c_str());
           std::string upper = ext;
@@ -1550,6 +1574,7 @@ static void do_dialog(const std::string& callid, const std::string& body) {
       if (!label.empty()) {
         gtk_file_filter_set_name(filt, label.c_str());
         gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dlg), filt);
+        type_filter = filt;
         GtkFileFilter* all = gtk_file_filter_new();
         gtk_file_filter_set_name(all, "All files");
         gtk_file_filter_add_pattern(all, "*");
@@ -1577,7 +1602,23 @@ static void do_dialog(const std::string& callid, const std::string& body) {
       reply_to_call(callid, 0, json);
     } else {
       char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
-      reply_to_call(callid, 0, path ? json_escape(path) : "null");
+      // saveFile({ types }) with a name typed without one: append the first
+      // declared extension, the way Windows' SetDefaultExtension does. GTK has
+      // no equivalent, so a bare "untitled-note" used to come back extensionless
+      // off Windows — the same call, two different results (TODO-verify.md).
+      // Only when the type filter is the one selected (pick "All files" and you
+      // meant it), and only when there is no extension at all: a name that
+      // already carries one, matching or not, is the user's business.
+      // Caveat GTK forces on us: this lands AFTER the chooser's own overwrite
+      // confirmation, which saw the extensionless name.
+      std::string out = path ? path : "";
+      if (path && op == "save" && type_filter && !first_ext.empty() &&
+          gtk_file_chooser_get_filter(GTK_FILE_CHOOSER(dlg)) == type_filter) {
+        const char* base = strrchr(path, '/');
+        base = base ? base + 1 : path;
+        if (!strchr(base, '.')) out += "." + first_ext;
+      }
+      reply_to_call(callid, 0, path ? json_escape(out.c_str()) : "null");
       g_free(path);
     }
     g_object_unref(dlg);

@@ -854,7 +854,9 @@ declare interface Tiny {
     /** `types`: extensions without dots (`['md', 'txt']`) limiting what's
      *  choosable — allowedContentTypes / COMDLG_FILTERSPEC / GtkFileFilter.
      *  Windows and Linux also show an "All files" escape hatch. Omit for
-     *  no filter. */
+     *  no filter. `saveFile` appends the first extension when the name is
+     *  typed without one (and the type filter, not "All files", is the one
+     *  selected) — on Windows and Linux; macOS's own panel decides there. */
     openFile(opts?: { types?: string[] }): Promise<string | null>;
     openFiles(opts?: { types?: string[] }): Promise<string[] | null>;
     pickFolder(): Promise<string | null>;

@@ -1158,18 +1158,22 @@ window-state-event signal now emits):
       right `win` field — opening a satellite gave `other focused:true` +
       `main focused:false`, closing it handed focus back. Deduped: one event
       per transition, no repeats.
-      **Found a real bug doing it: `win.restore()` does not restore on
-      GNOME.** `do_winop`'s `restore` is a bare `gtk_window_deiconify()`,
-      which Mutter's focus-stealing prevention ignores — measured twice, the
-      window stayed `_NET_WM_STATE_HIDDEN` and merely gained
-      `_NET_WM_STATE_DEMANDS_ATTENTION`, while the call resolved `true` and
-      no window-state event followed (correctly — nothing changed). This is
-      exactly the fire-and-forget trap this file exists for.
-      `win.show({ activate: true })` DOES un-minimize (HIDDEN → FOCUSED,
-      with `minimized:false` then `focused:true` arriving), and its op is
-      `gtk_widget_show` + **`gtk_window_present`** — so the fix shape is to
-      give `restore` the same present (ideally `present_with_time`).
-      Until then, un-minimize via `show({activate:true})`.
+      **Found a real bug doing it, and FIXED it the same day: `win.restore()`
+      did not restore on GNOME.** `do_winop`'s `restore` was a bare
+      `gtk_window_deiconify()`, which Mutter's focus-stealing prevention
+      ignores — measured twice, the window stayed `_NET_WM_STATE_HIDDEN` and
+      merely gained `_NET_WM_STATE_DEMANDS_ATTENTION`, while the call resolved
+      `true` and no window-state event followed (correctly — nothing changed).
+      Exactly the fire-and-forget trap this file exists for. The tell was that
+      `win.show({ activate: true })` DID un-minimize, and its op is
+      `gtk_widget_show` + **`gtk_window_present`**.
+      `restore` now deiconifies and then presents — `present_with_time` with
+      `gdk_x11_get_server_time()` on X11, so the WM has a real timestamp and
+      no reason to read it as a steal, plain `present()` elsewhere.
+      Re-verified after the fix: `_NET_WM_STATE_HIDDEN` →
+      `_NET_WM_STATE_FOCUSED`, no DEMANDS_ATTENTION, and the events arrive
+      (`minimized:false` then `focused:true`). Wayland re-checked too: still
+      resolves, still no warnings, `minimized` still silent by design.
 - [x] **Linux (Wayland)** — verified 2026-08-01, same drill. Fullscreen and
       focus flags move, `win.zoom()` moves `maximized`, and `minimize()`
       resolves `true` while `minimized` NEVER reports — the only event it
@@ -1359,12 +1363,24 @@ usual "written, compiled at best, never seen".
       nested main loop and the socket dispatch keeps running inside it)
       resolves **`null`**. `pickFolder` is unaffected: no combo, files greyed
       out and unselectable, folders live.
-      **One real difference from Windows, and it's a gap:** `saveFile({ types:
-      ['md'] })` does **not** append the extension. The combo reads `*.md` and
-      the list filters, but a name typed as `untitled-note` came back as
-      `…/untitled-note`, where Windows' `SetDefaultExtension` returns
-      `untitled-note.md`. GTK has no equivalent, so if that contract is meant
-      to hold everywhere, the launcher has to append it by hand.
+      **One real difference from Windows — found here, FIXED 2026-08-01.**
+      `saveFile({ types: ['md'] })` did **not** append the extension: a name
+      typed as `untitled-note` came back as `…/untitled-note`, where Windows'
+      `SetDefaultExtension` returns `untitled-note.md`. GTK has no equivalent,
+      so `do_dialog`'s save arm now appends the first declared extension by
+      hand. Re-verified after the fix, all against the real chooser:
+      `untitled-note` → **`untitled-note.md`**; a name already carrying one
+      (`notes.md`) is left alone, no doubling; and `saveFile()` with **no
+      types** still returns `untitled-note` bare, so nothing appends when
+      nobody asked. Not run: the same save with **"All files" selected**,
+      which the guard (`gtk_file_chooser_get_filter() == type_filter`) is
+      there to respect — the save dialog's filter combo is not in the Tab
+      chain (six Tab+Down pairs never moved it, where the OPEN dialog needed
+      exactly one), so switching it needs a real click. Same limitation the
+      Windows section hit.
+      Caveat GTK forces on the fix: the extension is appended AFTER the
+      chooser closed, so its own overwrite confirmation saw the extensionless
+      name. Windows appends inside the dialog and doesn't have that hole.
 
 ## `"about": "menu"` — the click itself, 2026-08-01
 
