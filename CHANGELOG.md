@@ -4,8 +4,32 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.36.0 — 2026-08-01
 
+- **The About menu item can be yours.** `"about": "menu"` in tinyjs.json
+  turns macOS's About item into an ordinary menu click — it arrives in
+  `tiny.menu.on` / the backend's `onMenu` with the reserved id `about`
+  instead of showing the standard panel, so an app can draw its own. Opt-in:
+  apps that don't declare it keep the free panel. Windows and Linux have no
+  default About item, so the flag changes nothing there.
+- **`win.open({ parent })` keeps a window above your own.** `parent: true`
+  (= main) or another window's id uses the native relation on each OS —
+  child window on macOS, Win32 owner, GTK transient — so an about box or
+  tool panel stays over the window it belongs to *without* floating over
+  other apps the way `setLevel('floating')` does. It also minimizes and
+  hides with its parent, closes when the parent closes, and gets no taskbar
+  button on Windows (GTK sets no skip-taskbar hint, so Linux taskbars may
+  still list it). Open-time only, like `transparent` — Win32 ownership can't
+  be set after creation. One cross-OS difference, documented rather than
+  fought: macOS child windows also move with their parent. Verified on all
+  three OSes, including that closing a parent destroys its children and
+  `WINCLOSED` arrives for every one of them.
+- **A throw in an app's own handler no longer takes the whole app down.**
+  An exception (or an async rejection) from any exported handler —
+  `onWindowClosed`, `onMenu`, … — propagated out of the bridge's read loop
+  and killed it: no further events, no api answers, and nothing on screen to
+  say why. Every handler call site now logs the failing handler by name and
+  carries on; verified with handlers that throw and reject on purpose.
 - **`saveFile({ types })` appends the extension on Linux too.** 0.35.0 shipped
   that as a Windows-only nicety — `SetDefaultExtension` there, nothing on
   Linux, because GTK has no equivalent — so the same call answered
