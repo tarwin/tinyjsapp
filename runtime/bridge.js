@@ -775,7 +775,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null }) {
+export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -875,6 +875,18 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // suffix, so UA-sniffing sites reject it. Packaged apps use the
     // TinyjsUserAgent plist key instead (this env only applies to the dev spawn).
     if (userAgent) spawnEnv.TINYJS_UA = String(userAgent);
+    // "debug": false (default) = no inspector anywhere, true = F12 (mac also
+    // Cmd+Opt+I) opens one detached, 'open' = every window auto-opens its
+    // own. `tinyjs dev` seeds TINYJS_DEBUG=1 in the inherited env, so dev
+    // always has devtools; the manifest can raise that to 'open' but a
+    // truthy manifest value is what carries into a packaged app (macOS
+    // .app via the TinyjsDebug plist key, not this env).
+    if (debug) spawnEnv.TINYJS_DEBUG = debug === 'open' ? 'open' : '1';
+    // "browserAccelerators": true keeps the engine's own key set (Ctrl+F
+    // find bar, Ctrl+R reload, Ctrl+P print…) reachable in-page. Default is
+    // suppressed — an app's menu accelerators are unaffected either way.
+    // Only WebView2 has such a set; no-op elsewhere.
+    if (browserAccelerators) spawnEnv.TINYJS_BROWSERACCEL = '1';
     // Linux getUserMedia: WebKitGTK denies an unanswered permission-request,
     // and there is no OS consent dialog underneath (no TCC, no WebView2
     // prompt) — so the launcher grants exactly what tinyjs.json's

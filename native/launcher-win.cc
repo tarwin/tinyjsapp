@@ -140,6 +140,14 @@ static bool g_tray_added = false;
 static HICON g_tray_icon = nullptr;
 static HMENU g_ctx_menu = nullptr;
 static bool g_ctx_suppress = false;
+// tinyjs.json "debug" via TINYJS_DEBUG spawn env: absent = no devtools at
+// all, "1" = F12 opens them (their own window), "open" = every window
+// auto-opens them at creation. "browserAccelerators" via TINYJS_BROWSERACCEL:
+// absent = WebView2's own key set (Ctrl+P print, Ctrl+F find, Ctrl+R reload,
+// F12…) is suppressed; "1" keeps it.
+static bool g_debug = false;
+static bool g_debug_open = false;
+static bool g_browser_accel = false;
 static std::string g_last_notif_id;
 
 static DWORD g_clip_last_seq = 0;
@@ -160,6 +168,7 @@ struct TinyWin;
 static std::map<std::string, TinyWin *> g_windows;
 static TinyWin *win_for_id(const std::string &id);
 static HWND hwnd_for_win(const std::string &id);
+static ICoreWebView2 *wv2_for_id(const std::string &id);
 // focused: -1 derive from GetForegroundWindow(); 0/1 the WM_ACTIVATE truth
 // (during deactivation the foreground handoff hasn't happened yet, so
 // deriving would leave the losing window marked focused).
@@ -3778,12 +3787,22 @@ struct AccelHandler : public ICoreWebView2AcceleratorKeyPressedEventHandler {
     args->get_KeyEventKind(&kind);
     if (kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN)
       return S_OK;
+    UINT vk = 0;
+    args->get_VirtualKey(&vk);
+    // Launcher-owned devtools key: F12 on every platform. The engine's own
+    // F12 is gone with the browser accelerator set suppressed, and this
+    // event fires regardless of that setting.
+    if (vk == VK_F12 && g_debug) {
+      args->put_Handled(TRUE);
+      ICoreWebView2 *wv = wv2_for_id(winid);
+      if (wv)
+        wv->OpenDevToolsWindow();
+      return S_OK;
+    }
     if (!(GetKeyState(VK_CONTROL) & 0x8000))
       return S_OK;
     bool alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
     bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
-    UINT vk = 0;
-    args->get_VirtualKey(&vk);
     char c = 0;
     if (vk >= 'A' && vk <= 'Z') c = (char)tolower((int)vk);
     else if (vk >= '0' && vk <= '9') c = (char)vk;
@@ -3794,12 +3813,17 @@ struct AccelHandler : public ICoreWebView2AcceleratorKeyPressedEventHandler {
       return S_OK;
     for (auto &kv : g_cmd_reg) {
       ItemReg *reg = kv.second;
-      if (reg->kind == "menu" && reg->owner == owner && reg->enabled &&
+      if (reg->kind == "menu" && reg->owner == owner &&
           reg->key.size() == 1 &&
           reg->needAlt == alt && reg->needShift == shift &&
           tolower((unsigned char)reg->key[0]) == c) {
+        // A disabled item still owns its combo (AppKit semantics). Swallow
+        // either way, fire only when enabled — otherwise the key falls
+        // through to WebView2's own Ctrl+P/Ctrl+F/Ctrl+R (nib's Ctrl+P
+        // print-sheet bug, TODO-verify.md 2026-08-01).
         args->put_Handled(TRUE);
-        pipe_write_line("MENU " + reg->id);
+        if (reg->enabled)
+          pipe_write_line("MENU " + reg->id);
         break;
       }
     }
@@ -4170,6 +4194,28 @@ static void apply_ctx_suppress_fallback(bool suppress) {
     settings->put_AreDefaultContextMenusEnabled(suppress ? FALSE : TRUE);
     settings->Release();
   }
+}
+
+// Devtools + browser-accelerator policy, per webview: main in run(), each
+// secondary in SecCtrlHandler::Invoke. Settings3 arrived in runtime 1.0.864
+// (2021); on anything older the QI fails and the engine keys stay enabled —
+// old behavior, not breakage. Menu accelerators are unaffected either way:
+// they ride AcceleratorKeyPressed, which Settings3 does not touch.
+static void apply_webview_policy(ICoreWebView2 *wv) {
+  if (!wv)
+    return;
+  ICoreWebView2Settings *settings = nullptr;
+  if (FAILED(wv->get_Settings(&settings)) || !settings)
+    return;
+  settings->put_AreDevToolsEnabled(g_debug ? TRUE : FALSE);
+  ICoreWebView2Settings3 *s3 = nullptr;
+  if (SUCCEEDED(settings->QueryInterface(IID_ICoreWebView2Settings3,
+                                         (void **)&s3)) &&
+      s3) {
+    s3->put_AreBrowserAcceleratorKeysEnabled(g_browser_accel ? TRUE : FALSE);
+    s3->Release();
+  }
+  settings->Release();
 }
 
 struct CtxReq {
@@ -4567,6 +4613,7 @@ struct SecCtrlHandler
       ah->winid = winid;
       ctrl->add_AcceleratorKeyPressed(ah, &atok);
       ah->Release();
+      apply_webview_policy(tw->wv);
       // Hand the keyboard to the page. The host HWND has focus, but WebView2's
       // child does not until something moves it there — so a brand-new window
       // answered document.hasFocus() with FALSE until the user clicked inside
@@ -4578,6 +4625,8 @@ struct SecCtrlHandler
       for (auto &js : tw->pending_js)
         tw->wv->ExecuteScript(widen(js).c_str(), nullptr);
       tw->pending_js.clear();
+      if (g_debug_open)
+        tw->wv->OpenDevToolsWindow();
     }
     return S_OK;
   }
@@ -6318,7 +6367,20 @@ static int run(int argc, char **argv) {
     return 1;
   }
 
-  g_w = webview_create(1 /* debug: enables devtools */, nullptr);
+  // tinyjs.json "debug" / "browserAccelerators" ride the spawn env (see the
+  // globals' comment). `tinyjs dev` seeds TINYJS_DEBUG=1 so dev always has
+  // devtools; packaged apps get nothing unless the manifest says so.
+  {
+    char v[8];
+    DWORD n = GetEnvironmentVariableA("TINYJS_DEBUG", v, sizeof(v));
+    if (n > 0 && n < sizeof(v)) {
+      g_debug = true;
+      g_debug_open = std::string(v) == "open";
+    }
+    n = GetEnvironmentVariableA("TINYJS_BROWSERACCEL", v, sizeof(v));
+    g_browser_accel = n > 0 && v[0] == '1';
+  }
+  g_w = webview_create(g_debug ? 1 : 0, nullptr);
   if (!g_w) {
     std::fprintf(stderr,
                  "launcher: failed to create webview (is the WebView2 runtime "
@@ -6368,6 +6430,9 @@ static int run(int argc, char **argv) {
       g_w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
   if (g_ctrl)
     g_ctrl->get_CoreWebView2(&g_wv2);
+  apply_webview_policy(g_wv2);
+  if (g_debug_open && g_wv2)
+    g_wv2->OpenDevToolsWindow();
   install_ctx_handler();
   install_drop_target();
   install_accel_handler();

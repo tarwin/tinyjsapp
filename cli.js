@@ -503,6 +503,8 @@ const app = await createApp({
   audioTap: ${JSON.stringify(cfg.audioTap ?? null)},
   windowPlacement: ${JSON.stringify(cfg.windowPlacement ?? null)},
   contextMenu: ${JSON.stringify(cfg.contextMenu ?? true)},
+  browserAccelerators: ${JSON.stringify(cfg.browserAccelerators ?? false)},
+  debug: ${JSON.stringify(cfg.debug ?? false)},
   about: ${JSON.stringify(cfg.about ?? null)},
   urlScheme: ${JSON.stringify(cfg.urlScheme ?? null)},
   fileExtensions: ${JSON.stringify(cfg.fileExtensions ?? null)},
@@ -762,6 +764,10 @@ async function cmdDev() {
     if (await exists(iconSrc)) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
     // Linux: the app id names the WM class (window ↔ .desktop matching).
     if (IS_LINUX) devEnv.TINYJS_APP_ID = cfg.id;
+    // Dev always has devtools (F12), whatever the manifest says — the
+    // launcher reads this env directly; the bridge only overrides it when
+    // the manifest raises debug to 'open'.
+    if (!devEnv.TINYJS_DEBUG) devEnv.TINYJS_DEBUG = '1';
     child = tjs.spawn([tjs.exePath, 'run', entryPath], {
       stdin: 'inherit',
       stdout: 'inherit',
@@ -1008,6 +1014,13 @@ async function cmdBuild() {
     const ua = String(cfg.userAgent).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     extraKeys += `
   <key>TinyjsUserAgent</key>     <string>${ua}</string>`;
+  }
+  if (cfg.debug) {
+    // Devtools in a packaged .app (see createApp debug): LaunchServices
+    // starts the launcher, not the bridge, so the env can't carry it — the
+    // plist does, like TinyjsUserAgent above.
+    extraKeys += `
+  <key>TinyjsDebug</key>         <string>${cfg.debug === 'open' ? 'open' : '1'}</string>`;
   }
   if (cfg.activation === 'accessory') {
     // Menu-bar agent: LSUIElement starts the process with no Dock icon at the

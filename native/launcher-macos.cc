@@ -362,6 +362,13 @@ static std::string g_chrome_vibrancy; // empty = none
 // reach files elsewhere. Empty = default (page dir only).
 static std::string g_read_access;
 static std::string g_user_agent; // custom UA (devUrl-wrapping sniffer-sensitive sites)
+// tinyjs.json "debug": dev via TINYJS_DEBUG env, packaged via the TinyjsDebug
+// plist key. Absent = no inspector anywhere (right-click Inspect gone),
+// "1"/"true" = F12 / Cmd+Opt+I open it detached, "open" = every window
+// auto-opens its inspector at creation. `tinyjs dev` seeds TINYJS_DEBUG=1.
+static bool g_debug = false;
+static bool g_debug_open = false;
+static void open_inspector_for_key_window(); // defined with the win lookups
 // Lines produced before the backend is connected (bundle mode: Apple Events
 // and page calls can arrive before the spawned backend attaches). Flushed by
 // sock_set_connected().
@@ -745,6 +752,7 @@ static NSMenu *g_tray_menu = nil;
 - (void)ctxItemClicked:(NSMenuItem *)sender;
 - (void)trayClicked:(id)sender;
 - (void)showAbout:(id)sender;
+- (void)showDevTools:(id)sender;
 - (void)doQuit:(id)sender;
 @end
 
@@ -763,6 +771,10 @@ static NSMenu *g_tray_menu = nil;
   NSString *mid = (NSString *)sender.representedObject;
   if (mid)
     sock_write_line(std::string("CTX ") + [mid UTF8String]);
+}
+- (void)showDevTools:(id)sender {
+  (void)sender;
+  open_inspector_for_key_window();
 }
 - (void)handleGetURL:(NSAppleEventDescriptor *)event
            withReply:(NSAppleEventDescriptor *)reply {
@@ -964,6 +976,24 @@ static void build_bar(MacBar &mb) {
         build_menu_into(menu, m.items, @selector(itemClicked:), mb.reg);
         holder.submenu = menu;
       }
+    }
+
+    // Develop menu only with tinyjs.json "debug" (dev forces it): Cmd+Opt+I
+    // matching Safari; the cross-platform F12 rides an NSEvent local monitor
+    // installed in main(). Rebuilt with the bar, so it survives bar swaps.
+    if (g_debug) {
+      NSMenuItem *devHolder = [[[NSMenuItem alloc] init] autorelease];
+      [bar addItem:devHolder];
+      NSMenu *devMenu = [[[NSMenu alloc] initWithTitle:@"Develop"] autorelease];
+      NSMenuItem *insp =
+          [[[NSMenuItem alloc] initWithTitle:@"Show Web Inspector"
+                                      action:@selector(showDevTools:)
+                               keyEquivalent:@"i"] autorelease];
+      insp.keyEquivalentModifierMask =
+          NSEventModifierFlagCommand | NSEventModifierFlagOption;
+      insp.target = g_menu_target;
+      [devMenu addItem:insp];
+      devHolder.submenu = devMenu;
     }
 
     [mb.bar release];
@@ -5869,6 +5899,50 @@ static std::string winid_for_nswindow(NSWindow *win) {
   return ""; // not ours: dialogs, panels, the devtools window
 }
 
+// Devtools (tinyjs.json "debug"). The Web Inspector attaches to the window
+// bottom by default; small app windows can't fit that, so force it into its
+// own window via the private _WKInspector (show, then detach — a no-op when
+// already windowed). Private API by KVC/performSelector so nothing breaks at
+// compile or load if it moves; the inspector UI's own detach button is the
+// manual fallback.
+static void open_inspector(WKWebView *wv) {
+  if (!wv)
+    return;
+  @try {
+    id insp = [wv valueForKey:@"_inspector"];
+    if ([insp respondsToSelector:@selector(show)])
+      [insp performSelector:@selector(show)];
+    if ([insp respondsToSelector:@selector(detach)])
+      [insp performSelector:@selector(detach)];
+  } @catch (NSException *) {
+  }
+}
+
+static void open_inspector_for_key_window() {
+  if (!g_w)
+    return;
+  std::string id = winid_for_nswindow([NSApp keyWindow]);
+  if (id.empty())
+    id = "main"; // key window is a panel/devtools window: aim at main
+  open_inspector(webview_for_id(g_w, id));
+}
+
+// Launcher-owned devtools key: F12 on every platform, same as Windows/Linux
+// (a bare F12 is no NSMenuItem keyEquivalent, so it rides a local monitor).
+static void install_devtools_key_monitor() {
+  [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                        handler:^NSEvent *(NSEvent *ev) {
+    if (ev.keyCode == 111 /* F12 */ &&
+        !(ev.modifierFlags &
+          (NSEventModifierFlagCommand | NSEventModifierFlagOption |
+           NSEventModifierFlagControl | NSEventModifierFlagShift))) {
+      open_inspector_for_key_window();
+      return (NSEvent *)nil;
+    }
+    return ev;
+  }];
+}
+
 static void emit_winstate(NSWindow *win, const std::string &id) {
   bool fs = (win.styleMask & NSWindowStyleMaskFullScreen) != 0;
   auto b = [](bool v) { return v ? "true" : "false"; };
@@ -6098,6 +6172,10 @@ static void do_winopen(webview_t w, void *arg) {
         [[[WKWebViewConfiguration alloc] init] autorelease];
     enable_webgpu_prefs(cfg.preferences);
     enable_file_access(cfg);
+    // Main gets this from webview_create(debug); secondaries build their own
+    // config, so without it child windows were never inspectable.
+    if (g_debug)
+      [cfg.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
     TinyWindow &tw = g_windows[req->id]; // create slot first (attach parks handler)
     attach_tiny_bridge(cfg.userContentController, req->id);
 
@@ -6118,6 +6196,13 @@ static void do_winopen(webview_t w, void *arg) {
     wv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     if (!g_user_agent.empty())
       wv.customUserAgent = ns(g_user_agent);
+    if (g_debug) {
+      // macOS 13.3+; KVC so older SDKs/OSes just throw into the catch.
+      @try {
+        [wv setValue:@YES forKey:@"inspectable"];
+      } @catch (NSException *) {
+      }
+    }
     [win.contentView addSubview:wv];
 
     if (req->page.rfind("http://", 0) == 0 ||
@@ -6177,6 +6262,8 @@ static void do_winopen(webview_t w, void *arg) {
       if (pw && pw != win)
         [pw addChildWindow:win ordered:NSWindowAbove];
     }
+    if (g_debug_open)
+      open_inspector(wv);
   }
   delete req;
 }
@@ -7710,6 +7797,18 @@ int main(int argc, char *argv[]) {
     if (s.length)
       g_user_agent = [s UTF8String];
   }
+  // tinyjs.json "debug": dev via TINYJS_DEBUG env (seeded by `tinyjs dev`),
+  // packaged via the TinyjsDebug plist key. See the globals' comment.
+  {
+    const char *dbg = getenv("TINYJS_DEBUG");
+    NSString *s = dbg && *dbg ? [NSString stringWithUTF8String:dbg] : nil;
+    if (!s)
+      s = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"TinyjsDebug"];
+    if (s.length) {
+      g_debug = true;
+      g_debug_open = [s isEqualToString:@"open"];
+    }
+  }
 #endif
 
 #ifdef __APPLE__
@@ -7718,7 +7817,7 @@ int main(int argc, char *argv[]) {
   install_media_scheme_hook();
 #endif
 
-  g_w = webview_create(1 /* debug: enables devtools */, nullptr);
+  g_w = webview_create(g_debug ? 1 : 0, nullptr);
   if (!g_w) {
     std::fprintf(stderr, "launcher: failed to create webview\n");
     return 1;
@@ -7726,6 +7825,8 @@ int main(int argc, char *argv[]) {
 
 #ifdef __APPLE__
   apply_dev_icon();   // dev only: TINYJS_ICON -> the Dock tile
+  if (g_debug)
+    install_devtools_key_monitor();
   enable_webgpu(g_w);
   install_close_hook(g_w);
   install_drop_hook();
@@ -7831,6 +7932,11 @@ int main(int argc, char *argv[]) {
     [win orderOut:nil];
     g_suppress_order_front = false;
   }
+  // debug:"open" — main window's inspector, once the run loop is going.
+  if (g_debug_open)
+    dispatch_async(dispatch_get_main_queue(), ^{
+      open_inspector(webview_for_id(g_w, "main"));
+    });
 #endif
 
   std::thread(sock_read_loop).detach();

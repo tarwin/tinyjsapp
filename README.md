@@ -163,6 +163,10 @@ myapp/
                          #   urlScheme?, fileExtensions?, chrome?, update?, notarize?,
                          #   permissions? ({ microphone: "why", camera: "why" } for getUserMedia),
                          #   contextMenu? (false suppresses WebKit's default right-click menu),
+                         #   debug? (true = F12 opens devtools, "open" = every window auto-opens
+                         #   them; default off — `tinyjs dev` always has F12),
+                         #   browserAccelerators? (true re-enables the engine's own keys —
+                         #   Ctrl+F find, Ctrl+R reload…; default suppressed, Windows only),
                          #   activation? ("accessory" = menu-bar agent: no Dock, starts hidden),
                          #   macos?/windows?/linux? (merged on top for that OS),
                          #   minTinyjsVersion? (refuse to run on an older tinyjs) }

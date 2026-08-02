@@ -1543,10 +1543,12 @@ and it composes with the disabled-item fix above rather than replacing it.
 - [ ] **Windows** — with default suppression: Ctrl+F in an app with no Find
       item does nothing; with `"browserAccelerators": true` in tinyjs.json it
       opens the find bar; devtools still reachable under `tinyjs dev`.
-- [ ] **Linux** — same shape unverified. GTK accel groups are the mechanism
-      there, and WebKitGTK has no print/find defaults to leak to as far as
-      anyone has checked, so this may be a non-issue — but "may be" is why
-      it's a box. Check what a disabled item does with its accel.
+- [ ] **Linux** — answered by reading the code (2026-08-02): a disabled item
+      is `gtk_widget_set_sensitive(FALSE)`, GTK refuses the accel, the key
+      falls through to the webview — same shape as Windows. But WebKitGTK's
+      only built-in shortcut is the inspector's, and developer extras are now
+      gated on `debug`, so there is nothing dangerous to leak. Left as-is;
+      the box is for confirming a disabled accel is merely inert on X11.
 - [ ] **macOS** — nothing to change; confirm the disabled-item beep is still
       what happens after any refactor of the shared menu code.
 
@@ -1554,3 +1556,41 @@ Worked around app-side in the meantime: nib's doc.js takes Ctrl+P in the page
 with `preventDefault` and runs Open Quickly itself, dropping the accelerator
 echo that follows. That workaround should be **removed once the launcher
 swallows disabled combos** — grep nib for `ctrlPAt`.
+
+## Devtools off by default, `"debug"` manifest key, launcher-owned F12 (2026-08-02)
+
+Surveying the launchers turned up that debugging is ON everywhere today: mac
+creates its webview with `debug:1` (→ WebKit `developerExtrasEnabled`,
+right-click Inspect), Linux hard-enables developer extras, and Windows never
+touches `AreDevToolsEnabled` whose WebView2 default is TRUE. Every shipped
+app has an end-user-reachable inspector. Decision (same day as the
+accelerator call above, and composing with it):
+
+- **`"debug"` in tinyjs.json, default off.** `false` (absent): no inspector,
+  right-click Inspect gone, F12 dead. `true`: inspector available,
+  launcher-owned F12 opens it. `"open"`: same, plus every window (main +
+  parents/children) auto-opens its inspector at creation. `tinyjs dev`
+  forces at least `true` regardless of the manifest.
+- **The accelerator is F12 on all three platforms** — launcher-owned (not
+  the engine's own F12, which the browserAccelerators suppression kills),
+  modifier-free so it can't collide with app menu combos. mac laptops:
+  fn+F12; Cmd+Opt+I registered as a mac alias for Safari muscle memory.
+- **The inspector opens DETACHED (own window) everywhere.** Windows:
+  `OpenDevToolsWindow()` is always standalone. Linux: WebKitGTK's inspector
+  is its own window unless `attach-request` is opted into — don't. mac: the
+  private `_WKInspector` (`show`/`detach`) forces it out of the app window;
+  the inspector UI's own detach button is the fallback if that API moves.
+  One inspector window per app window — `"open"` on a six-window app means
+  six inspector windows; that's the intended shape, not a bug.
+- Independent of `browserAccelerators`: debug governs whether an inspector
+  exists at all; browserAccelerators governs whether the engine's key set
+  reaches the page. Neither implies the other.
+
+- [ ] **Windows** — packaged app with no `debug` key: F12 dead, no devtools
+      via any route. `"debug": true`: F12 opens standalone devtools.
+      `"debug": "open"`: every window opens its devtools at creation.
+      `tinyjs dev` with no key: F12 works.
+- [ ] **Linux** — same four checks; inspector must appear in its OWN window,
+      not attached to the app window.
+- [ ] **macOS** — same four checks via fn+F12 and Cmd+Opt+I; right-click
+      Inspect Element gone when debug is off.

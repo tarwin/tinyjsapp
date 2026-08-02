@@ -586,9 +586,22 @@ static gboolean on_permission_request(WebKitWebView*, WebKitPermissionRequest* r
   return FALSE;  // everything else keeps WebKit's default (deny)
 }
 
+// tinyjs.json "debug" via TINYJS_DEBUG spawn env: absent = no inspector at
+// all (developer extras stay off, so no built-in shortcut either), "1" = F12
+// opens it in its own window, "open" = every window auto-opens it at
+// creation. `tinyjs dev` seeds TINYJS_DEBUG=1.
+static int debug_mode() {  // 0 off, 1 on, 2 on + auto-open per window
+  static int mode = -1;
+  if (mode < 0) {
+    const char* d = getenv("TINYJS_DEBUG");
+    mode = (!d || !*d) ? 0 : (!strcmp(d, "open") ? 2 : 1);
+  }
+  return mode;
+}
+
 static WebKitSettings* make_settings() {
   WebKitSettings* s = webkit_settings_new();
-  webkit_settings_set_enable_developer_extras(s, TRUE);
+  webkit_settings_set_enable_developer_extras(s, debug_mode() ? TRUE : FALSE);
   webkit_settings_set_enable_webgl(s, TRUE);
   webkit_settings_set_javascript_can_access_clipboard(s, TRUE);
   webkit_settings_set_allow_file_access_from_file_urls(s, TRUE);
@@ -5081,6 +5094,24 @@ static void load_target_into(WebKitWebView* wv, const std::string& target) {
   }
 }
 
+// Show the inspector in its OWN window — small app windows can't fit an
+// attached pane. show may attach if WebKit thinks there's room; the detach
+// right after forces it out (no-op when already windowed).
+static void inspector_open(WebKitWebView* wv) {
+  WebKitWebInspector* insp = webkit_web_view_get_inspector(wv);
+  if (!insp) return;
+  webkit_web_inspector_show(insp);
+  webkit_web_inspector_detach(insp);
+}
+
+// Launcher-owned devtools key: F12 on every platform (the engine shortcut
+// only exists when developer extras are on, which is the same gate).
+static gboolean on_debug_key(GtkWidget* w, GdkEventKey* ev, gpointer) {
+  if (ev->keyval != GDK_KEY_F12) return FALSE;
+  inspector_open(WEBKIT_WEB_VIEW(w));
+  return TRUE;
+}
+
 static WebKitWebView* make_webview(const std::string& winid) {
   WebKitUserContentManager* ucm = make_ucm(winid);
   WebKitSettings* settings = make_settings();
@@ -5103,6 +5134,10 @@ static WebKitWebView* make_webview(const std::string& winid) {
   // (needs the press's device + serial, lost by the round-trip otherwise).
   gtk_widget_add_events(GTK_WIDGET(wv), GDK_BUTTON_PRESS_MASK);
   g_signal_connect(wv, "button-press-event", G_CALLBACK(on_button_press), nullptr);
+  if (debug_mode()) {
+    gtk_widget_add_events(GTK_WIDGET(wv), GDK_KEY_PRESS_MASK);
+    g_signal_connect(wv, "key-press-event", G_CALLBACK(on_debug_key), nullptr);
+  }
   return wv;
 }
 
@@ -5202,6 +5237,7 @@ static void do_winopen(const std::string& rest) {
   // show_all just revealed the bar too. Fill it in from the app menu (or
   // hide it again if there is nothing to show / the window opted out).
   apply_menus(id);
+  if (debug_mode() == 2) inspector_open(sec->wv);
 }
 
 static void do_winclose(const std::string& id) {
@@ -5924,6 +5960,7 @@ int main(int argc, char** argv) {
 
   install_system_observers();
   send_theme();
+  if (debug_mode() == 2) inspector_open(g_wv);
 
   std::thread reader(reader_thread);
   reader.detach();
