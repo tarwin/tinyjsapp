@@ -1483,3 +1483,68 @@ this box):
       `orphan` had no `WM_TRANSIENT_FOR` on X11 and got `set_parent(nil)` on
       Wayland — byte-for-byte the same treatment as the satellite opened
       with no `parent` at all.
+
+## Menu combos the app doesn't currently claim leak to the webview's own accelerators (2026-08-01)
+
+Found from nib on Windows 11: **Ctrl+P put up WebView2's print preview
+instead of Open Quickly.** The first guess — that `put_Handled(TRUE)` in
+`AccelHandler::Invoke` (native/launcher-win.cc) fails to suppress a browser
+accelerator — is **wrong, measured wrong**. With a folder open, so that nib's
+`quickopen` item is enabled, Ctrl+P opens the palette and no print sheet
+appears: Handled does exactly what it says.
+
+The hole is the `reg->enabled` term in that match loop:
+
+```c
+if (reg->kind == "menu" && reg->owner == owner && reg->enabled &&
+    reg->key.size() == 1 && ...)
+```
+
+A **disabled** item doesn't match, so nothing calls `put_Handled`, so the key
+falls through to the webview — and WebView2 has a whole set of built-in
+browser accelerators no native app has: Ctrl+P print, Ctrl+F find-on-page,
+Ctrl+R/F5 reload, Ctrl+O open, Ctrl+Shift+I devtools. nib greys Open Quickly
+out with no folder open, and that is the entire bug: Ctrl+P with no folder →
+print sheet; Ctrl+P with a folder → palette. macOS never had it, because a
+disabled `keyEquivalent` is still consumed by the menu (AppKit beeps), and
+the webview underneath has no competing default.
+
+### What to change in the tinyjs repo
+
+Preferred, and it's small: **a disabled item should still swallow its
+combo.** In `AccelHandler::Invoke`, match without `reg->enabled`, then
+
+```c
+args->put_Handled(TRUE);
+if (reg->enabled) pipe_write_line("MENU " + reg->id);
+```
+
+That reproduces AppKit's semantics exactly — the accelerator belongs to the
+menu whether or not the item can fire right now — and needs no new API.
+
+Rejected as the primary fix, but worth knowing exists:
+`ICoreWebView2Settings3::put_AreBrowserAcceleratorKeysEnabled(FALSE)` turns
+the whole browser set off in one call. Too blunt as a default (it also takes
+find-on-page and reload from apps that want them, and devtools from anyone
+debugging); if it lands at all it should be a manifest/chrome flag, not
+unconditional. Note it does NOT affect the AcceleratorKeyPressed event, so it
+composes with the fix above rather than replacing it.
+
+The combos are still reachable by an app that has no menu item for them at
+all — an app with no Find menu still gets WebView2's find bar on Ctrl+F.
+Whether that's a bug or a freebie is a design call nobody has made.
+
+- [ ] **Windows** — with the `reg->enabled` change: a greyed item's combo does
+      nothing at all (no print sheet, no MENU line), an enabled one still
+      fires, and an item the app never declared still reaches the page.
+- [ ] **Linux** — same shape unverified. GTK accel groups are the mechanism
+      there, and WebKitGTK has no print/find defaults to leak to as far as
+      anyone has checked, so this may be a non-issue — but "may be" is why
+      it's a box. Check what a disabled item does with its accel.
+- [ ] **macOS** — nothing to change; confirm the disabled-item beep is still
+      what happens after any refactor of the shared menu code.
+
+Worked around app-side in the meantime: nib's doc.js takes Ctrl+P in the page
+with `preventDefault` and runs Open Quickly itself, dropping the accelerator
+echo that follows. That workaround should be **removed once the launcher
+swallows disabled combos** — grep nib for `ctrlPAt`.
