@@ -1522,21 +1522,27 @@ if (reg->enabled) pipe_write_line("MENU " + reg->id);
 That reproduces AppKit's semantics exactly — the accelerator belongs to the
 menu whether or not the item can fire right now — and needs no new API.
 
-Rejected as the primary fix, but worth knowing exists:
-`ICoreWebView2Settings3::put_AreBrowserAcceleratorKeysEnabled(FALSE)` turns
-the whole browser set off in one call. Too blunt as a default (it also takes
-find-on-page and reload from apps that want them, and devtools from anyone
-debugging); if it lands at all it should be a manifest/chrome flag, not
-unconditional. Note it does NOT affect the AcceleratorKeyPressed event, so it
-composes with the fix above rather than replacing it.
-
-The combos are still reachable by an app that has no menu item for them at
-all — an app with no Find menu still gets WebView2's find bar on Ctrl+F.
-Whether that's a bug or a freebie is a design call nobody has made.
+The second half of the fix (decided 2026-08-02): the combos are otherwise
+still reachable by an app that has no menu item for them at all — an app
+with no Find menu gets WebView2's find bar on Ctrl+F, and Ctrl+R reloads
+the page out from under it. Decision: **the browser set is suppressed by
+default.** `ICoreWebView2Settings3::put_AreBrowserAcceleratorKeysEnabled(FALSE)`
+turns the whole set off in one call; a new tinyjs.json key
+`"browserAccelerators": true` opts back in (same shape as `contextMenu` —
+manifest key → createApp option → one startup pipe line → launcher setting;
+see `CTXSUPPRESS` in bridge.js). QI-guard Settings3: on a runtime too old to
+have it, keys stay enabled, which only means old behavior, not breakage.
+`tinyjs dev` should keep devtools reachable regardless (force-enable in dev,
+or open devtools programmatically via a dev menu item). Note the setting does
+NOT affect the AcceleratorKeyPressed event, so menu accelerators keep working
+and it composes with the disabled-item fix above rather than replacing it.
 
 - [ ] **Windows** — with the `reg->enabled` change: a greyed item's combo does
       nothing at all (no print sheet, no MENU line), an enabled one still
-      fires, and an item the app never declared still reaches the page.
+      fires.
+- [ ] **Windows** — with default suppression: Ctrl+F in an app with no Find
+      item does nothing; with `"browserAccelerators": true` in tinyjs.json it
+      opens the find bar; devtools still reachable under `tinyjs dev`.
 - [ ] **Linux** — same shape unverified. GTK accel groups are the mechanism
       there, and WebKitGTK has no print/find defaults to leak to as far as
       anyone has checked, so this may be a non-issue — but "may be" is why
