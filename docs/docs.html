@@ -5,7 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>tinyjs — docs</title>
 <meta name="description" content="API reference for tinyjs — tiny macOS, Windows, and Linux desktop apps in JavaScript.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='4' y='4' width='56' height='56' rx='14' fill='%23101318'/%3E%3Cpath d='M22 24l12 8-12 8z' fill='%238ec0ff'/%3E%3Crect x='36' y='38' width='10' height='4' fill='%238ec0ff'/%3E%3C/svg%3E">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="tinyjs">
+<meta property="og:title" content="tinyjs — docs">
+<meta property="og:description" content="API reference for tinyjs — tiny macOS, Windows, and Linux desktop apps in JavaScript.">
+<meta property="og:url" content="https://tinyjs.app/docs.html">
+<meta property="og:image" content="https://tinyjs.app/rakali-logo.webp">
+<meta property="og:image:width" content="1188">
+<meta property="og:image:height" content="1024">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://tinyjs.app/rakali-logo.webp">
+<link rel="icon" href="rakali-badge-small.webp" type="image/webp">
 <meta name="theme-color" content="#fcfcfa" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#101318" media="(prefers-color-scheme: dark)">
 <script>
@@ -77,18 +87,29 @@
     background: repeating-linear-gradient(0deg, transparent 0 2px, var(--scan) 2px 4px);
   }
   header { padding: 72px 0 0; position: relative; z-index: 1; }
-  /* One flex row: wordmark, back-link, theme switch. It was a float, which on
-     a phone dropped these into a ragged pile over the h1. */
+  /* One flex row: wordmark, links, theme switch — the same nav as the home
+     page, with the current page underlined. */
   .brand {
     font: 700 15px var(--mono); letter-spacing: .08em; color: var(--accent);
-    display: flex; align-items: center; gap: 16px;
+    display: flex; align-items: center; gap: 18px;
   }
+  .brand .mark { margin-right: auto; }
+  .brand .links { display: flex; align-items: center; gap: 18px; order: 1; }
+  .brand .theme { order: 2; }
+  /* nowrap so "examples ↗" never leaves its arrow behind on the next line */
   .brand a { color: var(--muted); text-decoration: none; font-weight: 400; white-space: nowrap; }
   .brand a:hover { color: var(--text); }
-  /* the wordmark itself goes home, and pushes the rest to the right edge */
-  .brand a.home { margin-right: auto; color: var(--accent); font-weight: 700; }
-  .brand a.home:hover { color: var(--text); }
-  @media (max-width: 620px) { .brand { font-size: 13.5px; gap: 14px; } }
+  .brand a.mark { color: var(--accent); font-weight: 700; display: flex; align-items: center; gap: 10px; }
+  .brand a.mark:hover { color: var(--text); }
+  .brand .mark img { height: 30px; width: auto; display: block; }
+  /* the page you're on */
+  .brand .links a.here { color: var(--text); border-bottom: 2px solid var(--accent); padding-bottom: 2px; }
+  /* Phones: wordmark + switch on top, the four links as their own full row. */
+  @media (max-width: 620px) {
+    .brand { flex-wrap: wrap; gap: 14px 16px; font-size: 13.5px; }
+    .brand .theme { order: 0; }
+    .brand .links { flex: 1 0 100%; flex-wrap: wrap; gap: 8px 16px; }
+  }
   h1 { font: 700 clamp(34px, 7vw, 52px)/1.05 var(--mono); letter-spacing: -.04em; margin: 36px 0 0; }
   h1 em { font-style: normal; color: var(--accent); }
   .sub { margin: 14px 0 0; color: var(--muted); }
@@ -205,8 +226,11 @@
   @media (max-width: 620px) {
     code { white-space: normal; overflow-wrap: anywhere; }
   }
+  /* the mascot signs the page off, centered above the footer rule */
+  .mascot { margin-top: 72px; display: flex; justify-content: center; position: relative; z-index: 1; }
+  .mascot img { width: 128px; height: 128px; }
   footer {
-    margin-top: 72px; padding: 28px 0 56px; border-top: 1px solid var(--line);
+    margin-top: 40px; padding: 28px 0 56px; border-top: 1px solid var(--line);
     font: 12.5px var(--mono); color: var(--muted); display: flex; gap: 22px; flex-wrap: wrap;
     position: relative; z-index: 1;
   }
@@ -217,7 +241,7 @@
 <body>
 <div class="wrap">
   <header>
-    <div class="brand"><a class="home" href="./index.html">▸_ tinyjs</a> <a href="./index.html">← home</a><button class="theme" onclick="cycleTheme()" title="Theme — click to cycle auto / light / dark" aria-label="Change theme"></button></div>
+    <div class="brand"><a class="mark" href="./index.html"><img src="rakali-logo.webp" alt="rakali, the tinyjs mascot" width="35" height="30">tinyjs</a> <span class="links"><a href="./docs.html" class="here">docs</a><a href="./changelog.html">changelog</a><a href="https://github.com/tarwin/tinyjsapp-examples">examples ↗</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span><button class="theme" onclick="cycleTheme()" title="Theme — click to cycle auto / light / dark" aria-label="Change theme"></button></div>
     <h1>the <em>docs</em></h1>
     <p class="sub">Everything a tinyjs app can do. Frontend calls live under
     <code>window.tiny</code>; the backend exports plain functions.</p>
@@ -1344,6 +1368,8 @@ tjs.spawn(argv, { stdout: <b>'ignore'</b> });
     and nothing will promote it. That's measured, not theoretical; the native
     audio filters exist precisely because of it.</p>
   </section>
+
+  <div class="mascot"><img src="rakali-badge-small.webp" alt="rakali, the tinyjs mascot" width="128" height="128" loading="lazy"></div>
 
   <footer>
     <a href="./index.html">home</a>
