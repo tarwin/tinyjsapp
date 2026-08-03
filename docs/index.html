@@ -10,14 +10,33 @@
 <meta property="og:title" content="tinyjs — desktop apps for macOS, Windows, and Linux in ~6 MB">
 <meta property="og:description" content="Build macOS, Windows, and Linux desktop apps in JavaScript: txiki.js backend, native webview window, ~6 MB shipped. No Electron. No ports.">
 <meta property="og:url" content="https://tinyjs.app/">
-<meta property="og:image" content="https://tinyjs.app/rakali-og.jpg">
+<meta property="og:image" content="https://tinyjs.app/images/rakali-og.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://tinyjs.app/rakali-og.jpg">
-<link rel="icon" href="rakali-badge-small.webp" type="image/webp">
+<meta name="twitter:image" content="https://tinyjs.app/images/rakali-og.jpg">
+<link rel="icon" href="https://tinyjs.app/images/rakali-badge-small.webp" type="image/webp">
 <meta name="theme-color" content="#fcfcfa" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#101318" media="(prefers-color-scheme: dark)">
+
+<link rel="canonical" href="https://tinyjs.app" />
+<link rel="apple-touch-icon" sizes="512x512" href="https://tinyjs.app/images/rakali-badge-small.webp" />
+<meta property="og:image:alt" content="tinyjs mascot on the left with text to right 'TinyJS: Desktop apps in ~6mb" />
+<meta property="og:locale" content="en_US" />
+<meta name="twitter:site" content="@tinyjsapp" />
+<link rel="icon" type="image/png" sizes="32x32" href="https://tinyjs.app/images/rakali-badge-tiny.png" />
+<link rel="icon" type="image/svg+xml" href="https://tinyjs.app/images/rakali-badge.svg" />
+<link rel="manifest" href="https://tinyjs.app/site.webmanifest" />
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  "name": "TinyJS: Desktop apps in ~6MB",
+  "description": "Build macOS, Windows, and Linux desktop apps in JavaScript: txiki.js backend, native webview window, ~6 MB shipped. No Electron. No ports."
+}
+</script>
+
 <script>
   // Theme pin, applied before first paint so a pinned reader never sees a
   // flash of the other palette. No pin = follow the OS (the media query below).
@@ -307,7 +326,7 @@
 
 <div class="wrap">
   <header>
-    <div class="brand r r1"><a class="mark" href="./index.html"><img src="rakali-logo.webp" alt="rakali, the tinyjs mascot" width="35" height="30">tinyjs</a> <span class="links"><a href="./docs.html">docs</a><a href="./changelog.html">changelog</a><a href="https://github.com/tarwin/tinyjsapp-examples">examples ↗</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span><button class="theme" onclick="cycleTheme()" title="Theme — click to cycle auto / light / dark" aria-label="Change theme"></button></div>
+    <div class="brand r r1"><a class="mark" href="./index.html"><img src="images/rakali-logo.webp" alt="rakali, the tinyjs mascot" width="35" height="30">tinyjs</a> <span class="links"><a href="./docs.html">docs</a><a href="./changelog.html">changelog</a><a href="https://github.com/tarwin/tinyjsapp-examples">examples ↗</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span><button class="theme" onclick="cycleTheme()" title="Theme — click to cycle auto / light / dark" aria-label="Change theme"></button></div>
     <h1 class="r r2">Desktop apps<br>in <em>~6&hairsp;MB</em>.</h1>
     <p class="sub r r3">A <strong>JavaScript backend</strong> with full system access, a
     <strong>native webview window</strong> (WebKit on macOS, WebView2 on
@@ -390,13 +409,13 @@
         per-platform downloads.</p>
       </div>
       <a class="try-dl" data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.6/shelf-0.2.6-win.zip">
-        <img class="try-icon" src="shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf<span>-win.zip · 3.9 MB · win 10/11</span>
+        <img class="try-icon" src="images/shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf<span>-win.zip · 3.9 MB · win 10/11</span>
       </a>
       <a class="try-dl" data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.8/shelf-0.2.8.dmg">
-        <img class="try-icon" src="shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf<span>.dmg · 4.4 MB · signed &amp; notarized</span>
+        <img class="try-icon" src="images/shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf<span>.dmg · 4.4 MB · signed &amp; notarized</span>
       </a>
       <div class="try-dl" data-os-panel="linux">
-        <img class="try-icon" src="shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf
+        <img class="try-icon" src="images/shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf
         <span class="arch">
           <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.8/shelf-0.2.8-linux-x86_64.tar.gz">x86_64</a>
           <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.8/shelf-0.2.8-linux-arm64.tar.gz">arm64</a>
@@ -408,7 +427,7 @@
     <div class="shows">
       <div class="show">
         <a class="shot" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/amp">
-          <img src="amp.webp" alt="amp — player, playlist, EQ and a visualizer, each in its own window" width="1296" height="964" loading="lazy" decoding="async"></a>
+          <img src="images/amp.webp" alt="amp — player, playlist, EQ and a visualizer, each in its own window" width="1296" height="964" loading="lazy" decoding="async"></a>
         <div class="show-body">
           <b>amp</b> <i>— a Winamp for the desktop</i>
           <p>Player, playlist, 10-band EQ and six visualizer engines, each pane
@@ -433,7 +452,7 @@
 
       <div class="show">
         <a class="shot" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/nib">
-          <img src="nib.webp" alt="Nib — a Markdown editor with an editor and preview split" width="1480" height="900" loading="lazy" decoding="async"></a>
+          <img src="images/nib.webp" alt="Nib — a Markdown editor with an editor and preview split" width="1480" height="900" loading="lazy" decoding="async"></a>
         <div class="show-body">
           <b>Nib</b> <i>— the best Markdown editor for docs</i>
           <p>One window per document, editor/preview split, clickable task
@@ -454,7 +473,7 @@
 
       <div class="show">
         <a class="shot" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/kitchen-sink">
-          <img src="kitchen-sink.webp" alt="Tiny Deck — tabbed live demos of the tinyjs API" width="2186" height="1428" loading="lazy" decoding="async"></a>
+          <img src="images/kitchen-sink.webp" alt="Tiny Deck — tabbed live demos of the tinyjs API" width="2186" height="1428" loading="lazy" decoding="async"></a>
         <div class="show-body">
           <b>Tiny Deck</b> <i>— the whole API on one deck</i>
           <p>Thirteen tabs of live demos: shell, files, HTTP, GPU, WASM, FFI,
@@ -515,7 +534,7 @@ tiny.menu.set([…]);
     </div>
   </section>
 
-  <div class="mascot"><img src="rakali-badge-small.webp" alt="rakali, the tinyjs mascot" width="128" height="128" loading="lazy"></div>
+  <div class="mascot"><img src="images/rakali-badge-small.webp" alt="rakali, the tinyjs mascot" width="128" height="128" loading="lazy"></div>
 
   <footer>
     <a href="https://github.com/tarwin/tinyjsapp">source</a>

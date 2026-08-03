@@ -1,0 +1,21 @@
+{
+  "name": "tinyjs — desktop apps for macOS, Windows, and Linux in ~6 MB",
+  "short_name": "tinyjs",
+  "description": "Build macOS, Windows, and Linux desktop apps in JavaScript: txiki.js backend, native webview window, ~6 MB shipped. No Electron. No ports.",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#fcfcfa",
+  "theme_color": "#fcfcfa",
+  "icons": [
+    {
+      "src": "/images/rakali-badge-tiny.png",
+      "sizes": "32x32",
+      "type": "image/png"
+    },
+    {
+      "src": "/images/rakali-badge-small.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
