@@ -1,5 +1,7 @@
 # tinyjs
 
+![tinyjs — desktop apps ~6mb](docs/rakali-og.webp)
+
 Tiny desktop apps for macOS — and, in beta, Windows and Linux: a
 [txiki.js](https://txikijs.org/) backend + a native
 [webview](https://github.com/webview/webview) window.
