@@ -26,6 +26,17 @@ https://tinyjs.app/changelog.
   no folder open turned Ctrl+P (Open Quickly, disabled) into a print sheet.
   The accelerator now belongs to the menu whether or not the item can fire;
   disabled just means it fires nothing.
+- **Uppercase menu keys mean Shift on Linux too.** `{key:'P'}` is
+  Ctrl+Shift+P everywhere else (macOS gets it free from AppKit; Windows
+  already parsed it), but GTK lowercases the keyval and keeps the modifiers
+  as passed — so `'P'` registered plain Ctrl+P, collided with a `'p'` item
+  elsewhere in the bar, and Ctrl+Shift+P was bound to nothing. Every
+  uppercase accelerator on Linux was affected; nib's Print… was eating Open
+  Quickly's combo this way.
+- **`app.keystroke` can send function keys on Linux.** `'F12'` parsed to
+  NoSymbol (the combo parser lowercases and XStringToKeysym is
+  case-sensitive) and answered `ok:false`; F-keys now map to their keysyms
+  directly, matching macOS and Windows.
 
 ## 0.36.0 — 2026-08-01
 
