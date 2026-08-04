@@ -20,7 +20,11 @@ import { bundlePath, checkForUpdate, installUpdate, relaunch } from './update.js
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
-const DEBUG = !!tjs.env.TINYJS_DEBUG;
+// Bridge tracing is opt-in and EXPLICIT. `tinyjs dev` seeds TINYJS_DEBUG='dev'
+// for the launcher's devtools (any non-empty value arms F12), which must not
+// drag the full message trace along with it — and a shell's `=0`/`=false` is
+// someone asking for silence, not a truthy string.
+const DEBUG = !['', '0', 'false', 'dev'].includes(String(tjs.env.TINYJS_DEBUG || ''));
 // txiki has no tjs.platform; OS=Windows_NT is always set by Windows itself,
 // and navigator.platform reads "Linux …" from uname on Linux.
 const IS_WIN = tjs.env.OS === 'Windows_NT';
@@ -877,7 +881,7 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     if (userAgent) spawnEnv.TINYJS_UA = String(userAgent);
     // "debug": false (default) = no inspector anywhere, true = F12 (mac also
     // Cmd+Opt+I) opens one detached, 'open' = every window auto-opens its
-    // own. `tinyjs dev` seeds TINYJS_DEBUG=1 in the inherited env, so dev
+    // own. `tinyjs dev` seeds TINYJS_DEBUG='dev' in the inherited env, so dev
     // always has devtools; the manifest can raise that to 'open' but a
     // truthy manifest value is what carries into a packaged app (macOS
     // .app via the TinyjsDebug plist key, not this env).

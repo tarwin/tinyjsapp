@@ -766,8 +766,12 @@ async function cmdDev() {
     if (IS_LINUX) devEnv.TINYJS_APP_ID = cfg.id;
     // Dev always has devtools (F12), whatever the manifest says — the
     // launcher reads this env directly; the bridge only overrides it when
-    // the manifest raises debug to 'open'.
-    if (!devEnv.TINYJS_DEBUG) devEnv.TINYJS_DEBUG = '1';
+    // the manifest raises debug to 'open'. Seeded as 'dev', NOT '1': every
+    // launcher treats any non-empty value as devtools-on, but the bridge's
+    // message trace fires only on an explicit user-set value ('1'/'open') —
+    // seeding '1' had every dev run spewing the full bridge log. Keep the
+    // sentinel short: launcher-win reads this into char[8].
+    if (!devEnv.TINYJS_DEBUG) devEnv.TINYJS_DEBUG = 'dev';
     child = tjs.spawn([tjs.exePath, 'run', entryPath], {
       stdin: 'inherit',
       stdout: 'inherit',
