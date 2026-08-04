@@ -4,6 +4,16 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.37.1 — 2026-08-04
+
+- **`tinyjs dev` is quiet again.** 0.37.0's always-has-devtools change
+  seeded `TINYJS_DEBUG=1` into every dev run — the same env the bridge
+  reads as its message-trace gate, so dev spewed the full bridge log on
+  every launch, and (`!!'0'` being truthy) `TINYJS_DEBUG=0` couldn't hush
+  it. Dev now seeds a sentinel the trace ignores: devtools still arm on
+  all three platforms, an explicit `TINYJS_DEBUG=1` (or `open`) traces
+  exactly as documented, and `0`/`false` mean silence.
+
 ## 0.37.0 — 2026-08-02
 
 - **Devtools are off by default — and yours to turn on.** Every shipped app

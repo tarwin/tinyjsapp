@@ -168,6 +168,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.37.1 <span class="date">2026-08-04</span></h2>
+      <ul>
+        <li><b><code>tinyjs dev</code> is quiet again.</b> 0.37.0's always-has-devtools change seeded <code>TINYJS_DEBUG=1</code> into every dev run — the same env the bridge reads as its message-trace gate, so dev spewed the full bridge log on every launch, and (<code>!!'0'</code> being truthy) <code>TINYJS_DEBUG=0</code> couldn't hush it. Dev now seeds a sentinel the trace ignores: devtools still arm on all three platforms, an explicit <code>TINYJS_DEBUG=1</code> (or <code>open</code>) traces exactly as documented, and <code>0</code>/<code>false</code> mean silence.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.37.0 <span class="date">2026-08-02</span></h2>
       <ul>
         <li><b>Devtools are off by default — and yours to turn on.</b> Every shipped app had an end-user-reachable inspector: right-click "Inspect Element" on macOS and Linux, F12 devtools on Windows. Now nothing ships one unless tinyjs.json says <code>"debug": true</code> — which buys a launcher-owned <b>F12 on all three platforms</b> (plus ⌥⌘I and a Develop menu on macOS) opening the inspector <b>in its own window</b>, where it can't crush a small app window. <code>"debug": "open"</code> auto-opens one for every window at creation, child windows included — which were never inspectable before, on any OS. <code>tinyjs dev</code> always has F12, whatever the manifest says.</li>
