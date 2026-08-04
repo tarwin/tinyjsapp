@@ -1537,12 +1537,42 @@ or open devtools programmatically via a dev menu item). Note the setting does
 NOT affect the AcceleratorKeyPressed event, so menu accelerators keep working
 and it composes with the disabled-item fix above rather than replacing it.
 
-- [ ] **Windows** — with the `reg->enabled` change: a greyed item's combo does
-      nothing at all (no print sheet, no MENU line), an enabled one still
-      fires.
-- [ ] **Windows** — with default suppression: Ctrl+F in an app with no Find
-      item does nothing; with `"browserAccelerators": true` in tinyjs.json it
-      opens the find bar; devtools still reachable under `tinyjs dev`.
+- [x] **Windows** — **verified 2026-08-03**, launcher rebuilt from source first
+      (the checked-in exe was two days stale — again). A probe page under
+      `TINYJS_HTML` registered `{id:'dis', key:'p', enabled:false}` alongside
+      `{id:'en', key:'k'}`, fired the combos through the launcher's own
+      `app.keystroke`, and ran with **`"browserAccelerators": true`** — without
+      that the print sheet is suppressed for an unrelated reason and the test
+      proves nothing.
+      Item **disabled**: **no `MENU` line**, **no print sheet**
+      (`beforeprint` never fired), and the page saw only the bare `Control`
+      keydown — the `p` was swallowed, exactly the AppKit semantics the fix
+      set out to copy. `menu.update('dis',{enabled:true})` and re-fire: `dis`
+      arrives, still no print sheet. `ctrl+k` → `en`, unaffected.
+      **The control is what makes those numbers mean anything**: with the same
+      page, same run, same opt-in, a menu where **nothing claims ctrl+p** put
+      the print sheet up — `beforeprint` fired once and `ctrl+p` reached the
+      page. So the rig can see a print sheet, and the disabled item is what
+      stops it.
+      Detector note for anyone re-running this: WebView2's print preview is
+      drawn **inside the webview**, not as a top-level window — an
+      `EnumWindows` sweep never sees it, and a page-side `beforeprint`
+      listener is what catches it. (DevTools, by contrast, IS its own window.)
+- [x] **Windows — default suppression, verified 2026-08-03** by flipping one
+      manifest key and re-running the identical page. Unclaimed **Ctrl+P**:
+      `beforeprint` **1 → 0** the moment `"browserAccelerators"` came out of
+      tinyjs.json. Unclaimed **Ctrl+F**: at the default the page **keeps
+      focus** (`hasFocus` true, zero blurs) — no find bar; with
+      `"browserAccelerators": true` it **loses focus** (`hasFocus` false, one
+      blur) as the find bar takes the keyboard. Note the suppression does NOT
+      take the key from the page — `ctrl+p` and `ctrl+f` keydowns arrive in
+      both configurations; what goes away is the engine acting on them.
+      **Devtools stays reachable under `tinyjs dev`** with no `debug` key in
+      the manifest: F12 produced a top-level `Chrome_WidgetWin_1` **"DevTools
+      - file:///…"** window ~5.4s in, in both configurations, and the page
+      received **no keydown at all** for F12 — launcher-owned, as designed.
+      It opened **detached**, which is the shape the Linux column had to fight
+      for.
 - [x] **Linux** — **run 2026-08-03**, X11/XWayland, launcher rebuilt from
       source, both in `tinyjs dev` and in a BUILT app; a probe page registered
       `{ id:'dis', key:'p', enabled:false }` and fired the combos through the
@@ -1569,8 +1599,26 @@ page with `preventDefault`~~ — **the workaround is already gone**
 (tinyjsapp-examples `bb339b4`, "drop the Ctrl+P page workaround — the
 launcher owns disabled combos now"); `ctrlPAt` greps clean. nib therefore
 rides the launcher fix on every platform now, and the **Windows** box above
-is the one that still guards it: that is where the print sheet was, and it
-has not been re-run since the fix landed.
+was the one guarding it — that is where the print sheet was. **Re-run and
+green 2026-08-03**, so nib's Ctrl+P is covered by the launcher on the
+platform the bug came from. macOS is the only box left in this section.
+
+Confirmed in the real app the same day, by hand rather than by probe: nib
+from source (no workaround) on a launcher built from `0218c70`, **no folder
+open** so Open Quickly is greyed — Ctrl+P did **nothing at all**. No print
+sheet, which is the bug staying dead, and no palette either, which is the
+point: a disabled item is inert, exactly as ⌘P has always been on macOS.
+Worth saying plainly because it reads like a break — nib's removed
+workaround used to hand-run `quickOpen()` on every Ctrl+P with no
+folder-open check, so Windows and Linux used to open the palette there and
+macOS never did. All three now agree.
+
+**This pairing is not shippable yet.** The launcher fix is UNRELEASED —
+`v0.36.0` does not contain `0218c70` — while nib's source has already
+dropped its workaround, so a nib built against the current released tinyjs
+puts the print sheet straight back. Both platform boxes are now green, so
+what gates nib's next release is a tinyjs release carrying the launcher,
+not more verification.
 
 ## An UPPERCASE menu key never got its shift on Linux — fixed 2026-08-03
 
@@ -1650,10 +1698,18 @@ accelerator call above, and composing with it):
   exists at all; browserAccelerators governs whether the engine's key set
   reaches the page. Neither implies the other.
 
-- [ ] **Windows** — packaged app with no `debug` key: F12 dead, no devtools
+- [~] **Windows** — packaged app with no `debug` key: F12 dead, no devtools
       via any route. `"debug": true`: F12 opens standalone devtools.
       `"debug": "open"`: every window opens its devtools at creation.
       `tinyjs dev` with no key: F12 works.
+      **The last clause only, done 2026-08-03** (fell out of the accelerator
+      run above): under `tinyjs dev` with no `debug` key in tinyjs.json, F12
+      opens a top-level `Chrome_WidgetWin_1` **"DevTools - file:///…"**
+      window — so dev's force-enable works, and it opens **detached**. The
+      page saw no F12 keydown, confirming the launcher owns the key rather
+      than the engine. The three PACKAGED cases are the ones that matter for
+      shipping and are still unrun: an app with no key must have **no** route
+      to an inspector, which is the whole point of the default.
 - [x] **Linux** — **all four run 2026-08-03** on Ubuntu 24.04 aarch64,
       GNOME 46, XWayland, launcher rebuilt from source. Settled from outside
       with `xwininfo -root -tree` (an inspector window is invisible to the
