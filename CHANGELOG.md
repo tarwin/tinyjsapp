@@ -4,6 +4,29 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.37.0 — 2026-08-02
+
+- **Devtools are off by default — and yours to turn on.** Every shipped app
+  had an end-user-reachable inspector: right-click "Inspect Element" on
+  macOS and Linux, F12 devtools on Windows. Now nothing ships one unless
+  tinyjs.json says `"debug": true` — which buys a launcher-owned **F12 on
+  all three platforms** (plus ⌥⌘I and a Develop menu on macOS) opening the
+  inspector **in its own window**, where it can't crush a small app window.
+  `"debug": "open"` auto-opens one for every window at creation, child
+  windows included — which were never inspectable before, on any OS.
+  `tinyjs dev` always has F12, whatever the manifest says.
+- **The webview's own shortcuts can't fire under your app's nose.**
+  WebView2 ships a whole browser key set — Ctrl+P print preview, Ctrl+F
+  find bar, Ctrl+R/F5 reload, Ctrl+O — that no native app has, and it's now
+  suppressed by default (`"browserAccelerators": true` opts back in). Menu
+  accelerators are untouched either way. WKWebView and WebKitGTK have no
+  such set, so the flag is a no-op there.
+- **A greyed-out menu item swallows its shortcut, like AppKit always has.**
+  On Windows a disabled item's combo fell through to the webview — nib with
+  no folder open turned Ctrl+P (Open Quickly, disabled) into a print sheet.
+  The accelerator now belongs to the menu whether or not the item can fire;
+  disabled just means it fires nothing.
+
 ## 0.36.0 — 2026-08-01
 
 - **The About menu item can be yours.** `"about": "menu"` in tinyjs.json

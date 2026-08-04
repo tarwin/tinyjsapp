@@ -168,6 +168,15 @@
   <section>
 
     <div class="rel">
+      <h2>0.37.0 <span class="date">2026-08-02</span></h2>
+      <ul>
+        <li><b>Devtools are off by default — and yours to turn on.</b> Every shipped app had an end-user-reachable inspector: right-click "Inspect Element" on macOS and Linux, F12 devtools on Windows. Now nothing ships one unless tinyjs.json says <code>"debug": true</code> — which buys a launcher-owned <b>F12 on all three platforms</b> (plus ⌥⌘I and a Develop menu on macOS) opening the inspector <b>in its own window</b>, where it can't crush a small app window. <code>"debug": "open"</code> auto-opens one for every window at creation, child windows included — which were never inspectable before, on any OS. <code>tinyjs dev</code> always has F12, whatever the manifest says.</li>
+        <li><b>The webview's own shortcuts can't fire under your app's nose.</b> WebView2 ships a whole browser key set — Ctrl+P print preview, Ctrl+F find bar, Ctrl+R/F5 reload, Ctrl+O — that no native app has, and it's now suppressed by default (<code>"browserAccelerators": true</code> opts back in). Menu accelerators are untouched either way. WKWebView and WebKitGTK have no such set, so the flag is a no-op there.</li>
+        <li><b>A greyed-out menu item swallows its shortcut, like AppKit always has.</b> On Windows a disabled item's combo fell through to the webview — nib with no folder open turned Ctrl+P (Open Quickly, disabled) into a print sheet. The accelerator now belongs to the menu whether or not the item can fire; disabled just means it fires nothing.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.36.0 <span class="date">2026-08-01</span></h2>
       <ul>
         <li><b>The About menu item can be yours.</b> <code>"about": "menu"</code> in tinyjs.json turns macOS's About item into an ordinary menu click — it arrives in <code>tiny.menu.on</code> / the backend's <code>onMenu</code> with the reserved id <code>about</code> instead of showing the standard panel, so an app can draw its own. Opt-in: apps that don't declare it keep the free panel. Windows and Linux have no default About item, so the flag changes nothing there.</li>
