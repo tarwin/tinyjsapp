@@ -63,6 +63,11 @@ history 2026-07-25) — runbook in ../tinyjsapp-examples/CLAUDE.md.
 - Kill launchers by exact name: `for p in $(pgrep -x launcher-linux); do
   kill $p; done`. NEVER `pkill -f` a pattern that matches your own shell —
   it kills the agent's command (exit 144) and reads as a mystery failure.
+  A BUILT app's copy is named `launcher` (dist/), not `launcher-linux`, so
+  that loop misses it — `pgrep -x launcher` too, or kill by pid. A survivor
+  is not harmless: it keeps its modal dialogs up, it swallows the XTest keys
+  the next run wanted, and (apps being single-instance) a second launch just
+  forwards its argv to the old process and exits.
 - Audio measurement: `pw-cat --record --target <sink-or-name> -P
   '{ stream.capture.sink=true }'` + a few lines of Python (rms/peak).
   CAUTION: the built-in ALSA sink's monitor MONO-ISES — L/R comparisons

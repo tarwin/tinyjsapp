@@ -1543,19 +1543,80 @@ and it composes with the disabled-item fix above rather than replacing it.
 - [ ] **Windows** — with default suppression: Ctrl+F in an app with no Find
       item does nothing; with `"browserAccelerators": true` in tinyjs.json it
       opens the find bar; devtools still reachable under `tinyjs dev`.
-- [ ] **Linux** — answered by reading the code (2026-08-02): a disabled item
-      is `gtk_widget_set_sensitive(FALSE)`, GTK refuses the accel, the key
-      falls through to the webview — same shape as Windows. But WebKitGTK's
-      only built-in shortcut is the inspector's, and developer extras are now
-      gated on `debug`, so there is nothing dangerous to leak. Left as-is;
-      the box is for confirming a disabled accel is merely inert on X11.
+- [x] **Linux** — **run 2026-08-03**, X11/XWayland, launcher rebuilt from
+      source, both in `tinyjs dev` and in a BUILT app; a probe page registered
+      `{ id:'dis', key:'p', enabled:false }` and fired the combos through the
+      launcher's own XTest `keystroke`. Ctrl+P with the item **disabled**:
+      **no `MENU` line** — and the key **does reach the page** (its `keydown`
+      listener logged `ctrl+p`). Enable the same item and re-fire: `dis`
+      arrives and the page sees **only the bare Control keydown**, so an
+      enabled accel really does consume the key. `ctrl+shift+k` on an enabled
+      item fires `en`, unchanged.
+      So the code-reading above was right about the mechanism and the Linux
+      shape differs from the Windows fix in one way worth knowing: Windows
+      now **swallows** a disabled combo, Linux **passes it to the page**.
+      That is harmless today only because WebKitGTK's built-in set is the
+      inspector's alone (and that is now gated on `debug`) — but a page-level
+      `keydown` handler on Linux WILL see a combo its own menu item has
+      greyed out, where macOS and Windows both eat it. Left as-is; if that
+      asymmetry ever bites, the fix is a `key-press-event` handler that
+      returns TRUE for any registered-but-disabled accel.
 - [ ] **macOS** — nothing to change; confirm the disabled-item beep is still
       what happens after any refactor of the shared menu code.
 
-Worked around app-side in the meantime: nib's doc.js takes Ctrl+P in the page
-with `preventDefault` and runs Open Quickly itself, dropping the accelerator
-echo that follows. That workaround should be **removed once the launcher
-swallows disabled combos** — grep nib for `ctrlPAt`.
+~~Worked around app-side in the meantime: nib's doc.js takes Ctrl+P in the
+page with `preventDefault`~~ — **the workaround is already gone**
+(tinyjsapp-examples `bb339b4`, "drop the Ctrl+P page workaround — the
+launcher owns disabled combos now"); `ctrlPAt` greps clean. nib therefore
+rides the launcher fix on every platform now, and the **Windows** box above
+is the one that still guards it: that is where the print sheet was, and it
+has not been re-run since the fix landed.
+
+## An UPPERCASE menu key never got its shift on Linux — fixed 2026-08-03
+
+Reported from nib on Linux: Ctrl+P would not open Open Quickly, and printed
+instead. Nothing to do with the section above — the print sheet was **nib's
+own `Print…` item firing**, not the webview's.
+
+`{ key: 'P' }` means Ctrl+Shift+P; that contract is in both launchers'
+comments ("`S` is Ctrl+Shift+S, the shift coming out of the character
+itself") and macOS gets it free, because AppKit derives ⇧ from an uppercase
+`keyEquivalent`. **GTK does not.** `gtk_accel_group_connect` lowercases the
+keyval and keeps the modifiers exactly as passed, so `split_accel` handing
+it `P` + CONTROL registered plain **Ctrl+P**. Measured with a two-item probe
+(`{id:'upperP', key:'P'}` declared in an earlier menu than
+`{id:'lowerP', key:'p'}`, nib's own shape):
+
+- before: **Ctrl+P → `upperP`**, and **Ctrl+Shift+P → nothing at all**
+- after: Ctrl+P → `lowerP`, Ctrl+Shift+P → `upperP`
+
+`split_accel` now adds `GDK_SHIFT_MASK` for a single uppercase letter and
+lowercases the character. This hit **every uppercase accel on Linux**, not
+just nib's — in nib alone, Save As (`S`) sat on Save's Ctrl+S, Export (`E`),
+Close Window (`W`), Link to a File (`U`) and Refresh (`R`) all landed on
+their unshifted combos, and no shifted combo was reachable at all.
+
+Confirmed end to end in the real app, X11, built `dist/nib` on a folder of
+`.md` files: **Ctrl+P opens the "Open quickly" palette** (photographed) and
+**Ctrl+Shift+P opens nib's Print dialog** (a `"Print"` top-level window).
+
+Windows was checked and needs nothing — `split_accel` there already ends
+with `if (key.size() == 1 && isupper(key[0])) shift = true;`
+(`launcher-win.cc:516`). The stale comment on `ItemReg::needShift` ("from
+`alt+`/`shift+` prefixes") is what makes it look otherwise.
+
+- [x] **Linux, the rest of a real bar** — done the same day in nib's File
+      menu, the pair that shares a letter: **Ctrl+S saves silently** (no
+      chooser) and **Ctrl+Shift+S opens the Save As chooser** (photographed —
+      a save dialog with nib's markdown type filter). Before the fix Ctrl+S
+      would have hit whichever of the two registered first.
+
+A trap worth carrying: **`pgrep -x launcher-linux` does not find a BUILT
+app.** `tinyjs build` names the copy `dist/launcher`, so the kill recipe in
+CLAUDE.md silently leaves built apps running — and a stale one keeps its
+modal dialogs on screen and eats the XTest keys the next run was meant to
+get, which reads as "the accelerator did nothing". Kill by pid, or match
+`launcher` as well.
 
 ## Devtools off by default, `"debug"` manifest key, launcher-owned F12 (2026-08-02)
 
@@ -1576,8 +1637,11 @@ accelerator call above, and composing with it):
   modifier-free so it can't collide with app menu combos. mac laptops:
   fn+F12; Cmd+Opt+I registered as a mac alias for Safari muscle memory.
 - **The inspector opens DETACHED (own window) everywhere.** Windows:
-  `OpenDevToolsWindow()` is always standalone. Linux: WebKitGTK's inspector
-  is its own window unless `attach-request` is opted into — don't. mac: the
+  `OpenDevToolsWindow()` is always standalone. Linux: ~~WebKitGTK's inspector
+  is its own window unless `attach-request` is opted into~~ — **wrong,
+  measured wrong 2026-08-03**: WebKitGTK 2.44 attaches by default whenever
+  the app window is big enough, and it took an `attach`-signal handler to
+  force the window out (see the Linux box below). mac: the
   private `_WKInspector` (`show`/`detach`) forces it out of the app window;
   the inspector UI's own detach button is the fallback if that API moves.
   One inspector window per app window — `"open"` on a six-window app means
@@ -1590,7 +1654,40 @@ accelerator call above, and composing with it):
       via any route. `"debug": true`: F12 opens standalone devtools.
       `"debug": "open"`: every window opens its devtools at creation.
       `tinyjs dev` with no key: F12 works.
-- [ ] **Linux** — same four checks; inspector must appear in its OWN window,
-      not attached to the app window.
+- [x] **Linux** — **all four run 2026-08-03** on Ubuntu 24.04 aarch64,
+      GNOME 46, XWayland, launcher rebuilt from source. Settled from outside
+      with `xwininfo -root -tree` (an inspector window is invisible to the
+      page) and by photographing the app window with `xwd`:
+      built app with **no `debug` key** — F12 does nothing, no inspector
+      window and the app window is unchanged; **`"debug": true`** — F12
+      opens a top-level **`"Web Inspector"` 1158x736** window; **`"debug":
+      "open"`** — a two-window app (main + a `win.open` satellite) came up
+      with **two** inspector windows already open, one per app window;
+      **`tinyjs dev`** with no manifest key — F12 opens one. The
+      right-click half was photographed too, via the Menu key: the context
+      menu is Back/Forward/Stop/Reload with **no Inspect Element** when
+      debug is off and **grows Inspect Element** when it is on.
+      **It shipped attached, and that is now fixed.** As written, every
+      inspector opened as a PANE INSIDE the app window — the exact thing the
+      bullet above forbids — photographed on the first run. `show()` only
+      creates the frontend page; WebKitGTK takes the attach decision later,
+      when that page finishes loading, so the `detach()` issued in the same
+      turn ran while nothing was attached yet and returned a no-op.
+      `inspector_open` now connects the inspector's `attach` signal and
+      bounces it back out from an idle (the default handler attaches, the
+      idle detaches), which is what produces the standalone window measured
+      above. Re-verified in all four configurations after the fix.
+      One gap found in the process, also fixed: **`app.keystroke` could not
+      send a function key on Linux.** `parse_combo` lowercases every part
+      (letters need it) and `XStringToKeysym` is case-sensitive, so `'F12'`
+      became `f12` → `NoSymbol` and the call answered `ok:false` — where
+      macOS keeps an f1–f12 table and Windows maps F1–F24. F-keys now parse
+      to `XK_F1 + n-1`; a page calling `tiny.app.keystroke('F12')` opens its
+      own inspector, which is how the fix was verified.
 - [ ] **macOS** — same four checks via fn+F12 and Cmd+Opt+I; right-click
-      Inspect Element gone when debug is off.
+      Inspect Element gone when debug is off. **Worth checking hard**: the
+      attached-vs-detached bug the Linux column just turned up was in the
+      one platform whose comment claimed the inspector "is its own window
+      unless `attach-request` is opted into". `_WKInspector`'s `show`/
+      `detach` pair is the same shape and may have the same timing hole —
+      watch where the inspector actually appears, not just that it appears.

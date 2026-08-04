@@ -1213,6 +1213,16 @@ static GdkModifierType split_accel(const std::string& spec, std::string& key) {
     else break;                                   // not a modifier — it's the key
     key = key.substr(plus + 1);
   }
+  // The shift really does have to come out of the character: GTK does NOT
+  // derive it (unlike AppKit's keyEquivalent). gtk_accel_group_connect
+  // lowercases the keyval and keeps the modifiers as given, so "P" without
+  // this landed on plain Ctrl+P — colliding with a "p" item elsewhere in the
+  // bar, and leaving Ctrl+Shift+P bound to nothing. nib's Print… ("P") ate
+  // Open Quickly's Ctrl+P ("p") exactly that way.
+  if (key.size() == 1 && key[0] >= 'A' && key[0] <= 'Z') {
+    mask |= GDK_SHIFT_MASK;
+    key[0] = (char)tolower((unsigned char)key[0]);
+  }
   return (GdkModifierType)mask;
 }
 
@@ -3849,6 +3859,15 @@ static KeyCombo parse_combo(const std::string& combo) {
   };
   auto it = named.find(key);
   if (it != named.end()) out.keysym = it->second;
+  // Function keys: the parts were lowercased above (letters need that), and
+  // XStringToKeysym is case-sensitive — "f12" is NoSymbol where "F12" is a
+  // key, so without this every F-key silently answered ok:false here while
+  // macOS and Windows both accept them.
+  else if (key.size() >= 2 && key[0] == 'f' &&
+           key.find_first_not_of("0123456789", 1) == std::string::npos) {
+    int n = atoi(key.c_str() + 1);
+    if (n >= 1 && n <= 35) out.keysym = XK_F1 + (n - 1);
+  }
   else out.keysym = XStringToKeysym(key.c_str());
   out.ok = out.keysym != 0 && out.keysym != NoSymbol;
   return out;
@@ -5095,13 +5114,37 @@ static void load_target_into(WebKitWebView* wv, const std::string& target) {
 }
 
 // Show the inspector in its OWN window — small app windows can't fit an
-// attached pane. show may attach if WebKit thinks there's room; the detach
-// right after forces it out (no-op when already windowed).
+// attached pane.
+//
+// A detach() in the same turn as show() does NOT do it (measured, WebKitGTK
+// 2.44/webkit2gtk-4.1): show() only creates the frontend page, and the
+// attach decision is taken later, when that page finishes loading — so the
+// detach lands while nothing is attached yet, returns a no-op, and the
+// inspector then attaches as a pane inside the app window anyway. The
+// "attach" signal is the first moment the decision is observable; returning
+// FALSE lets WebKit do the attach it wants, and the idle right after bounces
+// it straight back out into its own window.
+static gboolean inspector_detach_idle(gpointer data) {
+  WebKitWebInspector* insp = WEBKIT_WEB_INSPECTOR(data);
+  webkit_web_inspector_detach(insp);
+  g_object_unref(insp);
+  return G_SOURCE_REMOVE;
+}
+
+static gboolean on_inspector_attach(WebKitWebInspector* insp, gpointer) {
+  g_idle_add(inspector_detach_idle, g_object_ref(insp));
+  return FALSE;  // let the default handler attach; the idle undoes it
+}
+
 static void inspector_open(WebKitWebView* wv) {
   WebKitWebInspector* insp = webkit_web_view_get_inspector(wv);
   if (!insp) return;
+  if (!g_object_get_data(G_OBJECT(insp), "tinyjs-detach-wired")) {
+    g_object_set_data(G_OBJECT(insp), "tinyjs-detach-wired", (gpointer)1);
+    g_signal_connect(insp, "attach", G_CALLBACK(on_inspector_attach), nullptr);
+  }
   webkit_web_inspector_show(insp);
-  webkit_web_inspector_detach(insp);
+  webkit_web_inspector_detach(insp);  // covers a re-show of an attached one
 }
 
 // Launcher-owned devtools key: F12 on every platform (the engine shortcut
