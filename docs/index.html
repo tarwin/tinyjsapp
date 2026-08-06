@@ -165,6 +165,30 @@
   .os-tab em { font-style: normal; font-size: 10px; color: var(--accent); opacity: .8; }
   .os-tab:hover { color: var(--text); }
   .os-tab.on { color: var(--accent); border-color: var(--accent); background: var(--wash); }
+  /* Example tabs — same chip language as the OS strip, plus the app's own
+     icon, and the same html[data-*] panel switching. One example on screen
+     at a time: three full-width screenshots stacked was most of the page's
+     height, and nobody scrolled past the first. */
+  .ex-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 26px 0 0; }
+  .ex-tab {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    font: 12px var(--mono); letter-spacing: .04em; padding: 6px 14px 6px 8px;
+    border-radius: 8px; cursor: pointer;
+  }
+  .ex-tab img { width: 22px; height: 22px; display: block; }
+  .ex-tab span { font-size: 13px; color: var(--muted); font-family: inherit; }
+  .ex-tab:hover { color: var(--text); }
+  .ex-tab:hover span { color: var(--text); }
+  .ex-tab.on { color: var(--accent); border-color: var(--accent); background: var(--wash); }
+  .ex-tab.on span { color: var(--accent); }
+  html[data-ex="amp"] [data-ex-panel]:not([data-ex-panel="amp"]),
+  html[data-ex="nib"] [data-ex-panel]:not([data-ex-panel="nib"]),
+  html[data-ex="kitchen-sink"] [data-ex-panel]:not([data-ex-panel="kitchen-sink"]) {
+    display: none !important;
+  }
+  /* No JS (or an unknown saved value): every panel stays visible, which is
+     the pre-tabs page — long, but never blank. */
   html[data-os="mac"] [data-os-panel="win"],
   html[data-os="mac"] [data-os-panel="linux"] { display: none !important; }
   html[data-os="win"] [data-os-panel="mac"],
@@ -425,8 +449,17 @@
       </div>
     </div>
 
+    <div class="ex-tabs" role="tablist" aria-label="example apps">
+      <button class="ex-tab" id="extab-amp" data-ex="amp" role="tab" aria-controls="expanel-amp" aria-selected="true" onclick="setExample('amp')">
+        <img src="images/amp-icon.png" alt="" width="22" height="22" loading="lazy"><span>amp</span></button>
+      <button class="ex-tab" id="extab-nib" data-ex="nib" role="tab" aria-controls="expanel-nib" aria-selected="false" onclick="setExample('nib')">
+        <img src="images/nib-icon.png" alt="" width="22" height="22" loading="lazy"><span>Nib</span></button>
+      <button class="ex-tab" id="extab-kitchen-sink" data-ex="kitchen-sink" role="tab" aria-controls="expanel-kitchen-sink" aria-selected="false" onclick="setExample('kitchen-sink')">
+        <img src="images/kitchen-sink-icon.png" alt="" width="22" height="22" loading="lazy"><span>Tiny Deck</span></button>
+    </div>
+
     <div class="shows">
-      <div class="show">
+      <div class="show" data-ex-panel="amp" id="expanel-amp" role="tabpanel" aria-labelledby="extab-amp">
         <a class="shot" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/amp">
           <img src="images/amp.webp" alt="amp — player, playlist, EQ and a visualizer, each in its own window" width="1296" height="964" loading="lazy" decoding="async"></a>
         <div class="show-body">
@@ -451,7 +484,7 @@
         </div>
       </div>
 
-      <div class="show">
+      <div class="show" data-ex-panel="nib" id="expanel-nib" role="tabpanel" aria-labelledby="extab-nib">
         <a class="shot" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/nib">
           <img src="images/nib.webp" alt="Nib — a Markdown editor with an editor and preview split" width="1480" height="900" loading="lazy" decoding="async"></a>
         <div class="show-body">
@@ -472,7 +505,7 @@
         </div>
       </div>
 
-      <div class="show">
+      <div class="show" data-ex-panel="kitchen-sink" id="expanel-kitchen-sink" role="tabpanel" aria-labelledby="extab-kitchen-sink">
         <a class="shot" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/kitchen-sink">
           <img src="images/kitchen-sink.webp" alt="Tiny Deck — tabbed live demos of the tinyjs API" width="2186" height="1428" loading="lazy" decoding="async"></a>
         <div class="show-body">
@@ -535,7 +568,7 @@ tiny.menu.set([…]);
     </div>
   </section>
 
-  <div class="mascot"><img src="images/rakali-badge-small.webp" alt="rakali, the tinyjs mascot" width="128" height="128" loading="lazy"></div>
+  <div class="mascot"><img src="images/rakali-badge.svg" alt="rakali, the tinyjs mascot" width="128" height="128" loading="lazy"></div>
 
   <footer>
     <a href="https://github.com/tarwin/tinyjsapp">source</a>
@@ -577,6 +610,18 @@ function setOS(os) {
   osBooted = true;
   try { localStorage.setItem('tinyjs-os', os); } catch (e) {}
 }
+// Example tabs: one app on screen at a time. Same shape as setOS — the
+// attribute lives on <html> so the CSS does the swapping, and the choice is
+// remembered. Nothing calls this before the strip exists, so no boot guard.
+function setExample(ex) {
+  document.documentElement.dataset.ex = ex;
+  document.querySelectorAll('.ex-tab').forEach(function (t) {
+    var on = t.dataset.ex === ex;
+    t.classList.toggle('on', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  try { localStorage.setItem('tinyjs-example', ex); } catch (e) {}
+}
 function copyCmd(btn) {
   navigator.clipboard.writeText(btn.previousElementSibling.textContent).then(function () {
     btn.textContent = 'copied';
@@ -589,6 +634,14 @@ function copyCmd(btn) {
   var sniffed = /Windows/i.test(navigator.userAgent) ? 'win'
     : /Linux/i.test(navigator.userAgent) ? 'linux' : 'mac';
   setOS(saved === 'mac' || saved === 'win' || saved === 'linux' ? saved : sniffed);
+
+  var ex = null;
+  try { ex = localStorage.getItem('tinyjs-example'); } catch (e) {}
+  // An unknown/absent value falls back to the first tab rather than leaving
+  // every panel up (the no-JS state) — a returning reader whose saved example
+  // has since been renamed would otherwise get the tall page back.
+  if (!document.querySelector('[data-ex-panel="' + ex + '"]')) ex = 'amp';
+  setExample(ex);
 })();
 </script>
 
