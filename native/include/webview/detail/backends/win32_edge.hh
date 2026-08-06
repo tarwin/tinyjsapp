@@ -57,6 +57,7 @@
 
 #include <atomic>
 #include <cstdlib>
+#include <deque> // tinyjs patch: the per-message origin queue below
 #include <functional>
 #include <list>
 #include <memory>
@@ -141,12 +142,42 @@ inline ICoreWebView2EnvironmentOptions *tinyjs_environment_options() {
 }
 // end tinyjs patch
 
-// tinyjs patch: the sender document's URI for the message currently being
-// dispatched, so the launcher can stamp RPC CALL lines with a
-// WebView2-attested origin (site-wrapper "api" gating — see
-// TODO-site-wrapper.md). The callback below runs synchronously inside
-// Invoke, so a single slot is enough; empty = unknown.
-inline std::wstring tinyjs_msg_source;
+// tinyjs patch: the sender document's URI for each incoming web message, so
+// the launcher can stamp RPC CALL lines with a WebView2-attested origin
+// (site-wrapper "api" gating — see TODO-site-wrapper.md).
+//
+// This is a QUEUE, not a slot, and that matters. The message callback below
+// does NOT run synchronously all the way into the launcher: on_message hands
+// the bound call to dispatch(), which is PostMessageW, so the launcher reads
+// the origin on a LATER message-loop turn. Two documents posting back-to-back
+// — a wrapped page and a cross-origin iframe, say — would then cross-
+// attribute, and the direction that matters is an iframe being stamped with
+// the top frame's origin and inheriting its keyhole. Entries are matched back
+// by the JSON-RPC id the call carries.
+struct tinyjs_msg_src {
+  std::string msg;
+  std::wstring source;
+};
+inline std::deque<tinyjs_msg_src> tinyjs_msg_sources;
+
+// Take the attested source for the call with this id. Anything queued ahead of
+// the match was a message nobody dispatched (an unbound method — tinyjs posts
+// drag-drop forwarding the same way), so it goes with it and the queue can't
+// grow without bound. No match = "null", which denies under an origins gate:
+// the failure direction has to be closed, not open.
+inline std::wstring tinyjs_take_msg_source(const std::string &id) {
+  const std::string needle = "\"id\":\"" + id + "\"";
+  for (auto it = tinyjs_msg_sources.begin(); it != tinyjs_msg_sources.end();
+       ++it) {
+    if (it->msg.find(needle) == std::string::npos) {
+      continue;
+    }
+    std::wstring src = it->source;
+    tinyjs_msg_sources.erase(tinyjs_msg_sources.begin(), it + 1);
+    return src;
+  }
+  return std::wstring();
+}
 
 using msg_cb_t = std::function<void(const std::string)>;
 
@@ -242,15 +273,22 @@ public:
     LPWSTR message{};
     auto res = args->TryGetWebMessageAsString(&message);
     if (SUCCEEDED(res)) {
-      // tinyjs patch: stash the attested sender URI for the origin stamp
+      // tinyjs patch: queue the attested sender URI for the origin stamp
+      auto msg = narrow_string(message);
       LPWSTR src{};
+      std::wstring source;
       if (SUCCEEDED(args->get_Source(&src)) && src) {
-        tinyjs_msg_source = src;
+        source = src;
         CoTaskMemFree(src);
-      } else {
-        tinyjs_msg_source.clear();
       }
-      m_msgCb(narrow_string(message));
+      // A page that posts and never calls (or posts junk) must not push
+      // anything out of reach — this is a backstop, the id match does the
+      // real cleanup.
+      if (tinyjs_msg_sources.size() >= 64) {
+        tinyjs_msg_sources.pop_front();
+      }
+      tinyjs_msg_sources.push_back({msg, source});
+      m_msgCb(msg);
     }
 
     CoTaskMemFree(message);
