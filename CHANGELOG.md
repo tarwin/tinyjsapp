@@ -4,6 +4,48 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.38.0 — 2026-08-06
+
+- **Wrap a hosted web app as a real desktop app.** `"url": "https://…"` in
+  tinyjs.json makes the main window a remote page (no local frontend
+  needed), and the things a *browser* does — which a local-page app never
+  missed — now exist on all three platforms: `alert`/`confirm`/`prompt` get
+  native panels headlined by the page's origin (`confirm()` used to return
+  `false` silently, a permanent "Cancel" for any site guarding a
+  destructive action); downloads actually download (`"downloads"`: `auto`
+  to ~/Downloads with de-duplicated names, `ask` for a save panel, or
+  `deny`) with start/progress/done events; `window.open` is configurable
+  (`"popups"`: `external` to the real browser, `window`, or `deny`);
+  navigation start/commit/finish/fail/crash reach `onNavigate`, which can
+  also *veto* a main-frame navigation or send it to the browser; and
+  `tiny.win.find()` searches the page.
+- **`"api"` — a capability gate, so a wrapped site isn't handed the
+  machine.** `tiny` is injected into every origin, so without this a
+  third-party page holds an RPC channel to a backend with full filesystem
+  and process access. Now: `"api": "wrapper"` for the obvious posture,
+  `{disable, enable}` name lists (enable wins), or **per-origin keyholes** —
+  `{"origins": {"file://*": "all", "https://app.example.com": ["notify",
+  "store.*"]}}` — keyed off the calling frame's origin as the ENGINE
+  reports it, not as the page claims it. Denied calls reject with a
+  readable reason; `capabilities().api.denied` lets a page hide UI it can't
+  use. Unknown preset names fail closed.
+- **`"inject"`** runs a script at document-start in every page, bundled at
+  build (`.ts` via esbuild) — the supported way to shim a wrapped site,
+  replacing the undocumented `TINYJS_INJECT` env var, which had a silent
+  8KB cap on Windows that dropped bigger bundles.
+- **`prompt()` crashed the app on macOS** — the result string was released
+  before WebKit read it, so any site using a prompt died. Fixed.
+- Windows: `beforeunload` is no longer auto-accepted (a wrapped app with
+  unsaved work navigated away silently); a download's reported `filename`
+  now names the file that exists on disk rather than the engine's
+  suggestion; Back/Forward survive a navigation policy ask; and
+  `menu.update` no longer applies stale specs.
+- Linux: `tiny.win.id` inside a popup is the popup's own id (it read
+  `main`, so `app.window(tiny.win.id)` from a popup targeted the main
+  window); find state no longer survives a navigation; and a download whose
+  filename isn't valid UTF-8 — legal on Linux — can't put an unparseable
+  line on the wire.
+
 ## 0.37.1 — 2026-08-04
 
 - **`tinyjs dev` is quiet again.** 0.37.0's always-has-devtools change

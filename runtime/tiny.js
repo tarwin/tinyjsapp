@@ -257,7 +257,14 @@
     notify: (title, body, opts = {}) => call('notify', { title, body, ...opts }),
 
     win: {
-      id: window.__TINY_WIN || 'main',   // which window this page lives in
+      // Which window this page lives in. A GETTER on purpose: in a Linux
+      // window-mode popup the page runs its OPENER's document-start shim, so
+      // the baked-in id is the opener's until the launcher corrects
+      // window.__TINY_WIN — which it does from the UI process, after this
+      // client has already been built. Read late and it's the popup's own id;
+      // read once at construction and `app.window(tiny.win.id)` from a popup
+      // targets MAIN.
+      get id() { return window.__TINY_WIN || 'main'; },
       // Open (or focus) another window; page = html file in your frontend dir.
       // size: 'WxH' is the page's box — a frameless window gets exactly that,
       // a titled one gets it plus a title bar (and, on Windows/Linux, plus a
@@ -360,6 +367,14 @@
       print: () => call('win.print'),
       // Render the page to a PDF file (vector) -> { path }.
       printToPDF: (path) => call('win.printToPDF', { path }),
+      // Find-in-page (⌘F UI is the app's; this is the engine underneath).
+      // -> { found, matches, activeMatch }: the next match is selected and
+      // scrolled into view; call again to step. Counts are a JS text-walk on
+      // top of the native find (approximate on exotic pages — hidden text
+      // counts, shadow DOM doesn't). macOS today — ask
+      // tiny.system.capabilities().findInPage.
+      find: (term, opts = {}) => call('win.find', { term, forward: opts.forward !== false, matchCase: !!opts.matchCase }),
+      stopFind: () => call('win.stopFind'),
       // This window's OWN menu bar — same spec and same click event as
       // tiny.menu, but for this window alone. Windows without an override
       // keep showing the app menu, and a window opened later inherits it too.

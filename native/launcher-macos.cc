@@ -362,6 +362,11 @@ static std::string g_chrome_vibrancy; // empty = none
 // reach files elsewhere. Empty = default (page dir only).
 static std::string g_read_access;
 static std::string g_user_agent; // custom UA (devUrl-wrapping sniffer-sensitive sites)
+// Wrapped-site affordances (dev via env, packaged via Tinyjs* plist keys):
+// document-start user JS, download policy, popup (window.open) policy.
+static std::string g_inject_js;       // TINYJS_INJECT / Resources/app/inject.js
+static std::string g_downloads_mode;  // "" = auto | ask | deny  (TinyjsDownloads)
+static std::string g_popup_mode;      // "" = external | window | deny (TinyjsPopups)
 // tinyjs.json "debug": dev via TINYJS_DEBUG env, packaged via the TinyjsDebug
 // plist key. Absent = no inspector anywhere (right-click Inspect gone),
 // "1"/"true" = F12 / Cmd+Opt+I open it detached, "open" = every window
@@ -544,11 +549,11 @@ static bool load_html_file(webview_t w, const std::string &path) {
 }
 
 static void do_reload(webview_t w, void *) {
-  if (g_html_path.empty())
-    return;
 #ifdef __APPLE__
   // reloadFromOrigin bypasses WebKit's caches, so edited subresources
-  // (css/js/images) are re-read from disk, not just the main document.
+  // (css/js/images) are re-read from disk, not just the main document. It
+  // also covers "url" apps (remote main page, g_html_path empty) — reload
+  // there means the live URL, not a file.
   WKWebView *wv = (WKWebView *)webview_get_native_handle(
       w, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER);
   if (wv && wv.URL != nil) {
@@ -556,6 +561,8 @@ static void do_reload(webview_t w, void *) {
     return;
   }
 #endif
+  if (g_html_path.empty())
+    return;
   load_html_file(w, g_html_path);
 }
 
@@ -6026,8 +6033,25 @@ static NSString *tiny_shim_js(const std::string &winid) {
     return;
   std::string seq = body.substr(0, c);
   std::string payload = body.substr(c + 1);
+  // The calling frame's origin rides as a SECOND array element — WebKit's
+  // own attestation (frameInfo.securityOrigin), not anything the page said,
+  // so the bridge's per-origin capability gate can trust it. Launchers that
+  // don't send it (Windows/Linux today) leave the bridge's `origin`
+  // undefined, which the gate treats as "no origin scoping".
+  std::string origin = "null";
+  WKSecurityOrigin *so = msg.frameInfo.securityOrigin;
+  if (so && so.protocol.length) {
+    origin = std::string([so.protocol UTF8String]) + "://";
+    if (so.host.length)
+      origin += [so.host UTF8String];
+    NSInteger port = so.port;
+    if (port &&
+        !((port == 80 && [so.protocol isEqualToString:@"http"]) ||
+          (port == 443 && [so.protocol isEqualToString:@"https"])))
+      origin += ":" + std::to_string((long)port);
+  }
   sock_write_line("CALL " + std::string([self.winId UTF8String]) + ":" + seq +
-                  " [" + json_escape(payload) + "]");
+                  " [" + json_escape(payload) + "," + json_escape(origin) + "]");
 }
 @end
 
@@ -6094,18 +6118,17 @@ static void attach_tiny_bridge(WKUserContentController *ucc,
          injectionTime:WKUserScriptInjectionTimeAtDocumentStart
       forMainFrameOnly:YES] autorelease];
   [ucc addUserScript:client];
-  // Optional user-supplied document-start glue (dev: TINYJS_INJECT env holds
-  // inline JS). Useful when wrapping a third-party site via devUrl and you need
-  // to shim capabilities/behaviour before the page boots.
-  {
-    const char *inj = getenv("TINYJS_INJECT");
-    if (inj && *inj) {
-      WKUserScript *glue = [[[WKUserScript alloc]
-            initWithSource:[NSString stringWithUTF8String:inj]
-             injectionTime:WKUserScriptInjectionTimeAtDocumentStart
-          forMainFrameOnly:YES] autorelease];
-      [ucc addUserScript:glue];
-    }
+  // Optional user-supplied document-start glue (tinyjs.json "inject"; dev
+  // carries it in the TINYJS_INJECT env, packaged apps as Resources/app/
+  // inject.js — both resolved into g_inject_js at startup). Useful when
+  // wrapping a third-party site and you need to shim capabilities/behaviour
+  // before the page boots.
+  if (!g_inject_js.empty()) {
+    WKUserScript *glue = [[[WKUserScript alloc]
+          initWithSource:ns(g_inject_js)
+           injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+        forMainFrameOnly:YES] autorelease];
+    [ucc addUserScript:glue];
   }
   // main window: handler ownership parked here (never removed)
   if (winid != "main")
@@ -6156,6 +6179,9 @@ struct WinOpenReq {
 
 static void enable_webgpu_prefs(id preferences); // defined in WebGPU section
 static void enable_file_access(WKWebViewConfiguration *cfg); // ditto
+// Navigation + download delegate and (for non-main windows) a UI delegate —
+// defined in the browser-affordances section below.
+static void tiny_apply_web_delegates(WKWebView *wv);
 
 static void do_winopen(webview_t w, void *arg) {
   WinOpenReq *req = static_cast<WinOpenReq *>(arg);
@@ -6203,6 +6229,10 @@ static void do_winopen(webview_t w, void *arg) {
       } @catch (NSException *) {
       }
     }
+    // Navigation events + downloads, and a UI delegate (file pickers, JS
+    // dialogs, window.open) — the main window's come from the webview library
+    // plus the runtime bolt-ons; secondary windows had neither.
+    tiny_apply_web_delegates(wv);
     [win.contentView addSubview:wv];
 
     if (req->page.rfind("http://", 0) == 0 ||
@@ -6326,6 +6356,857 @@ static void do_winopen(webview_t, void *arg) { delete static_cast<WinOpenReq *>(
 static void do_winclose(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
 static void do_eval_win(webview_t, void *arg) { delete static_cast<EvalReq *>(arg); }
 static void do_title_win(webview_t, void *arg) { delete static_cast<EvalReq *>(arg); }
+#endif
+
+// --- browser affordances (macOS) --------------------------------------------
+// Everything a *browser* does that a local-page app never needed, for wrapping
+// hosted web apps: JS dialogs (alert/confirm/prompt), downloads, navigation
+// events + policy, window.open, find-in-page. See TODO-site-wrapper.md.
+//
+// Wire additions:
+//   launcher -> backend:
+//     NAV {"window","kind","url","error"?}     kind: start|commit|finish|fail|crash
+//     NAVQ <qid> <winid>\t<url>                main-frame http(s) policy ask;
+//                                              unanswered after 400ms = allow
+//     DOWNLOAD {"id","url","filename","path","state","error"?}
+//     POPUP {"window","url","action"}          action: window|external|deny
+//   backend -> launcher:
+//     NAVR <qid> allow|deny|external
+//     FIND <id> <term>\t<forward>\t<matchCase> (call-style; resolved via RET path)
+//     STOPFIND <id>
+
+#ifdef __APPLE__
+static std::string tiny_winid_for_webview(WKWebView *wv) {
+  for (auto &kv : g_windows)
+    if (kv.second.wv == wv)
+      return kv.first;
+  return "main";
+}
+
+// -- navigation events + policy --
+
+static void tiny_nav_event(WKWebView *wv, const char *kind, NSURL *url,
+                           NSError *err) {
+  std::string u = url && url.absoluteString ? [url.absoluteString UTF8String] : "";
+  // Internal schemes stay off the wire (the tiny-media proxy, about:blank
+  // during popup setup); file/http(s) are the app's actual documents.
+  if (!u.empty() && u.rfind("http://", 0) != 0 && u.rfind("https://", 0) != 0 &&
+      u.rfind("file://", 0) != 0 && u != "about:blank")
+    return;
+  std::string j = "{\"window\":" + json_escape(tiny_winid_for_webview(wv)) +
+                  ",\"kind\":\"" + kind + "\",\"url\":" + json_escape(u);
+  if (err) {
+    const char *d = err.localizedDescription ? [err.localizedDescription UTF8String] : "";
+    j += ",\"error\":" + json_escape(d ? d : "");
+  }
+  sock_write_line("NAV " + j + "}");
+}
+
+// Held policy decisions: qid -> block(int verdict). Main thread only (delegate
+// callbacks, NAVR via webview_dispatch, and the timeout all land there).
+// Verdicts: 0 allow, 1 deny, 2 external (shell-open + cancel).
+static long g_nav_seq = 0;
+static std::map<std::string, void *> g_nav_pending;
+
+static void tiny_nav_resolve(const std::string &qid, int verdict) {
+  auto it = g_nav_pending.find(qid);
+  if (it == g_nav_pending.end())
+    return; // already resolved (timeout beat the reply, or vice versa)
+  void (^b)(int) = (void (^)(int))it->second;
+  g_nav_pending.erase(it);
+  b(verdict);
+  [b release];
+}
+
+// -- downloads --
+
+struct TinyDownloadInfo {
+  long id;
+  std::string url, filename, path;
+  double lastEmit = 0;    // throttle for progress events (monotonic ms)
+  bool observing = false; // NSProgress KVO registered
+};
+static std::map<void *, TinyDownloadInfo> g_downloads; // WKDownload* (main thread)
+static long g_download_seq = 0;
+
+static void tiny_download_event(long id, const std::string &url,
+                                const std::string &filename,
+                                const std::string &path, const char *state,
+                                const std::string &err,
+                                long long bytes = -1, long long total = -1) {
+  std::string j = "{\"id\":" + std::to_string(id) +
+                  ",\"url\":" + json_escape(url) +
+                  ",\"filename\":" + json_escape(filename) +
+                  ",\"path\":" + (path.empty() ? "null" : json_escape(path)) +
+                  ",\"state\":\"" + state + "\"";
+  if (bytes >= 0) {
+    j += ",\"bytes\":" + std::to_string(bytes);
+    // totalUnitCount is -1/0 while the response has no Content-Length.
+    j += ",\"total\":" + std::to_string(total > 0 ? total : -1);
+  }
+  if (!err.empty())
+    j += ",\"error\":" + json_escape(err);
+  sock_write_line("DOWNLOAD " + j + "}");
+}
+
+static NSString *tiny_downloads_dir() {
+  NSArray *dirs = NSSearchPathForDirectoriesInDomains(NSDownloadsDirectory,
+                                                      NSUserDomainMask, YES);
+  return dirs.count ? dirs[0] : [@"~/Downloads" stringByExpandingTildeInPath];
+}
+
+static void tiny_test_autodlg_arm(); // test hook, defined with the JS dialogs
+
+@interface TinyWebDelegate : NSObject <WKNavigationDelegate, WKDownloadDelegate>
+@end
+@implementation TinyWebDelegate
+
+- (void)webView:(WKWebView *)wv
+    decidePolicyForNavigationAction:(WKNavigationAction *)action
+                    decisionHandler:(void (^)(WKNavigationActionPolicy))decide {
+  NSURL *url = action.request.URL;
+  std::string u = url && url.absoluteString ? [url.absoluteString UTF8String] : "";
+  // <a download> and window.open'd blob: URLs ask to be downloads up front.
+  if (action.shouldPerformDownload) {
+    decide(WKNavigationActionPolicyDownload);
+    return;
+  }
+  // No target frame = a popup the UI delegate's createWebView didn't take
+  // (rel=noopener paths). Same policy as window.open, minus the ability to
+  // hand back a webview from here: window mode degrades to external.
+  if (!action.targetFrame) {
+    if (g_popup_mode != "deny" && url &&
+        (u.rfind("http://", 0) == 0 || u.rfind("https://", 0) == 0))
+      [[NSWorkspace sharedWorkspace] openURL:url];
+    decide(WKNavigationActionPolicyCancel);
+    return;
+  }
+  // Policy asks cover main-frame http(s) only — file:// pages are the app's
+  // own frontend, subframes are the page's business. Unanswered (backend not
+  // yet attached, no onNavigate handler answering in time) = allow, so a
+  // wrapper can never deadlock its own first load.
+  if (!action.targetFrame.mainFrame ||
+      (u.rfind("http://", 0) != 0 && u.rfind("https://", 0) != 0) ||
+      g_sock < 0) {
+    decide(WKNavigationActionPolicyAllow);
+    return;
+  }
+  std::string qid = "n" + std::to_string(++g_nav_seq);
+  void (^decideCopy)(WKNavigationActionPolicy) = [decide copy];
+  NSURL *ext = [url retain];
+  void (^resolver)(int) = [^(int verdict) {
+    if (verdict == 2 && ext)
+      [[NSWorkspace sharedWorkspace] openURL:ext];
+    decideCopy(verdict == 0 ? WKNavigationActionPolicyAllow
+                            : WKNavigationActionPolicyCancel);
+    [decideCopy release];
+    [ext release];
+  } copy];
+  g_nav_pending[qid] = (void *)resolver;
+  sock_write_line("NAVQ " + qid + " " + tiny_winid_for_webview(wv) + "\t" + u);
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(400 * NSEC_PER_MSEC)),
+                 dispatch_get_main_queue(), ^{
+                   tiny_nav_resolve(qid, 0);
+                 });
+}
+
+- (void)webView:(WKWebView *)wv
+    decidePolicyForNavigationResponse:(WKNavigationResponse *)resp
+                      decisionHandler:(void (^)(WKNavigationResponsePolicy))decide {
+  // Anything the webview can't render inline (attachments, CSV exports,
+  // unknown MIME types) becomes a download instead of a silent nothing.
+  decide(resp.canShowMIMEType ? WKNavigationResponsePolicyAllow
+                              : WKNavigationResponsePolicyDownload);
+}
+
+- (void)webView:(WKWebView *)wv
+    didStartProvisionalNavigation:(WKNavigation *)nav {
+  tiny_nav_event(wv, "start", wv.URL, nil);
+}
+- (void)webView:(WKWebView *)wv didCommitNavigation:(WKNavigation *)nav {
+  tiny_nav_event(wv, "commit", wv.URL, nil);
+}
+- (void)webView:(WKWebView *)wv didFinishNavigation:(WKNavigation *)nav {
+  // Popup windows carry the page's own title (like a browser would); other
+  // windows' titles belong to the app (setTitle / WINOPEN).
+  std::string wid = tiny_winid_for_webview(wv);
+  if (wid.rfind("popup", 0) == 0 && wv.title.length) {
+    auto it = g_windows.find(wid);
+    if (it != g_windows.end() && it->second.win)
+      it->second.win.title = wv.title;
+  }
+  tiny_nav_event(wv, "finish", wv.URL, nil);
+}
+// A failed (provisional) navigation names its target in the error, not in
+// wv.URL — by fail time that's still the page being LOOKED AT, and reporting
+// it as the failure sent apps chasing the wrong URL (measured: a
+// navigation-turned-download "failed" as the current file:// page).
+static NSURL *tiny_failing_url(WKWebView *wv, NSError *error) {
+  NSString *s = error.userInfo[NSURLErrorFailingURLStringErrorKey];
+  NSURL *u = s.length ? [NSURL URLWithString:s] : nil;
+  return u ? u : wv.URL;
+}
+
+// Not failures: NSURLErrorCancelled (our own policy cancels, rapid
+// re-navigation) and WebKit's "frame load interrupted" 102 — that one is how
+// a navigation-becoming-a-download reports itself, and painting an offline
+// screen because the user exported a CSV would be exactly wrong.
+static bool tiny_nav_error_is_noise(NSError *error) {
+  if ([error.domain isEqualToString:NSURLErrorDomain] &&
+      error.code == NSURLErrorCancelled)
+    return true;
+  if ([error.domain isEqualToString:@"WebKitErrorDomain"] && error.code == 102)
+    return true;
+  return false;
+}
+
+- (void)webView:(WKWebView *)wv
+    didFailProvisionalNavigation:(WKNavigation *)nav
+                       withError:(NSError *)error {
+  if (tiny_nav_error_is_noise(error))
+    return;
+  tiny_nav_event(wv, "fail", tiny_failing_url(wv, error), error);
+}
+- (void)webView:(WKWebView *)wv didFailNavigation:(WKNavigation *)nav
+      withError:(NSError *)error {
+  if (tiny_nav_error_is_noise(error))
+    return;
+  tiny_nav_event(wv, "fail", tiny_failing_url(wv, error), error);
+}
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)wv {
+  tiny_nav_event(wv, "crash", wv.URL, nil);
+}
+
+- (void)webView:(WKWebView *)wv
+    navigationAction:(WKNavigationAction *)action
+   didBecomeDownload:(WKDownload *)download {
+  download.delegate = self;
+}
+- (void)webView:(WKWebView *)wv
+    navigationResponse:(WKNavigationResponse *)resp
+     didBecomeDownload:(WKDownload *)download {
+  download.delegate = self;
+}
+
+- (void)download:(WKDownload *)download
+    decideDestinationUsingResponse:(NSURLResponse *)response
+                 suggestedFilename:(NSString *)suggested
+                 completionHandler:(void (^)(NSURL *))done {
+  @autoreleasepool {
+    std::string url = response.URL && response.URL.absoluteString
+                          ? [response.URL.absoluteString UTF8String]
+                          : "";
+    std::string mode = g_downloads_mode.empty() ? "auto" : g_downloads_mode;
+    NSString *name = suggested.length ? suggested : @"download";
+    if (mode == "deny") {
+      tiny_download_event(++g_download_seq, url, [name UTF8String], "",
+                          "denied", "");
+      done(nil);
+      return;
+    }
+    NSString *full = nil;
+    if (mode == "ask") {
+      NSSavePanel *panel = [NSSavePanel savePanel];
+      panel.nameFieldStringValue = name;
+      panel.directoryURL = [NSURL fileURLWithPath:tiny_downloads_dir()];
+      tiny_test_autodlg_arm();
+      if ([panel runModal] != NSModalResponseOK || !panel.URL) {
+        tiny_download_event(++g_download_seq, url, [name UTF8String], "",
+                            "cancelled", "");
+        done(nil);
+        return;
+      }
+      full = panel.URL.path;
+      name = full.lastPathComponent;
+    } else {
+      // auto: ~/Downloads, extension derived from the MIME type when the
+      // name has none, de-duplicated rather than overwritten (WKDownload
+      // refuses an existing destination anyway).
+      if (name.pathExtension.length == 0 && response.MIMEType.length) {
+        UTType *t = [UTType typeWithMIMEType:response.MIMEType];
+        if (t.preferredFilenameExtension.length)
+          name = [name stringByAppendingPathExtension:t.preferredFilenameExtension];
+      }
+      NSString *dir = tiny_downloads_dir();
+      NSString *base = [name stringByDeletingPathExtension];
+      NSString *ext = name.pathExtension;
+      NSFileManager *fm = [NSFileManager defaultManager];
+      NSString *cand = name;
+      for (int n = 2;
+           [fm fileExistsAtPath:[dir stringByAppendingPathComponent:cand]] &&
+           n < 1000;
+           n++)
+        cand = ext.length
+                   ? [NSString stringWithFormat:@"%@ (%d).%@", base, n, ext]
+                   : [NSString stringWithFormat:@"%@ (%d)", base, n];
+      name = cand;
+      full = [dir stringByAppendingPathComponent:cand];
+    }
+    long id_ = ++g_download_seq;
+    TinyDownloadInfo &info = g_downloads[(void *)download];
+    info = {id_, url, [name UTF8String], [full UTF8String]};
+    tiny_download_event(id_, url, [name UTF8String], [full UTF8String],
+                        "started", "");
+    // Progress: KVO the download's NSProgress, throttled to ~4 events/s in
+    // the observer. Context carries the WKDownload so the callback can find
+    // its bookkeeping.
+    @try {
+      [download.progress addObserver:self
+                          forKeyPath:@"completedUnitCount"
+                             options:0
+                             context:(void *)download];
+      info.observing = true;
+    } @catch (NSException *) {
+    }
+    done([NSURL fileURLWithPath:full]);
+  }
+}
+
+- (void)observeValueForKeyPath:(NSString *)kp
+                      ofObject:(id)obj
+                        change:(NSDictionary *)ch
+                       context:(void *)ctx {
+  if (![kp isEqualToString:@"completedUnitCount"])
+    return;
+  // KVO fires on whatever thread advanced the progress; the map lives on the
+  // main thread. The block retains `obj`, and the map lookup guards against
+  // a download that finished in between.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    auto it = g_downloads.find(ctx);
+    if (it == g_downloads.end())
+      return;
+    double now = tiny_now_ms();
+    if (now - it->second.lastEmit < 250)
+      return;
+    it->second.lastEmit = now;
+    NSProgress *p = (NSProgress *)obj;
+    tiny_download_event(it->second.id, it->second.url, it->second.filename,
+                        it->second.path, "progress", "",
+                        (long long)p.completedUnitCount,
+                        (long long)p.totalUnitCount);
+  });
+}
+
+- (void)stopObservingDownload:(WKDownload *)download
+                         info:(TinyDownloadInfo &)info {
+  if (!info.observing)
+    return;
+  info.observing = false;
+  @try {
+    [download.progress removeObserver:self forKeyPath:@"completedUnitCount"];
+  } @catch (NSException *) {
+  }
+}
+
+- (void)downloadDidFinish:(WKDownload *)download {
+  auto it = g_downloads.find((void *)download);
+  if (it == g_downloads.end())
+    return;
+  [self stopObservingDownload:download info:it->second];
+  tiny_download_event(it->second.id, it->second.url, it->second.filename,
+                      it->second.path, "done", "");
+  g_downloads.erase(it);
+}
+- (void)download:(WKDownload *)download
+    didFailWithError:(NSError *)error
+          resumeData:(NSData *)resumeData {
+  auto it = g_downloads.find((void *)download);
+  if (it == g_downloads.end())
+    return; // denied/cancelled before a destination — already reported
+  [self stopObservingDownload:download info:it->second];
+  const char *d = error.localizedDescription ? [error.localizedDescription UTF8String] : "";
+  tiny_download_event(it->second.id, it->second.url, it->second.filename,
+                      it->second.path, "failed", d ? d : "");
+  g_downloads.erase(it);
+}
+@end
+
+static TinyWebDelegate *g_web_delegate = nil;
+static id g_secondary_ui_delegate = nil; // WebviewWKUIDelegate for non-main windows
+
+// navigationDelegate/UIDelegate are weak — the globals hold the strong refs.
+// Main already has the library's UI delegate (plus our runtime bolt-ons);
+// secondary windows had none, which also left <input type=file> dead there.
+static void tiny_apply_web_delegates(WKWebView *wv) {
+  if (!wv)
+    return;
+  if (!g_web_delegate)
+    g_web_delegate = [[TinyWebDelegate alloc] init];
+  wv.navigationDelegate = g_web_delegate;
+  if (!wv.UIDelegate) {
+    if (!g_secondary_ui_delegate) {
+      Class cls = objc_lookUpClass("WebviewWKUIDelegate");
+      if (cls)
+        g_secondary_ui_delegate = [[cls alloc] init];
+    }
+    if (g_secondary_ui_delegate)
+      wv.UIDelegate = (id<WKUIDelegate>)g_secondary_ui_delegate;
+  }
+}
+
+// TINYJS_TEST_AUTODLG=ok|cancel — answer the next modal panel by pressing its
+// REAL default/cancel button (keyEquivalent \r / esc). Test hook for headless
+// dialog verification: runModal blocks the thread that called it, but the main
+// queue keeps draining during modal sessions, so a block armed just before
+// runModal fires into the panel. Inert unless the env var is set; never in
+// normal use. (The panels are in-process — the launcher isn't sandboxed — so
+// the buttons are really there.)
+//
+// POLLS rather than firing once: an NSAlert is up within ~100ms, but an
+// NSSavePanel routinely takes longer than a second, and a single-shot timer
+// found no modalWindow and gave up silently — the ask-mode download then sat
+// waiting for a human (measured 2026-08-05). Gives up after ~6s so a wedged
+// test still ends.
+static void tiny_collect_buttons(NSView *v, NSMutableArray *out) {
+  for (NSView *s in v.subviews) {
+    if ([s isKindOfClass:[NSButton class]])
+      [out addObject:s];
+    tiny_collect_buttons(s, out);
+  }
+}
+// NSString rather than std::string: a block capturing a C++ reference
+// parameter bound to a temporary is dangling by the time it fires — the
+// "cancel" comparison then read garbage and pressed the DEFAULT button, so
+// the cancel run silently tested the OK path (measured 2026-08-05). NSString
+// is retained by the block, so this can't rot.
+static void tiny_test_autodlg_poll(NSString *mode, int tries) {
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(200 * NSEC_PER_MSEC)),
+                 dispatch_get_main_queue(), ^{
+                   NSWindow *mw = [NSApp modalWindow];
+                   if (!mw) {
+                     if (tries > 0)
+                       tiny_test_autodlg_poll(mode, tries - 1);
+                     return;
+                   }
+                   bool cancel = [mode isEqualToString:@"cancel"];
+                   // Save/open panels are hosted OUT OF PROCESS on modern
+                   // macOS, so their buttons aren't in our view tree at all
+                   // (the button search found none and left the panel up).
+                   // cancel: is implemented and works; ok: is declared but
+                   // THROWS "-[NSSavePanel ok:] : not implemented", which
+                   // took the app down — so confirm the way a user does,
+                   // with Return, and fall back to ending the modal session
+                   // with the same code the Save button would return.
+                   if ([mw isKindOfClass:[NSSavePanel class]]) {
+                     if (cancel) {
+                       [(NSSavePanel *)mw cancel:nil];
+                       return;
+                     }
+                     NSEvent *ret =
+                         [NSEvent keyEventWithType:NSEventTypeKeyDown
+                                          location:NSZeroPoint
+                                     modifierFlags:0
+                                         timestamp:0
+                                      windowNumber:mw.windowNumber
+                                           context:nil
+                                        characters:@"\r"
+                       charactersIgnoringModifiers:@"\r"
+                                         isARepeat:NO
+                                           keyCode:36];
+                     if (![mw performKeyEquivalent:ret])
+                       [NSApp stopModalWithCode:NSModalResponseOK];
+                     return;
+                   }
+                   NSMutableArray *btns = [NSMutableArray array];
+                   tiny_collect_buttons(mw.contentView, btns);
+                   NSString *want = cancel ? @"\x1b" : @"\r";
+                   for (NSButton *b in btns)
+                     if ([b.keyEquivalent isEqualToString:want]) {
+                       [b performClick:nil];
+                       return;
+                     }
+                   // An alert with no Cancel (plain alert()) has only the
+                   // default button — pressing it is the only way out.
+                   for (NSButton *b in btns)
+                     if ([b.keyEquivalent isEqualToString:@"\r"]) {
+                       [b performClick:nil];
+                       return;
+                     }
+                   if (btns.count)
+                     [(NSButton *)btns[0] performClick:nil];
+                 });
+}
+static void tiny_test_autodlg_arm() {
+  const char *mode = getenv("TINYJS_TEST_AUTODLG");
+  if (!mode || !*mode)
+    return;
+  tiny_test_autodlg_poll([NSString stringWithUTF8String:mode], 30);
+}
+
+// -- JS dialogs (alert / confirm / prompt) --
+// Synchronous page primitives (`confirm()` must return a bool NOW) — nothing
+// tiny.dialog's async RPC can shim, so they get real panels here, styled like
+// do_dialog's. Headline is the page's origin: for a wrapped third-party site
+// that's the honest attribution, for the app's own file:// pages it falls
+// back to the app name. Bolted onto the vendored WebviewWKUIDelegate at
+// runtime (same pattern as install_media_capture_hook) so the header stays
+// pristine; the class is shared by every window.
+
+static NSString *tiny_js_dialog_title(WKFrameInfo *frame) {
+  NSString *host = frame.securityOrigin.host;
+  return host.length ? host : ns(g_app_name);
+}
+
+static void tiny_js_alert(id, SEL, WKWebView *, NSString *msg,
+                          WKFrameInfo *frame, void (^done)(void)) {
+  @autoreleasepool {
+    NSAlert *a = [[[NSAlert alloc] init] autorelease];
+    a.messageText = tiny_js_dialog_title(frame);
+    a.informativeText = msg ?: @"";
+    [a addButtonWithTitle:@"OK"];
+    tiny_test_autodlg_arm();
+    [a runModal];
+  }
+  done();
+}
+
+static void tiny_js_confirm(id, SEL, WKWebView *, NSString *msg,
+                            WKFrameInfo *frame, void (^done)(BOOL)) {
+  BOOL ok;
+  @autoreleasepool {
+    NSAlert *a = [[[NSAlert alloc] init] autorelease];
+    a.messageText = tiny_js_dialog_title(frame);
+    a.informativeText = msg ?: @"";
+    [a addButtonWithTitle:@"OK"];
+    [a addButtonWithTitle:@"Cancel"];
+    tiny_test_autodlg_arm();
+    ok = [a runModal] == NSAlertFirstButtonReturn;
+  }
+  done(ok);
+}
+
+static void tiny_js_prompt(id, SEL, WKWebView *, NSString *msg,
+                           NSString *defaultText, WKFrameInfo *frame,
+                           void (^done)(NSString *)) {
+  NSString *result = nil;
+  @autoreleasepool {
+    NSAlert *a = [[[NSAlert alloc] init] autorelease];
+    a.messageText = tiny_js_dialog_title(frame);
+    a.informativeText = msg ?: @"";
+    NSTextField *field =
+        [[[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 260, 24)] autorelease];
+    field.stringValue = defaultText ?: @"";
+    a.accessoryView = field;
+    a.window.initialFirstResponder = field;
+    [a addButtonWithTitle:@"OK"];
+    [a addButtonWithTitle:@"Cancel"];
+    tiny_test_autodlg_arm();
+    if ([a runModal] == NSAlertFirstButtonReturn)
+      // OWNED copy, not autorelease: the pool drains at the closing brace
+      // below, and done() runs after it. An autoreleased string here was a
+      // use-after-free — WebKit read the freed CFString and the app died in
+      // __CF_IS_OBJC (EXC_BREAKPOINT), i.e. every prompt() that returned a
+      // value crashed the app. Caught 2026-08-05 by the headless dialog run.
+      result = [field.stringValue copy];
+  }
+  done(result);
+  [result release];
+}
+
+// -- window.open / target=_blank --
+// createWebView must answer synchronously (return a WKWebView or nil), but
+// the DECISION doesn't have to be: "popups" config ("window" | external |
+// deny) fixes what's returned, then a POPUPQ ask lets onWindowOpen refine it
+// — unanswered after 400ms = the configured mode. In window mode the popup
+// is built (and starts loading) but stays HIDDEN until the verdict: 'window'
+// orders it front, 'external'/'deny' close it before it ever paints. In
+// external/deny modes nothing exists to show, so the hook can only choose
+// between those two ('window' needs "popups": "window" — the webview had to
+// be returned synchronously).
+//
+// window mode returns a real webview built on the provided configuration —
+// the only way window.open's return value, window.opener and postMessage
+// keep working (OAuth popups check). It gets a FRESH userContentController:
+// the inherited one carries the parent's tiny shim with the parent's window
+// id baked in, which would cross-wire the two windows' RPC promise tables.
+
+static long g_popup_seq = 0;
+static long g_popup_qseq = 0;
+static std::map<std::string, void *> g_popup_pending; // qid -> block(verdict)
+
+static void tiny_popup_resolve(const std::string &qid,
+                               const std::string &verdict) {
+  auto it = g_popup_pending.find(qid);
+  if (it == g_popup_pending.end())
+    return;
+  void (^b)(const std::string &) = (void (^)(const std::string &))it->second;
+  g_popup_pending.erase(it);
+  b(verdict);
+  [b release];
+}
+
+static void tiny_popup_ask(const std::string &pid, const std::string &opener,
+                           const std::string &u, const std::string &mode,
+                           void (^resolver)(const std::string &)) {
+  if (g_sock < 0) { // backend not attached: the configured mode stands
+    resolver(mode);
+    return;
+  }
+  std::string qid = "p" + std::to_string(++g_popup_qseq);
+  g_popup_pending[qid] = (void *)[resolver copy];
+  sock_write_line("POPUPQ " + qid + " " + (pid.empty() ? "-" : pid) + "\t" +
+                  opener + "\t" + u + "\t" + mode);
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(400 * NSEC_PER_MSEC)),
+                 dispatch_get_main_queue(), ^{
+                   tiny_popup_resolve(qid, mode);
+                 });
+}
+
+static void tiny_popup_event(const std::string &pid, const std::string &u,
+                             const std::string &action) {
+  sock_write_line("POPUP {\"window\":" +
+                  (pid.empty() ? "null" : json_escape(pid)) +
+                  ",\"url\":" + json_escape(u) + ",\"action\":\"" + action +
+                  "\"}");
+}
+
+static WKWebView *tiny_create_webview(id, SEL, WKWebView *parent,
+                                      WKWebViewConfiguration *cfg,
+                                      WKNavigationAction *action,
+                                      WKWindowFeatures *feat) {
+  @autoreleasepool {
+    NSURL *url = action.request.URL;
+    std::string u = url && url.absoluteString ? [url.absoluteString UTF8String] : "";
+    bool web = u.rfind("http://", 0) == 0 || u.rfind("https://", 0) == 0;
+    std::string mode = g_popup_mode.empty() ? "external" : g_popup_mode;
+    std::string opener = tiny_winid_for_webview(parent);
+
+    if (mode == "window") {
+      std::string wid = "popup" + std::to_string(++g_popup_seq);
+      while (g_windows.count(wid))
+        wid = "popup" + std::to_string(++g_popup_seq);
+      WKUserContentController *ucc =
+          [[[WKUserContentController alloc] init] autorelease];
+      cfg.userContentController = ucc;
+      TinyWindow &tw = g_windows[wid]; // slot first (attach parks handler)
+      attach_tiny_bridge(ucc, wid);
+
+      int w = feat.width ? feat.width.intValue : 0;
+      int h = feat.height ? feat.height.intValue : 0;
+      if (w < 120) w = 900;
+      if (h < 90) h = 600;
+      NSWindow *win = [[NSWindow alloc]
+          initWithContentRect:NSMakeRect(0, 0, w, h)
+                    styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                              NSWindowStyleMaskMiniaturizable |
+                              NSWindowStyleMaskResizable
+                      backing:NSBackingStoreBuffered
+                        defer:NO];
+      win.releasedWhenClosed = NO;
+      if (feat.x && feat.y) {
+        // window.open's left/top, in the same top-left coordinates SETPOS
+        // uses.
+        CGFloat screenTop = NSMaxY([[NSScreen screens][0] frame]);
+        [win setFrameTopLeftPoint:NSMakePoint(feat.x.doubleValue,
+                                              screenTop - feat.y.doubleValue)];
+      } else {
+        [win center];
+      }
+
+      WKWebView *wv = [[WKWebView alloc] initWithFrame:win.contentView.bounds
+                                         configuration:cfg];
+      wv.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+      if (!g_user_agent.empty())
+        wv.customUserAgent = ns(g_user_agent);
+      if (g_debug)
+        @try {
+          [wv setValue:@YES forKey:@"inspectable"];
+        } @catch (NSException *) {
+        }
+      tiny_apply_web_delegates(wv);
+      [win.contentView addSubview:wv];
+
+      TinyWinDelegate *del = [[TinyWinDelegate alloc] init];
+      del.winId = ns(wid);
+      win.delegate = del;
+      tw.win = win;
+      tw.wv = wv;
+      tw.wdelegate = del;
+      // NOT ordered front yet — the verdict decides (loading proceeds
+      // meanwhile, same tradeoff as the nav-policy hold).
+      std::string wid2 = wid, u2 = u;
+      NSURL *ext = url;
+      bool web2 = web;
+      tiny_popup_ask(wid, opener, u, "window",
+                     ^(const std::string &v) {
+                       std::string a = (v == "external" || v == "deny") ? v : "window";
+                       auto it = g_windows.find(wid2);
+                       NSWindow *pw = it != g_windows.end() ? it->second.win : nil;
+                       if (a == "window") {
+                         if (pw)
+                           [pw makeKeyAndOrderFront:nil];
+                       } else {
+                         if (a == "external" && web2 && ext)
+                           [[NSWorkspace sharedWorkspace] openURL:ext];
+                         if (pw)
+                           [pw close]; // emits WINCLOSED + cleans the slot
+                       }
+                       tiny_popup_event(wid2, u2, a);
+                     });
+      return wv; // WebKit issues the load itself
+    }
+
+    // external / deny: nothing to return either way, so the ask is free.
+    std::string u2 = u;
+    NSURL *ext = url;
+    bool web2 = web;
+    std::string mode2 = mode;
+    tiny_popup_ask("", opener, u, mode,
+                   ^(const std::string &v) {
+                     // 'window' can't be honored here (nil already returned)
+                     // — coerce to the configured mode.
+                     std::string a = (v == "external" || v == "deny") ? v : mode2;
+                     if (a == "external" && web2 && ext)
+                       [[NSWorkspace sharedWorkspace] openURL:ext];
+                     tiny_popup_event("", u2, a);
+                   });
+    return nil;
+  }
+}
+
+struct PopuprReq {
+  std::string qid, verdict;
+};
+static void do_popupr(webview_t, void *arg) {
+  PopuprReq *req = static_cast<PopuprReq *>(arg);
+  tiny_popup_resolve(req->qid, req->verdict);
+  delete req;
+}
+
+// Bolt the JS-dialog + createWebView handlers onto the vendored UI delegate
+// class at runtime (registered by webview_create — call after).
+static void install_page_dialog_hooks() {
+  Class cls = objc_lookUpClass("WebviewWKUIDelegate");
+  if (!cls)
+    return;
+  struct {
+    const char *sel;
+    IMP imp;
+    const char *types;
+  } adds[] = {
+      {"webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:"
+       "completionHandler:",
+       (IMP)tiny_js_alert, "v@:@@@@?"},
+      {"webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:"
+       "completionHandler:",
+       (IMP)tiny_js_confirm, "v@:@@@@?"},
+      {"webView:runJavaScriptTextInputPanelWithPrompt:defaultText:"
+       "initiatedByFrame:completionHandler:",
+       (IMP)tiny_js_prompt, "v@:@@@@@?"},
+      {"webView:createWebViewWithConfiguration:forNavigationAction:"
+       "windowFeatures:",
+       (IMP)tiny_create_webview, "@@:@@@@"},
+  };
+  for (auto &m : adds) {
+    SEL sel = sel_registerName(m.sel);
+    if (!class_getInstanceMethod(cls, sel))
+      class_addMethod(cls, sel, m.imp, m.types);
+  }
+}
+
+// -- find-in-page --
+// Call-style like DLG: the bridge hands the call id over, the completion
+// resolves the page's promise via reply_to_call. WKWebView's public find API
+// reports found/not-found only (no match counts).
+
+struct FindReq {
+  std::string id, term;
+  bool forward = true, matchCase = false;
+};
+
+static void do_find(webview_t w, void *arg) {
+  FindReq *req = static_cast<FindReq *>(arg);
+  @autoreleasepool {
+    size_t c = req->id.find(':');
+    std::string winid = c == std::string::npos ? "main" : req->id.substr(0, c);
+    WKWebView *wv = webview_for_id(w, winid);
+    if (!wv || req->term.empty()) {
+      reply_to_call(w, req->id, 0, "{\"found\":false}");
+      delete req;
+      return;
+    }
+    WKFindConfiguration *fc = [[[WKFindConfiguration alloc] init] autorelease];
+    fc.backwards = !req->forward;
+    fc.caseSensitive = req->matchCase;
+    fc.wraps = YES;
+    std::string cid = req->id; // NOT `id` — that would shadow the ObjC type
+                               // inside the blocks below
+    // Match counts: WebKit's public find API reports found/not-found only, so
+    // a JS pass counts occurrences (walking text nodes — skipping script/
+    // style — into one string, so matches spanning inline elements count) and
+    // derives the active index from where the find selection starts.
+    // Approximate by construction: hidden text still counts, textContent vs
+    // rendered text can differ. The selection IS the native match, though, so
+    // activeMatch tracks stepping correctly on normal pages.
+    std::string countJs =
+        "(function(t,cs){try{"
+        "var sel=getSelection(),sn=null,so=0;"
+        "if(sel.rangeCount){var r=sel.getRangeAt(0);sn=r.startContainer;so=r.startOffset;}"
+        "var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:function(n){"
+        "var p=n.parentNode&&n.parentNode.nodeName;"
+        "return(p==='SCRIPT'||p==='STYLE'||p==='NOSCRIPT')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}});"
+        "var text='',selAt=-1,nd;"
+        "while((nd=w.nextNode())){if(nd===sn)selAt=text.length+so;text+=nd.nodeValue;}"
+        "if(!cs){t=t.toLowerCase();text=text.toLowerCase();}"
+        "var n=0,act=0,i=0;"
+        "while((i=text.indexOf(t,i))!==-1){n++;if(selAt>=0&&i<=selAt)act=n;i+=t.length;}"
+        "return JSON.stringify({found:true,matches:n,activeMatch:act});"
+        "}catch(e){return '{\"found\":true}';}})(" +
+        json_escape(req->term) + "," + (req->matchCase ? "true" : "false") + ")";
+    NSString *countNs = ns(countJs);
+    [wv findString:ns(req->term)
+        withConfiguration:fc
+        completionHandler:^(WKFindResult *r) {
+          if (!r.matchFound) {
+            reply_to_call(g_w, cid, 0,
+                          "{\"found\":false,\"matches\":0,\"activeMatch\":0}");
+            return;
+          }
+          [wv evaluateJavaScript:countNs
+               completionHandler:^(id result, NSError *err) {
+                 std::string j = "{\"found\":true}";
+                 if (!err && [result isKindOfClass:[NSString class]])
+                   j = [(NSString *)result UTF8String];
+                 reply_to_call(g_w, cid, 0, j);
+               }];
+        }];
+  }
+  delete req;
+}
+
+static void do_stopfind(webview_t w, void *arg) {
+  std::string *id = static_cast<std::string *>(arg);
+  @autoreleasepool {
+    size_t c = id->find(':');
+    std::string winid = c == std::string::npos ? "main" : id->substr(0, c);
+    WKWebView *wv = webview_for_id(w, winid);
+    // The find match is an ordinary selection — clearing it is "stop".
+    if (wv)
+      [wv evaluateJavaScript:@"window.getSelection().removeAllRanges()"
+           completionHandler:nil];
+    reply_to_call(w, *id, 0, "true");
+  }
+  delete id;
+}
+
+struct NavrReq {
+  std::string qid, verdict;
+};
+static void do_navr(webview_t, void *arg) {
+  NavrReq *req = static_cast<NavrReq *>(arg);
+  tiny_nav_resolve(req->qid, req->verdict == "deny"      ? 1
+                             : req->verdict == "external" ? 2
+                                                          : 0);
+  delete req;
+}
+#else
+struct FindReq { std::string id, term; bool forward, matchCase; };
+struct NavrReq { std::string qid, verdict; };
+struct PopuprReq { std::string qid, verdict; };
+static void do_find(webview_t, void *arg) { delete static_cast<FindReq *>(arg); }
+static void do_stopfind(webview_t, void *arg) { delete static_cast<std::string *>(arg); }
+static void do_navr(webview_t, void *arg) { delete static_cast<NavrReq *>(arg); }
+static void do_popupr(webview_t, void *arg) { delete static_cast<PopuprReq *>(arg); }
 #endif
 
 // --- print (macOS) ---------------------------------------------------------------
@@ -6955,6 +7836,31 @@ static void sock_read_loop() {
         req->op = parts[0];
         req->args.assign(parts.begin() + 1, parts.end());
         webview_dispatch(g_w, do_dialog, req);
+      } else if (line.rfind("NAVR ", 0) == 0) {
+        // NAVR <qid> allow|deny|external — answer to a held NAVQ policy ask.
+        size_t sp = line.find(' ', 5);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_navr,
+                         new NavrReq{line.substr(5, sp - 5), line.substr(sp + 1)});
+      } else if (line.rfind("POPUPR ", 0) == 0) {
+        // POPUPR <qid> window|external|deny — answer to a POPUPQ ask.
+        size_t sp = line.find(' ', 7);
+        if (sp == std::string::npos) continue;
+        webview_dispatch(g_w, do_popupr,
+                         new PopuprReq{line.substr(7, sp - 7), line.substr(sp + 1)});
+      } else if (line.rfind("FIND ", 0) == 0) {
+        // FIND <id> <term>\t<forward>\t<matchCase> — call-style, RET via id.
+        size_t sp = line.find(' ', 5);
+        if (sp == std::string::npos) continue;
+        std::vector<std::string> p = split_tabs(line.substr(sp + 1));
+        FindReq *fr = new FindReq;
+        fr->id = line.substr(5, sp - 5);
+        fr->term = p.size() > 0 ? p[0] : "";
+        fr->forward = p.size() > 1 ? p[1] != "0" : true;
+        fr->matchCase = p.size() > 2 && p[2] == "1";
+        webview_dispatch(g_w, do_find, fr);
+      } else if (line.rfind("STOPFIND ", 0) == 0) {
+        webview_dispatch(g_w, do_stopfind, new std::string(line.substr(9)));
       } else if (line == "MENUBEGIN" || line.rfind("MENUBEGIN@", 0) == 0) {
         // Bare: the app menu — what every window shows unless it overrode.
         // @<win>: that window's own, up while it holds focus (macOS has one
@@ -7624,11 +8530,15 @@ static bool bundle_mode_setup(std::string &target, std::string &title,
   NSString *bp = [mb bundlePath];
   NSString *frontend = [bp
       stringByAppendingPathComponent:@"Contents/Resources/app/frontend/index.html"];
+  // tinyjs.json "url": the main window starts at a remote URL (site wrappers)
+  // — no local frontend required then.
+  NSString *remote = [mb objectForInfoDictionaryKey:@"TinyjsUrl"];
   if (![bp hasSuffix:@".app"] ||
-      ![[NSFileManager defaultManager] fileExistsAtPath:frontend])
+      (!remote.length &&
+       ![[NSFileManager defaultManager] fileExistsAtPath:frontend]))
     return false;
 
-  target = [frontend UTF8String];
+  target = remote.length ? [remote UTF8String] : [frontend UTF8String];
   NSString *name = [mb objectForInfoDictionaryKey:@"CFBundleName"];
   title = name ? [name UTF8String] : "tinyjs";
   NSString *ver = [mb objectForInfoDictionaryKey:@"CFBundleVersion"];
@@ -7809,6 +8719,39 @@ int main(int argc, char *argv[]) {
       g_debug_open = [s isEqualToString:@"open"];
     }
   }
+  // tinyjs.json "inject": document-start user JS in every window. Dev carries
+  // the source inline in the env; packaged apps ship it as Resources/app/
+  // inject.js (cli.js writes it at build).
+  {
+    const char *inj = getenv("TINYJS_INJECT");
+    if (inj && *inj) {
+      g_inject_js = inj;
+    } else {
+      NSString *p = [[[NSBundle mainBundle] bundlePath]
+          stringByAppendingPathComponent:@"Contents/Resources/app/inject.js"];
+      NSString *src = [NSString stringWithContentsOfFile:p
+                                                encoding:NSUTF8StringEncoding
+                                                   error:nil];
+      if (src.length)
+        g_inject_js = [src UTF8String];
+    }
+  }
+  // "downloads": auto (default) | ask | deny, "popups": external (default) |
+  // window | deny — see the browser-affordances section.
+  {
+    const char *v = getenv("TINYJS_DOWNLOADS");
+    NSString *s = v && *v ? [NSString stringWithUTF8String:v]
+                          : [[NSBundle mainBundle]
+                                objectForInfoDictionaryKey:@"TinyjsDownloads"];
+    if (s.length)
+      g_downloads_mode = [s UTF8String];
+    v = getenv("TINYJS_POPUPS");
+    s = v && *v ? [NSString stringWithUTF8String:v]
+                : [[NSBundle mainBundle]
+                      objectForInfoDictionaryKey:@"TinyjsPopups"];
+    if (s.length)
+      g_popup_mode = [s UTF8String];
+  }
 #endif
 
 #ifdef __APPLE__
@@ -7831,6 +8774,7 @@ int main(int argc, char *argv[]) {
   install_close_hook(g_w);
   install_drop_hook();
   install_media_capture_hook();
+  install_page_dialog_hooks(); // JS dialogs + window.open on the UI delegate
   install_first_mouse_hook();
   install_ctx_hook();
   install_system_observers();
@@ -7900,6 +8844,20 @@ int main(int argc, char *argv[]) {
       attach_tiny_bridge(mwv.configuration.userContentController, "main");
       if (!g_user_agent.empty())
         mwv.customUserAgent = ns(g_user_agent);
+      // Navigation events + downloads for the main window; its UI delegate is
+      // already the library's (with our runtime bolt-ons), left untouched —
+      // BUT WebKit caches which delegate methods exist at setUIDelegate:
+      // time, which was before install_page_dialog_hooks added ours (same
+      // trap install_open_handlers documents for NSApp). Re-set it so the
+      // JS-dialog and createWebView handlers are actually consulted;
+      // measured: without this, confirm() returns false instantly and
+      // window.open never reaches tiny_create_webview.
+      id uid = mwv.UIDelegate;
+      if (uid) {
+        mwv.UIDelegate = nil;
+        mwv.UIDelegate = uid;
+      }
+      tiny_apply_web_delegates(mwv);
     }
   }
 #endif

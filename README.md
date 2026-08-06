@@ -1409,14 +1409,29 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
   refuse embedded/non-blessed browsers — an embedded WKWebView genuinely lacks
   some of what they require (e.g. Web Push), so spoofing the UA gets you
   recognized as a browser but not necessarily *in*.
-- **`TINYJS_INJECT` (footgun).** Setting this env var injects arbitrary JS
-  into **every** page at document-start (before the page boots), on any
-  origin. It exists for wrapping/shimming a third-party site loaded via
-  `devUrl`. It is intentionally undocumented in the public API and has **no
-  packaged-app equivalent** — it runs your code inside someone else's origin
-  with full page privileges, so treat it as a debugging/experimentation tool,
-  not something to ship. Easy to foot-gun yourself (or a site's users) with;
-  reach for it only when you know exactly why.
+- **`"inject"` (document-start JS).** `"inject": "src/shim.js"` in tinyjs.json
+  injects that file (bundled at build; `.ts` goes through esbuild) into
+  **every** page at document-start, on any origin — the tool for shimming a
+  wrapped third-party site before it boots. Dev carries it in the
+  `TINYJS_INJECT` env var; packaged .apps ship it as `Resources/app/inject.js`.
+  It runs your code inside someone else's origin with full page privileges —
+  pair it with an `"api"` capability gate when the origin isn't yours.
+- **Site wrappers.** `"url": "https://…"` makes the main window a remote page
+  (no local frontend needed). JS dialogs (`alert`/`confirm`/`prompt`),
+  downloads (`"downloads"`: `auto` | `ask` | `deny`, with progress events),
+  `window.open` (`"popups"`: `external` | `window` | `deny`, refinable
+  per-popup from `onWindowOpen`'s `kind: 'policy'` call), navigation events +
+  policy (`onNavigate` — return `'deny'`/`'external'` from a `kind: 'policy'`
+  call), and `tiny.win.find` make a wrapped site behave like an app. The
+  `"api"` capability gate makes it shippable: `"api": "wrapper"` preset,
+  `{ disable, enable }` lists of wire method names (enable wins), or
+  per-origin keyholes — `"api": { "origins": { "file://*": "all",
+  "https://app.example.com": ["notify", "store.*"] } }` — keyed off the
+  calling frame's origin as WebKit reports it, not as the page claims it.
+  `capabilities().api.denied` tells a page what it can't have. All three
+  platforms; the per-engine caveats (a denied navigation still made its
+  request on Linux, an asked POST re-issues as a GET on Windows, popups keep
+  default chrome everywhere) are in TODO-site-wrapper.md.
 
 ### On-device AI (`tiny.macos.ai`)
 

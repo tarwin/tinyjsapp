@@ -247,17 +247,44 @@ right edge moves (a wrong `HT*` mapping resizes the opposite side).
       a boolean and all 8 grips mount on a frameless secondary, mount on
       neither a titled secondary nor main. The dragging itself needs a hand —
       watched on Windows 2026-07-28 in amp, edge resize working.
-- [ ] **Click an edge without moving** — press and release in place. The window
+**Three of the four closed 2026-08-06 — Tarwin on the mouse, everything else
+measured.** A frameless satellite sampled its own `getState` at 20Hz while the
+backend pushed a 250ms heartbeat, so each verdict is a number rather than an
+impression. Rig: `scratchpad/dragkit`.
+
+- [x] **Click an edge without moving** — press and release in place. The window
       must NOT follow the pointer afterwards. `xxxMoveSize` entered with the
       button already up tracks until the next click; the trip from the grip's
       `mousedown` to `do_ncdrag` is two process hops, so this is easy to hit.
       Guarded with `GetAsyncKeyState(VK_LBUTTON)`, mirroring macOS.
-- [ ] `setResizable(false)` then drag an edge — must do nothing (the style bit
+      **SEEN: after the grip press the pointer travelled 4470px and the window
+      moved 1px over 16.6s** (297 samples, one grip press registered). The
+      guard holds.
+      The first attempt of this one produced a bogus FAIL (215px) and the
+      lesson generalises: it started measuring when the window OPENED, and the
+      window opened flush against the left screen edge, so moving it somewhere
+      clickable was counted as the window following the pointer. The rig now
+      places itself away from the edge and starts the clock only when it sees a
+      grip pressed — a capture-phase `mousedown`, since the grips
+      `stopPropagation` in their own listener and a bubbling listener never
+      sees them. It also counts POINTER travel, so a pass reads "pointer moved
+      4470px, window moved 1px" instead of a bare "0px" that a motionless mouse
+      would also produce.
+- [x] `setResizable(false)` then drag an edge — must do nothing (the style bit
       is read live, because tiny.js gates its grips on one `getState` at load).
-- [ ] Alive mid-drag: hold an edge and confirm posted work still lands (the
+      **SEEN: 0px** while it was leaned on. The control matters as much: with
+      `setResizable(true)` again, the same edge moved **221px** — without that,
+      a 0 is equally consistent with the grips being dead all along.
+- [x] Alive mid-drag: hold an edge and confirm posted work still lands (the
       modal loop pumps `WM_APP`, so dispatch keeps running inside it).
+      **SEEN: 42 heartbeats over 10.8s** — the backend's 250ms tick, arriving
+      uninterrupted — while the window resized 265px. Dispatch is not starved
+      by the modal resize loop.
 - [ ] A monitor LEFT of primary (negative screen x) — exercises the
-      `MAKELPARAM` sign path in the point now passed as `lParam`.
+      `MAKELPARAM` sign path in the point now passed as `lParam`. **Blocked on
+      hardware, not on effort**: this box has one display
+      (`{X=0,Y=0,1728x1084}`), so there are no negative screen coordinates to
+      be had. Needs a second Parallels display placed to the LEFT of primary.
 
 ## ~~macOS — `startDrag` / `startResize` / `dragOut`~~ — done 2026-07-26
 
@@ -318,6 +345,250 @@ TODO-linux.md).
       full stop, for dev and built apps alike. Anyone wanting the taskbar
       button to change needs a different mechanism than `WM_SETICON`.
 
+## Site-wrapper gate — the ADVERSARIAL probes, added 2026-08-06
+
+The three legs of TODO-site-wrapper.md were each "verified live same day" —
+and the origin stamp, which is the input the `"api"` origins keyhole trusts,
+was still spoofable on two of them. Every harness drove our own cooperative
+`tiny.js` client (one argument per call, no navigation mid-call), so nothing
+ever asked the question a hostile wrapped site asks. The probe code is in
+TODO-site-wrapper.md's "Adversarial probes the harness MUST include"; these
+boxes are the per-OS ticks.
+
+Tick only after SEEING the denial (or the absent window) on that OS. A gate
+that silently allows looks exactly like a gate that was never consulted —
+which is precisely how this got through the first time.
+
+- [x] **Forged origin argument, macOS** — **DENIED, seen 2026-08-06.** A
+      `"url"` app whose main frame is served from `http://127.0.0.1:8123`
+      (keyhole: store/capabilities/win.open) with `http://127.0.0.1:8124`
+      granted `"all"`. `window.__invoke(payload, 'http://127.0.0.1:8124')`
+      denied; the same with three forged arguments denied; and the raw
+      transport (`webkit.messageHandlers.tiny.postMessage` with a payload
+      crafted to break out of the JSON string the launcher escapes it into,
+      both `","…` and `\","…`) never produced a call at all. Every denial
+      line in the backend log names the REAL origin — four denials, all
+      `http://127.0.0.1:8123`, none `:8124`. Control in the same run: the
+      gated method denied normally, so the probe can fail.
+- [x] **Forged origin argument, Windows** — **DENIED, seen 2026-08-06** on a
+      launcher rebuilt from source. A wraptest app served its main frame from
+      `http://127.0.0.1:8123` (narrow keyhole: 137 methods denied) with
+      `file://*` and `http://127.0.0.1:8124` both granted `"all"`, and the
+      page tried to be seen as either. Four shapes, all denied, and the wire
+      log is the proof — the page's forged value sits in the middle and the
+      launcher's stamp is last:
+      `CALL … ["{\"method\":\"win.setTitle\"…}","file://","http://127.0.0.1:8123"]`
+      → `tinyjs: denied "win.setTitle" for http://127.0.0.1:8123`.
+      Covered: one forged argument (`file://`), one aimed at the other
+      trusted origin, THREE stacked forged arguments (in case "last" is read
+      as "[1]" or "[2]"), and both raw `window.__webview__.post(...)` frames
+      bypassing the shim entirely — including one with a client-shaped 32-hex
+      id. The method under test was `win.setTitle` on purpose: a success is
+      visible from OUTSIDE the page, and the runner's title timeline shows the
+      window title never once became `SPOOFED-*`. The control (the same call
+      made honestly) is denied, and the same call from the trusted origin in
+      the same run is allowed — so the gate is on, not merely silent.
+- [x] **Forged origin argument, Linux** — **DENIED, seen 2026-08-06** on a
+      launcher rebuilt from source, four shapes. The wrapped site at
+      `http://127.0.0.1:8123` (keyhole: `store.*`, `system.capabilities`,
+      `win.find` — 135 names denied) tried to be seen as `file://` or as
+      `http://127.0.0.1:8124`, both granted `"all"` in the same manifest:
+      `window.__invoke(payload, 'file://')` (the extra argument the Windows
+      bridge once read) → rejected; a raw
+      `webkit.messageHandlers.tiny.postMessage` with a **forged token** and
+      one with the page's own token **mutated by one character** → no `CALL`
+      line at the launcher AT ALL (unknown token = not a window, dropped);
+      the untokened raw form `'|9902:{...}'` → processed, and the wire shows
+      the launcher's own stamp:
+      `CALL main:9902 ["{\"method\":\"win.setTitle\"…}","http://127.0.0.1:8123"]`
+      → `denied "win.setTitle" for http://127.0.0.1:8123`. `win.setTitle` was
+      the method under test on purpose: success would be visible from OUTSIDE
+      the page, and the X11 title timeline shows the main window's title never
+      left `WRAPKIT-MAIN`. Controls both ways in the same run: the honest call
+      is denied, an allowed one (`store.set`) resolves, and the popup on 8124
+      gets `0` denied.
+- [x] **Navigate-then-call race, Linux** — **denied, seen 2026-08-06**, with
+      a caveat that matters more than the tick. `location.href` was pointed at
+      a 3s-slow page on the TRUSTED origin and 24 `win.setTitle` calls were
+      fired at 100ms intervals from the still-live old document: all 24
+      denied, and the window title never became `SPOOFED-race-*`. **But it
+      also denies on the PRE-FIX launcher** — WebKitGTK 2.52.3 does not flip
+      the active uri at provisional-load start (the same navigation's `start`
+      NAV event still names the OLD url), so the hole the review predicted
+      isn't reachable on this engine and this probe cannot fail here. The fix
+      (origin captured at commit, in the token map) is kept as structural: it
+      stops the stamp depending on when an engine flips its uri.
+- [x] **Popup can't steal its opener's call token, Linux** — the token is the
+      launcher's routing identity, so a hostile popup reading
+      `window.opener.__TINY_TOK` would be able to speak AS the opener. Seen
+      2026-08-06: a cross-origin popup got `SecurityError` (same-origin policy
+      does this job; the probe is the proof it isn't bypassed by the
+      related-view/shared-process construction popups need).
+- [x] **Shared-manager mark is lifted when the last popup closes, Linux** —
+      **fixed and seen 2026-08-06** (finding 3). While a popup is alive an
+      untokened raw message on the opener's manager is ambiguous and must be
+      DROPPED; once every popup is gone the same message must be processed
+      again. Differential on one launcher rebuild: pre-fix the post-close
+      message was still dropped ("dropped an untokened call on a shared
+      content manager" — the opener stayed flagged for the process's life),
+      post-fix it produced `CALL main:9905` and was denied on its real origin.
+- [x] **Find state doesn't survive a navigation, Linux** — **fixed and seen
+      2026-08-06**. Same term (`needle`, 3 matches) searched on the first page
+      and again four navigations later: pre-fix the second search reported
+      `activeMatch 2` (the launcher thought it was a step through the previous
+      document's match list), post-fix `1` — a fresh search, which is what it
+      is.
+- [x] **Navigate-then-call race, macOS / Windows** — should already deny
+      (macOS stamps the document's own `frameInfo.securityOrigin`; Windows
+      stamps the message Source). Confirms the probe itself is sound —
+      a probe that can't fail anywhere proves nothing.
+      **Windows half seen 2026-08-06**: with a 3s-slow destination on the
+      trusted origin, the in-flight call from the still-live old document was
+      **denied**, and the window title never became `SPOOFED-race`. Caveat on
+      how much that proves: the page is being torn down while the loop runs,
+      so only the first verdict reliably reaches the store — the durable
+      evidence is the external one (no spoofed title at any point).
+      **macOS half seen 2026-08-06 — both halves now done, box closed.**
+      Same rig as the forged-argument box: `location.href` to a 3s-slow page
+      on the `"all"` origin, then the gated call from the still-live old
+      document. Denied, and the backend log names `:8123`, not `:8124`.
+- [x] **`tiny.win.id` inside a window-mode popup, Linux** — **fixed and seen
+      2026-08-06.** The popup (on the trusted origin, window mode) reported
+      `main` pre-fix and `popup1` post-fix, from the same harness on the same
+      box. The fix is in `runtime/tiny.js` — `win.id` is a getter, so it reads
+      `window.__TINY_WIN` when asked instead of at client-construction time;
+      the launcher's correction was always landing (the page saw the right
+      `__TINY_WIN` in both runs), the client had just read it too early.
+      Routing was never at risk: the popup's calls are attributed by token,
+      and in the same run its `win.setTitle` retitled the POPUP's window (X11
+      census: `PU-SETTITLE-OK` on the second window, main untouched) and its
+      `capabilities()` reported the 8124 grant (0 denied) rather than the
+      wrapped site's keyhole.
+- [x] **`tiny.win.id` inside a window-mode popup, macOS / Windows** — both
+      give the popup its own shim, so this is a regression guard.
+      **Windows half seen 2026-08-06: it is the popup's own id.** The popup
+      page stamped it into its document title (the only channel that survives
+      a popup whose RPC is dead — see the next box) and the window read
+      `PU:id-popup1`, not `main`.
+      **macOS half seen 2026-08-06 — both halves now done, box closed.** The
+      popup wrote `tiny.win.id` to the store and it read `popup1`. Note this
+      is now a real regression guard rather than a formality: cc749b2 made
+      `tiny.win.id` a GETTER in the shared client for Linux's sake, so this
+      box is what proves that change didn't disturb the two platforms whose
+      popups already baked in the right id.
+- [x] **A denied popup opens NO window, Windows** — **fixed and seen
+      2026-08-06.** `abandon_popup()` now calls `put_Handled(TRUE)` BEFORE
+      completing the deferral (and `ctrl->Close()`s the orphaned controller on
+      the early return; `SecCtrlHandler` also got a destructor that abandons,
+      so a completion that never fires can't hang `window.open()` forever).
+      Census: across the whole run exactly three launcher windows existed —
+      main, the allowed popup, and the `window.open('')` one — and the denied
+      popup produced **none**, with no `Chrome_WidgetWin_*` browser window
+      from msedgewebview2 either. The allowed popup appearing in the same
+      census is the control that says the rig can see a popup at all.
+- [x] **Reported `filename` names the file on disk, Windows** — **fixed and
+      seen 2026-08-06**, both arms. `download_finish()` now derives the
+      reported name from the FINAL path. Dedup arm: with a decoy `dup.txt`
+      staged in Downloads, the download reported `dup (1).txt` and
+      `dup (1).txt` is what exists (17 bytes). Ask arm: the save panel was
+      renamed from outside to `renamed-by-hand.txt`, and both the `started`
+      and `done` events report `renamed-by-hand.txt`, matching the file on
+      disk. Before the fix both reported the suggestion, `dup.txt`.
+      Rig note: you CANNOT force dedup by downloading twice from one page —
+      Chromium blocks a page's second automatic download outright and the
+      second click produces no download at all (measured twice). Stage the
+      collision on disk instead. And the Downloads folder here is redirected
+      to `\\Mac\Home\Downloads`, so the runner has to ask the shell for it,
+      exactly as the launcher does.
+- [x] **Back/forward after a policy ask, Windows** — **fixed and seen
+      2026-08-06.** `NavigationStarting` now reads
+      `ICoreWebView2NavigationStartingEventArgs3::get_NavigationKind` and does
+      not ask for `BACK_OR_FORWARD` at all: the ask is cancel-and-re-issue,
+      and a cancelled history move cannot be re-issued — `Navigate()`ing its
+      url pushes a NEW entry, so Back grows the stack and Forward dies. A
+      `RELOAD` is still asked, and re-issued with `Reload()` rather than
+      `Navigate()`. Seen: `history.back()` landed on `/` and the hook log
+      shows a bare `start` for it with **no policy ask**, where every
+      ordinary navigation in the same run has one.
+- [x] **A re-visited URL still asks, Windows** — **fixed and seen
+      2026-08-06.** `g_nav_allow_once` entries are now stamped and consumed
+      three ways (matched, expired after 10s, or superseded by any other
+      navigation in that window) instead of surviving until something happened
+      to match them. Seen: two visits to `http://127.0.0.1:8123/page2` in one
+      run produced **two** `policy` asks.
+- [x] **`beforeunload` prompts, Windows** — **fixed and seen 2026-08-06.**
+      The `else` arm of `JsDialogHandler` auto-Accepted it; it now runs an
+      MB_OKCANCEL and only Accepts on OK. Seen: a "Leave this page?" `#32770`
+      appeared and was answered by the runner. Two things worth carrying:
+      the page needs **sticky user activation** or Chromium suppresses the
+      dialog entirely and "no dialog" looks exactly like the bug (the probe
+      sends a real key through `app.keystroke` first); and an asked navigation
+      prompts **twice** — beforeunload runs, the policy ask cancels the
+      navigation, and the re-issue runs beforeunload again. Browser-consistent
+      it is not; it is the cancel-and-replay design showing through, and it is
+      the last thing that shape still costs.
+- [x] **A call from a never-committed document settles, Linux** — seen
+      2026-08-06: `window.open('')` then `tiny.win.getState()` from the blank
+      popup **rejected** ("disabled by tinyjs.json") well inside the 3s
+      timeout, on the pre-fix build too. The premise turned out not to hold
+      here — WebKitGTK COMMITS the about:blank document (`navigate commit
+      about:blank window popup3` in the hook log), so it gets a token like any
+      other page and its calls are attributed with origin `null`, which the
+      stranger gate denies. A guard was added anyway (a window-mode popup with
+      no token 120ms after `create` gets one) so a document that genuinely
+      never commits errors instead of hanging.
+- [x] **A denied popup opens NO window, Linux** — seen 2026-08-06. Window
+      census under XWayland across a full run: exactly THREE launcher windows
+      existed — main, the allowed popup (which is the control that says the
+      census can see a popup at all), and the `window.open('')` one — plus the
+      two modal GTK dialogs at the end. The `onWindowOpen`-denied popup
+      produced none, and the hook log shows its `policy` ask and its `open`
+      outcome with the deny verdict.
+- [x] **Reported `filename` names the file on disk, Linux** — seen
+      2026-08-06. With a decoy `dup.txt` staged in `~/Downloads`, the download
+      reported `dup (2).txt` in both the `started` and `done` hooks and
+      `dup (2).txt` (17 bytes, the served body) is what is on disk. Linux
+      derived the name from the final path already (both arms do); this is the
+      probe that says so rather than an inference from the source.
+- [x] **A call from a never-committed document settles, Windows** — seen
+      2026-08-06: `window.open('')` then `tiny.win.getState()` from the popup
+      **rejected** (the gate denied it, origin `null` on an about:blank
+      document) well inside the 3s timeout. It settles, which is the claim.
+
+### The harness
+
+**Linux (2026-08-06).** The same shape, rebuilt in python: `server.py` serves
+8123 (the wrapped site, narrow keyhole) and 8124 (trusted, `"all"`) with a
+3s `/slow` and an attachment for the download probe; `wraptest/` is a `"url"`
+app whose `src/main.js` records every hook into the app store (the only
+channel that survives the page navigating out from under itself) and denies
+the popup whose url carries `deny=1`; the page runs one PHASE per load
+(`?p=a…d`) because the race probe destroys its own document; `run.py` stages
+the download collision, launches `tinyjs dev` with `TINYJS_DEBUG=1` and
+`TINYJS_TEST_AUTODLG=ok`, polls a window census + title timeline while it
+runs, then prints store, census, Downloads and every denial line. Two things
+it cost:
+- **`GDK_BACKEND=x11`.** This box is a GNOME *Wayland* session, where
+  `_NET_CLIENT_LIST` is empty and `Shell.Introspect` is portal-locked — the
+  census silently saw ZERO windows, which reads exactly like "no popup
+  opened". Under XWayland every window is an X11 window `xprop` can count.
+  (Same rig as "Photographing a window on Linux" below.)
+- **A differential, or it proves nothing.** Every fix here was run BOTH ways
+  — `git stash` the launcher/client change, rebuild from source, re-run —
+  and two of the five predicted bugs turned out not to reproduce on WebKitGTK
+  2.52.3. A probe that passes on the unfixed build is evidence about the
+  ENGINE, not about the fix, and both are written up that way above.
+
+`scratchpad/wrapkit` (Windows session): `server.js` serves two origins — 8123 as
+the wrapped site with a narrow keyhole, 8124 as a trusted origin granted
+`"all"`, with a deliberately slow `/slow` for the race probe — `wraptest/` is a
+`"url"` app pointing at 8123 with hook recorders in `src/main.js`, and
+`run.ps1` is the part that matters: it enumerates top-level windows, tracks the
+app window's title, and **answers dialogs itself** rather than letting
+`TINYJS_TEST_AUTODLG` do it, so every dialog that appears is recorded before it
+is dismissed. Rebuild it rather than reinvent it; the probes that found things
+are the ones that assert from outside the page.
+
 ## Written 2026-07-26, never run off macOS
 
 - [x] **kitchen-sink FFI, Linux** — verified 2026-07-28 on aarch64: the
@@ -351,7 +622,12 @@ TODO-linux.md).
       Linux half verified 2026-07-28: `setChrome({windowControls:['close']})`
       resolves and `getState().chrome.windowControls` reports `null`, not an
       echo; the fleet sweep (all 26 examples launch) says nothing depended on
-      the lie. Windows unchecked.
+      the lie. **Closed 2026-08-05:** `trafficLights` no longer exists as a
+      key anywhere in the runtime (post-0.30 rename to `windowControls`/
+      `windowControlsPos`; only a cli.js comment mentions the old name), so
+      there is nothing left on Windows to check under this name — and the
+      current contract (getState reports what you GOT) was re-proven on
+      Windows the same day in the windowControlsPos entry below.
 
 - [x] **`chrome.windowControls` on Windows** — verified 2026-07-28, and the
       predicted Win32 coarseness is exactly what happens. `['close']` →
@@ -727,7 +1003,53 @@ exactly the kind of claim that deserves a run:
       (`?.voices ?? []`) but all three launchers implement `VOICES`, so it can
       never receive an unsupported reply — left alone. Everything else coerces
       to an honest `'unsupported'`/`false` default.
-      Still unrun: pressing a media key with Now Playing set.
+      **Media keys on Windows — MEASURED 2026-08-06, and it is the app.**
+      Reported from amp: play/pause works, `<<`/`>>` don't, and the suspicion
+      was that the Mac host was eating them. It isn't, and no tinyjs code is
+      involved either way. With amp playing, the SMTC session reads
+      **`SourceAppUserModelId: msedgewebview2.exe`, `IsNextEnabled: False`,
+      `IsPreviousEnabled: False`, title `"amp"`, artist empty** — so the
+      session is CHROMIUM's own registration of the `<audio>` element, the app
+      advertises no next/prev for Windows to route, and `nowPlaying.set()`
+      reaches nothing (amp sets title/artist/album per track and the card
+      still only says "amp"). Then, injecting the virtual keys INSIDE the VM
+      with `keybd_event` so the Mac keyboard is not involved:
+      `VK_MEDIA_NEXT_TRACK` changed nothing at all, while
+      `VK_MEDIA_PLAY_PAUSE` moved Playing → Paused → Playing. The key path
+      works; there is simply no handler behind next/previous.
+      Fixed app-side the same day, in ~5 lines next to amp's existing
+      `onMediaKey` block (`player.js:1371`):
+      `navigator.mediaSession.setActionHandler('nexttrack'/'previoustrack')`
+      pointing at the same `next`/`prev` the on-screen buttons use. Play/pause
+      is deliberately left to the engine, which drives the audio element
+      directly and so keeps amp's UI in step via its own play/pause events.
+      **Confirmed by re-measuring: `IsNextEnabled` and `IsPreviousEnabled`
+      both flipped `False` → `True`**, and Tarwin confirmed the keys now work.
+      Costs macOS nothing (WebKit routes its media keys through `onMediaKey`,
+      not mediaSession). Shipped from the examples repo by Tarwin.
+      Still true, and still a tinyjs gap rather than an app one:
+      `nowPlaying.set()` reaches nothing on Windows, so the OS card shows the
+      page title and no artist. `mediaSession.metadata` is the closest an app
+      can get until SMTC is wired into the launcher (the route is sketched in
+      TODO-windows.md's `nowPlaying` entry).
+      Rig: `scratchpad/mediakeys.ps1` — reads every SMTC session's controls
+      and injects the virtual keys locally, which is what separates "the host
+      ate it" from "the app has no handler". `MEDIAKEY` and `NOWPLAYING` appear
+      **zero times** in launcher-win.cc (macOS has four), so `onMediaKey` — the
+      hook amp uses (`player.js:1259`) — can never fire on Windows, and
+      `nowPlaying.set()` is dropped. What DOES work is Chromium's own: a
+      playing `<audio>` element registers with Windows SMTC by itself, and
+      play/pause is the one action the engine handles with no page
+      cooperation. Next/previous reach an app only if it registers
+      `navigator.mediaSession.setActionHandler('nexttrack'/'previoustrack')`,
+      and in amp that happens in exactly one place — the geiss-hdr
+      visualiser's `HookUpMediaKeys()` (`src/geiss-hdr/audio_input.js:359`) —
+      never in the main player. So Windows has nothing to send `<<`/`>>` to.
+      App-side fix, not a tinyjs gap. To settle it by measurement rather than
+      by reading: with amp playing, read the SMTC session's `IsNextEnabled`
+      (a `false` is the direct proof), and inject `VK_MEDIA_NEXT_TRACK` /
+      `VK_MEDIA_PLAY_PAUSE` **inside** the VM, which bypasses the Mac keyboard
+      and separates "the host ate it" from "the app has no handler" for good.
 - [x] **Linux/X11** — verified 2026-07-28, both sessions: the three now live
       on `tiny.macos.*` and each rejects with the guard message
       ("tiny.macos.X is macOS-only (this is linux) — guard with
@@ -791,10 +1113,24 @@ launchers were edited to match but not compiled:
 
 ## The ball on Windows and Linux — never run there
 
-- [ ] **Windows** — per-frame `win.setPosition` on a second window: is a
-      `SetWindowPos` per frame smooth, or does it stutter/trail? And does
-      `chrome: { transparent: true }` on a WebView2 child window give a real
-      circle, or a black square behind it?
+- [x] **Windows** — **both halves settled 2026-08-05**, headlessly, and it
+      is the best result of the three platforms. Motion: a rAF loop on a
+      frameless transparent satellite completed **721 moves in 721 frames
+      over 6.01s — 120 moves/s on this 120Hz display, zero dropped** —
+      with round-trip latency p50 1.2ms / p95 2.8ms / max 3.8ms, and
+      sampling the window's REAL position from outside (GetWindowRect,
+      DPI-aware) every ~125ms showed even ~270-physical-px steps with clean
+      reversals at both bounce edges. Pixels: the ball held still over a
+      magenta main window and a DPI-aware CopyFromScreen of its exact rect
+      read **pure 255,0,255 at all four corners and pure 0,0,0 at center**
+      — a real circle with transparent corners, not a black square (the
+      WS_EX_NOREDIRECTIONBITMAP secondaries doing their job).
+      Two rig traps, both already documented elsewhere in this file and both
+      hit anyway: Add-Type compilation is seconds of skew — compile BEFORE
+      launching the app or the "hold still" capture happens mid-flight (one
+      corner read black off a stale rect exactly that way); and
+      GetWindowTextW without CharSet.Unicode returns one-char garbage
+      titles.
 - [x] **Linux/X11** — mechanics verified 2026-07-28; **the pixels and the
       motion settled 2026-08-01.** A frameless `chrome:{transparent:true}`
       satellite drawing a `border-radius:50%` div was captured with `xwd`
@@ -1082,6 +1418,22 @@ never-compiled code:
   bug (one live NSMenu, nothing rebuilds); **the Windows launcher has the
   same rebuild-from-spec architecture and should be checked for it** — open
   a window AFTER a `menu.update` and see which state it shows.
+  **Checked on Windows 2026-08-06, and it had the bug — now fixed.** A driver
+  page set an app menu with `{id:'tick', label:'Tick me', checked:false}`,
+  called `menu.update('tick', {checked:true, label:'Ticked!'})`, then opened a
+  satellite that read its own bar back: `win.menu.get('tick')` in the NEW
+  window answered **`"Tick me"`, `checked:false`** while `menu.get('tick')`
+  (the registry) correctly said `"Ticked!"`, `checked:true` — the two
+  disagreeing is the bug stated as data. `do_menu_update` now patches
+  `g_app_menu` (and any window's own override) alongside the live `HMENU`s;
+  re-run after the fix, the satellite reads `"Ticked!"`, `checked:true`.
+  Rig traps this cost, both mine not the launcher's: `tiny.win.open` is
+  `open(id, opts)` — passing one object sends `id` as an object and the
+  satellite never opens; and a satellite page with an unclosed `</script>`
+  loads (the client boots, `client.hello` and `win.getState` reach the wire)
+  while its own script never runs, which reads exactly like dead RPC in a
+  secondary window. Stamp progress into `document.title` — a window title is
+  readable from outside and survives a page that can't call anything.
 
 **Two testing gotchas that produced convincing ghost failures first**, worth
 knowing before trusting any multi-window store-choreographed page on Linux:
@@ -1144,12 +1496,24 @@ The other two are compiled-never-watched (Windows: WM_SIZE/WM_ACTIVATE in
 both wndprocs + set_fullscreen; Linux: the already-connected
 window-state-event signal now emits):
 
-- [ ] **Windows** — kitchen-sink: toggle Listening on, then minimize,
-      maximize, restore, F11-style fullscreen (the Fullscreen buttons), and
-      click another app. Expect one feed line per transition, no spam while
-      drag-resizing (deduped), `maximized` true from the caption button too.
-      Secondary windows: open the inspector, minimize it — feed line says
-      `inspector`, not `main`.
+- [~] **Windows** — **core verified 2026-08-05**, launcher rebuilt from
+      source first (it was two days stale again — predating the site-wrapper
+      client changes). Headless drill: a TINYJS_HTML driver page recorded
+      every `win.onState` event while driving itself, then opened a satellite
+      (absolute-path `page:`) that drove ITSELF — window ops are scoped to
+      the calling page, so the satellite has to run its own script. All four
+      flags move: `minimize()` → `minimized:true` then `focused:false` (two
+      events — WM_SIZE lands before WM_ACTIVATE, so there's a ~1ms
+      `minimized:true, focused:true` state first; not spam, both are real
+      transitions); `restore()` → one event; `zoom()` toggles `maximized`
+      on and off; `setFullscreen(true/false)` moves `fullscreen`. The
+      satellite's events carry **`win:'sat'`, not `main`** — the claim this
+      box existed for — and focus moves both ways with the right ids:
+      opening sat gave `main focused:false` + `sat focused:true`, sat's
+      minimize handed focus to main, its restore took it back, its close
+      returned it. 21 events, every one a distinct transition — deduped.
+      Still needing a hand: `maximized` from the caption button, and
+      no-spam during a live drag-resize (both need a real mouse).
 - [x] **Linux (X11)** — verified 2026-08-01, launcher rebuilt from source.
       All four flags move: `setFullscreen(true/false)` → `fullscreen`
       true/false; `win.zoom()` → `maximized` true then false (cross-checked
@@ -1186,7 +1550,16 @@ window-state-event signal now emits):
       y:30} })` resolves `true`, `getState().chrome` comes back with no
       `windowControlsPos` key at all (no echo of a thing that didn't
       happen), and every other chrome field reads normally afterwards — the
-      wider CHROME line didn't disturb the parse. Windows still unchecked.
+      wider CHROME line didn't disturb the parse. **Windows half done
+      2026-08-05**, same shape, headless: `setChrome({ windowControlsPos:
+      {x:40,y:30} })` and the `null` form both resolve `true`,
+      `getState().chrome` has **no `windowControlsPos` key at all**, and a
+      follow-up `setChrome({ windowControls: ['close'] })` still lands
+      (reads back `['close']`) — the wider CHROME line doesn't disturb the
+      parser. A satellite born with `windowControlsPos` in WINOPEN field 14
+      opened at exactly its declared 300x200 page box with sane chrome. Both
+      halves are now done; what remains is only the kitchen-sink chip UI
+      saying "(macOS only — ignored here)", which is cosmetic.
 
 ## Off-screen window rescue (2026-07-30, policy verified macOS only)
 
@@ -1205,10 +1578,19 @@ Verified on macOS headlessly: dormant boot leaves (5000,5000) alone,
 manual verb clamps, forged-fingerprint boot chases the first pos and
 leaves the second. Compiled-never-watched elsewhere:
 
-- [ ] **Windows** — forge `__screens` in store.json, set saved pos
-      x:9999, launch: window appears clamped. Unforged relaunch: an
-      off-screen setPosition sticks (dormant). Unplug a monitor with a
-      window on it mid-session: window comes back (WM_DISPLAYCHANGE).
+- [~] **Windows** — **policy verified 2026-08-05**, headlessly (launcher
+      rebuilt from source first). Forged `__screens` boot: the fingerprint
+      was detected and rewritten to the real one, and the first
+      `setPosition(9999,9999)` was chased to **755,361 — exactly
+      `work area − outer frame`** (1728−973, 1037−676), i.e. clamped flush
+      into the corner, fully visible; a SECOND setPosition to 9999,9999
+      stuck (the chaser is first-pos-only, matching the macOS measurement);
+      `win.ensureOnScreen()` clamped it back. Unforged relaunch (dormant):
+      the same first setPosition **sticks at 9999,9999** — rescue stays out
+      of the way, the coo3d case — and the manual verb still clamps. Note
+      the clamp respects the taskbar: y lands on the work area (1037), not
+      the screen height (1084). Still unrun: unplugging a monitor holding a
+      window mid-session (WM_DISPLAYCHANGE sweep) — needs hardware.
 - [~] **Linux (X11)** — run 2026-08-01, and the interesting part is that
       **the policy is unobservable on GNOME, because Mutter never lets a
       window off-screen in the first place.** `setPosition(5000,5000)` on a
@@ -1296,10 +1678,13 @@ drills as written are still the way to pin it down.
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in dev; verify a PACKAGED app
       gets it too (attach mode doesn't go through the bridge's spawn env).
       **Half done 2026-07-31:** under `tinyjs dev` a never-clicked window's
-      AudioContext reached `running` and kept rendering. The PACKAGED half —
-      the reason this box exists — is still open: the four sampler apps were
-      published and launched as exes, but nothing read audio back out of
-      them, so a packaged app that comes up suspended would look identical.
+      AudioContext reached `running` and kept rendering. **Packaged half
+      done 2026-08-05:** a `tinyjs build` exe launched and never clicked
+      created an AudioContext + oscillator graph with no gesture —
+      `state` was `running` at 500ms, still `running` at 2s, and
+      `ctx.currentTime` advanced **1.552s in 1.5s of wall time**, so the
+      graph really renders. Packaged apps get the autoplay flag; the
+      attach-mode worry is closed.
 - [x] **win: hidden main window, 5+ min playback** — GPU/CPU quiet in Task
       Manager, audio unbroken (audibly-playing pages are exempt from
       intensive throttling — trust but verify).
@@ -1698,18 +2083,31 @@ accelerator call above, and composing with it):
   exists at all; browserAccelerators governs whether the engine's key set
   reaches the page. Neither implies the other.
 
-- [~] **Windows** — packaged app with no `debug` key: F12 dead, no devtools
-      via any route. `"debug": true`: F12 opens standalone devtools.
-      `"debug": "open"`: every window opens its devtools at creation.
-      `tinyjs dev` with no key: F12 works.
-      **The last clause only, done 2026-08-03** (fell out of the accelerator
-      run above): under `tinyjs dev` with no `debug` key in tinyjs.json, F12
-      opens a top-level `Chrome_WidgetWin_1` **"DevTools - file:///…"**
-      window — so dev's force-enable works, and it opens **detached**. The
-      page saw no F12 keydown, confirming the launcher owns the key rather
-      than the engine. The three PACKAGED cases are the ones that matter for
-      shipping and are still unrun: an app with no key must have **no** route
-      to an inspector, which is the whole point of the default.
+- [x] **Windows** — **all four verified.** Dev case 2026-08-03 (fell out of
+      the accelerator run): under `tinyjs dev` with no `debug` key, F12
+      opens a detached "DevTools - file:///…" window; the page saw no F12
+      keydown, so the launcher owns the key.
+      **The three PACKAGED cases done 2026-08-05**, headlessly: three real
+      `tinyjs build`s of a scratch app (launcher rebuilt from source first),
+      each launched as `dist\winsweep.exe` under an EnumWindows title
+      poller. **No `debug` key**: `app.keystroke('F12')` resolved
+      `{ok:true, trusted:true}` into the focused packaged app and **zero
+      DevTools windows appeared** the whole run (the poller demonstrably
+      watching the right desktop — it saw the app's own "winsweep" window;
+      and the same rig sees DevTools in the other two cases, so the zero is
+      meaningful). **`"debug": true`**: the same F12 opened one standalone
+      "DevTools - file:///…index.html" top-level window. **`"debug":
+      "open"`**: a two-window app (main + `win.open` satellite) came up with
+      **two** DevTools windows, one per app window (…index.html and
+      …sat.html), no keypress at all — the one-inspector-per-window shape.
+      Not driven: the right-click Inspect route (needs a real click);
+      given F12-dead + no auto-open, the remaining exposure is the context
+      menu only.
+      Rig gotcha worth keeping: `GetWindowTextW` P/Invoked without
+      `CharSet.Unicode` marshals the UTF-16 buffer as ANSI and every title
+      reads as one garbage char — the first pass returned an empty title
+      list that looked exactly like "no windows", on a desktop with plenty.
+      Validate the enumerator against a known window before trusting a zero.
 - [x] **Linux** — **all four run 2026-08-03** on Ubuntu 24.04 aarch64,
       GNOME 46, XWayland, launcher rebuilt from source. Settled from outside
       with `xwininfo -root -tree` (an inspector window is invisible to the

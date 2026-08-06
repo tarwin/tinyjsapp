@@ -60,6 +60,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <mutex>
 #include <thread>
 #include <atomic>
@@ -143,6 +144,10 @@ struct SecWin {
   bool click_through = false;
   WinMenu menu;
   int req_w = 0, req_h = 0;    // the page box win.open asked for
+  // A window-mode popup runs its OPENER's content manager (WebKit builds the
+  // page from the opener's configuration). Remember WHICH manager we marked
+  // shared so the destroy path un-marks that one and not the popup's own.
+  WebKitUserContentManager* shared_ucm = nullptr;
 };
 static std::map<std::string, SecWin*> g_secwins;
 static WinMenu g_main_menu;                // main's; secondaries carry theirs
@@ -184,7 +189,16 @@ static std::string wire_escape(const std::string& s) {
   return out;
 }
 
-static std::string json_escape(const std::string& s) {
+static std::string json_escape(const std::string& in) {
+  // A Linux filename is bytes, not text: a download named with an invalid
+  // UTF-8 sequence would otherwise ride into the DOWNLOAD JSON as-is and the
+  // bridge's parse would choke on the whole line. Substitute (U+FFFD) rather
+  // than drop, so the name still reads.
+  std::string s = in;
+  if (!g_utf8_validate(in.data(), (gssize)in.size(), nullptr)) {
+    char* fixed = g_utf8_make_valid(in.data(), (gssize)in.size());
+    if (fixed) { s = fixed; g_free(fixed); }
+  }
   std::string out = "\"";
   char buf[8];
   for (unsigned char c : s) {
@@ -387,15 +401,37 @@ static std::string tiny_shim_js(const std::string& winid) {
   // need them (macOS/Windows get theirs from the platform).
   GtkWindow* w0 = win_for(winid);
   const char* frameless = (w0 && !gtk_window_get_decorated(w0)) ? "true" : "false";
+  // Every message carries a per-DOCUMENT token the launcher planted in this
+  // page (window.__TINY_TOK, set by assign_call_token at commit). The winid
+  // baked in below cannot be trusted on its own: a window-mode popup runs
+  // its OPENER's content manager — WebKit builds the new page from the
+  // opener's PageConfiguration, so our fresh manager is ignored (measured,
+  // and it's what WebKitWebView.cpp's configurationForNextRelatedView does)
+  // — which means the popup's messages arrive on main's handler tagged
+  // "main". Left there, a hostile popup's calls would be ATTRIBUTED TO THE
+  // OPENER'S ORIGIN and inherit its "api" gate. The token is minted per
+  // document by the launcher, so it names the real sender; calls made
+  // before it lands are queued rather than sent under the wrong identity.
   return
     "(() => {\n"
     "  if (window.__tinyShim) return; window.__tinyShim = true;\n"
-    "  window.__TINY_WIN = '" + winid + "';\n"
+    // Don't clobber a label the launcher already planted: assign_call_token
+    // runs just before this document's scripts, and in a popup its winid is
+    // the right one while the baked value below is the opener's.
+    "  window.__TINY_WIN = window.__TINY_WIN || '" + winid + "';\n"
     "  window.__TINY_FRAMELESS = " + frameless + ";\n"
-    "  let seq = 0; const pending = {};\n"
+    "  let seq = 0, giveUp = false, q = []; const pending = {};\n"
+    "  const post = (s, payload) => window.webkit.messageHandlers.tiny.postMessage(\n"
+    "    (window.__TINY_TOK || '') + '|' + String(s) + ':' + String(payload));\n"
+    "  window.__tinyFlush = () => { const a = q; q = []; for (const e of a) post(e[0], e[1]); };\n"
+    // Last resort: a page that never gets a token (a document the launcher
+    // never saw commit) falls back to the untokened form, which the launcher
+    // accepts only from a window whose content manager it knows is not
+    // shared. Without this an unusual load would hang the app's own boot.
+    "  setTimeout(() => { giveUp = true; window.__tinyFlush(); }, 1500);\n"
     "  window.__invoke = (payload) => new Promise((res, rej) => {\n"
     "    const s = ++seq; pending[s] = { res, rej };\n"
-    "    window.webkit.messageHandlers.tiny.postMessage(String(s) + ':' + String(payload));\n"
+    "    if (window.__TINY_TOK || giveUp) post(s, payload); else q.push([s, payload]);\n"
     "  });\n"
     "  window.__tinyResolve = (s, ok, jsonText) => {\n"
     "    const p = pending[s]; if (!p) return; delete pending[s];\n"
@@ -405,8 +441,32 @@ static std::string tiny_shim_js(const std::string& winid) {
     "})();\n";
 }
 
+// token -> the document that holds it, and each window's current token (one
+// per document; a navigation mints a new one and retires the old). The ORIGIN
+// is captured with the token, at commit, and never re-read live. WebKit says
+// nothing binding about WHEN a view's active uri becomes the requested one:
+// if it flips at provisional-load start, the old document is still running
+// and still posting, and reading the uri at message time would stamp those
+// in-flight calls with the DESTINATION's origin for a whole round trip — a
+// page that picks a slow destination picks how long. (Measured on WebKitGTK
+// 2.52.3 the flip is late, so that race isn't reachable there; pinning the
+// origin to the document makes it not a question. TODO-site-wrapper.md.)
+struct CallToken {
+  std::string winid;
+  std::string origin;
+};
+static std::map<std::string, CallToken> g_call_tokens;
+static std::map<std::string, std::string> g_win_token;
+// Content managers serving more than one page — i.e. an opener whose
+// window-mode popup inherited it — with a count, because one opener can have
+// several popups alive at once. Untokened messages arriving on one of these
+// cannot be attributed and are dropped.
+static std::map<WebKitUserContentManager*, int> g_shared_ucms;
+
 // A page posted "<seq>:<payload>" from window `winid`.
-static void on_script_message(WebKitUserContentManager*, WebKitJavascriptResult* res,
+static std::string origin_from_uri(const char* uri);  // browser affordances below
+
+static void on_script_message(WebKitUserContentManager* ucm, WebKitJavascriptResult* res,
                               gpointer user_data) {
   const char* winid = (const char*)user_data;
   JSCValue* v = webkit_javascript_result_get_js_value(res);
@@ -414,12 +474,75 @@ static void on_script_message(WebKitUserContentManager*, WebKitJavascriptResult*
   if (!str) return;
   std::string msg = str;
   g_free(str);
-  size_t colon = msg.find(':');
+  // "<token>|<seq>:<payload>" — the token names the sending DOCUMENT (see
+  // tiny_shim_js); an empty one means the page never got one.
+  size_t bar = msg.find('|');
+  if (bar == std::string::npos) return;
+  std::string tok = msg.substr(0, bar);
+  size_t colon = msg.find(':', bar + 1);
   if (colon == std::string::npos) return;
-  std::string seq = msg.substr(0, colon);
+  std::string seq = msg.substr(bar + 1, colon - bar - 1);
   std::string payload = msg.substr(colon + 1);
-  pipe_write_line("CALL " + std::string(winid) + ":" + seq +
-                  " [" + json_escape(payload) + "]");
+
+  std::string from = winid;  // the manager's owner, the untokened fallback
+  bool have_origin = false;
+  std::string origin;
+  if (!tok.empty()) {
+    auto it = g_call_tokens.find(tok);
+    if (it == g_call_tokens.end()) return;  // stale/forged token: not a window
+    from = it->second.winid;
+    origin = it->second.origin;  // the document's own, captured at commit
+    have_origin = true;
+  } else if (g_shared_ucms.count(ucm)) {
+    // Ambiguous: this manager serves an opener AND its popup, so "whoever
+    // owns the manager" is a guess, and guessing wrong hands one page's
+    // origin gate to the other. Drop instead.
+    if (getenv("TINYJS_DEBUG"))
+      fprintf(stderr, "tinyjs: dropped an untokened call on a shared content manager\n");
+    return;
+  }
+
+  // Last element: the calling page's origin, for the bridge's "api"
+  // origin sub-gates. WebKitGTK's script-message signal carries no frame
+  // info (unlike WKScriptMessage.frameInfo or WebView2's Source), so this
+  // is the sending window's MAIN-FRAME origin — attested by the UI process
+  // (page JS can't spoof it) but frame-blind: a subframe's hand-rolled
+  // postMessage is attributed to the top frame. The tiny shim only injects
+  // top-frame, so every ordinary call IS main-frame; caveat in
+  // TODO-site-wrapper.md. Tokened calls carry their document's committed
+  // origin; only the untokened fallback (a document the launcher never saw
+  // commit, on a manager it knows is not shared) reads the view live.
+  if (!have_origin) {
+    WebKitWebView* wv = wv_for(from);
+    origin = origin_from_uri(wv ? webkit_web_view_get_uri(wv) : nullptr);
+  }
+  pipe_write_line("CALL " + from + ":" + seq +
+                  " [" + json_escape(payload) + "," + json_escape(origin) + "]");
+}
+
+// One token per document, planted at commit — the only thing that tells the
+// launcher which page a message came from when a manager is shared.
+static void assign_call_token(WebKitWebView* wv, const std::string& winid) {
+  auto old = g_win_token.find(winid);
+  if (old != g_win_token.end()) g_call_tokens.erase(old->second);
+  char* uuid = g_uuid_string_random();
+  std::string tok = uuid ? uuid : "";
+  g_free(uuid);
+  if (tok.empty()) return;
+  // Captured HERE, where the active uri is the committed document's — not at
+  // message time, where it may already be pointing at wherever the page just
+  // asked to go.
+  g_call_tokens[tok] = {winid, origin_from_uri(webkit_web_view_get_uri(wv))};
+  g_win_token[winid] = tok;
+  // __TINY_WIN rides along: the shim baked in the manager owner's id, which
+  // is wrong in a popup sharing its opener's manager, and tiny.win.id reads
+  // it. Routing never trusts it (that's the token's job) — this keeps the
+  // page's own label honest.
+  std::string js = "window.__TINY_TOK=" + json_escape(tok) +
+                   ";window.__TINY_WIN=" + json_escape(winid) +
+                   ";window.__tinyFlush&&window.__tinyFlush()";
+  webkit_web_view_evaluate_javascript(wv, js.c_str(), -1, nullptr, nullptr,
+                                      nullptr, nullptr, nullptr);
 }
 
 // Build a UserContentManager with the full injection set for a window.
@@ -608,6 +731,12 @@ static WebKitSettings* make_settings() {
   webkit_settings_set_allow_universal_access_from_file_urls(s, TRUE);
   webkit_settings_set_enable_media_stream(s, TRUE);
   webkit_settings_set_enable_mediasource(s, TRUE);
+  // macOS parity: WKPreferences defaults javaScriptCanOpenWindowsAutomatically
+  // to YES on desktop, WebKitGTK to FALSE — without this, a second
+  // gesture-less window.open silently never reaches `create` (measured
+  // 2026-08-05: the first sneaks through, later ones vanish). The "popups"
+  // config + POPUPQ ask is the actual gate.
+  webkit_settings_set_javascript_can_open_windows_automatically(s, TRUE);
   const char* ua = getenv("TINYJS_UA");
   if (ua && *ua) webkit_settings_set_user_agent(s, ua);
   return s;
@@ -5155,22 +5284,816 @@ static gboolean on_debug_key(GtkWidget* w, GdkEventKey* ev, gpointer) {
   return TRUE;
 }
 
-static WebKitWebView* make_webview(const std::string& winid) {
+// --- browser affordances (Linux) --------------------------------------------
+// Everything a *browser* does that a local-page app never needed, for wrapping
+// hosted web apps: JS dialogs (alert/confirm/prompt), downloads, navigation
+// events + policy, window.open, find-in-page. Same wire as the macOS/Windows
+// twins (see TODO-site-wrapper.md):
+//   launcher -> backend:
+//     NAV {"window","kind","url","error"?}     kind: start|commit|finish|fail|crash
+//     NAVQ <qid> <winid>\t<url>                main-frame http(s) policy ask;
+//                                              unanswered after 400ms = allow
+//     DOWNLOAD {"id","url","filename","path","state","error"?}
+//     POPUP {"window","url","action"}          action: window|external|deny
+//   backend -> launcher:
+//     NAVR <qid> allow|deny|external
+//     POPUPR <qid> window|external|deny
+//     FIND <id> <term>\t<forward>\t<matchCase> (call-style; resolved via RET path)
+//     STOPFIND <id>
+
+static std::string g_downloads_mode;  // TINYJS_DOWNLOADS: "" = auto | ask | deny
+static std::string g_popup_mode;      // TINYJS_POPUPS: "" = external | window | deny
+
+static WebKitWebView* make_webview(const std::string& winid,
+                                   WebKitWebView* related = nullptr);
+static gboolean on_secwin_delete(GtkWidget*, GdkEvent*, gpointer);
+static void on_secwin_destroy(GtkWidget*, gpointer);
+
+static std::string tiny_winid_for_wv(WebKitWebView* wv) {
+  if (wv == g_wv) return "main";
+  for (auto& kv : g_secwins)
+    if (kv.second->wv == wv) return kv.first;
+  return "main";
+}
+
+// scheme://host[:port] with default ports elided, bare "file://", literal
+// "null" when unknown — the same shape the macOS/Windows launchers stamp.
+static std::string origin_from_uri(const char* uri) {
+  if (!uri || !*uri) return "null";
+  if (!strncmp(uri, "file://", 7)) return "file://";
+  GUri* u = g_uri_parse(uri, G_URI_FLAGS_NONE, nullptr);
+  if (!u) return "null";
+  std::string out = "null";
+  const char* scheme = g_uri_get_scheme(u);
+  const char* host = g_uri_get_host(u);
+  int port = g_uri_get_port(u);
+  if (scheme && host && *host) {
+    out = std::string(scheme) + "://" + host;
+    bool dflt = port == -1 || (!strcmp(scheme, "http") && port == 80) ||
+                (!strcmp(scheme, "https") && port == 443);
+    if (!dflt) out += ":" + std::to_string(port);
+  }
+  g_uri_unref(u);
+  return out;
+}
+
+// TINYJS_TEST_AUTODLG=ok|cancel — answer the next modal dialog the way a user
+// would, so dialog paths run headless (test hook, inert without the env var;
+// the macOS/Windows launchers carry the same one). Polls: gtk_dialog_run
+// spins a nested main loop, and timeouts keep dispatching inside it, so a
+// source armed just before the run fires into the open dialog. Gives up
+// after ~6s so a wedged test still ends.
+static gboolean test_autodlg_tick(gpointer data) {
+  auto* st = static_cast<std::pair<std::string, int>*>(data);
+  GList* tops = gtk_window_list_toplevels();
+  GtkDialog* dlg = nullptr;
+  for (GList* l = tops; l; l = l->next) {
+    GtkWidget* w = GTK_WIDGET(l->data);
+    if (GTK_IS_DIALOG(w) && gtk_widget_get_visible(w) &&
+        gtk_window_get_modal(GTK_WINDOW(w))) {
+      dlg = GTK_DIALOG(w);
+      break;
+    }
+  }
+  g_list_free(tops);
+  if (!dlg) {
+    if (--st->second > 0) return G_SOURCE_CONTINUE;
+    delete st;
+    return G_SOURCE_REMOVE;
+  }
+  bool cancel = st->first == "cancel";
+  // File choosers answer ACCEPT, message/prompt dialogs OK. gtk_dialog_response
+  // works whether or not a button carries the id, so a plain alert() (no
+  // Cancel button) still closes on the cancel drill — returning CANCEL, which
+  // the alert path ignores. That is what a user's Escape does too.
+  gint resp = GTK_IS_FILE_CHOOSER(dlg)
+                  ? (cancel ? GTK_RESPONSE_CANCEL : GTK_RESPONSE_ACCEPT)
+                  : (cancel ? GTK_RESPONSE_CANCEL : GTK_RESPONSE_OK);
+  gtk_dialog_response(dlg, resp);
+  delete st;
+  return G_SOURCE_REMOVE;
+}
+
+static void test_autodlg_arm() {
+  const char* mode = getenv("TINYJS_TEST_AUTODLG");
+  if (!mode || !*mode) return;
+  g_timeout_add(200, test_autodlg_tick, new std::pair<std::string, int>(mode, 30));
+}
+
+// -- JS dialogs (alert / confirm / prompt) --
+// Synchronous page primitives (`confirm()` must return a bool NOW) — nothing
+// tiny.dialog's async RPC can shim. WebKitGTK does ship default dialogs, but
+// ours match do_dialog's styling, headline the page's origin (honest
+// attribution for a wrapped third-party site; the app name for its own
+// file:// pages) and are drivable by TINYJS_TEST_AUTODLG.
+
+static std::string js_dialog_title(WebKitWebView* wv) {
+  const char* uri = webkit_web_view_get_uri(wv);
+  if (uri) {
+    GUri* u = g_uri_parse(uri, G_URI_FLAGS_NONE, nullptr);
+    if (u) {
+      const char* host = g_uri_get_host(u);
+      std::string h = host ? host : "";
+      g_uri_unref(u);
+      if (!h.empty()) return h;
+    }
+  }
+  return g_app_name;
+}
+
+static gboolean on_script_dialog(WebKitWebView* wv, WebKitScriptDialog* sd, gpointer) {
+  WebKitScriptDialogType t = webkit_script_dialog_get_dialog_type(sd);
+  const char* m = webkit_script_dialog_get_message(sd);
+  std::string msg = m ? m : "";
+  std::string title = js_dialog_title(wv);
+  GtkWidget* top = gtk_widget_get_toplevel(GTK_WIDGET(wv));
+  GtkWindow* parent = GTK_IS_WINDOW(top) ? GTK_WINDOW(top) : g_win;
+
+  // gtk_dialog_run spins a NESTED main loop, so the socket keeps dispatching
+  // inside it — a backend WINCLOSE (or a page's own window.close) can destroy
+  // this window, and the view under it, while the dialog is still up. Hold a
+  // ref on both so nothing is freed under us, and watch for the destroy: the
+  // answer goes to a page that no longer exists, so skip it rather than write
+  // into a torn-down web page.
+  bool destroyed = false;
+  g_object_ref(wv);
+  webkit_script_dialog_ref(sd);
+  gulong destroy_h = g_signal_connect_swapped(
+      wv, "destroy", G_CALLBACK(+[](gpointer d) { *(bool*)d = true; }), &destroyed);
+  struct Guard {
+    WebKitWebView* wv;
+    WebKitScriptDialog* sd;
+    gulong h;
+    ~Guard() {
+      g_signal_handler_disconnect(wv, h);
+      webkit_script_dialog_unref(sd);
+      g_object_unref(wv);
+    }
+  } guard{wv, sd, destroy_h};
+
+  if (t == WEBKIT_SCRIPT_DIALOG_PROMPT) {
+    const char* d = webkit_script_dialog_prompt_get_default_text(sd);
+    GtkWidget* dlg = gtk_dialog_new_with_buttons(title.c_str(), parent,
+        GTK_DIALOG_MODAL, "Cancel", GTK_RESPONSE_CANCEL, "OK", GTK_RESPONSE_OK,
+        NULL);
+    gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_OK);
+    GtkWidget* content = gtk_dialog_get_content_area(GTK_DIALOG(dlg));
+    GtkWidget* label = gtk_label_new(msg.c_str());
+    gtk_label_set_xalign(GTK_LABEL(label), 0);
+    GtkWidget* entry = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(entry), d ? d : "");
+    gtk_entry_set_activates_default(GTK_ENTRY(entry), TRUE);
+    gtk_container_set_border_width(GTK_CONTAINER(content), 12);
+    gtk_box_set_spacing(GTK_BOX(content), 8);
+    gtk_box_pack_start(GTK_BOX(content), label, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(content), entry, FALSE, FALSE, 0);
+    gtk_widget_show_all(dlg);
+    test_autodlg_arm();
+    gint res = gtk_dialog_run(GTK_DIALOG(dlg));
+    // Text set only on OK: an unset prompt result IS the null a cancelled
+    // prompt() returns.
+    if (res == GTK_RESPONSE_OK && !destroyed)
+      webkit_script_dialog_prompt_set_text(sd, gtk_entry_get_text(GTK_ENTRY(entry)));
+    gtk_widget_destroy(dlg);
+    return TRUE;
+  }
+
+  bool is_confirm = t == WEBKIT_SCRIPT_DIALOG_CONFIRM ||
+                    t == WEBKIT_SCRIPT_DIALOG_BEFORE_UNLOAD_CONFIRM;
+  GtkWidget* dlg = gtk_message_dialog_new(parent, GTK_DIALOG_MODAL,
+      is_confirm ? GTK_MESSAGE_QUESTION : GTK_MESSAGE_INFO,
+      GTK_BUTTONS_NONE, "%s", title.c_str());
+  if (!msg.empty())
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(dlg), "%s",
+                                             msg.c_str());
+  if (is_confirm)
+    gtk_dialog_add_button(GTK_DIALOG(dlg), "Cancel", GTK_RESPONSE_CANCEL);
+  gtk_dialog_add_button(GTK_DIALOG(dlg), "OK", GTK_RESPONSE_OK);
+  gtk_dialog_set_default_response(GTK_DIALOG(dlg), GTK_RESPONSE_OK);
+  test_autodlg_arm();
+  gint res = gtk_dialog_run(GTK_DIALOG(dlg));
+  gtk_widget_destroy(dlg);
+  if (is_confirm && !destroyed)
+    webkit_script_dialog_confirm_set_confirmed(sd, res == GTK_RESPONSE_OK);
+  return TRUE;
+}
+
+// -- navigation events --
+
+static void find_forget(WebKitWebView* wv);  // find section, below
+
+static void nav_event(WebKitWebView* wv, const char* kind, const char* url,
+                      const char* err) {
+  std::string u = url ? url : "";
+  // Internal schemes stay off the wire (tiny-media, popup setup noise);
+  // file/http(s)/about:blank are the app's actual documents.
+  if (!u.empty() && u.rfind("http://", 0) != 0 && u.rfind("https://", 0) != 0 &&
+      u.rfind("file://", 0) != 0 && u != "about:blank")
+    return;
+  std::string j = "{\"window\":" + json_escape(tiny_winid_for_wv(wv)) +
+                  ",\"kind\":\"" + kind + "\",\"url\":" + json_escape(u);
+  if (err && *err) j += ",\"error\":" + json_escape(err);
+  pipe_write_line("NAV " + j + "}");
+}
+
+static void on_load_changed(WebKitWebView* wv, WebKitLoadEvent ev, gpointer) {
+  const char* uri = webkit_web_view_get_uri(wv);
+  if (ev == WEBKIT_LOAD_STARTED) {
+    nav_event(wv, "start", uri, nullptr);
+  } else if (ev == WEBKIT_LOAD_COMMITTED) {
+    // The document exists now (document-start scripts have run, so the shim
+    // is there to receive it) — hand this page its call token.
+    assign_call_token(wv, tiny_winid_for_wv(wv));
+    // The old document's find results describe text that is gone.
+    find_forget(wv);
+    nav_event(wv, "commit", uri, nullptr);
+  } else if (ev == WEBKIT_LOAD_FINISHED) {
+    // Popup windows carry the page's own title (like a browser would); other
+    // windows' titles belong to the app (setTitle / WINOPEN).
+    std::string wid = tiny_winid_for_wv(wv);
+    if (wid.rfind("popup", 0) == 0) {
+      const char* t = webkit_web_view_get_title(wv);
+      GtkWindow* win = win_for(wid);
+      if (t && *t && win) gtk_window_set_title(win, t);
+    }
+    nav_event(wv, "finish", uri, nullptr);
+  }
+}
+
+// Not failures: our own policy cancels / rapid re-navigation, a navigation
+// that became a download (painting an offline screen because the user
+// exported a CSV would be exactly wrong), and the preliminary media-load
+// error WebKit retries itself.
+static bool nav_error_is_noise(GError* e) {
+  if (!e) return false;
+  if (e->domain == WEBKIT_NETWORK_ERROR && e->code == WEBKIT_NETWORK_ERROR_CANCELLED)
+    return true;
+  if (e->domain == WEBKIT_POLICY_ERROR &&
+      e->code == WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE)
+    return true;
+  if (e->domain == WEBKIT_PLUGIN_ERROR && e->code == WEBKIT_PLUGIN_ERROR_WILL_HANDLE_LOAD)
+    return true;
+  return false;
+}
+
+static gboolean on_load_failed(WebKitWebView* wv, WebKitLoadEvent,
+                               gchar* failing_uri, GError* error, gpointer) {
+  // TRUE for noise = also no built-in error page over a page that is fine.
+  if (nav_error_is_noise(error)) return TRUE;
+  nav_event(wv, "fail", failing_uri, error ? error->message : "");
+  return FALSE;  // keep WebKit's error page
+}
+
+static void on_web_process_terminated(WebKitWebView* wv,
+                                      WebKitWebProcessTerminationReason, gpointer) {
+  nav_event(wv, "crash", webkit_web_view_get_uri(wv), nullptr);
+}
+
+// -- navigation policy (NAVQ/NAVR) --
+// The ask lives at the RESPONSE stage, not the action stage: WebKitGTK fires
+// NAVIGATION_ACTION for subframe navigations too and gives no way to tell
+// them apart (measured 2026-08-05 — frame_name is NULL for both), while the
+// response decision has is_main_frame_main_resource. The decision is held
+// (ref'd) until NAVR or a 400ms timeout default-allows, so a wrapper can't
+// deadlock its own first load. CAVEAT this stage creates: by ask time the
+// request has already been issued and answered — a deny discards the
+// response but the server saw the request (the Windows leg has the same
+// family of hole, shaped as asked POSTs re-issuing as GETs; macOS holds the
+// original action and has neither). A navigation whose response is an
+// un-renderable MIME type becomes a download WITHOUT a policy ask — the
+// download events are that path's hook.
+
+struct NavPending {
+  WebKitPolicyDecision* decision;
+  std::string url;
+};
+static long g_nav_seq = 0;
+static std::map<std::string, NavPending> g_nav_pending;
+
+static void nav_resolve(const std::string& qid, int verdict) {  // 0 allow 1 deny 2 external
+  auto it = g_nav_pending.find(qid);
+  if (it == g_nav_pending.end()) return;  // timeout beat the reply, or vice versa
+  NavPending p = it->second;
+  g_nav_pending.erase(it);
+  if (verdict == 2)
+    g_app_info_launch_default_for_uri(p.url.c_str(), nullptr, nullptr);
+  if (verdict == 0) webkit_policy_decision_use(p.decision);
+  else webkit_policy_decision_ignore(p.decision);
+  g_object_unref(p.decision);
+}
+
+// -- window.open / target=_blank (POPUPQ/POPUPR) --
+// The `create` signal must answer synchronously (return a webview or null),
+// but the DECISION doesn't have to be: "popups" config fixes what's
+// returned, then a POPUPQ ask lets onWindowOpen refine it — unanswered
+// after 400ms = the configured mode. In window mode the popup is built (and
+// starts loading) but stays HIDDEN until the verdict; in external/deny
+// modes nothing exists to show, so the hook can only choose between those
+// two. The window-mode webview is constructed with "related-view" (same web
+// process — the only way window.open's return value, window.opener and
+// postMessage keep working) but a FRESH user content manager: the parent's
+// carries the parent's tiny shim with the parent's window id baked in,
+// which would cross-wire the two windows' RPC promise tables.
+
+static long g_popup_seq = 0, g_popup_qseq = 0;
+static std::map<std::string, std::function<void(const std::string&)>> g_popup_pending;
+
+static void popup_resolve(const std::string& qid, const std::string& verdict) {
+  auto it = g_popup_pending.find(qid);
+  if (it == g_popup_pending.end()) return;
+  auto fn = it->second;
+  g_popup_pending.erase(it);
+  fn(verdict);
+}
+
+static void popup_ask(const std::string& pid, const std::string& opener,
+                      const std::string& u, const std::string& mode,
+                      std::function<void(const std::string&)> fn) {
+  if (g_sock < 0) {  // backend not attached: the configured mode stands
+    fn(mode);
+    return;
+  }
+  std::string qid = "p" + std::to_string(++g_popup_qseq);
+  g_popup_pending[qid] = std::move(fn);
+  pipe_write_line("POPUPQ " + qid + " " + (pid.empty() ? "-" : pid) + "\t" +
+                  opener + "\t" + u + "\t" + mode);
+  struct Arg { std::string qid, mode; };
+  g_timeout_add(400, +[](gpointer d) -> gboolean {
+    Arg* a = (Arg*)d;
+    popup_resolve(a->qid, a->mode);
+    delete a;
+    return G_SOURCE_REMOVE;
+  }, new Arg{qid, mode});
+}
+
+static void popup_event(const std::string& pid, const std::string& u,
+                        const std::string& action) {
+  pipe_write_line("POPUP {\"window\":" + (pid.empty() ? "null" : json_escape(pid)) +
+                  ",\"url\":" + json_escape(u) + ",\"action\":\"" + action + "\"}");
+}
+
+// window.open's width/height/left/top arrive via the window properties,
+// which WebKit fills in by ready-to-show time.
+static void on_popup_ready_to_show(WebKitWebView* wv, gpointer) {
+  GtkWidget* top = gtk_widget_get_toplevel(GTK_WIDGET(wv));
+  if (!GTK_IS_WINDOW(top)) return;
+  WebKitWindowProperties* wp = webkit_web_view_get_window_properties(wv);
+  if (!wp) return;
+  GdkRectangle geo;
+  webkit_window_properties_get_geometry(wp, &geo);
+  if (geo.width >= 120 && geo.height >= 90)
+    gtk_window_set_default_size(GTK_WINDOW(top), geo.width, geo.height);
+  // 0,0 is indistinguishable from unset here; treat any nonzero as intent
+  // (X11 honors it, Wayland ignores moves anyway).
+  if (geo.x || geo.y) gtk_window_move(GTK_WINDOW(top), geo.x, geo.y);
+}
+
+// A popup page's own window.close() — WebKitGTK surfaces it, unlike WebView2.
+static void on_popup_close(WebKitWebView* wv, gpointer) {
+  GtkWidget* top = gtk_widget_get_toplevel(GTK_WIDGET(wv));
+  if (GTK_IS_WINDOW(top)) gtk_widget_destroy(top);
+}
+
+static GtkWidget* on_create_webview(WebKitWebView* parent,
+                                    WebKitNavigationAction* action, gpointer) {
+  WebKitURIRequest* req = webkit_navigation_action_get_request(action);
+  const char* uri = req ? webkit_uri_request_get_uri(req) : nullptr;
+  std::string u = uri ? uri : "";
+  bool web = u.rfind("http://", 0) == 0 || u.rfind("https://", 0) == 0;
+  std::string mode = g_popup_mode.empty() ? "external" : g_popup_mode;
+  std::string opener = tiny_winid_for_wv(parent);
+
+  if (mode == "window") {
+    std::string wid = "popup" + std::to_string(++g_popup_seq);
+    while (g_secwins.count(wid)) wid = "popup" + std::to_string(++g_popup_seq);
+    SecWin* sec = new SecWin();
+    sec->id = wid;
+    sec->win = GTK_WINDOW(gtk_window_new(GTK_WINDOW_TOPLEVEL));
+    gtk_window_set_title(sec->win, g_app_name.c_str());
+    gtk_window_set_default_size(sec->win, 900, 600);
+    gtk_window_set_position(sec->win, GTK_WIN_POS_CENTER);
+    apply_rgba_visual(GTK_WIDGET(sec->win));
+    const char* icon = getenv("TINYJS_ICON");
+    if (icon && *icon) set_window_icon(sec->win, icon);
+    sec->req_w = 900;
+    sec->req_h = 600;
+    // Same box shape as every other window so nothing downstream special-
+    // cases popups; the bar stays hidden (browsers give popups no menu).
+    sec->menu.accel = gtk_accel_group_new();
+    gtk_window_add_accel_group(sec->win, sec->menu.accel);
+    GtkWidget* vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(sec->win), vbox);
+    sec->menu.bar = gtk_menu_bar_new();
+    gtk_box_pack_start(GTK_BOX(vbox), sec->menu.bar, FALSE, FALSE, 0);
+    // The popup MUST be built as a related view: WebKit takes the new page's
+    // configuration from the opener, and a plain view returned from `create`
+    // trips an assertion in the web process (measured 2026-08-06 —
+    // WindowFeatures unengaged). The cost is the shared content manager the
+    // call tokens exist to survive.
+    sec->wv = make_webview(wid, parent);
+    sec->shared_ucm = webkit_web_view_get_user_content_manager(parent);
+    g_shared_ucms[sec->shared_ucm]++;  // counted: one opener, several popups
+    gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(sec->wv), TRUE, TRUE, 0);
+    g_signal_connect(sec->win, "window-state-event", G_CALLBACK(on_window_state), nullptr);
+    g_signal_connect(sec->win, "delete-event", G_CALLBACK(on_secwin_delete), nullptr);
+    g_signal_connect_data(sec->win, "destroy", G_CALLBACK(on_secwin_destroy),
+        g_strdup(wid.c_str()), [](gpointer d, GClosure*) { g_free(d); },
+        (GConnectFlags)0);
+    g_signal_connect(sec->wv, "ready-to-show", G_CALLBACK(on_popup_ready_to_show), nullptr);
+    g_signal_connect(sec->wv, "close", G_CALLBACK(on_popup_close), nullptr);
+    g_secwins[wid] = sec;
+
+    // Backstop for a document that never commits. On a SHARED manager an
+    // untokened call is dropped with no reply, so a page holding a token-less
+    // document would hang every promise it made. WebKitGTK does commit the
+    // about:blank of a `window.open('')` (measured 2026-08-06 — that popup's
+    // calls settle as denials, origin "null"), so this normally does nothing;
+    // it fills in when nothing else did. A real navigation committing first
+    // wins, and re-mints anyway.
+    g_timeout_add(120, +[](gpointer d) -> gboolean {
+      std::string* id = (std::string*)d;
+      SecWin* sw = sec_for(*id);
+      if (sw && !g_win_token.count(*id)) assign_call_token(sw->wv, *id);
+      delete id;
+      return G_SOURCE_REMOVE;
+    }, new std::string(wid));
+
+    // NOT shown yet — the verdict decides (loading proceeds meanwhile, the
+    // same tradeoff as the nav-policy hold).
+    popup_ask(wid, opener, u, "window", [wid, u, web](const std::string& v) {
+      std::string a = (v == "external" || v == "deny") ? v : "window";
+      SecWin* sw = sec_for(wid);
+      if (a == "window") {
+        if (sw) {
+          gtk_widget_show_all(GTK_WIDGET(sw->win));
+          gtk_widget_hide(sw->menu.bar);
+        }
+      } else {
+        if (a == "external" && web)
+          g_app_info_launch_default_for_uri(u.c_str(), nullptr, nullptr);
+        if (sw) gtk_widget_destroy(GTK_WIDGET(sw->win));  // WINCLOSED + slot cleanup
+      }
+      popup_event(wid, u, a);
+    });
+    return GTK_WIDGET(sec->wv);  // WebKit issues the load itself
+  }
+
+  // external / deny: nothing to return either way, so the ask is free.
+  popup_ask("", opener, u, mode, [u, web, mode](const std::string& v) {
+    // 'window' can't be honored here (null already returned) — coerce to the
+    // configured mode.
+    std::string a = (v == "external" || v == "deny") ? v : mode;
+    if (a == "external" && web)
+      g_app_info_launch_default_for_uri(u.c_str(), nullptr, nullptr);
+    popup_event("", u, a);
+  });
+  return nullptr;
+}
+
+// -- policy decisions (downloads at RESPONSE, NAVQ ask, popups untouched) --
+
+static gboolean on_decide_policy(WebKitWebView* wv, WebKitPolicyDecision* decision,
+                                 WebKitPolicyDecisionType type, gpointer) {
+  if (type != WEBKIT_POLICY_DECISION_TYPE_RESPONSE)
+    return FALSE;  // NEW_WINDOW_ACTION's default use makes `create` fire
+  WebKitResponsePolicyDecision* rd = WEBKIT_RESPONSE_POLICY_DECISION(decision);
+  // Anything the webview can't render inline (attachments, CSV exports,
+  // unknown MIME types) becomes a download instead of a silent nothing.
+  if (!webkit_response_policy_decision_is_mime_type_supported(rd)) {
+    webkit_policy_decision_download(decision);
+    return TRUE;
+  }
+  if (!webkit_response_policy_decision_is_main_frame_main_resource(rd) || g_sock < 0)
+    return FALSE;
+  WebKitURIResponse* resp = webkit_response_policy_decision_get_response(rd);
+  const char* uri = resp ? webkit_uri_response_get_uri(resp) : nullptr;
+  std::string u = uri ? uri : "";
+  // file:// pages are the app's own frontend — no ask.
+  if (u.rfind("http://", 0) != 0 && u.rfind("https://", 0) != 0) return FALSE;
+  std::string qid = "n" + std::to_string(++g_nav_seq);
+  g_object_ref(decision);
+  g_nav_pending[qid] = {decision, u};
+  pipe_write_line("NAVQ " + qid + " " + tiny_winid_for_wv(wv) + "\t" + u);
+  g_timeout_add(400, +[](gpointer d) -> gboolean {
+    std::string* q = (std::string*)d;
+    nav_resolve(*q, 0);
+    delete q;
+    return G_SOURCE_REMOVE;
+  }, new std::string(qid));
+  return TRUE;  // decision held; NAVR or the timeout releases it
+}
+
+// -- downloads --
+
+struct DlInfo {
+  long id;
+  std::string url, filename, path;
+  gint64 last_emit = 0;  // µs, progress throttle
+};
+static std::map<WebKitDownload*, DlInfo> g_dl_info;
+static long g_download_seq = 0;
+
+static void download_event(long id, const std::string& url,
+                           const std::string& filename, const std::string& path,
+                           const char* state, const std::string& err,
+                           long long bytes = -1, long long total = -1) {
+  std::string j = "{\"id\":" + std::to_string(id) + ",\"url\":" + json_escape(url) +
+                  ",\"filename\":" + json_escape(filename) +
+                  ",\"path\":" + (path.empty() ? "null" : json_escape(path)) +
+                  ",\"state\":\"" + state + "\"";
+  if (bytes >= 0) {
+    j += ",\"bytes\":" + std::to_string(bytes);
+    j += ",\"total\":" + std::to_string(total > 0 ? total : -1);
+  }
+  if (!err.empty()) j += ",\"error\":" + json_escape(err);
+  pipe_write_line("DOWNLOAD " + j + "}");
+}
+
+static std::string downloads_dir() {
+  const char* d = g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+  if (d && *d) return d;
+  return home_dir() + "/Downloads";
+}
+
+// MIME → extension for names that arrive without one. GLib knows content
+// types but not preferred extensions, so this is a small honest map of what
+// actually crosses the wire (macOS asks UTType, Windows lets the engine do
+// it); an unknown type just keeps the bare name.
+static std::string ext_for_mime(std::string mime) {
+  size_t sc = mime.find(';');
+  if (sc != std::string::npos) mime = mime.substr(0, sc);
+  static const struct { const char *m, *e; } table[] = {
+      {"application/pdf", "pdf"}, {"application/zip", "zip"},
+      {"application/json", "json"}, {"application/gzip", "gz"},
+      {"text/csv", "csv"}, {"text/plain", "txt"}, {"text/html", "html"},
+      {"image/png", "png"}, {"image/jpeg", "jpg"}, {"image/gif", "gif"},
+      {"image/webp", "webp"}, {"image/svg+xml", "svg"},
+      {"audio/mpeg", "mp3"}, {"audio/wav", "wav"}, {"audio/ogg", "ogg"},
+      {"video/mp4", "mp4"}, {"video/webm", "webm"},
+  };
+  for (auto& t : table)
+    if (mime == t.m) return t.e;
+  return "";
+}
+
+static gboolean on_decide_destination(WebKitDownload* dl, gchar* suggested, gpointer) {
+  WebKitURIResponse* resp = webkit_download_get_response(dl);
+  WebKitURIRequest* req = webkit_download_get_request(dl);
+  const char* ru = resp ? webkit_uri_response_get_uri(resp) : nullptr;
+  if (!ru && req) ru = webkit_uri_request_get_uri(req);
+  std::string url = ru ? ru : "";
+  std::string mode = g_downloads_mode.empty() ? "auto" : g_downloads_mode;
+  std::string name = suggested && *suggested ? suggested : "download";
+
+  if (mode == "deny") {
+    download_event(++g_download_seq, url, name, "", "denied", "");
+    webkit_download_cancel(dl);
+    return TRUE;
+  }
+
+  std::string dir = downloads_dir();
+  std::string full;
+  if (mode == "ask") {
+    // A plain GtkFileChooserDialog, NOT gtk_file_chooser_native: the native
+    // chooser rides the portal (out of process) where TINYJS_TEST_AUTODLG
+    // can't reach it — the same lesson macOS's out-of-process save panel
+    // taught. The launcher isn't sandboxed, so nothing is lost.
+    GtkWidget* dlg = gtk_file_chooser_dialog_new(g_app_name.c_str(), g_win,
+        GTK_FILE_CHOOSER_ACTION_SAVE, "Cancel", GTK_RESPONSE_CANCEL,
+        "Save", GTK_RESPONSE_ACCEPT, NULL);
+    gtk_window_set_modal(GTK_WINDOW(dlg), TRUE);
+    gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
+    gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), dir.c_str());
+    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg), name.c_str());
+    test_autodlg_arm();
+    gint res = gtk_dialog_run(GTK_DIALOG(dlg));
+    char* path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dlg));
+    gtk_widget_destroy(dlg);
+    if (res != GTK_RESPONSE_ACCEPT || !path) {
+      g_free(path);
+      download_event(++g_download_seq, url, name, "", "cancelled", "");
+      webkit_download_cancel(dl);
+      return TRUE;
+    }
+    full = path;
+    g_free(path);
+    size_t slash = full.rfind('/');
+    name = slash == std::string::npos ? full : full.substr(slash + 1);
+  } else {
+    // auto: ~/Downloads (XDG), extension derived from the MIME type when the
+    // name has none, de-duplicated rather than overwritten.
+    if (name.find('.') == std::string::npos && resp) {
+      const char* mt = webkit_uri_response_get_mime_type(resp);
+      std::string ext = ext_for_mime(mt ? mt : "");
+      if (!ext.empty()) name += "." + ext;
+    }
+    size_t dot = name.rfind('.');
+    std::string base = dot == std::string::npos ? name : name.substr(0, dot);
+    std::string ext = dot == std::string::npos ? "" : name.substr(dot);
+    std::string cand = name;
+    for (int n = 2; file_exists(dir + "/" + cand) && n < 1000; n++)
+      cand = base + " (" + std::to_string(n) + ")" + ext;
+    name = cand;
+    full = dir + "/" + name;
+  }
+
+  long id = ++g_download_seq;
+  g_dl_info[dl] = {id, url, name, full};
+  // The dedup / ask already decided the fate of an existing file; without
+  // this a name collision fails the whole download instead.
+  webkit_download_set_allow_overwrite(dl, TRUE);
+  // An absolute PATH, not a file:// URI: 4.1 takes either, but the 6.0 API
+  // asserts on anything that isn't an absolute path.
+  webkit_download_set_destination(dl, full.c_str());
+  download_event(id, url, name, full, "started", "");
+  return TRUE;
+}
+
+static void on_download_data(WebKitDownload* dl, guint64, gpointer) {
+  auto it = g_dl_info.find(dl);
+  if (it == g_dl_info.end()) return;
+  gint64 now = g_get_monotonic_time();
+  if (now - it->second.last_emit < 250000) return;  // ~4 events/s
+  it->second.last_emit = now;
+  WebKitURIResponse* resp = webkit_download_get_response(dl);
+  long long total = resp ? (long long)webkit_uri_response_get_content_length(resp) : 0;
+  download_event(it->second.id, it->second.url, it->second.filename,
+                 it->second.path, "progress", "",
+                 (long long)webkit_download_get_received_data_length(dl),
+                 total > 0 ? total : -1);
+}
+
+static void on_download_failed(WebKitDownload* dl, GError* error, gpointer) {
+  auto it = g_dl_info.find(dl);
+  if (it == g_dl_info.end()) return;  // denied/cancelled pre-destination — already reported
+  download_event(it->second.id, it->second.url, it->second.filename,
+                 it->second.path, "failed",
+                 error && error->message ? error->message : "download failed");
+  g_dl_info.erase(it);  // "finished" fires after "failed" too; keep it silent
+}
+
+static void on_download_finished(WebKitDownload* dl, gpointer) {
+  auto it = g_dl_info.find(dl);
+  if (it == g_dl_info.end()) return;
+  download_event(it->second.id, it->second.url, it->second.filename,
+                 it->second.path, "done", "");
+  g_dl_info.erase(it);
+}
+
+static void on_download_started(WebKitWebContext*, WebKitDownload* dl, gpointer) {
+  g_signal_connect(dl, "decide-destination", G_CALLBACK(on_decide_destination), nullptr);
+  g_signal_connect(dl, "received-data", G_CALLBACK(on_download_data), nullptr);
+  g_signal_connect(dl, "failed", G_CALLBACK(on_download_failed), nullptr);
+  g_signal_connect(dl, "finished", G_CALLBACK(on_download_finished), nullptr);
+}
+
+// -- find-in-page (FIND/STOPFIND, call-style like DLG) --
+// WebKitFindController does the search AND the counting (the one launcher
+// where match counts come from the engine instead of the mac/win JS
+// text-walk approximation). The active index is tracked here: 1 after a
+// fresh search (count on a fresh backwards search — the engine lands on the
+// last match), then stepped with wraparound on repeat finds.
+
+struct FindState {
+  std::string callid;   // the FIND awaiting found-text / failed-to-find
+  std::string term;
+  bool matchCase = false;
+  bool fresh = false;   // pending op is a new search(), not a step
+  bool forward = true;  // direction of the pending op
+  int matches = 0, active = 0;
+  bool wired = false;
+};
+static std::map<WebKitWebView*, FindState> g_find_state;
+
+// A navigation invalidates the term and the counts, but not `wired` — those
+// signal connections live on the view's find controller, which outlives the
+// document. Called from the commit handler.
+static void find_forget(WebKitWebView* wv) {
+  auto it = g_find_state.find(wv);
+  if (it == g_find_state.end()) return;
+  it->second.term.clear();
+  it->second.matches = 0;
+  it->second.active = 0;
+  it->second.fresh = false;
+}
+
+static void find_reply(FindState& st, bool found) {
+  if (st.callid.empty()) return;
+  std::string j = found ? "{\"found\":true,\"matches\":" + std::to_string(st.matches) +
+                              ",\"activeMatch\":" + std::to_string(st.active) + "}"
+                        : "{\"found\":false,\"matches\":0,\"activeMatch\":0}";
+  reply_to_call(st.callid, 0, j);
+  st.callid.clear();
+}
+
+static void on_found_text(WebKitFindController* fc, guint count, gpointer data) {
+  auto it = g_find_state.find((WebKitWebView*)data);
+  if (it == g_find_state.end()) return;
+  FindState& st = it->second;
+  if (st.fresh) {
+    st.matches = (int)count;
+    st.active = st.forward ? 1 : (int)count;
+    st.fresh = false;
+  } else {
+    st.active += st.forward ? 1 : -1;
+    if (st.active > st.matches) st.active = 1;
+    if (st.active < 1) st.active = st.matches;
+  }
+  find_reply(st, true);
+}
+
+static void on_failed_to_find(WebKitFindController* fc, gpointer data) {
+  auto it = g_find_state.find((WebKitWebView*)data);
+  if (it == g_find_state.end()) return;
+  FindState& st = it->second;
+  st.matches = 0;
+  st.active = 0;
+  st.term.clear();  // a later FIND with this term is a fresh search
+  find_reply(st, false);
+}
+
+static void do_find(const std::string& callid, const std::string& term,
+                    bool forward, bool matchCase) {
+  size_t c = callid.find(':');
+  std::string winid = c == std::string::npos ? "main" : callid.substr(0, c);
+  WebKitWebView* wv = wv_for(winid);
+  if (!wv || term.empty()) {
+    reply_to_call(callid, 0, "{\"found\":false,\"matches\":0,\"activeMatch\":0}");
+    return;
+  }
+  WebKitFindController* fc = webkit_web_view_get_find_controller(wv);
+  FindState& st = g_find_state[wv];
+  if (!st.wired) {
+    st.wired = true;
+    g_signal_connect(fc, "found-text", G_CALLBACK(on_found_text), wv);
+    g_signal_connect(fc, "failed-to-find-text", G_CALLBACK(on_failed_to_find), wv);
+  }
+  find_reply(st, false);  // a stale pending call resolves rather than leaks
+  st.callid = callid;
+  st.forward = forward;
+  if (term == st.term && matchCase == st.matchCase && st.matches > 0) {
+    st.fresh = false;
+    if (forward) webkit_find_controller_search_next(fc);
+    else webkit_find_controller_search_previous(fc);
+  } else {
+    st.term = term;
+    st.matchCase = matchCase;
+    st.fresh = true;
+    guint32 opts = WEBKIT_FIND_OPTIONS_WRAP_AROUND |
+                   (matchCase ? 0 : WEBKIT_FIND_OPTIONS_CASE_INSENSITIVE) |
+                   (forward ? 0 : WEBKIT_FIND_OPTIONS_BACKWARDS);
+    webkit_find_controller_search(fc, term.c_str(), opts, G_MAXUINT);
+  }
+}
+
+static void do_stopfind(const std::string& callid) {
+  size_t c = callid.find(':');
+  std::string winid = c == std::string::npos ? "main" : callid.substr(0, c);
+  WebKitWebView* wv = wv_for(winid);
+  if (wv) {
+    webkit_find_controller_search_finish(webkit_web_view_get_find_controller(wv));
+    auto it = g_find_state.find(wv);
+    if (it != g_find_state.end()) {
+      it->second.term.clear();
+      it->second.matches = 0;
+    }
+  }
+  reply_to_call(callid, 0, "true");
+}
+
+static WebKitWebView* make_webview(const std::string& winid, WebKitWebView* related) {
   WebKitUserContentManager* ucm = make_ucm(winid);
   WebKitSettings* settings = make_settings();
   enable_features(settings);
   WebKitWebsitePolicies* policies = webkit_website_policies_new_with_policies(
       "autoplay", WEBKIT_AUTOPLAY_ALLOW, NULL);
-  WebKitWebView* wv = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW,
-      "user-content-manager", ucm,
-      "settings", settings,
-      "website-policies", policies,
-      NULL));
+  // "related-view" keeps a popup in its opener's web process (window.opener /
+  // postMessage survive); it and the plain path are the same construction
+  // otherwise.
+  WebKitWebView* wv = related
+      ? WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW,
+            "related-view", related,
+            "user-content-manager", ucm,
+            "settings", settings,
+            "website-policies", policies,
+            NULL))
+      : WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW,
+            "user-content-manager", ucm,
+            "settings", settings,
+            "website-policies", policies,
+            NULL));
   g_object_unref(ucm);
   g_object_unref(settings);
   g_object_unref(policies);
   g_signal_connect(wv, "context-menu", G_CALLBACK(on_context_menu), nullptr);
   g_signal_connect(wv, "permission-request", G_CALLBACK(on_permission_request), nullptr);
+  g_signal_connect(wv, "script-dialog", G_CALLBACK(on_script_dialog), nullptr);
+  g_signal_connect(wv, "load-changed", G_CALLBACK(on_load_changed), nullptr);
+  g_signal_connect(wv, "load-failed", G_CALLBACK(on_load_failed), nullptr);
+  g_signal_connect(wv, "web-process-terminated",
+                   G_CALLBACK(on_web_process_terminated), nullptr);
+  g_signal_connect(wv, "decide-policy", G_CALLBACK(on_decide_policy), nullptr);
+  g_signal_connect(wv, "create", G_CALLBACK(on_create_webview), nullptr);
   g_signal_connect_after(wv, "drag-data-received",
                          G_CALLBACK(on_drag_data_received), nullptr);
   // Track the live left-button press so DRAGWIN can start a real move-drag
@@ -5196,6 +6119,23 @@ static void on_secwin_destroy(GtkWidget*, gpointer data) {
   if (it != g_secwins.end()) {
     pipe_write_line(std::string("WINCLOSED ") + id);
     g_last_winstate.erase(id);
+    g_find_state.erase(it->second->wv);
+    // The window's call token and its shared-manager mark go with it —
+    // a later manager could otherwise land on the same address and inherit
+    // the "ambiguous" verdict.
+    auto tok = g_win_token.find(id);
+    if (tok != g_win_token.end()) {
+      g_call_tokens.erase(tok->second);
+      g_win_token.erase(tok);
+    }
+    // Un-mark the manager we actually marked (the OPENER's), and only when the
+    // last popup riding it is gone: erasing the popup's own manager left the
+    // opener flagged for the process's life, and erasing on the first close
+    // re-opened the misattribution hole while a second popup was still alive.
+    if (it->second->shared_ucm) {
+      auto sh = g_shared_ucms.find(it->second->shared_ucm);
+      if (sh != g_shared_ucms.end() && --sh->second <= 0) g_shared_ucms.erase(sh);
+    }
     // This window's menu items go with it — their widgets are already gone,
     // and a later app-wide MENUUPD would otherwise walk into them.
     clear_registry_kind("menu", it->second->win);
@@ -5424,6 +6364,36 @@ static void handle_line(const std::string& line) {
     size_t sp = line.find(' ', 4);
     if (sp == std::string::npos) return;
     do_dialog(line.substr(4, sp - 4), line.substr(sp + 1));
+    return;
+  }
+
+  // browser affordances (TODO-site-wrapper.md)
+  if (line.rfind("NAVR ", 0) == 0) {
+    // NAVR <qid> allow|deny|external — answer to a held NAVQ policy ask.
+    size_t sp = line.find(' ', 5);
+    if (sp == std::string::npos) return;
+    std::string v = line.substr(sp + 1);
+    nav_resolve(line.substr(5, sp - 5), v == "deny" ? 1 : v == "external" ? 2 : 0);
+    return;
+  }
+  if (line.rfind("POPUPR ", 0) == 0) {
+    // POPUPR <qid> window|external|deny — answer to a POPUPQ ask.
+    size_t sp = line.find(' ', 7);
+    if (sp == std::string::npos) return;
+    popup_resolve(line.substr(7, sp - 7), line.substr(sp + 1));
+    return;
+  }
+  if (line.rfind("FIND ", 0) == 0) {
+    // FIND <id> <term>\t<forward>\t<matchCase> — call-style, RET via id.
+    size_t sp = line.find(' ', 5);
+    if (sp == std::string::npos) return;
+    auto p = split_tabs(line.substr(sp + 1));
+    do_find(line.substr(5, sp - 5), tab_field(p, 0),
+            tab_field(p, 1) != "0", tab_field(p, 2) == "1");
+    return;
+  }
+  if (line.rfind("STOPFIND ", 0) == 0) {
+    do_stopfind(line.substr(9));
     return;
   }
 
@@ -5930,6 +6900,13 @@ int main(int argc, char** argv) {
   // before any webview exists
   webkit_web_context_register_uri_scheme(webkit_web_context_get_default(),
       "tiny-media", media_scheme_cb, nullptr, nullptr);
+
+  // Browser affordances config (TODO-site-wrapper.md). Linux is spawn-mode
+  // always, so the env is the whole story — same as Windows.
+  if (const char* v = getenv("TINYJS_DOWNLOADS"); v && *v) g_downloads_mode = v;
+  if (const char* v = getenv("TINYJS_POPUPS"); v && *v) g_popup_mode = v;
+  g_signal_connect(webkit_web_context_get_default(), "download-started",
+                   G_CALLBACK(on_download_started), nullptr);
 
   // A monitor departing mid-session can strand windows in space (X11 moves
   // nothing on its own). One pass over what's VISIBLE when the topology

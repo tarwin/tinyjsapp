@@ -668,12 +668,59 @@ struct MenuUpdReq {
   std::string win, id, label, checked, enabled;  // win empty = every window
 };
 
+// Patch the STORED spec as well as the live menu. Bars are rebuilt from these
+// specs — by a later window, by MENURESET, by a chrome.menu toggle — so an
+// update that only touched the live HMENUs evaporated on any rebuild and the
+// stale checked/label state came back. Found on Linux 2026-07-28 and confirmed
+// present here 2026-08-06: a window opened AFTER menu.update('tick',
+// {checked:true, label:'Ticked!'}) reported the item as "Tick me", unchecked,
+// while the app registry correctly said "Ticked!". macOS cannot have this bug
+// (one live NSMenu, nothing rebuilds).
+static bool patch_spec_items(std::vector<MenuItemSpec> &items,
+                             const MenuUpdReq *req) {
+  bool hit = false;
+  for (auto &it : items) {
+    if (it.id == req->id) {
+      if (!req->label.empty())
+        it.label = req->label;
+      if (!req->checked.empty())
+        it.checked = req->checked == "1";
+      if (!req->enabled.empty())
+        it.disabled = req->enabled != "1";
+      hit = true;
+    }
+    if (!it.submenu.empty() && patch_spec_items(it.submenu, req))
+      hit = true;
+  }
+  return hit;
+}
+
+static void patch_spec(std::vector<MenuSpec> &menus, const MenuUpdReq *req) {
+  for (auto &m : menus)
+    patch_spec_items(m.items, req);
+}
+
 static void do_menu_update(webview_t, void *arg) {
   MenuUpdReq *req = static_cast<MenuUpdReq *>(arg);
   HWND only = req->win.empty() ? nullptr : hwnd_for_win(req->win);
   if (!req->win.empty() && !only) {
     delete req;  // named a window that has since closed
     return;
+  }
+  if (only) {
+    // One window's own declaration (or, if it inherits, nothing of its own to
+    // patch — the app spec must not move for a window-scoped update).
+    if (WinMenu *wm = menu_for(only))
+      if (wm->has_own)
+        patch_spec(wm->own, req);
+  } else {
+    // App-wide: the app spec, plus every window that copied it into an
+    // override of its own.
+    patch_spec(g_app_menu, req);
+    for (HWND h : menu_windows())
+      if (WinMenu *wm = menu_for(h))
+        if (wm->has_own)
+          patch_spec(wm->own, req);
   }
   auto range = g_id_reg.equal_range(req->id);
   for (auto i = range.first; i != range.second; ++i) {
@@ -1531,8 +1578,12 @@ static void dlg_item(std::vector<WORD> &t, DWORD style, short x, short y,
   t.push_back(0); // no creation data
 }
 
-static std::string run_prompt(const std::string &message,
-                              const std::string &defval) {
+// Raw core shared by the backend dialog op and the page's window.prompt()
+// (browser affordances): returns true on OK with the typed text in *out.
+// `owner` is the window the prompt belongs to — a page's window.prompt() in a
+// popup must be modal to THAT window, not to main (nullptr = main).
+static bool run_prompt_raw(const std::string &message, const std::string &defval,
+                           std::wstring *out, HWND owner = nullptr) {
   std::vector<WORD> t;
   DLGTEMPLATE hdr = {};
   hdr.style = DS_MODALFRAME | DS_SETFONT | WS_CAPTION | WS_SYSMENU | WS_POPUP |
@@ -1559,9 +1610,18 @@ static std::string run_prompt(const std::string &message,
   st.message = widen(message);
   st.value = widen(defval);
   DialogBoxIndirectParamW(GetModuleHandleW(nullptr),
-                          (LPCDLGTEMPLATEW)t.data(), g_hwnd, prompt_proc,
-                          (LPARAM)&st);
-  return st.ok ? json_escape(narrow(st.value)) : "null";
+                          (LPCDLGTEMPLATEW)t.data(), owner ? owner : g_hwnd,
+                          prompt_proc, (LPARAM)&st);
+  if (st.ok && out)
+    *out = st.value;
+  return st.ok;
+}
+
+static std::string run_prompt(const std::string &message,
+                              const std::string &defval) {
+  std::wstring value;
+  return run_prompt_raw(message, defval, &value) ? json_escape(narrow(value))
+                                                 : "null";
 }
 
 static std::string run_file_dialog(const std::string &op,
@@ -4483,6 +4543,13 @@ static std::string sec_shim_js(const std::string &winid, bool frameless) {
          "})();";
 }
 
+// Browser affordances for wrapped sites (defined below do_winclose): NAV
+// events + policy, downloads, JS dialogs, window.open popups, per-frame
+// origin stamping. One call wires a webview; main and every secondary get it.
+static void install_browser_affordances(ICoreWebView2 *wv,
+                                        const std::string &winid);
+static std::string origin_from_uri(const std::string &uri);
+
 struct SecMsgHandler : public ICoreWebView2WebMessageReceivedEventHandler {
   ULONG refs = 1;
   std::string winid;
@@ -4514,8 +4581,18 @@ struct SecMsgHandler : public ICoreWebView2WebMessageReceivedEventHandler {
     size_t c = body.find(':');
     if (c == std::string::npos)
       return S_OK;
+    // Second array element: the calling document's origin, from the
+    // WebView2-attested message Source (a hostile page can't spoof it).
+    // The bridge's "api" gate keys origin sub-gates on it.
+    std::string origin = "null";
+    LPWSTR src = nullptr;
+    if (SUCCEEDED(args->get_Source(&src)) && src) {
+      origin = origin_from_uri(narrow(src));
+      CoTaskMemFree(src);
+    }
     pipe_write_line("CALL " + winid + ":" + body.substr(0, c) + " [" +
-                    json_escape(body.substr(c + 1)) + "]");
+                    json_escape(body.substr(c + 1)) + "," +
+                    json_escape(origin) + "]");
     return S_OK;
   }
 };
@@ -4528,6 +4605,12 @@ struct SecCtrlHandler
   // not be what decides them.
   bool transparent = false;
   bool frameless = false;
+  // window.open popups (site wrappers): the completion hands the new webview
+  // back to WebView2 via put_NewWindow instead of navigating, and completes
+  // the held deferral — WebView2 then drives the load itself, preserving
+  // window.opener / postMessage for OAuth popups.
+  ICoreWebView2NewWindowRequestedEventArgs *popup_args = nullptr;
+  ICoreWebView2Deferral *popup_deferral = nullptr;
   ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
   ULONG STDMETHODCALLTYPE Release() override {
     if (refs > 1) return --refs;
@@ -4545,11 +4628,43 @@ struct SecCtrlHandler
     *ppv = nullptr;
     return E_NOINTERFACE;
   }
+  // A failed creation must still complete a held popup deferral, or WebView2
+  // waits on it forever (and the args leak).
+  // put_Handled(TRUE) FIRST, and that ordering is the whole point: a deferral
+  // completed with Handled still FALSE means WebView2's documented fallback
+  // fires and it opens ITS OWN browser window — so a 'deny' verdict that beat
+  // controller creation used to show the user a bare browser window. Invisible
+  // to any page-side assertion; count top-level windows to see it.
+  void abandon_popup() {
+    if (popup_args)
+      popup_args->put_Handled(TRUE);
+    if (popup_deferral) {
+      popup_deferral->Complete();
+      popup_deferral->Release();
+      popup_deferral = nullptr;
+    }
+    if (popup_args) {
+      popup_args->Release();
+      popup_args = nullptr;
+    }
+  }
+  // Safety net: if WebView2 drops its reference without ever invoking us (a
+  // creation that neither succeeds nor fails), window.open() would otherwise
+  // hang on the deferral forever.
+  ~SecCtrlHandler() { abandon_popup(); }
   HRESULT STDMETHODCALLTYPE Invoke(HRESULT hr,
                                    ICoreWebView2Controller *ctrl) override {
     TinyWin *tw = win_for_id(winid);
-    if (!tw || FAILED(hr) || !ctrl)
+    if (!tw || FAILED(hr) || !ctrl) {
+      // The window went away under us — a 'deny' verdict that closed the
+      // hidden popup before creation finished takes exactly this path. Close
+      // the controller too: it and its renderer process are otherwise orphaned
+      // on a destroyed HWND for the life of the app.
+      if (ctrl)
+        ctrl->Close();
+      abandon_popup();
       return S_OK;
+    }
     ctrl->AddRef();
     tw->ctrl = ctrl;
     ctrl->get_CoreWebView2(&tw->wv);
@@ -4579,11 +4694,15 @@ struct SecCtrlHandler
           nullptr);
       tw->wv->AddScriptToExecuteOnDocumentCreated(widen(TINY_CLIENT_JS).c_str(),
                                                   nullptr);
-      char inj[8192];
-      DWORD n = GetEnvironmentVariableA("TINYJS_INJECT", inj, sizeof(inj));
-      if (n > 0 && n < sizeof(inj))
-        tw->wv->AddScriptToExecuteOnDocumentCreated(widen(inj).c_str(),
-                                                    nullptr);
+      DWORD need = GetEnvironmentVariableA("TINYJS_INJECT", nullptr, 0);
+      if (need > 0) {
+        std::vector<char> inj(need + 1);
+        DWORD n = GetEnvironmentVariableA("TINYJS_INJECT", inj.data(),
+                                          (DWORD)inj.size());
+        if (n > 0 && n < inj.size())
+          tw->wv->AddScriptToExecuteOnDocumentCreated(widen(inj.data()).c_str(),
+                                                      nullptr);
+      }
       SecMsgHandler *mh = new SecMsgHandler();
       mh->winid = winid;
       EventRegistrationToken tok;
@@ -4614,6 +4733,9 @@ struct SecCtrlHandler
       ctrl->add_AcceleratorKeyPressed(ah, &atok);
       ah->Release();
       apply_webview_policy(tw->wv);
+      // Browser affordances (dialogs, downloads, nav policy, popups) must be
+      // registered BEFORE the first navigation or they miss it.
+      install_browser_affordances(tw->wv, winid);
       // Hand the keyboard to the page. The host HWND has focus, but WebView2's
       // child does not until something moves it there — so a brand-new window
       // answered document.hasFocus() with FALSE until the user clicked inside
@@ -4621,13 +4743,28 @@ struct SecCtrlHandler
       // action for "someone else's window") silently did nothing. macOS makes
       // the webview first responder on its own; here it has to be asked.
       ctrl->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
-      tw->wv->Navigate(widen(tw->url).c_str());
+      if (popup_args) {
+        // window.open popup: hand WebView2 the webview and let IT navigate —
+        // an explicit Navigate here would sever window.opener.
+        popup_args->put_NewWindow(tw->wv);
+        popup_args->put_Handled(TRUE);
+        if (popup_deferral) {
+          popup_deferral->Complete();
+          popup_deferral->Release();
+          popup_deferral = nullptr;
+        }
+        popup_args->Release();
+        popup_args = nullptr;
+      } else {
+        tw->wv->Navigate(widen(tw->url).c_str());
+      }
       for (auto &js : tw->pending_js)
         tw->wv->ExecuteScript(widen(js).c_str(), nullptr);
       tw->pending_js.clear();
       if (g_debug_open)
         tw->wv->OpenDevToolsWindow();
     }
+    abandon_popup(); // no-op when the popup path consumed them above
     return S_OK;
   }
 };
@@ -4736,6 +4873,21 @@ struct WinOpenReq {
   std::string parent; // '' | 'main' | a win id: owner window (stays above it)
 };
 
+static void ensure_secwin_class() {
+  static bool registered = false;
+  if (registered)
+    return;
+  WNDCLASSW wc = {};
+  wc.lpfnWndProc = secwin_proc;
+  wc.hInstance = GetModuleHandleW(nullptr);
+  wc.lpszClassName = L"TinyjsSecondary";
+  wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+  wc.hbrBackground = nullptr; // no erase — a brush paints white behind
+                              // transparent webviews
+  RegisterClassW(&wc);
+  registered = true;
+}
+
 static void do_winopen(webview_t, void *arg) {
   WinOpenReq *wr = static_cast<WinOpenReq *>(arg);
   if (TinyWin *ex = win_for_id(wr->id)) {
@@ -4744,18 +4896,7 @@ static void do_winopen(webview_t, void *arg) {
     delete wr;
     return;
   }
-  static bool registered = false;
-  if (!registered) {
-    WNDCLASSW wc = {};
-    wc.lpfnWndProc = secwin_proc;
-    wc.hInstance = GetModuleHandleW(nullptr);
-    wc.lpszClassName = L"TinyjsSecondary";
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr; // no erase — a brush paints white behind
-                                // transparent webviews
-    RegisterClassW(&wc);
-    registered = true;
-  }
+  ensure_secwin_class();
   bool frameless = wr->frame == "0" || wr->square == "1";
   DWORD style = frameless ? (WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX |
                              WS_MAXIMIZEBOX | WS_SYSMENU)
@@ -4874,6 +5015,1116 @@ static void do_winclose(webview_t, void *arg) {
   if (h && h != g_hwnd)
     PostMessageW(h, WM_CLOSE, 0, 0);
   delete id;
+}
+
+// ---------------------------------------------------------------------------
+// browser affordances for wrapped sites — the WebView2 twin of the
+// launcher-macos.cc section of the same name (which carries the canonical
+// wire doc). Summary:
+//   emit:  NAV {"window","kind","url","error"?}   start|commit|finish|fail|crash
+//          NAVQ <qid> <winid>\t<url>              main-frame http(s) policy ask
+//          DOWNLOAD {"id","url","filename","path","state","bytes"?,"total"?,"error"?}
+//          POPUPQ <qid> <pid|->\t<opener>\t<url>\t<mode>
+//          POPUP {"window","url","action"}
+//   recv:  NAVR <qid> allow|deny|external
+//          POPUPR <qid> window|external|deny
+//          FIND <id> <term>\t<forward>\t<matchCase>   (call-style, no RET line:
+//          STOPFIND <id>                               answered via route_ret)
+// Everything here runs on the UI thread: WebView2 events, WM_TIMER timeouts,
+// and the webview_dispatch'd do_* handlers — no locking needed.
+//
+// One Windows-only divergence worth knowing: NavigationStarting has no
+// deferral, so a policy ask CANCELS the navigation and re-Navigates on
+// 'allow' (marked allow-once so it isn't re-asked). That turns an asked POST
+// into a GET — macOS holds the original action and doesn't have this hole.
+
+static std::string g_downloads_mode; // "" = auto | ask | deny (TINYJS_DOWNLOADS)
+static std::string g_popup_mode;     // "" = external | window | deny (TINYJS_POPUPS)
+
+// -- origin stamping ---------------------------------------------------------
+// Reduce a document URI to its origin the way the macOS launcher builds it
+// from WKSecurityOrigin: scheme://host[:port], default ports elided,
+// bare "file://" for local pages, the literal string "null" when unknown.
+static std::string origin_from_uri(const std::string &uri) {
+  size_t p = uri.find("://");
+  if (p == std::string::npos)
+    return "null";
+  std::string scheme = uri.substr(0, p);
+  for (auto &c : scheme)
+    c = (char)tolower((unsigned char)c);
+  if (scheme == "file")
+    return "file://";
+  size_t hs = p + 3;
+  size_t he = uri.find_first_of("/?#", hs);
+  std::string hostport =
+      he == std::string::npos ? uri.substr(hs) : uri.substr(hs, he - hs);
+  if (hostport.empty())
+    return scheme + "://";
+  size_t cp = hostport.rfind(':');
+  if (cp != std::string::npos && hostport.find(']', cp) == std::string::npos) {
+    std::string port = hostport.substr(cp + 1);
+    if (port == "0" || (scheme == "http" && port == "80") ||
+        (scheme == "https" && port == "443"))
+      hostport.erase(cp);
+  }
+  return scheme + "://" + hostport;
+}
+
+// -- NAV events --------------------------------------------------------------
+// Only URLs a page could name get on the wire (internal schemes stay off it).
+static bool nav_url_visible(const std::string &u) {
+  return u.empty() || u == "about:blank" || u.rfind("http://", 0) == 0 ||
+         u.rfind("https://", 0) == 0 || u.rfind("file://", 0) == 0;
+}
+
+static void nav_event(const std::string &win, const char *kind,
+                      const std::string &url, const std::string &err = "") {
+  if (!nav_url_visible(url))
+    return;
+  std::string j = "{\"window\":" + json_escape(win) + ",\"kind\":\"" + kind +
+                  "\",\"url\":" + json_escape(url);
+  if (!err.empty())
+    j += ",\"error\":" + json_escape(err);
+  pipe_write_line("NAV " + j + "}");
+}
+
+// The FAILING url for fail events — wv->get_Source() is the page still being
+// looked at, so track what each window last STARTED loading instead (same
+// distinction NSURLErrorFailingURLStringErrorKey carries on macOS).
+static std::map<std::string, std::string> g_nav_last_url;
+
+static std::string web_error_name(int st) {
+  switch (st) {
+  case COREWEBVIEW2_WEB_ERROR_STATUS_HOST_NAME_NOT_RESOLVED:
+    return "host name not resolved";
+  case COREWEBVIEW2_WEB_ERROR_STATUS_CANNOT_CONNECT:
+    return "cannot connect";
+  case COREWEBVIEW2_WEB_ERROR_STATUS_DISCONNECTED:
+    return "internet disconnected";
+  case COREWEBVIEW2_WEB_ERROR_STATUS_TIMEOUT:
+    return "timeout";
+  case COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED:
+    return "connection aborted";
+  case COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_RESET:
+    return "connection reset";
+  case COREWEBVIEW2_WEB_ERROR_STATUS_ERROR_HTTP_INVALID_SERVER_RESPONSE:
+    return "invalid server response";
+  default:
+    if (st >= COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_COMMON_NAME_IS_INCORRECT &&
+        st <= COREWEBVIEW2_WEB_ERROR_STATUS_CERTIFICATE_IS_INVALID)
+      return "certificate error";
+    return "web error " + std::to_string(st);
+  }
+}
+
+// -- NAV policy (NAVQ/NAVR) --------------------------------------------------
+static long g_nav_seq = 0;
+struct NavPending {
+  std::string win, url;
+  UINT_PTR timer = 0;
+  bool reload = false; // re-issue with Reload(), not Navigate()
+};
+static std::map<std::string, NavPending> g_nav_pending; // qid -> ask
+static std::map<UINT_PTR, std::string> g_nav_timer_qid; // timer -> qid
+// win -> the navigation we cancelled for a policy ask and then re-issued, so
+// its second NavigationStarting passes without asking again. Stamped, because
+// an entry that is never matched used to sit here for the life of the process
+// and a LATER navigation to the same url then skipped the ask entirely — a
+// security marker failing OPEN. Cleared three ways now: matched, expired, or
+// superseded by any other navigation in that window.
+struct NavAllowOnce {
+  std::string url;
+  ULONGLONG at = 0;
+};
+static std::map<std::string, NavAllowOnce> g_nav_allow_once;
+static const ULONGLONG kNavAllowOnceMs = 10000;
+
+static void nav_apply_verdict(const std::string &qid, int verdict) {
+  auto it = g_nav_pending.find(qid);
+  if (it == g_nav_pending.end())
+    return; // first resolver won (reply vs timeout, either order)
+  NavPending p = it->second;
+  g_nav_pending.erase(it);
+  if (p.timer) {
+    KillTimer(nullptr, p.timer);
+    g_nav_timer_qid.erase(p.timer);
+  }
+  if (verdict == 1) // deny — the cancel already happened
+    return;
+  if (verdict == 2) { // external — hand it to the browser
+    ShellExecuteW(nullptr, L"open", widen(p.url).c_str(), nullptr, nullptr,
+                  SW_SHOWNORMAL);
+    return;
+  }
+  // allow: re-issue the navigation we cancelled, marked so the second
+  // NavigationStarting passes without another ask. A reload has to go back
+  // through Reload() — Navigate()ing the same url instead would drop the
+  // page's history entry and turn app.reload() into a fresh load.
+  ICoreWebView2 *wv = wv2_for_id(p.win);
+  if (!wv)
+    return;
+  g_nav_allow_once[p.win] = {p.url, GetTickCount64()};
+  if (p.reload)
+    wv->Reload();
+  else
+    wv->Navigate(widen(p.url).c_str());
+}
+
+static void CALLBACK nav_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
+  auto it = g_nav_timer_qid.find(id);
+  KillTimer(nullptr, id);
+  if (it == g_nav_timer_qid.end())
+    return;
+  std::string qid = it->second;
+  g_nav_timer_qid.erase(it);
+  // unanswered after 400ms = allow, so a wrapper can't deadlock its own load
+  nav_apply_verdict(qid, 0);
+}
+
+struct NavrReq {
+  std::string qid, verdict;
+};
+static void do_navr(webview_t, void *arg) {
+  NavrReq *r = static_cast<NavrReq *>(arg);
+  int v = r->verdict == "deny" ? 1 : r->verdict == "external" ? 2 : 0;
+  nav_apply_verdict(r->qid, v);
+  delete r;
+}
+
+#define TINY_COM_BOILERPLATE(IFACE)                                            \
+  ULONG refs = 1;                                                              \
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }                 \
+  ULONG STDMETHODCALLTYPE Release() override {                                 \
+    if (refs > 1)                                                              \
+      return --refs;                                                           \
+    delete this;                                                               \
+    return 0;                                                                  \
+  }                                                                            \
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override { \
+    if (!ppv)                                                                  \
+      return E_POINTER;                                                        \
+    if (riid == IID_IUnknown || riid == IID_##IFACE) {                         \
+      *ppv = this;                                                             \
+      AddRef();                                                                \
+      return S_OK;                                                             \
+    }                                                                          \
+    *ppv = nullptr;                                                            \
+    return E_NOINTERFACE;                                                      \
+  }
+
+struct NavStartHandler : public ICoreWebView2NavigationStartingEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2NavigationStartingEventHandler)
+  std::string winid;
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *,
+         ICoreWebView2NavigationStartingEventArgs *args) override {
+    LPWSTR u = nullptr;
+    if (FAILED(args->get_Uri(&u)) || !u)
+      return S_OK;
+    std::string url = narrow(u);
+    CoTaskMemFree(u);
+    // Consume the allow-once marker — and drop it on ANY other navigation in
+    // this window, or on age. A redirect or a failure means the url we marked
+    // may never arrive, and a marker left behind waves a later navigation to
+    // that same url straight past the policy ask.
+    auto ao = g_nav_allow_once.find(winid);
+    if (ao != g_nav_allow_once.end()) {
+      bool fresh = GetTickCount64() - ao->second.at <= kNavAllowOnceMs;
+      bool mine = ao->second.url == url;
+      g_nav_allow_once.erase(ao);
+      if (mine && fresh) {
+        g_nav_last_url[winid] = url;
+        nav_event(winid, "start", url);
+        return S_OK;
+      }
+    }
+    bool http = url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+    // What kind of navigation this is decides whether it can survive the ask
+    // at all: the ask is implemented as cancel + re-issue (NavigationStarting
+    // carries no deferral), and a cancelled back/forward cannot be re-issued —
+    // Navigate()ing its url pushes a NEW history entry, so Back grows the
+    // stack and Forward dies. History moves therefore skip the ask rather than
+    // quietly corrupting the stack. A reload is askable, because Reload() can
+    // re-issue it faithfully.
+    COREWEBVIEW2_NAVIGATION_KIND kind = COREWEBVIEW2_NAVIGATION_KIND_NEW_DOCUMENT;
+    {
+      ICoreWebView2NavigationStartingEventArgs3 *a3 = nullptr;
+      if (SUCCEEDED(args->QueryInterface(
+              IID_ICoreWebView2NavigationStartingEventArgs3, (void **)&a3)) &&
+          a3) {
+        a3->get_NavigationKind(&kind);
+        a3->Release();
+      }
+    }
+    if (!http || kind == COREWEBVIEW2_NAVIGATION_KIND_BACK_OR_FORWARD) {
+      g_nav_last_url[winid] = url;
+      nav_event(winid, "start", url);
+      return S_OK;
+    }
+    // Policy ask. No deferral on this event, so cancel now and re-navigate on
+    // 'allow'; the cancelled attempt emits no start (the re-issue does), and
+    // its OPERATION_CANCELED completion is suppressed as noise below.
+    args->put_Cancel(TRUE);
+    std::string qid = "n" + std::to_string(++g_nav_seq);
+    UINT_PTR t = SetTimer(nullptr, 0, 400, nav_timer_proc);
+    g_nav_pending[qid] = {winid, url, t,
+                          kind == COREWEBVIEW2_NAVIGATION_KIND_RELOAD};
+    g_nav_timer_qid[t] = qid;
+    pipe_write_line("NAVQ " + qid + " " + winid + "\t" + url);
+    return S_OK;
+  }
+};
+
+struct ContentLoadingHandler : public ICoreWebView2ContentLoadingEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2ContentLoadingEventHandler)
+  std::string winid;
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *sender, ICoreWebView2ContentLoadingEventArgs *) override {
+    LPWSTR s = nullptr;
+    std::string url;
+    if (SUCCEEDED(sender->get_Source(&s)) && s) {
+      url = narrow(s);
+      CoTaskMemFree(s);
+    }
+    nav_event(winid, "commit", url);
+    return S_OK;
+  }
+};
+
+struct NavDoneHandler : public ICoreWebView2NavigationCompletedEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2NavigationCompletedEventHandler)
+  std::string winid;
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *sender,
+         ICoreWebView2NavigationCompletedEventArgs *args) override {
+    BOOL ok = FALSE;
+    args->get_IsSuccess(&ok);
+    if (ok) {
+      LPWSTR s = nullptr;
+      std::string url;
+      if (SUCCEEDED(sender->get_Source(&s)) && s) {
+        url = narrow(s);
+        CoTaskMemFree(s);
+      }
+      nav_event(winid, "finish", url);
+      return S_OK;
+    }
+    COREWEBVIEW2_WEB_ERROR_STATUS st = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+    args->get_WebErrorStatus(&st);
+    // Noise, not failures: our own policy cancels and rapid re-navigation
+    // report OPERATION_CANCELED; a navigation that became a download reports
+    // CONNECTION_ABORTED (Chromium's ERR_ABORTED — measured against a live
+    // 300MB download, where the fail arrived BEFORE DownloadStarting, so it
+    // can't be suppressed by looking the download up). Painting an offline
+    // screen for either would be exactly wrong. Genuine network failures
+    // come in as CANNOT_CONNECT / CONNECTION_RESET / TIMEOUT / name errors.
+    // Same shape as macOS suppressing NSURLErrorCancelled + WebKitError 102.
+    if (st == COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED ||
+        st == COREWEBVIEW2_WEB_ERROR_STATUS_CONNECTION_ABORTED)
+      return S_OK;
+    auto lu = g_nav_last_url.find(winid);
+    nav_event(winid, "fail", lu == g_nav_last_url.end() ? "" : lu->second,
+              web_error_name((int)st));
+    return S_OK;
+  }
+};
+
+struct ProcFailHandler : public ICoreWebView2ProcessFailedEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2ProcessFailedEventHandler)
+  std::string winid;
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *sender, ICoreWebView2ProcessFailedEventArgs *) override {
+    LPWSTR s = nullptr;
+    std::string url;
+    if (SUCCEEDED(sender->get_Source(&s)) && s) {
+      url = narrow(s);
+      CoTaskMemFree(s);
+    }
+    nav_event(winid, "crash", url);
+    return S_OK;
+  }
+};
+
+// popup windows adopt the page's own title once it has one (macOS twin:
+// didFinishNavigation's popup branch)
+struct PopupTitleHandler
+    : public ICoreWebView2DocumentTitleChangedEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2DocumentTitleChangedEventHandler)
+  std::string winid;
+  HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *sender, IUnknown *) override {
+    LPWSTR t = nullptr;
+    if (SUCCEEDED(sender->get_DocumentTitle(&t)) && t) {
+      HWND h = hwnd_for_win(winid);
+      if (h && wcslen(t))
+        SetWindowTextW(h, t);
+      CoTaskMemFree(t);
+    }
+    return S_OK;
+  }
+};
+
+// -- JS dialogs (alert/confirm/prompt) ---------------------------------------
+// Answered natively and synchronously inside the handler, like the backend's
+// DLG dialogs — no wire exchange. Headline = the page origin's host, falling
+// back to the app name (a third-party page shouldn't speak AS the app).
+static std::string js_dialog_title(const std::string &uri) {
+  std::string o = origin_from_uri(uri);
+  size_t p = o.find("://");
+  std::string host = p == std::string::npos ? "" : o.substr(p + 3);
+  return host.empty() ? g_app_name : host;
+}
+
+struct JsDialogHandler : public ICoreWebView2ScriptDialogOpeningEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2ScriptDialogOpeningEventHandler)
+  std::string winid;
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *,
+         ICoreWebView2ScriptDialogOpeningEventArgs *args) override {
+    COREWEBVIEW2_SCRIPT_DIALOG_KIND kind =
+        COREWEBVIEW2_SCRIPT_DIALOG_KIND_ALERT;
+    args->get_Kind(&kind);
+    LPWSTR w = nullptr;
+    std::string msg, uri;
+    if (SUCCEEDED(args->get_Message(&w)) && w) {
+      msg = narrow(w);
+      CoTaskMemFree(w);
+      w = nullptr;
+    }
+    if (SUCCEEDED(args->get_Uri(&w)) && w) {
+      uri = narrow(w);
+      CoTaskMemFree(w);
+      w = nullptr;
+    }
+    HWND owner = hwnd_for_win(winid);
+    if (!owner)
+      owner = g_hwnd;
+    std::wstring title = widen(js_dialog_title(uri));
+    if (kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_ALERT) {
+      MessageBoxW(owner, widen(msg).c_str(), title.c_str(), MB_OK);
+      args->Accept();
+    } else if (kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_CONFIRM) {
+      if (MessageBoxW(owner, widen(msg).c_str(), title.c_str(), MB_OKCANCEL) ==
+          IDOK)
+        args->Accept();
+    } else if (kind == COREWEBVIEW2_SCRIPT_DIALOG_KIND_PROMPT) {
+      std::string defval;
+      if (SUCCEEDED(args->get_DefaultText(&w)) && w) {
+        defval = narrow(w);
+        CoTaskMemFree(w);
+      }
+      std::wstring typed;
+      if (run_prompt_raw(msg, defval, &typed, owner)) {
+        args->put_ResultText(typed.c_str());
+        args->Accept();
+      }
+    } else {
+      // beforeunload. Auto-accepting it (what this used to do) means a wrapped
+      // app with unsaved work navigates away silently — macOS routes it
+      // through the confirm panel, so this does too. Chromium supplies no
+      // page text for these any more, so the message is ours; not accepting
+      // is what keeps the user on the page.
+      std::string body =
+          msg.empty() ? "Changes you made may not be saved." : msg;
+      if (MessageBoxW(owner, widen(body).c_str(), L"Leave this page?",
+                      MB_OKCANCEL | MB_ICONWARNING) == IDOK)
+        args->Accept();
+    }
+    return S_OK;
+  }
+};
+
+// -- downloads ---------------------------------------------------------------
+static long g_download_seq = 0;
+
+static void download_event(long id, const std::string &url,
+                           const std::string &fname, const std::string &path,
+                           const char *state, const std::string &err = "",
+                           long long bytes = -1, long long total = -1) {
+  std::string j = "{\"id\":" + std::to_string(id) +
+                  ",\"url\":" + json_escape(url) +
+                  ",\"filename\":" + json_escape(fname) + ",\"path\":" +
+                  (path.empty() ? "null" : json_escape(path)) +
+                  ",\"state\":\"" + state + "\"";
+  if (bytes >= 0)
+    j += ",\"bytes\":" + std::to_string(bytes) +
+         ",\"total\":" + std::to_string(total > 0 ? total : -1);
+  if (!err.empty())
+    j += ",\"error\":" + json_escape(err);
+  pipe_write_line("DOWNLOAD " + j + "}");
+}
+
+static std::string downloads_dir() {
+  // FOLDERID_Downloads, spelled out so MinGW needs no uuid lib for it
+  static const GUID kDownloads = {0x374DE290, 0x123F, 0x4565,
+                                  {0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46,
+                                   0x7B}};
+  PWSTR p = nullptr;
+  std::string out;
+  if (SUCCEEDED(SHGetKnownFolderPath(kDownloads, 0, nullptr, &p)) && p) {
+    out = narrow(p);
+    CoTaskMemFree(p);
+  }
+  if (out.empty()) {
+    wchar_t up[MAX_PATH];
+    DWORD n = GetEnvironmentVariableW(L"USERPROFILE", up, MAX_PATH);
+    if (n > 0 && n < MAX_PATH)
+      out = narrow(up) + "\\Downloads";
+  }
+  return out;
+}
+
+// "name.ext" -> "name (2).ext" … up to 999, macOS-style, so a repeat download
+// never silently overwrites.
+static std::string dedup_download_path(const std::string &dir,
+                                       const std::string &fname) {
+  size_t dot = fname.rfind('.');
+  std::string base = dot == std::string::npos ? fname : fname.substr(0, dot);
+  std::string ext = dot == std::string::npos ? "" : fname.substr(dot);
+  for (int n = 1; n <= 999; n++) {
+    std::string cand = n == 1 ? dir + "\\" + fname
+                              : dir + "\\" + base + " (" + std::to_string(n) +
+                                    ")" + ext;
+    if (GetFileAttributesW(widen(cand).c_str()) == INVALID_FILE_ATTRIBUTES)
+      return cand;
+  }
+  return dir + "\\" + fname;
+}
+
+// download "ask" mode: a save panel seeded with the suggested name in the
+// Downloads folder, like the macOS NSSavePanel arm.
+static std::string download_save_panel(const std::string &suggested) {
+  std::string out;
+  IFileSaveDialog *dlg = nullptr;
+  if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr,
+                              CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))) ||
+      !dlg)
+    return out;
+  dlg->SetFileName(widen(suggested).c_str());
+  IShellItem *folder = nullptr;
+  if (SUCCEEDED(SHCreateItemFromParsingName(widen(downloads_dir()).c_str(),
+                                            nullptr, IID_PPV_ARGS(&folder))) &&
+      folder) {
+    dlg->SetFolder(folder);
+    folder->Release();
+  }
+  if (SUCCEEDED(dlg->Show(g_hwnd))) {
+    IShellItem *item = nullptr;
+    if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+      PWSTR path = nullptr;
+      if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+        out = narrow(path);
+        CoTaskMemFree(path);
+      }
+      item->Release();
+    }
+  }
+  dlg->Release();
+  return out;
+}
+
+// Progress + terminal state for one download, throttled like the macOS KVO
+// observer (one progress event per 250ms).
+struct DlWatch : public ICoreWebView2BytesReceivedChangedEventHandler {
+  ULONG refs = 1;
+  long id = 0;
+  std::string url, fname, path;
+  ULONGLONG last_emit = 0;
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    if (refs > 1)
+      return --refs;
+    delete this;
+    return 0;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv)
+      return E_POINTER;
+    if (riid == IID_IUnknown ||
+        riid == IID_ICoreWebView2BytesReceivedChangedEventHandler) {
+      *ppv = this;
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2DownloadOperation *op,
+                                   IUnknown *) override {
+    ULONGLONG now = GetTickCount64();
+    if (now - last_emit < 250)
+      return S_OK;
+    last_emit = now;
+    INT64 br = 0, tot = 0;
+    op->get_BytesReceived(&br);
+    op->get_TotalBytesToReceive(&tot);
+    download_event(id, url, fname, path, "progress", "", (long long)br,
+                   (long long)tot);
+    return S_OK;
+  }
+};
+
+struct DlStateWatch : public ICoreWebView2StateChangedEventHandler {
+  ULONG refs = 1;
+  long id = 0;
+  std::string url, fname, path;
+  ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
+  ULONG STDMETHODCALLTYPE Release() override {
+    if (refs > 1)
+      return --refs;
+    delete this;
+    return 0;
+  }
+  HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) override {
+    if (!ppv)
+      return E_POINTER;
+    if (riid == IID_IUnknown ||
+        riid == IID_ICoreWebView2StateChangedEventHandler) {
+      *ppv = this;
+      AddRef();
+      return S_OK;
+    }
+    *ppv = nullptr;
+    return E_NOINTERFACE;
+  }
+  HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2DownloadOperation *op,
+                                   IUnknown *) override {
+    COREWEBVIEW2_DOWNLOAD_STATE st = COREWEBVIEW2_DOWNLOAD_STATE_IN_PROGRESS;
+    op->get_State(&st);
+    if (st == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED) {
+      download_event(id, url, fname, path, "done");
+    } else if (st == COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED) {
+      COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON r =
+          COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_NONE;
+      op->get_InterruptReason(&r);
+      if (r == COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON_USER_CANCELED)
+        download_event(id, url, fname, "", "cancelled");
+      else
+        download_event(id, url, fname, path, "failed",
+                       "download interrupted (" + std::to_string((int)r) + ")");
+    }
+    return S_OK;
+  }
+};
+
+// Point a download at its final destination and start watching it. An empty
+// path means the ask-mode panel was cancelled.
+static void download_finish(ICoreWebView2DownloadStartingEventArgs *args,
+                            ICoreWebView2DownloadOperation *op, long id,
+                            const std::string &url,
+                            const std::string &suggested,
+                            const std::string &path) {
+  if (path.empty()) {
+    args->put_Cancel(TRUE);
+    download_event(id, url, suggested, "", "cancelled");
+    return;
+  }
+  args->put_ResultFilePath(widen(path).c_str());
+  // Report the name of the file that will actually EXIST. The suggestion is
+  // not it: ` (2)` dedup renames it, and an ask-mode panel can rename it
+  // outright — so "Downloaded <name>" used to name a file nobody could find.
+  // macOS reassigns in both arms; this is the twin.
+  size_t sl = path.find_last_of("\\/");
+  std::string fname = sl == std::string::npos ? path : path.substr(sl + 1);
+  download_event(id, url, fname, path, "started");
+  if (!op)
+    return;
+  EventRegistrationToken tok;
+  DlWatch *pw = new DlWatch();
+  pw->id = id;
+  pw->url = url;
+  pw->fname = fname;
+  pw->path = path;
+  op->add_BytesReceivedChanged(pw, &tok);
+  pw->Release();
+  DlStateWatch *sw = new DlStateWatch();
+  sw->id = id;
+  sw->url = url;
+  sw->fname = fname;
+  sw->path = path;
+  op->add_StateChanged(sw, &tok);
+  sw->Release();
+}
+
+// ask mode, deferred: IFileSaveDialog::Show spins a NESTED MODAL LOOP, and
+// running one inside a WebView2 event callback re-enters the engine and lets
+// our own 400ms nav/popup timers fire mid-callback. Take the deferral, hop out
+// of the handler, then show the panel.
+struct DownloadAskReq {
+  long id = 0;
+  std::string url, fname;
+  ICoreWebView2DownloadStartingEventArgs *args = nullptr;
+  ICoreWebView2DownloadOperation *op = nullptr;
+  ICoreWebView2Deferral *def = nullptr;
+};
+
+static void do_download_ask(webview_t, void *arg) {
+  DownloadAskReq *r = static_cast<DownloadAskReq *>(arg);
+  download_finish(r->args, r->op, r->id, r->url, r->fname,
+                  download_save_panel(r->fname));
+  r->def->Complete();
+  r->def->Release();
+  r->args->Release();
+  if (r->op)
+    r->op->Release();
+  delete r;
+}
+
+struct DownloadStartHandler
+    : public ICoreWebView2DownloadStartingEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2DownloadStartingEventHandler)
+  std::string winid;
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *,
+         ICoreWebView2DownloadStartingEventArgs *args) override {
+    long id = ++g_download_seq;
+    ICoreWebView2DownloadOperation *op = nullptr;
+    args->get_DownloadOperation(&op);
+    std::string url, fname, defpath;
+    LPWSTR w = nullptr;
+    if (op && SUCCEEDED(op->get_Uri(&w)) && w) {
+      url = narrow(w);
+      CoTaskMemFree(w);
+      w = nullptr;
+    }
+    // The suggested filename is the leaf of WebView2's own default result
+    // path — the engine already derived an extension from the MIME type.
+    if (SUCCEEDED(args->get_ResultFilePath(&w)) && w) {
+      defpath = narrow(w);
+      CoTaskMemFree(w);
+      w = nullptr;
+      size_t sl = defpath.find_last_of("\\/");
+      fname = sl == std::string::npos ? defpath : defpath.substr(sl + 1);
+    }
+    if (fname.empty())
+      fname = "download";
+    std::string mode = g_downloads_mode.empty() ? "auto" : g_downloads_mode;
+    args->put_Handled(TRUE); // our events replace the default download UI
+    if (mode == "deny") {
+      args->put_Cancel(TRUE);
+      download_event(id, url, fname, "", "denied");
+    } else if (mode == "ask") {
+      ICoreWebView2Deferral *def = nullptr;
+      if (SUCCEEDED(args->GetDeferral(&def)) && def) {
+        DownloadAskReq *r = new DownloadAskReq();
+        r->id = id;
+        r->url = url;
+        r->fname = fname;
+        r->args = args;
+        r->op = op;
+        r->def = def;
+        args->AddRef(); // both released by do_download_ask
+        webview_dispatch(g_w, do_download_ask, r);
+        return S_OK;    // op ownership moved with the request
+      }
+      // No deferral (shouldn't happen): the old in-callback panel, which
+      // works — it just re-enters the engine while it is up.
+      download_finish(args, op, id, url, fname, download_save_panel(fname));
+    } else {
+      // No known Downloads folder (and no USERPROFILE either) is the one case
+      // where we keep the engine's own destination rather than cancelling.
+      std::string dir = downloads_dir();
+      download_finish(args, op, id, url, fname,
+                      dir.empty() ? defpath : dedup_download_path(dir, fname));
+    }
+    if (op)
+      op->Release();
+    return S_OK;
+  }
+};
+
+// -- window.open / target=_blank (POPUPQ/POPUPR/POPUP) -----------------------
+static long g_popup_seq = 0, g_popup_qseq = 0;
+struct PopupPending {
+  std::string pid, url, mode;
+  UINT_PTR timer = 0;
+};
+static std::map<std::string, PopupPending> g_popup_pending;
+static std::map<UINT_PTR, std::string> g_popup_timer_qid;
+
+static void popup_event(const std::string &pid, const std::string &url,
+                        const std::string &action) {
+  pipe_write_line("POPUP {\"window\":" +
+                  (pid.empty() ? std::string("null") : json_escape(pid)) +
+                  ",\"url\":" + json_escape(url) + ",\"action\":\"" + action +
+                  "\"}");
+}
+
+static void popup_apply_verdict(const std::string &qid,
+                                const std::string &verdict) {
+  auto it = g_popup_pending.find(qid);
+  if (it == g_popup_pending.end())
+    return; // first resolver won
+  PopupPending p = it->second;
+  g_popup_pending.erase(it);
+  if (p.timer) {
+    KillTimer(nullptr, p.timer);
+    g_popup_timer_qid.erase(p.timer);
+  }
+  bool http = p.url.rfind("http://", 0) == 0 || p.url.rfind("https://", 0) == 0;
+  if (p.pid != "-") {
+    // window mode: the popup exists, hidden and loading; the verdict shows it
+    // or closes it unseen ('window' unless the hook said otherwise).
+    std::string v =
+        (verdict == "external" || verdict == "deny") ? verdict : "window";
+    HWND h = hwnd_for_win(p.pid);
+    if (v == "window") {
+      if (h) {
+        ShowWindow(h, SW_SHOW);
+        SetForegroundWindow(h);
+      }
+    } else {
+      if (v == "external" && http)
+        ShellExecuteW(nullptr, L"open", widen(p.url).c_str(), nullptr, nullptr,
+                      SW_SHOWNORMAL);
+      if (h)
+        PostMessageW(h, WM_CLOSE, 0, 0); // fires WINCLOSED via WM_DESTROY
+    }
+    popup_event(p.pid, p.url, v);
+  } else {
+    // no window was built: only external/deny can be honored, like macOS
+    std::string v =
+        (verdict == "external" || verdict == "deny") ? verdict : p.mode;
+    if (v != "external" && v != "deny")
+      v = "external";
+    if (v == "external" && http)
+      ShellExecuteW(nullptr, L"open", widen(p.url).c_str(), nullptr, nullptr,
+                    SW_SHOWNORMAL);
+    popup_event("", p.url, v);
+  }
+}
+
+static void CALLBACK popup_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
+  auto it = g_popup_timer_qid.find(id);
+  KillTimer(nullptr, id);
+  if (it == g_popup_timer_qid.end())
+    return;
+  std::string qid = it->second;
+  g_popup_timer_qid.erase(it);
+  auto p = g_popup_pending.find(qid);
+  if (p == g_popup_pending.end())
+    return;
+  // unanswered after 400ms = the configured mode
+  popup_apply_verdict(qid, p->second.mode);
+}
+
+static void popup_ask(const std::string &pid, const std::string &opener,
+                      const std::string &url, const std::string &mode) {
+  std::string qid = "p" + std::to_string(++g_popup_qseq);
+  UINT_PTR t = SetTimer(nullptr, 0, 400, popup_timer_proc);
+  g_popup_pending[qid] = {pid, url, mode, t};
+  g_popup_timer_qid[t] = qid;
+  pipe_write_line("POPUPQ " + qid + " " + pid + "\t" + opener + "\t" + url +
+                  "\t" + mode);
+}
+
+struct PopuprReq {
+  std::string qid, verdict;
+};
+static void do_popupr(webview_t, void *arg) {
+  PopuprReq *r = static_cast<PopuprReq *>(arg);
+  popup_apply_verdict(r->qid, r->verdict);
+  delete r;
+}
+
+struct NewWindowHandler : public ICoreWebView2NewWindowRequestedEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2NewWindowRequestedEventHandler)
+  std::string winid; // the opener
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *,
+         ICoreWebView2NewWindowRequestedEventArgs *args) override {
+    LPWSTR w = nullptr;
+    std::string url;
+    if (SUCCEEDED(args->get_Uri(&w)) && w) {
+      url = narrow(w);
+      CoTaskMemFree(w);
+    }
+    std::string mode = g_popup_mode.empty() ? "external" : g_popup_mode;
+    if (mode != "window") {
+      // external (default) | deny: no window either way; the verdict decides
+      // between shell-open and nothing.
+      args->put_Handled(TRUE);
+      popup_ask("-", winid, url, mode);
+      return S_OK;
+    }
+    // window mode: build a real (hidden) window + webview and hand the
+    // webview back via put_NewWindow so window.opener / postMessage survive.
+    std::string pid;
+    do {
+      pid = "popup" + std::to_string(++g_popup_seq);
+    } while (g_windows.count(pid));
+    UINT32 fw = 0, fh = 0, fx = 0, fy = 0;
+    BOOL hasSize = FALSE, hasPos = FALSE;
+    ICoreWebView2WindowFeatures *feat = nullptr;
+    if (SUCCEEDED(args->get_WindowFeatures(&feat)) && feat) {
+      feat->get_HasSize(&hasSize);
+      feat->get_HasPosition(&hasPos);
+      if (hasSize) {
+        feat->get_Width(&fw);
+        feat->get_Height(&fh);
+      }
+      if (hasPos) {
+        feat->get_Left(&fx);
+        feat->get_Top(&fy);
+      }
+      feat->Release();
+    }
+    int cw = (int)fw, ch = (int)fh;
+    if (cw < 120)
+      cw = 900;
+    if (ch < 90)
+      ch = 600;
+    ensure_secwin_class();
+    double sc = window_scale(g_hwnd);
+    RECT rc = {0, 0, (LONG)lround(cw * sc), (LONG)lround(ch * sc)};
+    AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
+    int px = hasPos ? (int)lround(fx * sc) : CW_USEDEFAULT;
+    int py = hasPos ? (int)lround(fy * sc) : CW_USEDEFAULT;
+    HWND hwnd = CreateWindowExW(0, L"TinyjsSecondary", widen(pid).c_str(),
+                                WS_OVERLAPPEDWINDOW, px, py,
+                                rc.right - rc.left, rc.bottom - rc.top,
+                                nullptr, nullptr, GetModuleHandleW(nullptr),
+                                nullptr);
+    if (!hwnd) {
+      args->put_Handled(TRUE);
+      popup_ask("-", winid, url, "external");
+      return S_OK;
+    }
+    apply_relaunch_props(hwnd);
+    TinyWin *tw = new TinyWin();
+    tw->hwnd = hwnd;
+    g_windows[pid] = tw;
+    render_menu(hwnd);
+    // NOT shown — it loads hidden until the POPUPQ verdict.
+    ICoreWebView2Deferral *def = nullptr;
+    args->GetDeferral(&def);
+    args->AddRef();
+    ICoreWebView2_2 *wv22 = nullptr;
+    bool kicked = false;
+    if (g_wv2 &&
+        SUCCEEDED(g_wv2->QueryInterface(IID_ICoreWebView2_2, (void **)&wv22)) &&
+        wv22) {
+      ICoreWebView2Environment *env = nullptr;
+      if (SUCCEEDED(wv22->get_Environment(&env)) && env) {
+        SecCtrlHandler *ch2 = new SecCtrlHandler();
+        ch2->winid = pid;
+        ch2->popup_args = args;
+        ch2->popup_deferral = def;
+        env->CreateCoreWebView2Controller(hwnd, ch2);
+        ch2->Release();
+        env->Release();
+        kicked = true;
+      }
+      wv22->Release();
+    }
+    if (!kicked) {
+      if (def) {
+        def->Complete();
+        def->Release();
+      }
+      args->put_Handled(TRUE);
+      args->Release();
+      PostMessageW(hwnd, WM_CLOSE, 0, 0);
+      popup_ask("-", winid, url, "external");
+      return S_OK;
+    }
+    popup_ask(pid, winid, url, "window");
+    return S_OK;
+  }
+};
+
+// -- find in page (FIND/STOPFIND) --------------------------------------------
+// WebView2 has no find API at all, so the page does both halves: Chromium's
+// window.find() selects and scrolls, and the same text-walk the macOS
+// launcher layers on its native find produces {matches, activeMatch} (approx
+// by construction: hidden text counts, shadow DOM doesn't).
+struct FindReq {
+  std::string id, term;
+  bool forward = true, matchCase = false;
+};
+
+struct FindResultHandler
+    : public ICoreWebView2ExecuteScriptCompletedHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2ExecuteScriptCompletedHandler)
+  std::string id;
+  HRESULT STDMETHODCALLTYPE Invoke(HRESULT hr,
+                                   LPCWSTR resultObjectAsJson) override {
+    std::string json =
+        SUCCEEDED(hr) && resultObjectAsJson ? narrow(resultObjectAsJson) : "";
+    if (json.empty() || json == "null")
+      json = "{\"found\":false}";
+    route_ret(g_w, id, 0, json);
+    return S_OK;
+  }
+};
+
+static void do_find(webview_t w, void *arg) {
+  FindReq *r = static_cast<FindReq *>(arg);
+  size_t c = r->id.find(':');
+  std::string winid = c == std::string::npos ? "main" : r->id.substr(0, c);
+  ICoreWebView2 *wv = wv2_for_id(winid);
+  if (!wv || r->term.empty()) {
+    route_ret(w, r->id, 0, "{\"found\":false}");
+    delete r;
+    return;
+  }
+  std::string js =
+      "(function(t,cs,fwd){try{"
+      "var f=window.find(t,cs,!fwd,true,false,false,false);"
+      "if(!f)return{found:false,matches:0,activeMatch:0};"
+      "var sel=getSelection(),sn=null,so=0;"
+      "if(sel.rangeCount){var r=sel.getRangeAt(0);sn=r.startContainer;so=r.startOffset;}"
+      "var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,{acceptNode:function(n){"
+      "var p=n.parentNode&&n.parentNode.nodeName;"
+      "return(p==='SCRIPT'||p==='STYLE'||p==='NOSCRIPT')?NodeFilter.FILTER_REJECT:NodeFilter.FILTER_ACCEPT;}});"
+      "var text='',selAt=-1,nd;"
+      "while((nd=w.nextNode())){if(nd===sn)selAt=text.length+so;text+=nd.nodeValue;}"
+      "if(!cs){t=t.toLowerCase();text=text.toLowerCase();}"
+      "var n=0,act=0,i=0;"
+      "while((i=text.indexOf(t,i))!==-1){n++;if(selAt>=0&&i<=selAt)act=n;i+=t.length;}"
+      "return{found:true,matches:n,activeMatch:act};"
+      "}catch(e){return{found:true}}})(" +
+      json_escape(r->term) + "," + (r->matchCase ? "true" : "false") + "," +
+      (r->forward ? "true" : "false") + ")";
+  FindResultHandler *h = new FindResultHandler();
+  h->id = r->id;
+  wv->ExecuteScript(widen(js).c_str(), h);
+  h->Release();
+  delete r;
+}
+
+static void do_stopfind(webview_t w, void *arg) {
+  std::string *id = static_cast<std::string *>(arg);
+  size_t c = id->find(':');
+  std::string winid = c == std::string::npos ? "main" : id->substr(0, c);
+  ICoreWebView2 *wv = wv2_for_id(winid);
+  if (wv)
+    wv->ExecuteScript(L"getSelection().removeAllRanges()", nullptr);
+  route_ret(w, *id, 0, "true");
+  delete id;
+}
+
+// -- wiring ------------------------------------------------------------------
+static void install_browser_affordances(ICoreWebView2 *wv,
+                                        const std::string &winid) {
+  if (!wv)
+    return;
+  EventRegistrationToken tok;
+  {
+    NavStartHandler *h = new NavStartHandler();
+    h->winid = winid;
+    wv->add_NavigationStarting(h, &tok);
+    h->Release();
+  }
+  {
+    ContentLoadingHandler *h = new ContentLoadingHandler();
+    h->winid = winid;
+    wv->add_ContentLoading(h, &tok);
+    h->Release();
+  }
+  {
+    NavDoneHandler *h = new NavDoneHandler();
+    h->winid = winid;
+    wv->add_NavigationCompleted(h, &tok);
+    h->Release();
+  }
+  {
+    ProcFailHandler *h = new ProcFailHandler();
+    h->winid = winid;
+    wv->add_ProcessFailed(h, &tok);
+    h->Release();
+  }
+  {
+    NewWindowHandler *h = new NewWindowHandler();
+    h->winid = winid;
+    wv->add_NewWindowRequested(h, &tok);
+    h->Release();
+  }
+  {
+    // ScriptDialogOpening only fires with the engine's own dialogs off.
+    ICoreWebView2Settings *s = nullptr;
+    if (SUCCEEDED(wv->get_Settings(&s)) && s) {
+      s->put_AreDefaultScriptDialogsEnabled(FALSE);
+      s->Release();
+    }
+    JsDialogHandler *h = new JsDialogHandler();
+    h->winid = winid;
+    wv->add_ScriptDialogOpening(h, &tok);
+    h->Release();
+  }
+  {
+    // Downloads need ICoreWebView2_4; a runtime too old for it keeps the
+    // engine's default download UI (old behavior, not breakage).
+    ICoreWebView2_4 *wv4 = nullptr;
+    if (SUCCEEDED(wv->QueryInterface(IID_ICoreWebView2_4, (void **)&wv4)) &&
+        wv4) {
+      DownloadStartHandler *h = new DownloadStartHandler();
+      h->winid = winid;
+      wv4->add_DownloadStarting(h, &tok);
+      h->Release();
+      wv4->Release();
+    }
+  }
+  if (winid.rfind("popup", 0) == 0) {
+    PopupTitleHandler *h = new PopupTitleHandler();
+    h->winid = winid;
+    wv->add_DocumentTitleChanged(h, &tok);
+    h->Release();
+  }
+}
+
+// -- TINYJS_TEST_AUTODLG=ok|cancel -------------------------------------------
+// Test hook (env-gated, inert otherwise), ported from the macOS launcher:
+// polls for a modal #32770 owned by this process and answers it the way a
+// user would, so dialog paths run headless. MessageBox, the prompt template
+// and the common file dialog all use ctrl IDs IDOK/IDCANCEL.
+static void autodlg_arm() {
+  char v[16];
+  DWORD n = GetEnvironmentVariableA("TINYJS_TEST_AUTODLG", v, sizeof(v));
+  if (!(n > 0 && n < sizeof(v)))
+    return;
+  bool okmode = std::string(v) == "ok";
+  std::thread([okmode]() {
+    DWORD pid = GetCurrentProcessId();
+    for (;;) {
+      Sleep(200);
+      struct Ctx {
+        DWORD pid;
+        HWND found;
+      } ctx = {pid, nullptr};
+      EnumWindows(
+          [](HWND h, LPARAM lp) -> BOOL {
+            Ctx *c = (Ctx *)lp;
+            DWORD wp = 0;
+            GetWindowThreadProcessId(h, &wp);
+            if (wp != c->pid || !IsWindowVisible(h))
+              return TRUE;
+            wchar_t cls[32];
+            GetClassNameW(h, cls, 32);
+            if (wcscmp(cls, L"#32770") != 0)
+              return TRUE;
+            c->found = h;
+            return FALSE;
+          },
+          (LPARAM)&ctx);
+      if (!ctx.found)
+        continue;
+      // MB_OK quirk (probed live): a single-button MessageBox gives its OK
+      // button ctrl id 2 (IDCANCEL) so that close works — an ok-mode answer
+      // must fall back to it or an alert() hangs forever.
+      HWND ok = GetDlgItem(ctx.found, IDOK);
+      HWND cancel = GetDlgItem(ctx.found, IDCANCEL);
+      int want = okmode ? (ok ? IDOK : IDCANCEL) : (cancel ? IDCANCEL : IDOK);
+      HWND btn = GetDlgItem(ctx.found, want);
+      if (btn)
+        PostMessageW(ctx.found, WM_COMMAND, MAKEWPARAM(want, BN_CLICKED),
+                     (LPARAM)btn);
+      else
+        PostMessageW(ctx.found, WM_CLOSE, 0, 0);
+      // Give the dialog time to actually close before scanning again, or a
+      // slow dismiss reads as a second dialog and gets a second answer.
+      Sleep(400);
+    }
+  }).detach();
 }
 
 struct EvalReq {
@@ -6070,6 +7321,33 @@ static void pipe_read_loop() {
                          new EvalReq{line.substr(6), "window.print()"});
       } else if (line == "RELOAD") {
         webview_dispatch(g_w, do_reload, nullptr);
+      } else if (line.rfind("NAVR ", 0) == 0) {
+        size_t sp = line.find(' ', 5);
+        if (sp == std::string::npos)
+          continue;
+        webview_dispatch(g_w, do_navr,
+                         new NavrReq{line.substr(5, sp - 5),
+                                     line.substr(sp + 1)});
+      } else if (line.rfind("POPUPR ", 0) == 0) {
+        size_t sp = line.find(' ', 7);
+        if (sp == std::string::npos)
+          continue;
+        webview_dispatch(g_w, do_popupr,
+                         new PopuprReq{line.substr(7, sp - 7),
+                                       line.substr(sp + 1)});
+      } else if (line.rfind("FIND ", 0) == 0) {
+        size_t sp = line.find(' ', 5);
+        if (sp == std::string::npos)
+          continue;
+        std::vector<std::string> p = split_tabs(line.substr(sp + 1));
+        FindReq *fr = new FindReq;
+        fr->id = line.substr(5, sp - 5);
+        fr->term = p.size() > 0 ? p[0] : "";
+        fr->forward = !(p.size() > 1 && p[1] == "0");
+        fr->matchCase = p.size() > 2 && p[2] == "1";
+        webview_dispatch(g_w, do_find, fr);
+      } else if (line.rfind("STOPFIND ", 0) == 0) {
+        webview_dispatch(g_w, do_stopfind, new std::string(line.substr(9)));
       } else if (line == "QUIT") {
         webview_dispatch(g_w, do_terminate, nullptr);
       }
@@ -6183,9 +7461,27 @@ static int embed_icon(const std::string &exe, const std::string &png) {
 static void on_invoke(const char *id, const char *req, void *) {
   // req is the JSON argument array from the page: ["<payload>"] — exactly the
   // CALL body the backend expects. The id round-trips through RET (or DLG).
+  // The calling document's origin is APPENDED as the last element: attested by
+  // WebView2 (a hostile page can't spoof it) and taken from the queue the
+  // vendored WebMessageReceived handler fills, matched to this call by id.
+  // The bridge's "api" gate keys origin sub-gates on it — and reads the LAST
+  // element precisely because the page controls everything before it (this
+  // binding's argument array is whatever the page passed to __invoke).
+  std::string body = req ? req : "[]";
+  std::string origin = "null";
+  {
+    std::wstring src = webview::detail::tinyjs_take_msg_source(id ? id : "");
+    if (!src.empty())
+      origin = origin_from_uri(narrow(src));
+  }
+  if (body.size() >= 2 && body.back() == ']') {
+    bool empty = body.find_first_not_of(" \t\r\n", 1) == body.size() - 1;
+    body.pop_back();
+    body += (empty ? "" : ",") + json_escape(origin) + "]";
+  }
   if (GetEnvironmentVariableA("TINYJS_LAUNCHER_DEBUG", nullptr, 0))
-    std::fprintf(stderr, "launcher: CALL %s %s\n", id, req);
-  pipe_write_line(std::string("CALL ") + id + " " + req);
+    std::fprintf(stderr, "launcher: CALL %s %s\n", id, body.c_str());
+  pipe_write_line(std::string("CALL ") + id + " " + body);
 }
 
 // `launcher-win.exe --open <pipe> <app-exe> [arg]` — the registered handler
@@ -6418,10 +7714,16 @@ static int run(int argc, char **argv) {
   webview_init(g_w, TINY_CLIENT_JS);
   {
     // Optional user-supplied document-start glue (see launcher-macos.cc).
-    char inj[8192];
-    DWORD n = GetEnvironmentVariableA("TINYJS_INJECT", inj, sizeof(inj));
-    if (n > 0 && n < sizeof(inj))
-      webview_init(g_w, inj);
+    // Sized dynamically: a bundled inject.ts easily beats a fixed buffer,
+    // and a too-small one silently dropped the whole script.
+    DWORD need = GetEnvironmentVariableA("TINYJS_INJECT", nullptr, 0);
+    if (need > 0) {
+      std::vector<char> inj(need + 1);
+      DWORD n = GetEnvironmentVariableA("TINYJS_INJECT", inj.data(),
+                                        (DWORD)inj.size());
+      if (n > 0 && n < inj.size())
+        webview_init(g_w, inj.data());
+    }
   }
 
   // Stash the controller + ICoreWebView2 for Reload()/settings/context-menu
@@ -6433,6 +7735,20 @@ static int run(int argc, char **argv) {
   apply_webview_policy(g_wv2);
   if (g_debug_open && g_wv2)
     g_wv2->OpenDevToolsWindow();
+  // Browser affordances for wrapped sites: policy modes ride the spawn env
+  // (Windows has no attach mode, so env is the whole story), and the
+  // handlers must be registered BEFORE the first navigation below.
+  {
+    char v[16];
+    DWORD n = GetEnvironmentVariableA("TINYJS_DOWNLOADS", v, sizeof(v));
+    if (n > 0 && n < sizeof(v))
+      g_downloads_mode = v;
+    n = GetEnvironmentVariableA("TINYJS_POPUPS", v, sizeof(v));
+    if (n > 0 && n < sizeof(v))
+      g_popup_mode = v;
+  }
+  install_browser_affordances(g_wv2, "main");
+  autodlg_arm();
   install_ctx_handler();
   install_drop_target();
   install_accel_handler();

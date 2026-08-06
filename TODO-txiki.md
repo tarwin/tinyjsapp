@@ -116,3 +116,38 @@ follows the http→https redirect internally and then fails the handshake.
   shim is installed: that makes bridge.js an async module, and an app's
   backend module body then runs first and gets the raw fetch (this was real —
   update.js's bundle probe did it, see CHANGELOG 0.30.0).
+
+## Bug C — small writes to a child's stdin are never delivered
+
+`tjs.spawn(argv, { stdin: 'pipe' })`, then a single small write through the
+writer: the child receives nothing, and neither the `write()` nor the
+`close()` promise ever settles. The same code with a large payload works.
+
+```js
+const p = tjs.spawn(['/usr/bin/tr', 'a-z', 'A-Z'], { stdin: 'pipe', stdout: 'pipe' });
+const w = p.stdin.getWriter();
+await w.write(enc.encode('abc def\n'));   // never resolves; child gets nothing
+await w.write(enc.encode('abc def\n'.repeat(40000)));  // 320 KB: fine, and echoed back
+```
+
+Measured 2026-08-04 on the shipped `bin/tjs` (macOS arm64), with `wc`, `cat`
+and `tr` alike, with and without `cwd`/`env`/`stderr: 'pipe'` — the payload
+size is the only variable that matters. Not awaiting doesn't help: the bytes
+never reach the child, so it sits on an open stdin and no EOF ever arrives.
+Smells like a `uv_try_write` fast path that completes the write synchronously
+and never runs the JS completion callback (the big case falls back to the
+queued path and does).
+
+Related, already noted in the README's gotchas: only the FIRST write to a
+child's stdin was delivered at all (upstream fix
+[PR #1028](https://github.com/saghul/txiki.js/pull/1028), untagged as of
+writing). Worth checking whether #1028 also fixes this, and whether the
+tagged release we pin has it, before anyone builds on the stdin pipe again.
+
+- Real victim: nib's Actions (`nib/src/actions.js`, `stdin: "doc"` — a
+  document piped through a formatter). It works around the bug entirely by
+  staging stdin in a temp file and redirecting through a shell:
+  `sh -c 'exec "$@" < "$0"' <tmpfile> <cmd> <args…>`, which keeps the argv
+  intact and has no size limit. That workaround should stay until a fixed
+  runtime is pinned — but if the pipe ever works, `startRun` is the one place
+  to change.
