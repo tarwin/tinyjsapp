@@ -184,6 +184,8 @@
   .ex-tab.on span { color: var(--accent); }
   html[data-ex="amp"] [data-ex-panel]:not([data-ex-panel="amp"]),
   html[data-ex="nib"] [data-ex-panel]:not([data-ex-panel="nib"]),
+  html[data-ex="platter"] [data-ex-panel]:not([data-ex-panel="platter"]),
+  html[data-ex="worldclock"] [data-ex-panel]:not([data-ex-panel="worldclock"]),
   html[data-ex="kitchen-sink"] [data-ex-panel]:not([data-ex-panel="kitchen-sink"]) {
     display: none !important;
   }
@@ -283,6 +285,11 @@
   .show { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
   .show .shot { display: block; border-bottom: 1px solid var(--line); background: var(--bg); }
   .show .shot img { display: block; width: 100%; height: auto; }
+  /* A portrait shot (a menu-bar panel, not a window) blown up to the card's
+     full width would tower over the landscape ones — centre it at its own
+     size instead. */
+  .show .shot.tall { display: flex; justify-content: center; padding: 24px 0; }
+  .show .shot.tall img { width: auto; max-width: 100%; max-height: 430px; }
   .show-body { padding: 16px 20px 18px; }
   .show-body b { font: 600 13px var(--mono); color: var(--accent); letter-spacing: .02em; }
   .show-body i { font-style: normal; font-size: 13px; color: var(--muted); }
@@ -454,6 +461,10 @@
         <img src="images/amp-icon.png" alt="" width="22" height="22" loading="lazy"><span>amp</span></button>
       <button class="ex-tab" id="extab-nib" data-ex="nib" role="tab" aria-controls="expanel-nib" aria-selected="false" onclick="setExample('nib')">
         <img src="images/nib-icon.png" alt="" width="22" height="22" loading="lazy"><span>Nib</span></button>
+      <button class="ex-tab" id="extab-platter" data-ex="platter" role="tab" aria-controls="expanel-platter" aria-selected="false" onclick="setExample('platter')">
+        <img src="images/platter-icon.png" alt="" width="22" height="22" loading="lazy"><span>Platter</span></button>
+      <button class="ex-tab" id="extab-worldclock" data-ex="worldclock" role="tab" aria-controls="expanel-worldclock" aria-selected="false" onclick="setExample('worldclock')">
+        <img src="images/worldclock-icon.png" alt="" width="22" height="22" loading="lazy"><span>World Clock</span></button>
       <button class="ex-tab" id="extab-kitchen-sink" data-ex="kitchen-sink" role="tab" aria-controls="expanel-kitchen-sink" aria-selected="false" onclick="setExample('kitchen-sink')">
         <img src="images/kitchen-sink-icon.png" alt="" width="22" height="22" loading="lazy"><span>Tiny Deck</span></button>
     </div>
@@ -501,6 +512,58 @@
               <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/nib-v0.1.10/nib-0.1.10-linux-arm64.tar.gz">arm64</a>
             </span>
             <a class="src" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/nib">source ↗</a>
+          </span>
+        </div>
+      </div>
+
+      <div class="show" data-ex-panel="platter" id="expanel-platter" role="tabpanel" aria-labelledby="extab-platter">
+        <a class="shot" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/platter">
+          <img src="images/platter.webp" alt="Platter — an album spinning, with its cover art and side listing" width="1180" height="760" loading="lazy" decoding="async"></a>
+        <div class="show-body">
+          <b>Platter</b> <i>— a record player, not a music player</i>
+          <p>Albums, one side at a time, and deliberately slow. Point it at a
+          music folder and the scanner reads it the way a person would:
+          <code style="font-size:13px">Artist/Album/</code> trees, year
+          prefixes stripped, <b>CD1</b>/<b>CD2</b> merged back into one LP,
+          an artist's strays filed as <i>Singles</i>. No library to commit to
+          — it ships with a sample record to spin, and connects Spotify if
+          you'd rather bring your own.</p>
+          <span class="show-dl">
+            <a data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.3.4/platter-0.3.4.dmg">⬇ .dmg · 6.0 MB</a>
+            <a data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.3.4/platter-0.3.4-win.zip">⬇ .zip · 4.9 MB</a>
+            <span class="lin" data-os-panel="linux">⬇ .tar.gz
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.3.5/platter-0.3.5-linux-x86_64.tar.gz">x86_64</a>
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.3.5/platter-0.3.5-linux-arm64.tar.gz">arm64</a>
+            </span>
+            <a class="src" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/platter">source ↗</a>
+          </span>
+        </div>
+      </div>
+
+      <div class="show" data-ex-panel="worldclock" id="expanel-worldclock" role="tabpanel" aria-labelledby="extab-worldclock">
+        <a class="shot tall" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/worldclock">
+          <img src="images/worldclock.webp" alt="World Clock — a menu-bar panel listing cities with their live times" width="768" height="1002" loading="lazy" decoding="async"></a>
+        <div class="show-body">
+          <b>World Clock</b> <i>— every city you care about, in the menu bar</i>
+          <p>The tray is the app: your home city as an emoji, ticking every
+          second — <b>🌉 4:45p</b> — and a click drops a vibrancy popover
+          centred under the icon with each city's time, day offset and a
+          day/night dot. It dismisses itself on focus loss like a real
+          popover, and stops redrawing entirely while hidden — the backend
+          alone keeps the bar ticking. Turn on cycling and it rotates through
+          the cities.</p>
+          <p><b>Best on macOS and Linux</b>, whose menu bar and app indicator
+          can show live text. It runs on Windows, but a tray icon there
+          carries no label — the clock becomes something you hover to read,
+          which rather misses the point.</p>
+          <span class="show-dl">
+            <a data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.4/worldclock-0.3.4.dmg">⬇ .dmg · 4.4 MB</a>
+            <a data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.4/worldclock-0.3.4-win.zip">⬇ .zip · 3.7 MB</a>
+            <span class="lin" data-os-panel="linux">⬇ .tar.gz
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.5/worldclock-0.3.5-linux-x86_64.tar.gz">x86_64</a>
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.5/worldclock-0.3.5-linux-arm64.tar.gz">arm64</a>
+            </span>
+            <a class="src" href="https://github.com/tarwin/tinyjsapp-examples/tree/main/worldclock">source ↗</a>
           </span>
         </div>
       </div>
