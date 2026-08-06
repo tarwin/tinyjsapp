@@ -1428,8 +1428,10 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
   per-origin keyholes — `"api": { "origins": { "file://*": "all",
   "https://app.example.com": ["notify", "store.*"] } }` — keyed off the
   calling frame's origin as WebKit reports it, not as the page claims it.
-  `capabilities().api.denied` tells a page what it can't have. macOS launcher
-  today; see TODO-site-wrapper.md for the Windows/Linux legs.
+  `capabilities().api.denied` tells a page what it can't have. All three
+  platforms; the per-engine caveats (a denied navigation still made its
+  request on Linux, an asked POST re-issues as a GET on Windows, popups keep
+  default chrome everywhere) are in TODO-site-wrapper.md.
 
 ### On-device AI (`tiny.macos.ai`)
 

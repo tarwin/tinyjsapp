@@ -248,6 +248,20 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
 
 ## Done
 
+- [x] **Browser affordances for wrapped sites (2026-08-06)** — the Linux
+      leg of TODO-site-wrapper.md: JS dialogs (`script-dialog`), downloads
+      auto/ask/deny + progress (`download-started`), navigation events +
+      policy, window.open popups, find-in-page (`WebKitFindController` —
+      the only launcher whose match counts come from the engine), origin
+      stamping on CALL. All five wrapper capabilities are now true on all
+      three platforms. Three WebKitGTK facts that shaped it, all measured
+      here and written up in that file: the policy ask has to sit at the
+      RESPONSE decision (the navigation-action one can't tell a subframe
+      from the main frame), a window-mode popup runs its OPENER's content
+      manager (so page messages needed per-document call tokens or a
+      hostile popup would inherit the opener's `api` gate), and the
+      find signal is `failed-to-find-text` — the wrong name connects with
+      only a GObject-CRITICAL and hangs every miss.
 - [x] **getUserMedia / camera+mic (2026-07-29)** — the launcher now answers
       WebKit's `permission-request` signal (previously unhandled = WebKit's
       default deny, so every camera app failed with NotAllowedError while

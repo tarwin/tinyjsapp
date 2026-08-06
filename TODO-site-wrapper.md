@@ -74,8 +74,8 @@ paths).
   wrapper loaded the remote page with policy ask + NAV events flowing.
 
 Capabilities report the lot: `jsDialogs, downloads, navigation, popups,
-findInPage` — true on macOS (and on Windows since 2026-08-05, see the
-Windows-leg section), false on Linux until its leg lands.
+findInPage` — true on macOS, on Windows since 2026-08-05 and on Linux
+since 2026-08-06 (see those legs' sections).
 
 ## Round 2: shipped on macOS 2026-08-05 (verified live same day)
 
@@ -265,23 +265,130 @@ inject, hook recorders, popups "window", downloads auto/ask), wrapurl
 Capabilities: all five wrapper keys now `true` on Windows; Linux is the
 only `false` column left.
 
+## Linux leg: shipped 2026-08-06 (verified live same day, headless)
+
+Implemented in launcher-linux.cc (section "browser affordances (Linux)" —
+same wire, same section name as its twins) plus the call-token change to
+the page shim below. Bridge: capabilities flip + dropping the IS_LINUX
+throw from the find guard, exactly the two the Windows leg predicted.
+Verified by rebuilding the harness (wraptest with a two-origin gate,
+inject, hook recorders, popups window/deny, downloads auto/ask/deny;
+wrapurl for `"url"`; a python static server for cross-origin targets and a
+300MB file; `TINYJS_TEST_AUTODLG` for every modal).
+
+- **JS dialogs** — the `script-dialog` signal, answered synchronously with
+  the same GTK dialogs `do_dialog` builds, headlined by the page's host.
+  WebKitGTK does ship default dialogs, so unlike macOS this replaces rather
+  than fills a hole — the win is the origin headline, the app's styling and
+  a testable path. Verified both directions: confirm true/false, prompt
+  returns the typed text / null, alert returns.
+- **Downloads** — `download-started` on the default web context, then
+  `decide-destination` / `received-data` / `failed` / `finished` per
+  download. auto: `G_USER_DIRECTORY_DOWNLOAD` (XDG, not a hardcoded
+  ~/Downloads) + ` (n)` dedup + a small MIME→extension table (GLib knows
+  content types but not preferred extensions, so unknown types keep the
+  bare name). ask: a GtkFileChooser**Dialog**, deliberately NOT
+  `gtk_file_chooser_native` — the native one rides the portal, out of
+  process, where the test hook can't reach it (the twin of macOS's
+  out-of-process save panel). deny: `webkit_download_cancel`. Progress via
+  `received-data` throttled to 250ms. `set_destination` takes an absolute
+  PATH here (4.1 also accepts a file:// URI; the 6.0 API asserts on
+  anything but a path). Verified: blob download byte-exact, 300MB with 12
+  progress events (bytes/total sane), ask-mode save and cancel, deny.
+- **Navigation events + policy** — `load-changed`
+  (started/committed/finished), `load-failed`, `web-process-terminated`.
+  **The policy ask lives at the RESPONSE decision, not the navigation
+  action**: WebKitGTK fires NAVIGATION_ACTION for subframe navigations too
+  and gives no way to tell them apart (measured — `frame_name` is NULL for
+  both), while the response decision has
+  `is_main_frame_main_resource`. The decision is ref'd and held until NAVR
+  or a 400ms default-allow. CAVEAT this stage creates: by ask time the
+  request has been issued and answered, so a deny discards the response but
+  the server saw the request (macOS holds the original action and has no
+  such hole; Windows has a different one — asked POSTs re-issue as GETs).
+  Noise suppressed: CANCELLED, FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE (a
+  navigation-turned-download) and PLUGIN_WILL_HANDLE_LOAD. Verified: deny
+  provably stopped a load (no commit/finish after the ask, page stayed
+  put), external shell-opened via a private fake default browser
+  (XDG_DATA_HOME/XDG_CONFIG_HOME override — the user's mimeapps.list is
+  never touched), and an iframe that self-navigates produced two frame
+  loads and ZERO policy asks.
+- **Popups** — the `create` signal. window mode builds a hidden
+  SecWin+webview, POPUPQ decides show or destroy, registered as popupN in
+  g_secwins (targetable, WINCLOSE-able, WINCLOSED via the normal destroy
+  path, page title once loaded, window.open's width/height/x/y from
+  `ready-to-show`'s window properties). Unlike Windows, `window.close()`
+  from the popup's own page works (the `close` signal) — verified
+  alongside a backend close by id.
+- **The call-token change, and why it exists.** A window-mode popup MUST be
+  built with `related-view` (window.opener / postMessage / the WindowProxy
+  need it, and a plain view returned from `create` trips an assertion in
+  the web process — measured). But WebKit builds the new page from the
+  OPENER's PageConfiguration, so the popup's own user content manager is
+  ignored and it runs the opener's injected shim — with the opener's window
+  id baked in. macOS solves the same trap with a fresh WKUserContentController;
+  WebKitGTK gives no such lever, and its script-message signal carries no
+  sender. Left alone this is not just cross-wired RPC: **a hostile popup's
+  calls would be attributed to the OPENER's origin and inherit its `api`
+  gate.** So the shim now tags every message with a per-DOCUMENT token that
+  the launcher plants at commit (`assign_call_token`) and maps back to the
+  real window; calls made before the token lands are queued rather than
+  sent under the wrong identity, and untokened calls arriving on a manager
+  known to be shared are dropped. A 1500ms fallback flushes untokened (the
+  pre-existing attribution) so an unusual load can never hang an app's own
+  boot. Verified: the popup's own gated tiny works (its origin, 140 denied
+  vs main's 0, `clipboard.write` rejected quoting the manifest) while
+  `window.opener.postMessage` reaches the opener.
+- **Find** — `WebKitFindController`, the one launcher whose match counts
+  come from the ENGINE (`counted-matches` semantics via found-text's count)
+  instead of the mac/win JS text-walk approximation. The active index is
+  tracked launcher-side: 1 after a fresh search (count when searching
+  backwards), stepped with wraparound on repeats. THE TRAP: the signal is
+  `failed-to-find-text`, not `failed-to-find` — the wrong name connects
+  with only a GLib-GObject-CRITICAL on stderr and every miss then hangs the
+  page's promise forever. Verified: 3 matches, activeMatch 1→2→1 stepping
+  back, a case-sensitive miss and a nonsense term both 0/0/false.
+- **Origin stamping** — CALLs carry the origin as the second element, from
+  the sending window's URI (`origin_from_uri`, same shape as the other
+  two). Frame-blind, unlike macOS's frameInfo and WebView2's Source: the
+  shim only injects top-frame so every ordinary call IS main-frame, but a
+  subframe's hand-rolled postMessage would be attributed to the top frame.
+- **popups "window" needed one settings change** —
+  `javascript_can_open_windows_automatically` is FALSE by default on
+  WebKitGTK (macOS defaults it TRUE), so a second gesture-less
+  `window.open` silently never reached `create`. The "popups" config plus
+  the POPUPQ ask is the real gate.
+- **`inject` / `url` / config** — TINYJS_DOWNLOADS/TINYJS_POPUPS read at
+  startup (Linux is spawn-mode always, like Windows); `"url"` apps needed
+  nothing new. Verified: the remote main window loads with the policy ask
+  and NAV events flowing, the gate applies to the remote origin, inject
+  lands, and `app.reload()` re-loads the live URL (sessionStorage-marked
+  second pass).
+- **TINYJS_TEST_AUTODLG=ok|cancel ported** — polls for a visible modal
+  GtkDialog and answers it with `gtk_dialog_response` (ACCEPT/CANCEL for
+  file choosers, OK/CANCEL otherwise). Polling for the same reason macOS
+  does: `gtk_dialog_run` spins a nested main loop and timeouts keep
+  dispatching inside it, but a chooser can take a second to appear.
+
+Capabilities: all five wrapper keys are now `true` on all three platforms.
+
 ## Remaining
-- **Linux leg** — WebKitGTK: `script-dialog` signal, `download-started`,
-  `decide-policy` + `create`, `WebKitFindController` (full-featured, has
-  counts). Same: wire is ready. (Origin stamping too — the Windows leg
-  leaves Linux as the only launcher that doesn't stamp.)
 - **`window` popups keep default chrome** — no `win.open`-style chrome
-  options beyond WKWindowFeatures' width/height/x/y (both platforms).
+  options beyond the window features' width/height/x/y (all platforms).
 - **Windows: `WindowCloseRequested` unhandled** — a window-mode popup
   page calling `window.close()` does nothing; the backend can close it by
   id. Small arm if it ever matters.
 - **Windows: asked POSTs re-issue as GETs** — structural (NavigationStarting
   has no deferral; the ask is cancel + re-Navigate). Only main-frame http(s)
   form submissions are affected; fetch/XHR never hit the policy path.
+- **Linux: a denied nav still made its request** — structural, see the
+  navigation bullet above (the ask is at the response decision, the only
+  place WebKitGTK distinguishes main-frame). Fine for "don't show me this
+  page", not a request blocker.
 - **Visual once-over** — every path is verified by assertion, but nobody has
   *looked* at the panels (native styling, origin in the headline) or at a
-  popup window's placement, on either platform. Five minutes with the
-  wraptest scratch app.
+  popup window's placement, on any of the three platforms. Five minutes with
+  the wraptest scratch app.
 
 ## Test bed
 
@@ -305,3 +412,17 @@ Two behaviours that look like bugs and aren't: programmatic `click()`s in the
 same tick cancel each other's provisional navigation (space them), and a
 popup allowed by `onWindowOpen` whose URL `onNavigate` then denies shows as
 an empty window (the two policies compose).
+
+Linux harness notes (2026-08-06), each of which cost a wrong result first:
+- the page must live in `src/frontend/`, and `tiny.quit()` is the page's
+  quit — `tiny.app.quit` doesn't exist, and awaiting it hangs the run in a
+  way that reads exactly like a launcher hang;
+- `app.reload()` is a BACKEND method, so a page can only reach it through
+  an app api method;
+- hook recorders that spread the info object (`{kind:'popup', ...info}`)
+  have their `kind` overwritten by the info's own — filter on
+  `policy`/`open`/`start`, not on the label you thought you set;
+- to test the `external` verdict without touching the user's default
+  browser, point XDG_DATA_HOME + XDG_CONFIG_HOME at a scratch dir holding
+  a fake handler .desktop and a mimeapps.list (the app's store moves there
+  too — read results from that copy).

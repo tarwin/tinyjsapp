@@ -518,11 +518,14 @@ async function systemCapabilities(query, aiStatus) {
     // is native here: Web Audio reaching ctx.destination crackles under
     // WebKitGTK. Informational — the API is identical either way.
     sampler: 'native',
-    // Browser affordances for wrapped sites (TODO-site-wrapper.md): macOS
-    // launcher only so far. WebKitGTK has the signals (script-dialog,
-    // download-started, WebKitFindController) — unwritten, not impossible.
-    jsDialogs: false, downloads: false, navigation: false, popups: false,
-    findInPage: false,
+    // Browser affordances for wrapped sites (TODO-site-wrapper.md): the
+    // WebKitGTK leg — script-dialog, download-started, decide-policy +
+    // create, WebKitFindController (the one launcher whose match counts come
+    // from the engine, not the JS text-walk). Origin stamping rides the
+    // webview's main-frame URI (frame-blind — WebKitGTK's script-message
+    // carries no frame info; caveat in TODO-site-wrapper.md).
+    jsDialogs: true, downloads: true, navigation: true, popups: true,
+    findInPage: true,
   };
   const windows = {
     // Permanent, not pending: measured 2026-07-28. Process-loopback capture is
@@ -798,8 +801,11 @@ function compileNameGate(spec) {
 // first matching key in manifest order wins. An origin matching NO key gets
 // the top-level lists if any, else NOTHING (origins present = deny-by-default
 // for strangers — redirects to unlisted domains shouldn't inherit the keys).
-// Calls with no origin stamp (the Linux launcher today) skip origin
-// scoping and use the top-level lists.
+// All three launchers stamp now (macOS: frameInfo.securityOrigin; Windows:
+// the WebMessageReceived Source; Linux: the webview's main-frame URI —
+// engine-attested but frame-blind, see TODO-site-wrapper.md). A call with
+// no stamp (an older launcher) skips origin scoping and uses the top-level
+// lists.
 function compileApiGate(spec) {
   if (!spec) return null;
   const base = compileNameGate(typeof spec === 'string' || Array.isArray(spec)
@@ -2491,9 +2497,8 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
         return;
       }
 
-      // Find-in-page: launcher-answered like dialogs (macOS + Windows today).
+      // Find-in-page: launcher-answered like dialogs (all three platforms).
       if (method === 'win.find' || method === 'win.stopFind') {
-        if (IS_LINUX) throw new Error(method + ' is not supported on this platform yet');
         if (method === 'win.find') {
           const p = params ?? {};
           send(`FIND ${id} ${[one(p.term), p.forward === false ? '0' : '1', p.matchCase ? '1' : '0'].join('\t')}`);
