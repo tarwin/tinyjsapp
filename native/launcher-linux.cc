@@ -144,6 +144,10 @@ struct SecWin {
   bool click_through = false;
   WinMenu menu;
   int req_w = 0, req_h = 0;    // the page box win.open asked for
+  // A window-mode popup runs its OPENER's content manager (WebKit builds the
+  // page from the opener's configuration). Remember WHICH manager we marked
+  // shared so the destroy path un-marks that one and not the popup's own.
+  WebKitUserContentManager* shared_ucm = nullptr;
 };
 static std::map<std::string, SecWin*> g_secwins;
 static WinMenu g_main_menu;                // main's; secondaries carry theirs
@@ -185,7 +189,16 @@ static std::string wire_escape(const std::string& s) {
   return out;
 }
 
-static std::string json_escape(const std::string& s) {
+static std::string json_escape(const std::string& in) {
+  // A Linux filename is bytes, not text: a download named with an invalid
+  // UTF-8 sequence would otherwise ride into the DOWNLOAD JSON as-is and the
+  // bridge's parse would choke on the whole line. Substitute (U+FFFD) rather
+  // than drop, so the name still reads.
+  std::string s = in;
+  if (!g_utf8_validate(in.data(), (gssize)in.size(), nullptr)) {
+    char* fixed = g_utf8_make_valid(in.data(), (gssize)in.size());
+    if (fixed) { s = fixed; g_free(fixed); }
+  }
   std::string out = "\"";
   char buf[8];
   for (unsigned char c : s) {
@@ -428,14 +441,27 @@ static std::string tiny_shim_js(const std::string& winid) {
     "})();\n";
 }
 
-// token -> winid, and each window's current token (one per document; a
-// navigation mints a new one and retires the old).
-static std::map<std::string, std::string> g_call_tokens;
+// token -> the document that holds it, and each window's current token (one
+// per document; a navigation mints a new one and retires the old). The ORIGIN
+// is captured with the token, at commit, and never re-read live. WebKit says
+// nothing binding about WHEN a view's active uri becomes the requested one:
+// if it flips at provisional-load start, the old document is still running
+// and still posting, and reading the uri at message time would stamp those
+// in-flight calls with the DESTINATION's origin for a whole round trip — a
+// page that picks a slow destination picks how long. (Measured on WebKitGTK
+// 2.52.3 the flip is late, so that race isn't reachable there; pinning the
+// origin to the document makes it not a question. TODO-site-wrapper.md.)
+struct CallToken {
+  std::string winid;
+  std::string origin;
+};
+static std::map<std::string, CallToken> g_call_tokens;
 static std::map<std::string, std::string> g_win_token;
 // Content managers serving more than one page — i.e. an opener whose
-// window-mode popup inherited it. Untokened messages arriving on one of
-// these cannot be attributed and are dropped.
-static std::set<WebKitUserContentManager*> g_shared_ucms;
+// window-mode popup inherited it — with a count, because one opener can have
+// several popups alive at once. Untokened messages arriving on one of these
+// cannot be attributed and are dropped.
+static std::map<WebKitUserContentManager*, int> g_shared_ucms;
 
 // A page posted "<seq>:<payload>" from window `winid`.
 static std::string origin_from_uri(const char* uri);  // browser affordances below
@@ -459,10 +485,14 @@ static void on_script_message(WebKitUserContentManager* ucm, WebKitJavascriptRes
   std::string payload = msg.substr(colon + 1);
 
   std::string from = winid;  // the manager's owner, the untokened fallback
+  bool have_origin = false;
+  std::string origin;
   if (!tok.empty()) {
     auto it = g_call_tokens.find(tok);
     if (it == g_call_tokens.end()) return;  // stale/forged token: not a window
-    from = it->second;
+    from = it->second.winid;
+    origin = it->second.origin;  // the document's own, captured at commit
+    have_origin = true;
   } else if (g_shared_ucms.count(ucm)) {
     // Ambiguous: this manager serves an opener AND its popup, so "whoever
     // owns the manager" is a guess, and guessing wrong hands one page's
@@ -472,16 +502,20 @@ static void on_script_message(WebKitUserContentManager* ucm, WebKitJavascriptRes
     return;
   }
 
-  // Second element: the calling page's origin, for the bridge's "api"
+  // Last element: the calling page's origin, for the bridge's "api"
   // origin sub-gates. WebKitGTK's script-message signal carries no frame
   // info (unlike WKScriptMessage.frameInfo or WebView2's Source), so this
   // is the sending window's MAIN-FRAME origin — attested by the UI process
   // (page JS can't spoof it) but frame-blind: a subframe's hand-rolled
   // postMessage is attributed to the top frame. The tiny shim only injects
   // top-frame, so every ordinary call IS main-frame; caveat in
-  // TODO-site-wrapper.md.
-  WebKitWebView* wv = wv_for(from);
-  std::string origin = origin_from_uri(wv ? webkit_web_view_get_uri(wv) : nullptr);
+  // TODO-site-wrapper.md. Tokened calls carry their document's committed
+  // origin; only the untokened fallback (a document the launcher never saw
+  // commit, on a manager it knows is not shared) reads the view live.
+  if (!have_origin) {
+    WebKitWebView* wv = wv_for(from);
+    origin = origin_from_uri(wv ? webkit_web_view_get_uri(wv) : nullptr);
+  }
   pipe_write_line("CALL " + from + ":" + seq +
                   " [" + json_escape(payload) + "," + json_escape(origin) + "]");
 }
@@ -495,7 +529,10 @@ static void assign_call_token(WebKitWebView* wv, const std::string& winid) {
   std::string tok = uuid ? uuid : "";
   g_free(uuid);
   if (tok.empty()) return;
-  g_call_tokens[tok] = winid;
+  // Captured HERE, where the active uri is the committed document's — not at
+  // message time, where it may already be pointing at wherever the page just
+  // asked to go.
+  g_call_tokens[tok] = {winid, origin_from_uri(webkit_web_view_get_uri(wv))};
   g_win_token[winid] = tok;
   // __TINY_WIN rides along: the shim baked in the manager owner's id, which
   // is wrong in a popup sharing its opener's manager, and tiny.win.id reads
@@ -5372,6 +5409,28 @@ static gboolean on_script_dialog(WebKitWebView* wv, WebKitScriptDialog* sd, gpoi
   GtkWidget* top = gtk_widget_get_toplevel(GTK_WIDGET(wv));
   GtkWindow* parent = GTK_IS_WINDOW(top) ? GTK_WINDOW(top) : g_win;
 
+  // gtk_dialog_run spins a NESTED main loop, so the socket keeps dispatching
+  // inside it — a backend WINCLOSE (or a page's own window.close) can destroy
+  // this window, and the view under it, while the dialog is still up. Hold a
+  // ref on both so nothing is freed under us, and watch for the destroy: the
+  // answer goes to a page that no longer exists, so skip it rather than write
+  // into a torn-down web page.
+  bool destroyed = false;
+  g_object_ref(wv);
+  webkit_script_dialog_ref(sd);
+  gulong destroy_h = g_signal_connect_swapped(
+      wv, "destroy", G_CALLBACK(+[](gpointer d) { *(bool*)d = true; }), &destroyed);
+  struct Guard {
+    WebKitWebView* wv;
+    WebKitScriptDialog* sd;
+    gulong h;
+    ~Guard() {
+      g_signal_handler_disconnect(wv, h);
+      webkit_script_dialog_unref(sd);
+      g_object_unref(wv);
+    }
+  } guard{wv, sd, destroy_h};
+
   if (t == WEBKIT_SCRIPT_DIALOG_PROMPT) {
     const char* d = webkit_script_dialog_prompt_get_default_text(sd);
     GtkWidget* dlg = gtk_dialog_new_with_buttons(title.c_str(), parent,
@@ -5393,7 +5452,7 @@ static gboolean on_script_dialog(WebKitWebView* wv, WebKitScriptDialog* sd, gpoi
     gint res = gtk_dialog_run(GTK_DIALOG(dlg));
     // Text set only on OK: an unset prompt result IS the null a cancelled
     // prompt() returns.
-    if (res == GTK_RESPONSE_OK)
+    if (res == GTK_RESPONSE_OK && !destroyed)
       webkit_script_dialog_prompt_set_text(sd, gtk_entry_get_text(GTK_ENTRY(entry)));
     gtk_widget_destroy(dlg);
     return TRUE;
@@ -5414,12 +5473,14 @@ static gboolean on_script_dialog(WebKitWebView* wv, WebKitScriptDialog* sd, gpoi
   test_autodlg_arm();
   gint res = gtk_dialog_run(GTK_DIALOG(dlg));
   gtk_widget_destroy(dlg);
-  if (is_confirm)
+  if (is_confirm && !destroyed)
     webkit_script_dialog_confirm_set_confirmed(sd, res == GTK_RESPONSE_OK);
   return TRUE;
 }
 
 // -- navigation events --
+
+static void find_forget(WebKitWebView* wv);  // find section, below
 
 static void nav_event(WebKitWebView* wv, const char* kind, const char* url,
                       const char* err) {
@@ -5443,6 +5504,8 @@ static void on_load_changed(WebKitWebView* wv, WebKitLoadEvent ev, gpointer) {
     // The document exists now (document-start scripts have run, so the shim
     // is there to receive it) — hand this page its call token.
     assign_call_token(wv, tiny_winid_for_wv(wv));
+    // The old document's find results describe text that is gone.
+    find_forget(wv);
     nav_event(wv, "commit", uri, nullptr);
   } else if (ev == WEBKIT_LOAD_FINISHED) {
     // Popup windows carry the page's own title (like a browser would); other
@@ -5628,7 +5691,8 @@ static GtkWidget* on_create_webview(WebKitWebView* parent,
     // WindowFeatures unengaged). The cost is the shared content manager the
     // call tokens exist to survive.
     sec->wv = make_webview(wid, parent);
-    g_shared_ucms.insert(webkit_web_view_get_user_content_manager(parent));
+    sec->shared_ucm = webkit_web_view_get_user_content_manager(parent);
+    g_shared_ucms[sec->shared_ucm]++;  // counted: one opener, several popups
     gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(sec->wv), TRUE, TRUE, 0);
     g_signal_connect(sec->win, "window-state-event", G_CALLBACK(on_window_state), nullptr);
     g_signal_connect(sec->win, "delete-event", G_CALLBACK(on_secwin_delete), nullptr);
@@ -5638,6 +5702,21 @@ static GtkWidget* on_create_webview(WebKitWebView* parent,
     g_signal_connect(sec->wv, "ready-to-show", G_CALLBACK(on_popup_ready_to_show), nullptr);
     g_signal_connect(sec->wv, "close", G_CALLBACK(on_popup_close), nullptr);
     g_secwins[wid] = sec;
+
+    // Backstop for a document that never commits. On a SHARED manager an
+    // untokened call is dropped with no reply, so a page holding a token-less
+    // document would hang every promise it made. WebKitGTK does commit the
+    // about:blank of a `window.open('')` (measured 2026-08-06 — that popup's
+    // calls settle as denials, origin "null"), so this normally does nothing;
+    // it fills in when nothing else did. A real navigation committing first
+    // wins, and re-mints anyway.
+    g_timeout_add(120, +[](gpointer d) -> gboolean {
+      std::string* id = (std::string*)d;
+      SecWin* sw = sec_for(*id);
+      if (sw && !g_win_token.count(*id)) assign_call_token(sw->wv, *id);
+      delete id;
+      return G_SOURCE_REMOVE;
+    }, new std::string(wid));
 
     // NOT shown yet — the verdict decides (loading proceeds meanwhile, the
     // same tradeoff as the nav-policy hold).
@@ -5886,6 +5965,18 @@ struct FindState {
 };
 static std::map<WebKitWebView*, FindState> g_find_state;
 
+// A navigation invalidates the term and the counts, but not `wired` — those
+// signal connections live on the view's find controller, which outlives the
+// document. Called from the commit handler.
+static void find_forget(WebKitWebView* wv) {
+  auto it = g_find_state.find(wv);
+  if (it == g_find_state.end()) return;
+  it->second.term.clear();
+  it->second.matches = 0;
+  it->second.active = 0;
+  it->second.fresh = false;
+}
+
 static void find_reply(FindState& st, bool found) {
   if (st.callid.empty()) return;
   std::string j = found ? "{\"found\":true,\"matches\":" + std::to_string(st.matches) +
@@ -6037,7 +6128,14 @@ static void on_secwin_destroy(GtkWidget*, gpointer data) {
       g_call_tokens.erase(tok->second);
       g_win_token.erase(tok);
     }
-    g_shared_ucms.erase(webkit_web_view_get_user_content_manager(it->second->wv));
+    // Un-mark the manager we actually marked (the OPENER's), and only when the
+    // last popup riding it is gone: erasing the popup's own manager left the
+    // opener flagged for the process's life, and erasing on the first close
+    // re-opened the misattribution hole while a second popup was still alive.
+    if (it->second->shared_ucm) {
+      auto sh = g_shared_ucms.find(it->second->shared_ucm);
+      if (sh != g_shared_ucms.end() && --sh->second <= 0) g_shared_ucms.erase(sh);
+    }
     // This window's menu items go with it — their widgets are already gone,
     // and a later app-wide MENUUPD would otherwise walk into them.
     clear_registry_kind("menu", it->second->win);
