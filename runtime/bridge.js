@@ -581,12 +581,13 @@ async function systemCapabilities(query, aiStatus) {
     // tiny.audio.sampler mixes in the main window's page (Web Audio is
     // RT-scheduled on Chromium's audio service) — see TODO-audio-sampler.md.
     sampler: 'page',
-    // Browser affordances for wrapped sites: macOS only so far. WebView2 has
-    // ScriptDialogOpening / DownloadStarting / NavigationStarting +
-    // NewWindowRequested (find needs a page-side CSS.highlights fallback —
-    // WebView2 has no find API). See TODO-site-wrapper.md.
-    jsDialogs: false, downloads: false, navigation: false, popups: false,
-    findInPage: false,
+    // Browser affordances for wrapped sites (TODO-site-wrapper.md): the
+    // WebView2 leg — ScriptDialogOpening, DownloadStarting, NavigationStarting
+    // + NewWindowRequested, and a page-side window.find + text-walk for find
+    // (WebView2 has no find API of its own). Origin stamping rides the
+    // message Source, so "api" origin sub-gates work here too.
+    jsDialogs: true, downloads: true, navigation: true, popups: true,
+    findInPage: true,
   };
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
     // Browser affordances for wrapped sites (TODO-site-wrapper.md): JS
@@ -797,7 +798,7 @@ function compileNameGate(spec) {
 // first matching key in manifest order wins. An origin matching NO key gets
 // the top-level lists if any, else NOTHING (origins present = deny-by-default
 // for strangers — redirects to unlisted domains shouldn't inherit the keys).
-// Calls with no origin stamp (Windows/Linux launchers today) skip origin
+// Calls with no origin stamp (the Linux launcher today) skip origin
 // scoping and use the top-level lists.
 function compileApiGate(spec) {
   if (!spec) return null;
@@ -2468,8 +2469,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     let result;
     try {
       // Launcher forwards the bound call's argument array: ["<payload>"] —
-      // plus, where the launcher stamps it (macOS), the calling frame's
-      // origin as a second element (WebKit-attested, not page-claimed).
+      // plus, where the launcher stamps it (macOS + Windows), the calling
+      // frame's origin as a second element (engine-attested, not
+      // page-claimed).
       const [payload, origin] = JSON.parse(line.slice(sp + 1));
       const { method, params } = JSON.parse(payload);
 
@@ -2489,9 +2491,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
         return;
       }
 
-      // Find-in-page: launcher-answered like dialogs (macOS launcher today).
+      // Find-in-page: launcher-answered like dialogs (macOS + Windows today).
       if (method === 'win.find' || method === 'win.stopFind') {
-        if (IS_WIN || IS_LINUX) throw new Error(method + ' is not supported on this platform yet');
+        if (IS_LINUX) throw new Error(method + ' is not supported on this platform yet');
         if (method === 'win.find') {
           const p = params ?? {};
           send(`FIND ${id} ${[one(p.term), p.forward === false ? '0' : '1', p.matchCase ? '1' : '0'].join('\t')}`);

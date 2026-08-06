@@ -141,6 +141,13 @@ inline ICoreWebView2EnvironmentOptions *tinyjs_environment_options() {
 }
 // end tinyjs patch
 
+// tinyjs patch: the sender document's URI for the message currently being
+// dispatched, so the launcher can stamp RPC CALL lines with a
+// WebView2-attested origin (site-wrapper "api" gating — see
+// TODO-site-wrapper.md). The callback below runs synchronously inside
+// Invoke, so a single slot is enough; empty = unknown.
+inline std::wstring tinyjs_msg_source;
+
 using msg_cb_t = std::function<void(const std::string)>;
 
 class webview2_com_handler
@@ -235,6 +242,14 @@ public:
     LPWSTR message{};
     auto res = args->TryGetWebMessageAsString(&message);
     if (SUCCEEDED(res)) {
+      // tinyjs patch: stash the attested sender URI for the origin stamp
+      LPWSTR src{};
+      if (SUCCEEDED(args->get_Source(&src)) && src) {
+        tinyjs_msg_source = src;
+        CoTaskMemFree(src);
+      } else {
+        tinyjs_msg_source.clear();
+      }
       m_msgCb(narrow_string(message));
     }
 

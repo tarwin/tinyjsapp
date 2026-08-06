@@ -74,7 +74,8 @@ paths).
   wrapper loaded the remote page with policy ask + NAV events flowing.
 
 Capabilities report the lot: `jsDialogs, downloads, navigation, popups,
-findInPage` — true on macOS, false on Windows/Linux until the legs below.
+findInPage` — true on macOS (and on Windows since 2026-08-05, see the
+Windows-leg section), false on Linux until its leg lands.
 
 ## Round 2: shipped on macOS 2026-08-05 (verified live same day)
 
@@ -172,22 +173,115 @@ Whether that hook stays in the shipped launcher is a judgement call — it is
 ~60 lines, unreachable without the env var, and the alternative is that
 nobody ever tests dialogs on any platform again.
 
-## Remaining
+## Windows leg: shipped 2026-08-05 (verified live same day, headless)
 
-- **Windows leg** — WebView2: `ScriptDialogOpening` (+ `Deferral`) for
-  dialogs, `DownloadStarting` for downloads, `NavigationStarting`/`Completed`
-  + `NewWindowRequested` for nav/popups. No find API — needs a page-side
-  `CSS.highlights` fallback. No CALL origin stamp yet (origin scoping
-  inert there). Bridge/wire/config are already platform-neutral; only
-  launcher-win.cc arms are missing.
+Implemented in launcher-win.cc (section "browser affordances for wrapped
+sites" — same wire, same section name as the macOS twin) plus a two-line
+tinyjs patch in the vendored win32_edge.hh (stashes the WebMessageReceived
+Source so main-window CALLs can be origin-stamped; secondaries read
+`get_Source` directly). Bridge changes were exactly the two predicted:
+capabilities flip + dropping IS_WIN from the find guard. Verified by
+rebuilding the macOS harness: wraptest (local frontend, two-origin gate,
+inject, hook recorders, popups "window", downloads auto/ask), wrapurl
+("url" app), a node static server for cross-origin targets + a 300MB file,
+`TINYJS_TEST_AUTODLG` for every modal.
+
+- **JS dialogs** — `put_AreDefaultScriptDialogsEnabled(FALSE)` +
+  `ScriptDialogOpening`, answered synchronously (MessageBox / the DLG
+  prompt template via a new `run_prompt_raw`). Verified both directions:
+  confirm true/false, prompt returns typed text / null, alert returns.
+- **Downloads** — `ICoreWebView2_4::add_DownloadStarting` (QI-guarded; a
+  runtime too old keeps the engine's default download UI). auto: known
+  Downloads folder (`SHGetKnownFolderPath`, GUID spelled inline for MinGW)
+  + ` (n)` dedup — and note the suggested filename is just the leaf of
+  WebView2's default ResultFilePath, the engine already did MIME→extension.
+  ask: IFileSaveDialog seeded name+folder. deny: put_Cancel. Progress via
+  `add_BytesReceivedChanged` throttled to 250ms; done/failed/cancelled via
+  `add_StateChanged`. Verified: blob download byte-exact, 300MB with 3
+  progress events (bytes/total sane), ask-mode save + cancel, and the
+  files land on this box's REDIRECTED Downloads (`\\Mac\Home\Downloads`) —
+  the known-folder call is what makes that work, don't hardcode
+  `%USERPROFILE%\Downloads`.
+- **Navigation events + policy** — `NavigationStarting` (start),
+  `ContentLoading` (commit), `NavigationCompleted` (finish/fail),
+  `ProcessFailed` (crash). **NavigationStarting has no deferral**, so a
+  policy ask cancels the nav, sends NAVQ, and re-Navigates on 'allow'
+  behind an allow-once marker; 400ms `SetTimer` default-allows. CAVEAT
+  this creates: an asked (main-frame http) POST re-issues as a GET —
+  macOS holds the original action and doesn't have this hole. fail names
+  the last STARTED url (get_Source is the page still showing), and BOTH
+  OPERATION_CANCELED and CONNECTION_ABORTED are suppressed as noise —
+  the latter is how a navigation-turned-download reports itself
+  (measured: the bogus fail arrived BEFORE DownloadStarting, so it can't
+  be suppressed by looking the download up). Verified: deny provably
+  stopped a load (no start/commit/finish after the ask), external
+  shell-opened, policy asks flowed for every main-frame http(s) nav.
+- **Popups** — `NewWindowRequested`. window mode: hidden TinyjsSecondary
+  window + controller from the shared env; SecCtrlHandler grew
+  popup_args/popup_deferral fields — the completion hands the webview to
+  `put_NewWindow` INSTEAD of navigating (an explicit Navigate would sever
+  window.opener) and completes the deferral; a fresh sec_shim with the
+  popup's own winid prevents the cross-wired-RPC trap the macOS fresh-UCC
+  dance solves. POPUPQ verdict shows or closes the hidden window.
+  Registered as popupN in g_windows: targetable, WINCLOSE-able, emits
+  WINCLOSED via the normal WM_DESTROY path; DocumentTitleChanged gives it
+  the page's title. Verified: window.open returned a WindowProxy, the
+  popup's cross-origin page used its own gated tiny, hook-denied popup
+  produced `open deny` and never appeared, backend closed it by id.
+  NOT handled: `WindowCloseRequested` — a popup page's own
+  `window.close()` is a no-op today (close it via the backend).
+- **Find** — WebView2 has no find API, so the page does both halves:
+  Chromium's `window.find(t, cs, !fwd, wrap)` selects and scrolls, then
+  the exact macOS text-walk counts (returned as an object so
+  ExecuteScript's JSON needs no double-decode), answered via route_ret
+  like DLG. Verified: 3 matches, activeMatch 1 → 2, miss 0/0/false.
+- **Origin scoping** — CALLs now carry the origin second element on BOTH
+  paths: secondaries in SecMsgHandler (`get_Source`), main via the
+  vendored-handler stash + splice in on_invoke. `origin_from_uri` matches
+  the macOS shape (scheme://host[:port], default ports elided, bare
+  `file://`, literal `"null"` when unknown). Verified in one run:
+  `file://*` got "all" while `http://127.0.0.1:8123` got a 3-name allow
+  list (denied call rejects quoting the manifest; capabilities().api
+  reported 0 vs 140 denied for the two origins). Note a popup's initial
+  about:blank document runs the injected client whose load-time getState
+  carries origin "null" → denied under an origins gate — fail-closed by
+  design, shows up as one startup denial log line, harmless.
+- **inject / url / config** — TINYJS_INJECT now sized dynamically (the
+  fixed 8KB buffer silently dropped bigger bundles, both webview sites);
+  TINYJS_DOWNLOADS/TINYJS_POPUPS read at startup (Windows is spawn-mode
+  always, env is the whole story — no plist/registry equivalent needed).
+  "url" apps needed nothing new (argv already carried it); verified the
+  remote main window loads with policy ask + NAV events flowing, and
+  app.reload re-loads the live URL (sessionStorage-marked second pass).
+- **TINYJS_TEST_AUTODLG=ok|cancel ported** — polls for a visible #32770
+  owned by this process, posts WM_COMMAND to the right button. THE TRAP
+  IT COST (the twin of macOS's out-of-process `ok:` throw): **an MB_OK
+  MessageBox's single OK button has ctrl id 2 (IDCANCEL)**, so that close
+  works — ok-mode must fall back to IDCANCEL when no IDOK control exists
+  or every `alert()` hangs the drill forever. Probed live on the stuck
+  dialog. The IFileSaveDialog answers a posted `WM_COMMAND IDOK` fine
+  (in-process, unlike macOS's out-of-process panel).
+
+Capabilities: all five wrapper keys now `true` on Windows; Linux is the
+only `false` column left.
+
+## Remaining
 - **Linux leg** — WebKitGTK: `script-dialog` signal, `download-started`,
   `decide-policy` + `create`, `WebKitFindController` (full-featured, has
-  counts). Same: wire is ready.
+  counts). Same: wire is ready. (Origin stamping too — the Windows leg
+  leaves Linux as the only launcher that doesn't stamp.)
 - **`window` popups keep default chrome** — no `win.open`-style chrome
-  options beyond WKWindowFeatures' width/height/x/y.
+  options beyond WKWindowFeatures' width/height/x/y (both platforms).
+- **Windows: `WindowCloseRequested` unhandled** — a window-mode popup
+  page calling `window.close()` does nothing; the backend can close it by
+  id. Small arm if it ever matters.
+- **Windows: asked POSTs re-issue as GETs** — structural (NavigationStarting
+  has no deferral; the ask is cancel + re-Navigate). Only main-frame http(s)
+  form submissions are affected; fetch/XHR never hit the policy path.
 - **Visual once-over** — every path is verified by assertion, but nobody has
   *looked* at the panels (native styling, origin in the headline) or at a
-  popup window's placement. Five minutes with the wraptest scratch app.
+  popup window's placement, on either platform. Five minutes with the
+  wraptest scratch app.
 
 ## Test bed
 
