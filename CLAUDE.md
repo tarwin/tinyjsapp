@@ -26,6 +26,15 @@ three platforms same day (Linux instrumented, mac/win hand-tested;
 TODO-verify.md). PDF pagination + header/footer plan:
 TODO-pdf.md (macOS `printToPDF` emits ONE tall page today; Windows and
 Linux paginate).
+Site wrappers (a hosted third-party page as the app's main frame — JS
+dialogs, downloads, navigation policy, popups, find, and the tinyjs.json
+`"api"` capability gate): TODO-site-wrapper.md, shipped on all three
+platforms 2026-08-04/06. The gate's per-origin keyholes trust the origin
+the LAUNCHER stamps onto each CALL, so anything touching that path is
+security code — the origin is always the LAST element of the CALL array
+(every launcher appends it; reading `[1]` trusted the page on Windows).
+Verify it the way a hostile page would, never only through our own client:
+adversarial probes in that file, per-OS ticks in TODO-verify.md.
 Anything built on one OS but never watched run on another goes in
 TODO-verify.md — tick a box there only after seeing it work on that OS,
 since a fire-and-forget op a shell ignores looks just like an unimplemented

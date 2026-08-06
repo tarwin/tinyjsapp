@@ -318,6 +318,65 @@ TODO-linux.md).
       full stop, for dev and built apps alike. Anyone wanting the taskbar
       button to change needs a different mechanism than `WM_SETICON`.
 
+## Site-wrapper gate — the ADVERSARIAL probes, added 2026-08-06
+
+The three legs of TODO-site-wrapper.md were each "verified live same day" —
+and the origin stamp, which is the input the `"api"` origins keyhole trusts,
+was still spoofable on two of them. Every harness drove our own cooperative
+`tiny.js` client (one argument per call, no navigation mid-call), so nothing
+ever asked the question a hostile wrapped site asks. The probe code is in
+TODO-site-wrapper.md's "Adversarial probes the harness MUST include"; these
+boxes are the per-OS ticks.
+
+Tick only after SEEING the denial (or the absent window) on that OS. A gate
+that silently allows looks exactly like a gate that was never consulted —
+which is precisely how this got through the first time.
+
+- [ ] **Forged origin argument, macOS** — `window.__invoke(payload,
+      'file://')` from a non-file origin. Bridge fix bc41aa8 reads the LAST
+      element, so this should be gated as the real origin; macOS builds its
+      own two-element array and was never exposed, so this is a
+      regression guard, not a fix check.
+- [ ] **Forged origin argument, Windows** — the leg this fix was written
+      for: the main window's RPC rides the library's `bind()`, so before
+      bc41aa8 the page's own second argument WAS the origin the gate read.
+      Must now be denied. Also run the raw `window.__webview__.post(...)`
+      variant, which bypasses the shim entirely.
+- [ ] **Forged origin argument, Linux** — regression guard (Linux builds
+      its own array).
+- [ ] **Navigate-then-call race, Linux** — `location.href` to a slow URL on
+      a trusted origin, then call a gated method before it commits. UNFIXED
+      as of bc41aa8: the stamp reads the view's ACTIVE uri, which flips at
+      provisional-load start, so this is expected to FAIL until the origin
+      moves into `assign_call_token`'s map. Tick when it denies.
+- [ ] **Navigate-then-call race, macOS / Windows** — should already deny
+      (macOS stamps the document's own `frameInfo.securityOrigin`; Windows
+      stamps the message Source). Confirms the probe itself is sound —
+      a probe that can't fail anywhere proves nothing.
+- [ ] **`tiny.win.id` inside a window-mode popup, Linux** — must be the
+      popup's id, not `main`. UNFIXED: the popup runs the opener's
+      document-start shim with the opener's id baked in, so
+      `app.window(tiny.win.id)` from a popup targets MAIN today.
+- [ ] **`tiny.win.id` inside a window-mode popup, macOS / Windows** — both
+      give the popup its own shim, so this is a regression guard.
+- [ ] **A denied popup opens NO window, Windows** — count top-level windows
+      after a `'deny'`. UNFIXED: if the verdict beats controller creation,
+      the deferral completes with `Handled=FALSE` and WebView2 opens its own
+      browser window. Page-side assertions cannot see this.
+- [ ] **Reported `filename` names the file on disk, Windows** — force a
+      ` (2)` dedup and an ask-mode rename, then stat what `filename` claims.
+      UNFIXED: Windows reports WebView2's suggestion, not the result.
+- [ ] **Back/forward after a policy ask, Windows** — `history.back()` must
+      go back. UNFIXED: the ask cancels and replays as a forward `Navigate`.
+- [ ] **A re-visited URL still asks, Windows** — the allow-once marker can
+      go stale and fails OPEN (no policy ask at all).
+- [ ] **`beforeunload` prompts, Windows** — UNFIXED: auto-accepted today, so
+      a wrapped app with unsaved work navigates away silently.
+- [ ] **A call from a never-committed document settles, Linux** —
+      `window.open('')` then call, with a 3s timeout. UNFIXED: untokened
+      calls on a shared manager are dropped with no reply, so the page's
+      promise hangs forever.
+
 ## Written 2026-07-26, never run off macOS
 
 - [x] **kitchen-sink FFI, Linux** — verified 2026-07-28 on aarch64: the

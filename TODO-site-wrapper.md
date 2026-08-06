@@ -515,6 +515,68 @@ same tick cancel each other's provisional navigation (space them), and a
 popup allowed by `onWindowOpen` whose URL `onNavigate` then denies shows as
 an empty window (the two policies compose).
 
+### Adversarial probes the harness MUST include
+
+Every harness so far drove the cooperative `tiny.js` shim — one argument per
+call, no navigation mid-call — and so all three legs' verification runs
+passed while the origin stamp was spoofable on two of them (see the review
+sweep above). A wrapper's gate is only worth what a HOSTILE page can't do to
+it, so the harness has to act like one. Add these to the wraptest page; each
+is one assertion and each maps to a real finding.
+
+```js
+// 1. Forged origin argument (found the Windows spoof). The page passes a
+//    second argument where a naive bridge reads the origin from.
+//    PASS = still gated as the page's REAL origin.
+R.spoofArg = await tiny.api.call ? null : null; // (call __invoke directly:)
+try {
+  await window.__invoke(JSON.stringify({ method: 'shell.reveal', params: { path: '/tmp' } }),
+                        'file://');            // <- claim the widest grant
+  R.spoofArg = 'ALLOWED (bad)';
+} catch (e) { R.spoofArg = 'denied'; }
+
+// 2. Same, bypassing the shim entirely (the raw bound-call transport).
+try {
+  window.__webview__.post(JSON.stringify({ id: 'x', method: '__invoke',
+    params: [JSON.stringify({ method: 'secrets.get', params: { key: 'k' } }), 'file://'] }));
+} catch (e) {}   // PASS = a denial in the log, never a secret in the reply
+
+// 3. Navigate-then-call race (found the Linux active-URI spoof). Point at a
+//    SLOW url on a trusted origin, then call before it commits.
+//    PASS = the in-flight call is still gated as the current origin.
+location.href = 'http://127.0.0.1:8123/slow';   // server sleeps ~3s
+try { await tiny.api.call('shell.reveal', { path: '/tmp' }); R.spoofNav = 'ALLOWED (bad)'; }
+catch (e) { R.spoofNav = 'denied'; }
+
+// 4. Popup identity: inside a window-mode popup, tiny.win.id must be the
+//    POPUP's id, not the opener's (Linux finding 2 — app.window(tiny.win.id)
+//    from a popup otherwise targets main).
+tiny.store.set('popupWinId', tiny.win.id);      // PASS = 'popupN', not 'main'
+
+// 5. A call from a document that never commits must not hang forever
+//    (Linux finding 4): window.open('') then call with a 3s timeout.
+//    PASS = resolves or rejects; FAIL = the promise never settles.
+```
+
+Non-JS assertions the runner should make, each from a real finding:
+
+- **A denied popup opens NO window at all.** Count top-level windows after a
+  `'deny'` verdict — on Windows an abandoned deferral completed with
+  `Handled=FALSE` makes WebView2 open its OWN browser window, which looks
+  like "the deny didn't work" and is invisible to a page-side assertion.
+- **The reported `filename` names the file that exists on disk.** Download
+  the same name twice (forcing ` (2)` dedup) and in ask-mode rename in the
+  panel, then `stat` what `info.filename` claims. Windows reports the
+  suggestion, not the result.
+- **Back/forward still work after a policy ask** — `history.back()` must go
+  back (Windows replays it as a forward `Navigate`, so the stack grows).
+- **A second navigation to a previously-asked URL still asks** — the
+  Windows allow-once marker can go stale and fails OPEN (no policy ask).
+- **`beforeunload` prompts** rather than being auto-accepted (Windows).
+
+The rule this encodes: a probe that only exercises the happy path through
+our own client proves the client works, not that the gate holds.
+
 Linux harness notes (2026-08-06), each of which cost a wrong result first:
 - the page must live in `src/frontend/`, and `tiny.quit()` is the page's
   quit — `tiny.app.quit` doesn't exist, and awaiting it hangs the run in a
