@@ -2475,10 +2475,22 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     let result;
     try {
       // Launcher forwards the bound call's argument array: ["<payload>"] —
-      // plus, where the launcher stamps it (macOS + Windows), the calling
-      // frame's origin as a second element (engine-attested, not
-      // page-claimed).
-      const [payload, origin] = JSON.parse(line.slice(sp + 1));
+      // plus the calling frame's origin, which every launcher APPENDS, so it
+      // is always the LAST element (engine-attested, not page-claimed).
+      //
+      // Read it by position-from-the-end, never as [1]. On Windows the main
+      // window's RPC rides the webview library's bind(), whose argument array
+      // is whatever the page passed to window.__invoke(...) — so a hostile
+      // wrapped site could pass a second argument of its own and land it
+      // where [1] reads, claiming any origin the manifest trusts and
+      // inheriting that keyhole's grant. That defeats "api".origins on the
+      // very window that hosts the wrapped site. (macOS and Linux build the
+      // two-element array themselves from the message body and were never
+      // exposed; the page's extra arguments now simply sit in the middle and
+      // are ignored.) Found by review 2026-08-06, before any of this shipped.
+      const callArgs = JSON.parse(line.slice(sp + 1));
+      const payload = callArgs[0];
+      const origin = callArgs.length > 1 ? callArgs[callArgs.length - 1] : undefined;
       const { method, params } = JSON.parse(payload);
 
       // Capability gate FIRST — the dialog and find paths below short-circuit

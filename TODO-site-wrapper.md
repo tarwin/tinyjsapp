@@ -372,6 +372,108 @@ wrapurl for `"url"`; a python static server for cross-origin targets and a
 
 Capabilities: all five wrapper keys are now `true` on all three platforms.
 
+## Review sweep 2026-08-06 — two origin-spoofs, one fixed here
+
+An adversarial read of both new legs against the macOS contract (protocol
+conformance, engine lifetimes, and specifically "can the page influence the
+origin the gate trusts?"). Both legs are otherwise sound — wire vocabulary
+identical on all three, deferrals/decisions correctly completed and
+timeout-bounded, no first-load deadlock, popups hidden until verdict. But
+the origin stamp — the input the `"api"` origins keyhole trusts — was
+spoofable on BOTH new platforms, in two completely different ways. Neither
+was reachable through the cooperative `tiny.js` shim, which is exactly why
+both legs' own verification runs passed.
+
+**FIXED HERE (bridge, all platforms).** Windows' main-window RPC rides the
+webview library's `bind()`, whose argument array is *whatever the page
+passed* to `window.__invoke(...)` (`engine_base.hh` onBind →
+`slice.call(arguments)`). The launcher appends the attested origin, but the
+bridge read position `[1]` — so `window.__invoke(payload, "file://")` put a
+page-chosen string exactly where the gate looked, letting a hostile wrapped
+site claim any origin the manifest trusts (typically `file://*`, which
+carries the widest grant) and inherit its keyhole. The bridge now reads the
+origin as the LAST element, which every launcher appends, so page-supplied
+extra arguments sit in the middle and are ignored. macOS and Linux build
+their two-element array themselves and were never exposed. Verified: origin
+gating still enforced on macOS (two origins, different grants, in one run).
+
+### Open — Linux box
+
+1. **SECURITY: the origin stamp follows the ACTIVE uri, not the committed
+   document.** `launcher-linux.cc:483-486` reads
+   `webkit_web_view_get_uri(wv)` live at message time; WebKitGTK flips the
+   active URI to the *requested* one at provisional-load start, while the
+   old document is still running and still posting. So
+   `location.href='https://trusted/slow'` followed immediately by `tiny.*`
+   calls stamps them with the DESTINATION origin for a whole network RTT
+   (attacker-extendable by choosing a slow target). Fix is half-built:
+   `assign_call_token` already runs at `WEBKIT_LOAD_COMMITTED`, where the
+   active URI IS the committed document's — store the origin next to the
+   winid in `g_call_tokens` (token → {winid, origin}) and stamp from that.
+2. **`tiny.win.id` is the opener's id inside a window-mode popup** — the
+   popup runs the opener's document-start shim (baked id), and the
+   UI-process `evaluate_javascript` that corrects `window.__TINY_WIN` can't
+   beat the web process's own injection. Routing is fine (tokens fix
+   attribution), but `app.window(tiny.win.id)` / `tiny.win.close(tiny.win.id)`
+   from a popup target MAIN. Make tiny.js read `__TINY_WIN` through a
+   getter, or patch `tiny.win.id` in `assign_call_token` too.
+3. **Shared-manager mark cleaned up with the wrong manager**
+   (`:5631` marks the opener's, `:6040` un-marks via the popup's own) — so
+   either the opener stays flagged forever (untokened calls dropped for the
+   process's life) or closing one popup un-marks while a second is alive
+   (re-opening the misattribution hole). Erase by the same key that was set.
+4. **Dropped calls hang the page's promise** (`:464`, `:466-472`) — a
+   `window.open('')` document never commits, so it never gets a token, and
+   every `tiny.*` call from it hangs forever with no reply. Dropping beats
+   misattributing, but reply `RET <id> 1 {...}` so it's an error, not a mystery.
+5. Lower: find state goes stale across navigation (`:5943`); `gtk_dialog_run`
+   reentrancy — a backend `WINCLOSE` during a JS dialog can free the view
+   under `webkit_script_dialog_confirm_set_confirmed` (`:5418`, suspected);
+   `json_escape` passes raw bytes ≥0x20, so a non-UTF-8 filename (legal on
+   Linux) yields invalid UTF-8 in the DOWNLOAD JSON.
+
+### Open — Windows box
+
+1. **Origin attribution can be stale/wrong (the fix above closes the spoof,
+   not this).** The vendored `win32_edge.hh` slot comment says the callback
+   runs synchronously inside Invoke — it does not: `on_message` does
+   `dispatch([=]{...})` and `dispatch_impl` is `PostMessageW`, so
+   `on_invoke` reads the global slot on a LATER message-loop turn. Two
+   documents' messages arriving back-to-back can cross-attribute, and the
+   slot is never cleared when `TryGetWebMessageAsString` fails. Carry the
+   source through the dispatch (or fix the comment and accept the limit).
+2. **A denied popup can open a WebView2 DEFAULT window, and leaks a
+   controller.** If the POPUPQ verdict lands before
+   `CreateCoreWebView2Controller` completes, the hidden HWND is destroyed,
+   so `SecCtrlHandler::Invoke` takes the `!tw` path → `abandon_popup()`
+   completes the deferral with `Handled` still FALSE, and WebView2's
+   documented fallback is to open its own window — i.e. `'deny'` shows the
+   user a bare browser window. Set `put_Handled(TRUE)` before completing,
+   and `ctrl->Close()` on that early return (today the controller and its
+   renderer are orphaned on a destroyed HWND). Also give `SecCtrlHandler` a
+   destructor that abandons, or a completion that never fires hangs
+   `window.open()` forever.
+3. **`filename` disagrees with the file actually written** — the reported
+   name is WebView2's suggestion, never updated after ` (n)` dedup or the
+   ask-mode save panel, so "Downloaded X" names a file that doesn't exist.
+   macOS reassigns in both arms; do the same.
+4. **Cancel-and-re-Navigate breaks more than POSTs** (the documented
+   caveat): back/forward are cancelled and replayed as a forward
+   `Navigate`, so the back stack grows and Forward dies; `Navigate()` also
+   sends no Referer/user-activation (breaks referrer-gated OAuth returns);
+   and `do_reload` becomes a fresh load. Gate the ask on navigation kind.
+5. **Stale allow-once marker fails OPEN** — `g_nav_allow_once` is only
+   cleared by a matching `NavigationStarting`, so a re-issued navigation
+   that redirects/fails leaves the entry, and a LATER navigation to that
+   URL skips `NAVQ` with no policy ask. Clear it on a timer/next event too.
+6. **`beforeunload` is auto-accepted** — macOS routes it through the confirm
+   panel, so a wrapped app with unsaved work silently navigates away here.
+7. Lower: `IFileSaveDialog::Show` runs a nested modal loop inside the
+   `DownloadStarting` callback (the 400ms nav/popup timers fire re-entrantly
+   during it — take the deferral instead); `params: []` produces a malformed
+   `[,"null"]` CALL body; `prompt()` from a popup is parented to the main
+   window.
+
 ## Remaining
 - **`window` popups keep default chrome** — no `win.open`-style chrome
   options beyond the window features' width/height/x/y (all platforms).
