@@ -518,6 +518,11 @@ async function systemCapabilities(query, aiStatus) {
     // is native here: Web Audio reaching ctx.destination crackles under
     // WebKitGTK. Informational — the API is identical either way.
     sampler: 'native',
+    // Browser affordances for wrapped sites (TODO-site-wrapper.md): macOS
+    // launcher only so far. WebKitGTK has the signals (script-dialog,
+    // download-started, WebKitFindController) — unwritten, not impossible.
+    jsDialogs: false, downloads: false, navigation: false, popups: false,
+    findInPage: false,
   };
   const windows = {
     // Permanent, not pending: measured 2026-07-28. Process-loopback capture is
@@ -576,8 +581,18 @@ async function systemCapabilities(query, aiStatus) {
     // tiny.audio.sampler mixes in the main window's page (Web Audio is
     // RT-scheduled on Chromium's audio service) — see TODO-audio-sampler.md.
     sampler: 'page',
+    // Browser affordances for wrapped sites: macOS only so far. WebView2 has
+    // ScriptDialogOpening / DownloadStarting / NavigationStarting +
+    // NewWindowRequested (find needs a page-side CSS.highlights fallback —
+    // WebView2 has no find API). See TODO-site-wrapper.md.
+    jsDialogs: false, downloads: false, navigation: false, popups: false,
+    findInPage: false,
   };
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
+    // Browser affordances for wrapped sites (TODO-site-wrapper.md): JS
+    // dialogs, downloads, navigation events + policy, window.open, find.
+    jsDialogs: true, downloads: true, navigation: true, popups: true,
+    findInPage: true,
     // Native DSP on our own output, via a muted Core Audio process tap fed
     // back through an aggregate device. 14.2+, so the launcher answers.
     audioFilters: await hasMacAudioFilters(query),
@@ -713,6 +728,106 @@ const DIALOG_OPS = {
   'dialog.prompt': { op: 'prompt', args: (p) => [one(p.message), one(p.default), one(p.ok), one(p.cancel)] },
 };
 
+// Capability gating (tinyjs.json "api"). `tiny` is injected into EVERY
+// origin, so a wrapped third-party site's own JavaScript holds an RPC channel
+// to this backend — the gate is what makes that shippable. Enforced HERE, the
+// single chokepoint, never in the page (the page-side tiny object is
+// attacker-modifiable on a hostile origin).
+//
+//   "api": { "disable": ["*"], "enable": ["notify", "win.*"] }   explicit
+//   "api": "wrapper"                                             preset
+//   "api": { "preset": "wrapper", "enable": ["myMethod"] }       preset + extra
+//
+// Precedence, in one line: enable wins over disable; absent "api" allows all.
+// Names are the wire method names (the app's own api methods gate by their
+// bare name); "ns.*" covers a namespace, bare "*" everything. Denied calls
+// REJECT with a readable reason — resolving null feeds bad data into callers
+// while a rejection degrades visibly.
+const API_ALWAYS = ['client.hello', 'debug.get']; // the client's own bootstrap
+const API_PRESETS = {
+  // A site wrapper's posture: OS chrome, windows, dialogs, the app's own
+  // store in; filesystem, clipboard READ, secrets, capture and automation out.
+  // The app's OWN api methods are gated off too — enable them by name.
+  wrapper: {
+    disable: ['*'],
+    enable: ['notify', 'dialog.*', 'win.*', 'menu.*', 'tray.*', 'store.*',
+             'clip.write', 'shell.open', 'theme.get', 'system.locale',
+             'system.capabilities', 'system.requirements', 'system.info',
+             'app.info', 'app.badge', 'app.attention', 'app.progress',
+             'sound.play', 'nowplaying.*', 'power.prevent', 'power.allow'],
+  },
+};
+// One name-list -> gate function (null = allow everything). Accepts the
+// explicit {disable, enable} object, a preset name, "all"/"none", or a bare
+// array of names (sugar for deny-by-default + that enable list). An unknown
+// preset denies everything rather than allowing it — a typo in a security
+// setting must fail closed, and loudly.
+function compileNameGate(spec) {
+  if (spec == null || spec === 'all' || spec === true) return null;
+  if (spec === 'none' || spec === false) spec = { disable: ['*'] };
+  else if (typeof spec === 'string') {
+    if (!API_PRESETS[spec]) {
+      console.log(`tinyjs: unknown "api" preset "${spec}" — denying everything (fail closed)`);
+      spec = { disable: ['*'] };
+    } else spec = API_PRESETS[spec];
+  } else if (Array.isArray(spec)) spec = { disable: ['*'], enable: spec };
+  let disable = [], enable = [];
+  const add = (s) => {
+    if (!s) return;
+    disable = disable.concat(s.disable ?? []);
+    enable = enable.concat(s.enable ?? []);
+  };
+  if (spec.preset) {
+    if (!API_PRESETS[spec.preset]) {
+      console.log(`tinyjs: unknown "api" preset "${spec.preset}" — denying everything (fail closed)`);
+      add({ disable: ['*'] });
+    } else add(API_PRESETS[spec.preset]);
+  }
+  add(spec);
+  if (!disable.length) return null; // nothing denied = no gate
+  const match = (pats, m) => pats.some((p) =>
+    p === '*' || p === m || (p.endsWith('.*') && m.startsWith(p.slice(0, -1))));
+  return (m) => API_ALWAYS.includes(m) || match(enable, m) || !match(disable, m);
+}
+
+// The full gate: (method, origin) -> allowed. "origins" scopes by the CALLING
+// FRAME's origin — stamped onto each CALL by the launcher from WebKit's own
+// frameInfo.securityOrigin, so a hostile page can't spoof it. Keys are origin
+// patterns ('*' wildcards anywhere: "file://*", "https://*.airtable.com");
+// first matching key in manifest order wins. An origin matching NO key gets
+// the top-level lists if any, else NOTHING (origins present = deny-by-default
+// for strangers — redirects to unlisted domains shouldn't inherit the keys).
+// Calls with no origin stamp (Windows/Linux launchers today) skip origin
+// scoping and use the top-level lists.
+function compileApiGate(spec) {
+  if (!spec) return null;
+  const base = compileNameGate(typeof spec === 'string' || Array.isArray(spec)
+    ? spec : { ...spec, origins: undefined });
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const origins = spec.origins && typeof spec.origins === 'object'
+    ? Object.entries(spec.origins).map(([pat, sub]) => ({
+        re: new RegExp('^' + pat.split('*').map(escRe).join('.*') + '$'),
+        gate: compileNameGate(sub),
+      }))
+    : null;
+  if (!base && !origins) return null;
+  const strangerGate = (m) => API_ALWAYS.includes(m); // bootstrap only
+  const gateFor = (origin) => {
+    if (origins && origin !== undefined) {
+      const hit = origins.find((o) => o.re.test(origin));
+      if (hit) return hit.gate; // may be null = allow all
+      return base ?? strangerGate;
+    }
+    return base;
+  };
+  const fn = (m, origin) => {
+    const g = gateFor(origin);
+    return g ? g(m) : true;
+  };
+  fn.gateFor = gateFor; // capabilities() reports per-origin denials
+  return fn;
+}
+
 // Per-app data root: ~/Library/Application Support/<id> (macOS),
 // %APPDATA%\<id> (Windows), or $XDG_DATA_HOME/<id> (Linux).
 function appDataDir(appId) {
@@ -779,7 +894,7 @@ function makeStore(appId) {
   };
 }
 
-export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null }) {
+export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, onNavigate, onDownload, onWindowOpen, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null, downloads = null, popups = null, apiAccess = null, inject = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
   async function exists(p) {
@@ -832,7 +947,12 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     //    images load relatively (multi-file frontends); RELOAD re-reads disk
     //  - html string: materialized into the private workDir
     const overridePath = tjs.env.TINYJS_HTML;
-    if (!overridePath && htmlPath) {
+    if (url && !overridePath) {
+      // "url": the main window IS a remote page (site wrappers) — nothing to
+      // materialize; the launcher navigates straight there (the same branch
+      // a frontend.devUrl rides). Packaged .apps carry it as TinyjsUrl.
+      pagePath = String(url);
+    } else if (!overridePath && htmlPath) {
       pagePath = htmlPath;
     } else {
       let pageHtml = html;
@@ -879,6 +999,13 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     // suffix, so UA-sniffing sites reject it. Packaged apps use the
     // TinyjsUserAgent plist key instead (this env only applies to the dev spawn).
     if (userAgent) spawnEnv.TINYJS_UA = String(userAgent);
+    // Wrapped-site affordances (macOS launcher today; packaged .apps carry
+    // the same three as Tinyjs* plist keys / Resources/app/inject.js):
+    // "downloads": auto | ask | deny, "popups": external | window | deny,
+    // "inject": document-start JS source (already bundled by cli.js).
+    if (downloads) spawnEnv.TINYJS_DOWNLOADS = String(downloads);
+    if (popups) spawnEnv.TINYJS_POPUPS = String(popups);
+    if (inject) spawnEnv.TINYJS_INJECT = String(inject);
     // "debug": false (default) = no inspector anywhere, true = F12 (mac also
     // Cmd+Opt+I) opens one detached, 'open' = every window auto-opens its
     // own. `tinyjs dev` seeds TINYJS_DEBUG='dev' in the inherited env, so dev
@@ -2271,7 +2398,11 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     'system.locale': async () => lastLocale ?? query('locale'),
     'app.info': async () => app.info,
     'system.info': async () => systemInfo(),
-    'system.capabilities': async () => systemCapabilities(query, () => app.macos.ai.availability()),
+    'system.capabilities': async (_p, _a, m) => ({
+      ...(await systemCapabilities(query, () => app.macos.ai.availability())),
+      // what the "api" gate denies the CALLING origin (empty when ungated)
+      api: gateInfo(m?.origin),
+    }),
     'system.requirements': async ({ ids, refresh } = {}) => systemRequirements(ids, refresh),
     'app.screens': async () => app.screens(),
     'app.paths': async () => app.paths,
@@ -2312,6 +2443,16 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
   };
   const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };
+  const apiGate = compileApiGate(apiAccess);
+  // capabilities() reports what the gate denies THE CALLING ORIGIN, so a
+  // page can hide UI for features it would only watch fail.
+  const gateInfo = (origin) => {
+    if (!apiGate) return { gated: false, denied: [] };
+    const names = [...new Set([...Object.keys(methods), ...Object.keys(DIALOG_OPS),
+                               'win.find', 'win.stopFind'])];
+    const g = apiGate.gateFor(origin);
+    return { gated: true, denied: g ? names.filter((m) => !g(m)).sort() : [] };
+  };
   let lastTheme = null; // { dark } once the launcher reports it (at startup)
   let lastLocale = null;   // last SYSLOCALE payload
   let markEof;
@@ -2326,9 +2467,19 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
     let status = 0;
     let result;
     try {
-      // Launcher forwards the bound call's argument array: ["<payload>"]
-      const [payload] = JSON.parse(line.slice(sp + 1));
+      // Launcher forwards the bound call's argument array: ["<payload>"] —
+      // plus, where the launcher stamps it (macOS), the calling frame's
+      // origin as a second element (WebKit-attested, not page-claimed).
+      const [payload, origin] = JSON.parse(line.slice(sp + 1));
       const { method, params } = JSON.parse(payload);
+
+      // Capability gate FIRST — the dialog and find paths below short-circuit
+      // to the launcher before `methods` is consulted, and they must not slip
+      // past it.
+      if (apiGate && !apiGate(method, origin)) {
+        if (tjs.env.TINYJS_DEBUG) console.log(`tinyjs: denied "${method}" for ${origin ?? 'unknown origin'} (tinyjs.json "api")`);
+        throw new Error(`"${method}" is disabled by tinyjs.json "api"`);
+      }
 
       // Native dialogs: hand the call id to the launcher; it runs the panel
       // on the UI thread and resolves the page's promise itself.
@@ -2338,9 +2489,21 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
         return;
       }
 
+      // Find-in-page: launcher-answered like dialogs (macOS launcher today).
+      if (method === 'win.find' || method === 'win.stopFind') {
+        if (IS_WIN || IS_LINUX) throw new Error(method + ' is not supported on this platform yet');
+        if (method === 'win.find') {
+          const p = params ?? {};
+          send(`FIND ${id} ${[one(p.term), p.forward === false ? '0' : '1', p.matchCase ? '1' : '0'].join('\t')}`);
+        } else {
+          send(`STOPFIND ${id}`);
+        }
+        return;
+      }
+
       const fn = methods[method];
       if (!fn) throw new Error('unknown method: ' + method);
-      result = await fn(params ?? {}, app, { window: callerWin });
+      result = await fn(params ?? {}, app, { window: callerWin, origin });
     } catch (e) {
       status = 1;
       result = String((e && e.message) || e);
@@ -2512,6 +2675,74 @@ export async function createApp({ html, htmlPath, title = 'tinyjs', size = '960x
             push('open-files', { paths });
             fire('onOpenFiles', onOpenFiles, paths, app);
           } catch {}
+        } else if (line.startsWith('NAVQ ')) {
+          // Main-frame navigation policy ask: NAVQ <qid> <winid>\t<url>.
+          // The launcher holds the webview's decision handler and
+          // default-allows after 400ms, so answer promptly — an app with no
+          // onNavigate (or one that returns nothing) allows immediately.
+          const sp = line.indexOf(' ', 5);
+          const qid = line.slice(5, sp);
+          const [win, navUrl] = line.slice(sp + 1).split('\t');
+          (async () => {
+            let verdict = 'allow';
+            if (onNavigate) {
+              try {
+                const r = await onNavigate({ window: win, url: navUrl, kind: 'policy', isMainFrame: true }, app);
+                if (r === 'deny' || r === 'external') verdict = r;
+              } catch (e) {
+                console.log('tinyjs onNavigate policy failed:', e);
+              }
+            }
+            send(`NAVR ${qid} ${verdict}`);
+          })();
+        } else if (line.startsWith('NAV ')) {
+          // Navigation lifecycle: {window, kind: start|commit|finish|fail|crash,
+          // url, error?} — the raw material for loading / offline / crashed UI.
+          let info = null;
+          try { info = JSON.parse(line.slice(4)); } catch {}
+          if (info) {
+            push('navigate', info);
+            fire('onNavigate', onNavigate, info, app);
+          }
+        } else if (line.startsWith('DOWNLOAD ')) {
+          // {id, url, filename, path, state: started|done|failed|denied|cancelled, error?}
+          let info = null;
+          try { info = JSON.parse(line.slice(9)); } catch {}
+          if (info) {
+            push('download', info);
+            fire('onDownload', onDownload, info, app);
+          }
+        } else if (line.startsWith('POPUPQ ')) {
+          // window.open policy ask: POPUPQ <qid> <popupid|->\t<opener>\t<url>\t<mode>.
+          // In "window" mode the popup already exists (hidden, loading) under
+          // <popupid>; the verdict shows or closes it. Elsewhere only
+          // 'external'/'deny' can be honored — the webview had to be returned
+          // (or not) synchronously. Unanswered after 400ms = configured mode.
+          const sp = line.indexOf(' ', 7);
+          const qid = line.slice(7, sp);
+          const [pid, opener, popUrl, mode] = line.slice(sp + 1).split('\t');
+          (async () => {
+            let verdict = mode;
+            if (onWindowOpen) {
+              try {
+                const r = await onWindowOpen({ window: pid === '-' ? null : pid, opener, url: popUrl, kind: 'policy', mode }, app);
+                if (r === 'window' || r === 'external' || r === 'deny') verdict = r;
+              } catch (e) {
+                console.log('tinyjs onWindowOpen policy failed:', e);
+              }
+            }
+            send(`POPUPR ${qid} ${verdict}`);
+          })();
+        } else if (line.startsWith('POPUP ')) {
+          // window.open / target=_blank was resolved: {window, url, action}.
+          // action 'window' means a real popup window exists under that id
+          // (app.window(id).close() still works to veto later).
+          let info = null;
+          try { info = JSON.parse(line.slice(6)); } catch {}
+          if (info) {
+            push('popup', info);
+            fire('onWindowOpen', onWindowOpen, { ...info, kind: 'open' }, app);
+          }
         }
       }
     }

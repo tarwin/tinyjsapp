@@ -645,6 +645,11 @@ declare interface Tiny {
     setFullscreen(enabled: boolean): Promise<any>;
     setAlwaysOnTop(enabled: boolean): Promise<any>;
     setResizable(enabled: boolean): Promise<any>;
+    /** Native page zoom, 0.25–5 — the WEBVIEW's own (WKWebView pageZoom,
+     *  WebView2 ZoomFactor, webkit_web_view_set_zoom_level), so it renders
+     *  crisp and the page keeps laying out in ordinary CSS px with fewer of
+     *  them. Distinct from zoom(), which is the green-button maximize. */
+    setZoom(factor: number): Promise<any>;
     /** mouse events pass through to whatever is behind the window */
     setClickThrough(enabled: boolean): Promise<any>;
     setLevel(level: TinyWindowLevel): Promise<any>;
@@ -671,6 +676,13 @@ declare interface Tiny {
     print(): Promise<any>;
     /** render the page to a PDF file (vector) */
     printToPDF(path: string): Promise<{ path: string }>;
+    /** Find-in-page: selects and scrolls to the next match; call again to
+     *  step. matches/activeMatch come from a JS text-walk on top of the
+     *  native find (approximate on exotic pages). macOS today — ask
+     *  tiny.system.capabilities().findInPage. */
+    find(term: string, opts?: { forward?: boolean; matchCase?: boolean }): Promise<{ found: boolean; matches?: number; activeMatch?: number }>;
+    /** clear the find selection */
+    stopFind(): Promise<any>;
     /** files dragged onto the window — real filesystem paths */
     onDrop(fn: (paths: string[]) => void): void;
 
@@ -1048,6 +1060,11 @@ declare interface TinyWindowHandle {
   setFullscreen(enabled: boolean): void;
   setAlwaysOnTop(enabled: boolean): void;
   setResizable(enabled: boolean): void;
+  /** Native page zoom, 0.25–5 — the WEBVIEW's own (WKWebView pageZoom,
+   *  WebView2 ZoomFactor, webkit_web_view_set_zoom_level), so it renders
+   *  crisp and the page keeps laying out in ordinary CSS px with fewer of
+   *  them. Distinct from zoom(), which is the green-button maximize. */
+  setZoom(factor: number): void;
   setClickThrough(enabled: boolean): void;
   setLevel(level: TinyWindowLevel): void;
   setAllSpaces(enabled: boolean): void;
@@ -1102,6 +1119,11 @@ declare interface TinyApp {
   setPosition(x: number, y: number): void;
   setAlwaysOnTop(enabled: boolean): void;
   setResizable(enabled: boolean): void;
+  /** Native page zoom, 0.25–5 — the WEBVIEW's own (WKWebView pageZoom,
+   *  WebView2 ZoomFactor, webkit_web_view_set_zoom_level), so it renders
+   *  crisp and the page keeps laying out in ordinary CSS px with fewer of
+   *  them. Distinct from zoom(), which is the green-button maximize. */
+  setZoom(factor: number): void;
   setClickThrough(enabled: boolean): void;
   setLevel(level: TinyWindowLevel): void;
   setAllSpaces(enabled: boolean): void;
@@ -1261,6 +1283,12 @@ declare interface TinyApp {
 declare interface TinyApiMeta {
   /** id of the window the call came from ('main' or a tiny.win.open id) */
   window: string;
+  /** origin of the CALLING FRAME, stamped by the launcher from WebKit's own
+   *  frame info (not page-claimed) — e.g. "https://airtable.com",
+   *  "file://". undefined where the launcher doesn't stamp it yet
+   *  (Windows/Linux). The tinyjs.json "api".origins gate keys off the same
+   *  value. */
+  origin?: string;
 }
 
 /** Signature for backend api methods:
@@ -1270,3 +1298,58 @@ declare type TinyApiHandler = (
   app: TinyApp,
   meta: TinyApiMeta,
 ) => unknown | Promise<unknown>;
+
+/** 'navigate' page event / onNavigate backend hook (macOS today).
+ *  kind 'policy' reaches only the backend hook, for main-frame http(s)
+ *  navigations before they run: return 'deny' or 'external' (hand the URL to
+ *  the real browser) to stop them; anything else — or answering slower than
+ *  ~400ms — allows. The rest narrate the load: start | commit | finish |
+ *  fail (with error) | crash (web content process died). */
+declare interface TinyNavEvent {
+  window: string;
+  kind: 'policy' | 'start' | 'commit' | 'finish' | 'fail' | 'crash';
+  url: string;
+  isMainFrame?: boolean;
+  error?: string;
+}
+
+/** 'download' page event / onDownload backend hook (macOS today).
+ *  tinyjs.json "downloads": 'auto' (default; ~/Downloads, de-duped names) |
+ *  'ask' (save panel) | 'deny'. 'progress' states carry bytes/total
+ *  (total -1 when the response had no Content-Length), throttled to ~4/s. */
+declare interface TinyDownloadEvent {
+  id: number;
+  url: string;
+  filename: string;
+  path: string | null;
+  state: 'started' | 'progress' | 'done' | 'failed' | 'denied' | 'cancelled';
+  bytes?: number;
+  total?: number;
+  error?: string;
+}
+
+/** onWindowOpen backend hook / 'popup' page event (macOS today) —
+ *  window.open / target=_blank, per tinyjs.json "popups": 'external'
+ *  (default; handed to the browser) | 'window' (a real tinyjs window) |
+ *  'deny'.
+ *
+ *  kind 'policy' reaches only the backend hook, BEFORE anything shows:
+ *  return 'window' | 'external' | 'deny' to override the configured mode
+ *  (anything else — or answering slower than ~400ms — keeps it). In
+ *  "popups": "window" mode the popup already exists hidden under `window`
+ *  while you decide; in other modes only 'external'/'deny' can be honored,
+ *  because the webview had to be returned (or not) synchronously.
+ *
+ *  kind 'open' (and the 'popup' page event) reports the outcome; with
+ *  action 'window' the popup is live under `window` and
+ *  app.window(id).close() still vetoes it late. */
+declare interface TinyPopupEvent {
+  window: string | null;
+  /** id of the window whose page called window.open */
+  opener?: string;
+  url: string;
+  kind?: 'policy' | 'open';
+  /** the configured "popups" mode (policy asks only) */
+  mode?: string;
+  action?: 'window' | 'external' | 'deny';
+}

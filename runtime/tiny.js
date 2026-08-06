@@ -360,6 +360,14 @@
       print: () => call('win.print'),
       // Render the page to a PDF file (vector) -> { path }.
       printToPDF: (path) => call('win.printToPDF', { path }),
+      // Find-in-page (⌘F UI is the app's; this is the engine underneath).
+      // -> { found, matches, activeMatch }: the next match is selected and
+      // scrolled into view; call again to step. Counts are a JS text-walk on
+      // top of the native find (approximate on exotic pages — hidden text
+      // counts, shadow DOM doesn't). macOS today — ask
+      // tiny.system.capabilities().findInPage.
+      find: (term, opts = {}) => call('win.find', { term, forward: opts.forward !== false, matchCase: !!opts.matchCase }),
+      stopFind: () => call('win.stopFind'),
       // This window's OWN menu bar — same spec and same click event as
       // tiny.menu, but for this window alone. Windows without an override
       // keep showing the app menu, and a window opened later inherits it too.

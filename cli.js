@@ -438,8 +438,28 @@ async function generateBuild(cfg, dev = false) {
     }
   }
 
+  // tinyjs.json "inject": document-start JS injected into every window before
+  // the page boots (site wrappers shim capabilities/behaviour there). Bundled
+  // like the backend (.ts via esbuild); ships as Resources/app/inject.js in a
+  // packaged .app, rides the spawn env (TINYJS_INJECT) in dev.
+  let injectSrc = null;
+  if (cfg.inject) {
+    if (!(await exists(cfg.inject))) fail('tinyjs.json "inject": ' + cfg.inject + ' not found');
+    if (String(cfg.inject).endsWith('.ts')) {
+      console.log('==> bundling inject (esbuild)');
+      await run(nodeToolArgv(['npx', '--yes', 'esbuild', cfg.inject, '--bundle',
+                 '--format=iife', '--log-level=warning',
+                 '--outfile=' + B + '/inject.js']));
+      injectSrc = dec.decode(await tjs.readFile(B + '/inject.js'));
+    } else {
+      injectSrc = dec.decode(await tjs.readFile(cfg.inject));
+      await tjs.writeFile(B + '/inject.js', enc.encode(injectSrc));
+    }
+  }
+
   // Frontend: optional build hook (bundlers) or plain source dir; dev with a
-  // devUrl skips all of this — the dev server owns the frontend.
+  // devUrl skips all of this — the dev server owns the frontend. A "url"
+  // wrapper (the main window IS a remote page) needs no frontend at all.
   const fe = cfg.frontend ?? {};
   const devUrl = dev ? fe.devUrl : null;
   let frontendSrc = fe.dir ?? 'src/frontend';
@@ -448,10 +468,10 @@ async function generateBuild(cfg, dev = false) {
     await run(shellArgv(fe.build));
     frontendSrc = fe.dist ?? 'dist';
   }
-  if (!devUrl && !(await exists(frontendSrc + '/index.html'))) {
+  if (!devUrl && !cfg.url && !(await exists(frontendSrc + '/index.html'))) {
     fail(frontendSrc + '/index.html not found');
   }
-  if (!dev) await copyTree(frontendSrc, B + '/frontend');
+  if (!dev && (await exists(frontendSrc + '/index.html'))) await copyTree(frontendSrc, B + '/frontend');
 
   // Frontend location at runtime: dev uses the project sources in place;
   // packaged apps resolve relative to entry.js (.app Resources/app/) with a
@@ -495,6 +515,14 @@ const app = await createApp({
   onClipboardChange: appMod.onClipboardChange,
   onUpdateAvailable: appMod.onUpdateAvailable,
   onAudioTap: appMod.onAudioTap,
+  onNavigate: appMod.onNavigate,
+  onDownload: appMod.onDownload,
+  onWindowOpen: appMod.onWindowOpen,
+  url: ${JSON.stringify(cfg.url ?? null)},
+  downloads: ${JSON.stringify(cfg.downloads ?? null)},
+  popups: ${JSON.stringify(cfg.popups ?? null)},
+  apiAccess: ${JSON.stringify(cfg.api ?? null)},
+  inject: ${JSON.stringify(injectSrc)},
   chrome: ${JSON.stringify(cfg.chrome ?? null)},
   update: ${JSON.stringify(cfg.update ?? null)},
   activation: ${JSON.stringify(cfg.activation ?? null)},
@@ -515,8 +543,10 @@ const app = await createApp({
 if (appMod.init) appMod.init(app);
 `;
 
-  if (dev && !devUrl) {
+  if (dev && !devUrl && !cfg.url) {
     // Hot-reload: any frontend change re-renders the page from disk in place.
+    // "url" apps skip it twice over: the main window is a remote page, and
+    // the frontend dir being watched may not even exist.
     entry += `
 let reloadTimer = null;
 tjs.watch(FRONTEND, () => {
@@ -967,8 +997,10 @@ async function cmdBuild() {
   }
 
   await run(['cp', TOOL_DIR + 'native/launcher-macos', 'dist/launcher']);
-  // The bare binary resolves its frontend next to the executable.
-  await run(['cp', '-R', '.build/app/frontend', 'dist/frontend']);
+  // The bare binary resolves its frontend next to the executable ("url"
+  // wrappers may not have one).
+  if (await exists('.build/app/frontend'))
+    await run(['cp', '-R', '.build/app/frontend', 'dist/frontend']);
 
   // The .app does NOT use the compiled binary (it can't be codesigned, see
   // below): it ships the stock tjs runtime + the app as plain data files in
@@ -1018,6 +1050,23 @@ async function cmdBuild() {
     const ua = String(cfg.userAgent).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     extraKeys += `
   <key>TinyjsUserAgent</key>     <string>${ua}</string>`;
+  }
+  if (cfg.url) {
+    // "url": the main window starts at this remote page (site wrappers) —
+    // the launcher navigates there instead of Resources/app/frontend.
+    const u = String(cfg.url).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    extraKeys += `
+  <key>TinyjsUrl</key>           <string>${u}</string>`;
+  }
+  if (cfg.downloads) {
+    // "downloads": auto | ask | deny (see the launcher's download delegate).
+    extraKeys += `
+  <key>TinyjsDownloads</key>     <string>${cfg.downloads}</string>`;
+  }
+  if (cfg.popups) {
+    // "popups": external | window | deny (window.open / target=_blank).
+    extraKeys += `
+  <key>TinyjsPopups</key>        <string>${cfg.popups}</string>`;
   }
   if (cfg.debug) {
     // Devtools in a packaged .app (see createApp debug): LaunchServices
