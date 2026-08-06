@@ -351,7 +351,12 @@ TODO-linux.md).
       Linux half verified 2026-07-28: `setChrome({windowControls:['close']})`
       resolves and `getState().chrome.windowControls` reports `null`, not an
       echo; the fleet sweep (all 26 examples launch) says nothing depended on
-      the lie. Windows unchecked.
+      the lie. **Closed 2026-08-05:** `trafficLights` no longer exists as a
+      key anywhere in the runtime (post-0.30 rename to `windowControls`/
+      `windowControlsPos`; only a cli.js comment mentions the old name), so
+      there is nothing left on Windows to check under this name — and the
+      current contract (getState reports what you GOT) was re-proven on
+      Windows the same day in the windowControlsPos entry below.
 
 - [x] **`chrome.windowControls` on Windows** — verified 2026-07-28, and the
       predicted Win32 coarseness is exactly what happens. `['close']` →
@@ -791,10 +796,24 @@ launchers were edited to match but not compiled:
 
 ## The ball on Windows and Linux — never run there
 
-- [ ] **Windows** — per-frame `win.setPosition` on a second window: is a
-      `SetWindowPos` per frame smooth, or does it stutter/trail? And does
-      `chrome: { transparent: true }` on a WebView2 child window give a real
-      circle, or a black square behind it?
+- [x] **Windows** — **both halves settled 2026-08-05**, headlessly, and it
+      is the best result of the three platforms. Motion: a rAF loop on a
+      frameless transparent satellite completed **721 moves in 721 frames
+      over 6.01s — 120 moves/s on this 120Hz display, zero dropped** —
+      with round-trip latency p50 1.2ms / p95 2.8ms / max 3.8ms, and
+      sampling the window's REAL position from outside (GetWindowRect,
+      DPI-aware) every ~125ms showed even ~270-physical-px steps with clean
+      reversals at both bounce edges. Pixels: the ball held still over a
+      magenta main window and a DPI-aware CopyFromScreen of its exact rect
+      read **pure 255,0,255 at all four corners and pure 0,0,0 at center**
+      — a real circle with transparent corners, not a black square (the
+      WS_EX_NOREDIRECTIONBITMAP secondaries doing their job).
+      Two rig traps, both already documented elsewhere in this file and both
+      hit anyway: Add-Type compilation is seconds of skew — compile BEFORE
+      launching the app or the "hold still" capture happens mid-flight (one
+      corner read black off a stale rect exactly that way); and
+      GetWindowTextW without CharSet.Unicode returns one-char garbage
+      titles.
 - [x] **Linux/X11** — mechanics verified 2026-07-28; **the pixels and the
       motion settled 2026-08-01.** A frameless `chrome:{transparent:true}`
       satellite drawing a `border-radius:50%` div was captured with `xwd`
@@ -1144,12 +1163,24 @@ The other two are compiled-never-watched (Windows: WM_SIZE/WM_ACTIVATE in
 both wndprocs + set_fullscreen; Linux: the already-connected
 window-state-event signal now emits):
 
-- [ ] **Windows** — kitchen-sink: toggle Listening on, then minimize,
-      maximize, restore, F11-style fullscreen (the Fullscreen buttons), and
-      click another app. Expect one feed line per transition, no spam while
-      drag-resizing (deduped), `maximized` true from the caption button too.
-      Secondary windows: open the inspector, minimize it — feed line says
-      `inspector`, not `main`.
+- [~] **Windows** — **core verified 2026-08-05**, launcher rebuilt from
+      source first (it was two days stale again — predating the site-wrapper
+      client changes). Headless drill: a TINYJS_HTML driver page recorded
+      every `win.onState` event while driving itself, then opened a satellite
+      (absolute-path `page:`) that drove ITSELF — window ops are scoped to
+      the calling page, so the satellite has to run its own script. All four
+      flags move: `minimize()` → `minimized:true` then `focused:false` (two
+      events — WM_SIZE lands before WM_ACTIVATE, so there's a ~1ms
+      `minimized:true, focused:true` state first; not spam, both are real
+      transitions); `restore()` → one event; `zoom()` toggles `maximized`
+      on and off; `setFullscreen(true/false)` moves `fullscreen`. The
+      satellite's events carry **`win:'sat'`, not `main`** — the claim this
+      box existed for — and focus moves both ways with the right ids:
+      opening sat gave `main focused:false` + `sat focused:true`, sat's
+      minimize handed focus to main, its restore took it back, its close
+      returned it. 21 events, every one a distinct transition — deduped.
+      Still needing a hand: `maximized` from the caption button, and
+      no-spam during a live drag-resize (both need a real mouse).
 - [x] **Linux (X11)** — verified 2026-08-01, launcher rebuilt from source.
       All four flags move: `setFullscreen(true/false)` → `fullscreen`
       true/false; `win.zoom()` → `maximized` true then false (cross-checked
@@ -1186,7 +1217,16 @@ window-state-event signal now emits):
       y:30} })` resolves `true`, `getState().chrome` comes back with no
       `windowControlsPos` key at all (no echo of a thing that didn't
       happen), and every other chrome field reads normally afterwards — the
-      wider CHROME line didn't disturb the parse. Windows still unchecked.
+      wider CHROME line didn't disturb the parse. **Windows half done
+      2026-08-05**, same shape, headless: `setChrome({ windowControlsPos:
+      {x:40,y:30} })` and the `null` form both resolve `true`,
+      `getState().chrome` has **no `windowControlsPos` key at all**, and a
+      follow-up `setChrome({ windowControls: ['close'] })` still lands
+      (reads back `['close']`) — the wider CHROME line doesn't disturb the
+      parser. A satellite born with `windowControlsPos` in WINOPEN field 14
+      opened at exactly its declared 300x200 page box with sane chrome. Both
+      halves are now done; what remains is only the kitchen-sink chip UI
+      saying "(macOS only — ignored here)", which is cosmetic.
 
 ## Off-screen window rescue (2026-07-30, policy verified macOS only)
 
@@ -1205,10 +1245,19 @@ Verified on macOS headlessly: dormant boot leaves (5000,5000) alone,
 manual verb clamps, forged-fingerprint boot chases the first pos and
 leaves the second. Compiled-never-watched elsewhere:
 
-- [ ] **Windows** — forge `__screens` in store.json, set saved pos
-      x:9999, launch: window appears clamped. Unforged relaunch: an
-      off-screen setPosition sticks (dormant). Unplug a monitor with a
-      window on it mid-session: window comes back (WM_DISPLAYCHANGE).
+- [~] **Windows** — **policy verified 2026-08-05**, headlessly (launcher
+      rebuilt from source first). Forged `__screens` boot: the fingerprint
+      was detected and rewritten to the real one, and the first
+      `setPosition(9999,9999)` was chased to **755,361 — exactly
+      `work area − outer frame`** (1728−973, 1037−676), i.e. clamped flush
+      into the corner, fully visible; a SECOND setPosition to 9999,9999
+      stuck (the chaser is first-pos-only, matching the macOS measurement);
+      `win.ensureOnScreen()` clamped it back. Unforged relaunch (dormant):
+      the same first setPosition **sticks at 9999,9999** — rescue stays out
+      of the way, the coo3d case — and the manual verb still clamps. Note
+      the clamp respects the taskbar: y lands on the work area (1037), not
+      the screen height (1084). Still unrun: unplugging a monitor holding a
+      window mid-session (WM_DISPLAYCHANGE sweep) — needs hardware.
 - [~] **Linux (X11)** — run 2026-08-01, and the interesting part is that
       **the policy is unobservable on GNOME, because Mutter never lets a
       window off-screen in the first place.** `setPosition(5000,5000)` on a
@@ -1296,10 +1345,13 @@ drills as written are still the way to pin it down.
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS in dev; verify a PACKAGED app
       gets it too (attach mode doesn't go through the bridge's spawn env).
       **Half done 2026-07-31:** under `tinyjs dev` a never-clicked window's
-      AudioContext reached `running` and kept rendering. The PACKAGED half —
-      the reason this box exists — is still open: the four sampler apps were
-      published and launched as exes, but nothing read audio back out of
-      them, so a packaged app that comes up suspended would look identical.
+      AudioContext reached `running` and kept rendering. **Packaged half
+      done 2026-08-05:** a `tinyjs build` exe launched and never clicked
+      created an AudioContext + oscillator graph with no gesture —
+      `state` was `running` at 500ms, still `running` at 2s, and
+      `ctx.currentTime` advanced **1.552s in 1.5s of wall time**, so the
+      graph really renders. Packaged apps get the autoplay flag; the
+      attach-mode worry is closed.
 - [x] **win: hidden main window, 5+ min playback** — GPU/CPU quiet in Task
       Manager, audio unbroken (audibly-playing pages are exempt from
       intensive throttling — trust but verify).
@@ -1698,18 +1750,31 @@ accelerator call above, and composing with it):
   exists at all; browserAccelerators governs whether the engine's key set
   reaches the page. Neither implies the other.
 
-- [~] **Windows** — packaged app with no `debug` key: F12 dead, no devtools
-      via any route. `"debug": true`: F12 opens standalone devtools.
-      `"debug": "open"`: every window opens its devtools at creation.
-      `tinyjs dev` with no key: F12 works.
-      **The last clause only, done 2026-08-03** (fell out of the accelerator
-      run above): under `tinyjs dev` with no `debug` key in tinyjs.json, F12
-      opens a top-level `Chrome_WidgetWin_1` **"DevTools - file:///…"**
-      window — so dev's force-enable works, and it opens **detached**. The
-      page saw no F12 keydown, confirming the launcher owns the key rather
-      than the engine. The three PACKAGED cases are the ones that matter for
-      shipping and are still unrun: an app with no key must have **no** route
-      to an inspector, which is the whole point of the default.
+- [x] **Windows** — **all four verified.** Dev case 2026-08-03 (fell out of
+      the accelerator run): under `tinyjs dev` with no `debug` key, F12
+      opens a detached "DevTools - file:///…" window; the page saw no F12
+      keydown, so the launcher owns the key.
+      **The three PACKAGED cases done 2026-08-05**, headlessly: three real
+      `tinyjs build`s of a scratch app (launcher rebuilt from source first),
+      each launched as `dist\winsweep.exe` under an EnumWindows title
+      poller. **No `debug` key**: `app.keystroke('F12')` resolved
+      `{ok:true, trusted:true}` into the focused packaged app and **zero
+      DevTools windows appeared** the whole run (the poller demonstrably
+      watching the right desktop — it saw the app's own "winsweep" window;
+      and the same rig sees DevTools in the other two cases, so the zero is
+      meaningful). **`"debug": true`**: the same F12 opened one standalone
+      "DevTools - file:///…index.html" top-level window. **`"debug":
+      "open"`**: a two-window app (main + `win.open` satellite) came up with
+      **two** DevTools windows, one per app window (…index.html and
+      …sat.html), no keypress at all — the one-inspector-per-window shape.
+      Not driven: the right-click Inspect route (needs a real click);
+      given F12-dead + no auto-open, the remaining exposure is the context
+      menu only.
+      Rig gotcha worth keeping: `GetWindowTextW` P/Invoked without
+      `CharSet.Unicode` marshals the UTF-16 buffer as ANSI and every title
+      reads as one garbage char — the first pass returned an empty title
+      list that looked exactly like "no windows", on a desktop with plenty.
+      Validate the enumerator against a known window before trusting a zero.
 - [x] **Linux** — **all four run 2026-08-03** on Ubuntu 24.04 aarch64,
       GNOME 46, XWayland, launcher rebuilt from source. Settled from outside
       with `xwininfo -root -tree` (an inspector window is invisible to the
