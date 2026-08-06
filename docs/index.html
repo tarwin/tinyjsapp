@@ -321,6 +321,39 @@
   .qs-cell h3 { font: 400 11px var(--mono); letter-spacing: .18em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px 2px; }
   .qs-cell pre { margin: 0; }
 
+  /* faq — a comparison table, then answers that open on demand. <details>
+     keeps a dozen answers off the first screen without any JS, and the text
+     still ships in the HTML for search engines and readers who ⌘F. */
+  .vs { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  .vs table { border-collapse: collapse; width: 100%; font: 12px var(--mono); }
+  .vs th, .vs td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .vs th { color: var(--muted); font: 400 10.5px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+  .vs td { color: var(--muted); }
+  .vs td:first-child { color: var(--text); }
+  .vs tbody tr:last-child td { border-bottom: 0; }
+  .vs tr.us td { color: var(--accent); background: var(--wash); }
+  .vs-note { margin-top: 14px; font-size: 14px; color: var(--muted); }
+
+  .faq { margin-top: 22px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+  .faq details + details { border-top: 1px solid var(--line); }
+  .faq summary {
+    cursor: pointer; padding: 14px 20px; list-style: none;
+    font: 600 13px var(--mono); color: var(--accent); letter-spacing: .02em;
+    display: flex; gap: 12px; align-items: baseline;
+  }
+  .faq summary::-webkit-details-marker { display: none; }  /* safari draws its own */
+  .faq summary::before { content: "+"; color: var(--muted); font-weight: 400; }
+  .faq details[open] summary::before { content: "−"; }
+  .faq summary:hover { background: var(--wash); }
+  .faq details[open] summary { padding-bottom: 4px; }
+  .faq .ans { padding: 0 20px 18px 45px; font-size: 15px; color: var(--muted); }
+  .faq .ans p + p { margin-top: 10px; }
+  .faq .ans strong { color: var(--text); font-weight: 600; }
+  .faq .ans code { font: 12.5px var(--mono); color: var(--text); }
+  .faq .ans a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--line); }
+  .faq .ans a:hover { border-color: var(--accent); }
+  @media (max-width: 560px) { .faq .ans { padding-left: 20px; } }
+
   /* architecture */
   /* how it fits — was a <pre>, which flattened three tiers and two transports
      into one wall of muted mono. Boxes for the layers, arrows for the wires. */
@@ -628,6 +661,190 @@ tiny.menu.set([…]);
           <div class="tier"><b>backend</b><span>txiki.js</span></div>
         </div>
       </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <h2>Questions</h2>
+    <div class="vs">
+      <table>
+        <thead>
+          <tr><th>&nbsp;</th><th>backend</th><th>window</th><th>ships</th><th>ports</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>electron</td><td>Node.js</td><td>bundled Chromium</td><td>≥ 150 MB</td><td>none</td></tr>
+          <tr><td>tauri</td><td>Rust, compiled</td><td>system webview</td><td>~10 MB</td><td>none</td></tr>
+          <tr><td>neutralino</td><td>none — page-side only</td><td>system webview</td><td>~3 MB</td><td>localhost ws</td></tr>
+          <tr class="us"><td>tinyjs</td><td>JavaScript (txiki.js)</td><td>system webview</td><td>~6 MB</td><td>none</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="vs-note">Everything below is the honest version, caveats
+    included — including the parts where another tool is the better answer.</p>
+
+    <div class="faq">
+      <details>
+        <summary>How is this different from Electron?</summary>
+        <div class="ans">
+          <p>Electron ships an entire Chromium and an entire Node with every
+          app. That is where the ≥&hairsp;150 MB goes, and why every app on
+          your machine carries its own browser to patch. tinyjs renders in the
+          webview the OS already ships and runs its backend on a 5.6 MB JS
+          runtime, so the same app is ~6 MB.</p>
+          <p>What you give up: one identical rendering engine on every
+          platform, native Node addons, and a decade of Electron-shaped
+          tooling. What you keep: writing the whole app — backend
+          included — in plain JavaScript.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>How is this different from Tauri?</summary>
+        <div class="ans">
+          <p>Same shape — system webview, small binary — and Tauri does it
+          well. Two real differences. The backend is <strong>JavaScript, not
+          Rust</strong>, so there is no compile step and no second language in
+          the project. And the OS surface — dialogs, menus, tray, clipboard,
+          keychain, notifications, global hotkeys, auto-update — is
+          <strong>just the API</strong>, not plugins you add one at a time.</p>
+          <p>Tauri's ecosystem, mobile targets and cross-platform bundler are
+          further along. If you want Rust in your stack, or you want mobile,
+          use Tauri.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>What about Neutralino?</summary>
+        <div class="ans">
+          <p>Closest in spirit, and smaller still. The difference is that
+          Neutralino has <strong>no backend runtime</strong>: your code runs in
+          the page, and the OS API is proxied over a <strong>localhost
+          websocket server</strong> — a real port, guarded by a token. Logic
+          the built-in API doesn't cover means writing an "extension": a
+          separate process, usually in another language.</p>
+          <p>tinyjs gives you a real JS process with full system access —
+          files, sockets, subprocesses, FFI, sqlite — talking to the page over
+          a Unix socket in a <code>0700</code> temp dir. Nothing listens,
+          nothing collides, nothing to scan.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Will my app look the same on all three platforms?</summary>
+        <div class="ans">
+          <p>No, and that's the deal you're making. You get the OS's own
+          engine: WebKit on macOS, Chromium-based WebView2 on Windows,
+          WebKitGTK on Linux. It's the same discipline as shipping a website
+          to Safari and Chrome — modern CSS and JS are fine, the edges differ.
+          Linux has the sharpest ones: media codecs depend on which GStreamer
+          plugins are installed, and Web Audio through
+          <code>ctx.destination</code> crackles under WebKitGTK, so audio apps
+          play the element directly there.</p>
+          <p>The upside of not bundling an engine: it updates with the OS, so
+          you're not shipping a release every time a browser CVE lands. The
+          cost: test on all three. Native calls that aren't ported to a
+          platform fail cleanly with a reason (or resolve <code>null</code>),
+          so cross-platform code can feature-detect rather than crash.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Can I use React, Vue, Svelte, TypeScript, npm?</summary>
+        <div class="ans">
+          <p><code>tinyjs new myapp --template react-ts</code> — also vue-ts,
+          svelte-ts, solid-ts, vanilla-ts — scaffolds a Vite app wired to
+          tinyjs. <code>tinyjs dev</code> runs the Vite dev server with HMR
+          inside the native window; <code>tinyjs build</code> ships the built
+          assets. TypeScript backends bundle through esbuild automatically,
+          which is also what makes npm packages usable on the backend.</p>
+          <p>The default template is the opposite: zero dependencies, plain
+          HTML/CSS/JS, no build step at all. The frontend is served as real
+          files over <code>file://</code>, so relative scripts and images just
+          work.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Do I need Node installed?</summary>
+        <div class="ans">
+          <p>Not for the runtime, and not for the CLI — both run on txiki.js
+          (QuickJS + libuv), which is the 5.6 MB the install brings with it.
+          Your backend gets fetch, WebSocket, sqlite, FFI, sockets, processes
+          and the filesystem out of the box.</p>
+          <p>You need Node and npm only if you pick a Vite template, and only
+          at dev and build time — nothing from it ships in the app. Native
+          Node addons (<code>.node</code>) don't apply here; pure-JS packages
+          bundle fine.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Can I build a Windows app from my Mac?</summary>
+        <div class="ans">
+          <p>No. <code>tinyjs build</code> packages the host platform's
+          launcher with the host's signing tools, so you build on the OS you
+          ship for. A three-legged CI matrix covers it in one push — that's
+          how tinyjs itself releases macOS, Windows and both Linux
+          architectures from a single tag.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Is it production ready?</summary>
+        <div class="ans">
+          <p>macOS is the primary platform and is stable. <strong>Windows and
+          Linux are beta</strong> — same runtime, same wire protocol, same API,
+          with a short list of unported calls (mostly the genuinely macOS-only
+          ones: Quick Look, OCR, AppleScript, on-device AI). MIT licensed, and
+          the whole thing is two native files plus your code, so there isn't
+          much to be surprised by.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Can I wrap a website I already have?</summary>
+        <div class="ans">
+          <p>Yes — point the window at a URL and it behaves like a browser:
+          JS dialogs, downloads, popups, find-on-page, and a navigation policy
+          you control. A capability gate in <code>tinyjs.json</code> decides,
+          <strong>per origin</strong>, which parts of the native API that page
+          may call; anything not listed can't reach the backend at all.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>How do I sign, notarize and ship updates?</summary>
+        <div class="ans">
+          <p><code>tinyjs build</code> emits a codesigned macOS bundle (add
+          <code>--dmg</code> for the installer image); <code>tinyjs
+          notarize</code> submits it and staples the ticket. Windows gets a
+          portable <code>dist/</code> folder, Linux a per-arch tarball whose
+          app registers its own <code>.desktop</code> entry on first run.</p>
+          <p><code>tinyjs publish</code> writes a zip plus a manifest you host
+          on any static server. The app's built-in updater verifies sha256 and
+          the code signature, swaps in place, relaunches, and rolls back on
+          failure.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>What about iOS and Android?</summary>
+        <div class="ans">
+          <p>No — this is a desktop runtime. macOS, Windows and Linux, each
+          using the webview that platform already has.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Why ~6 MB and not 1 MB?</summary>
+        <div class="ans">
+          <p>5.6 MB of it is the txiki.js binary — QuickJS, libuv, sqlite,
+          wasm — and ~380 KB is the launcher that owns the window. Your HTML,
+          CSS and JS are the rest. Building the runtime without wasm and
+          sqlite would save roughly 2 MB for apps that don't need them; it's a
+          measured direction, not a promise.</p>
+        </div>
+      </details>
     </div>
   </section>
 
