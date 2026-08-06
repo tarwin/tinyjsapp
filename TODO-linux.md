@@ -262,6 +262,24 @@ Pause/Next/Previous/PlayPause all arrive as `media-key` events.
       hostile popup would inherit the opener's `api` gate), and the
       find signal is `failed-to-find-text` — the wrong name connects with
       only a GObject-CRITICAL and hangs every miss.
+- [x] **The adversarial pass over that leg (2026-08-06)** — the review's
+      five Linux findings, each run BOTH ways (stash the fix, rebuild from
+      source, re-run) against a hostile-page harness. Fixed and proven by
+      differential: `tiny.win.id` inside a window-mode popup (`main` →
+      `popup1`; `win.id` is a getter now, so it reads the launcher's
+      correction instead of the opener's baked id), the shared-manager mark
+      being erased with the popup's manager instead of the opener's (counted
+      now, keyed by the manager actually marked), and find state surviving a
+      navigation (`activeMatch 2` → `1` on a fresh document). Fixed but NOT
+      reproducible on WebKitGTK 2.52.3, and written up as such: the origin
+      stamp following the active uri (this engine's uri flips late, so the
+      navigate-then-call race denies on the unfixed build too — the origin is
+      captured at commit now regardless) and a `window.open('')` document
+      hanging its calls (that about:blank DOES commit here, so it gets a
+      token and its calls settle as denials). Also hardened: `json_escape`
+      repairs invalid UTF-8 (a Linux filename is bytes), and the JS-dialog
+      handler holds refs across `gtk_dialog_run`'s nested loop so a
+      `WINCLOSE` arriving mid-dialog can't free the view under the answer.
 - [x] **getUserMedia / camera+mic (2026-07-29)** — the launcher now answers
       WebKit's `permission-request` signal (previously unhandled = WebKit's
       default deny, so every camera app failed with NotAllowedError while

@@ -382,13 +382,56 @@ which is precisely how this got through the first time.
       window title never once became `SPOOFED-*`. The control (the same call
       made honestly) is denied, and the same call from the trusted origin in
       the same run is allowed — so the gate is on, not merely silent.
-- [ ] **Forged origin argument, Linux** — regression guard (Linux builds
-      its own array).
-- [ ] **Navigate-then-call race, Linux** — `location.href` to a slow URL on
-      a trusted origin, then call a gated method before it commits. UNFIXED
-      as of bc41aa8: the stamp reads the view's ACTIVE uri, which flips at
-      provisional-load start, so this is expected to FAIL until the origin
-      moves into `assign_call_token`'s map. Tick when it denies.
+- [x] **Forged origin argument, Linux** — **DENIED, seen 2026-08-06** on a
+      launcher rebuilt from source, four shapes. The wrapped site at
+      `http://127.0.0.1:8123` (keyhole: `store.*`, `system.capabilities`,
+      `win.find` — 135 names denied) tried to be seen as `file://` or as
+      `http://127.0.0.1:8124`, both granted `"all"` in the same manifest:
+      `window.__invoke(payload, 'file://')` (the extra argument the Windows
+      bridge once read) → rejected; a raw
+      `webkit.messageHandlers.tiny.postMessage` with a **forged token** and
+      one with the page's own token **mutated by one character** → no `CALL`
+      line at the launcher AT ALL (unknown token = not a window, dropped);
+      the untokened raw form `'|9902:{...}'` → processed, and the wire shows
+      the launcher's own stamp:
+      `CALL main:9902 ["{\"method\":\"win.setTitle\"…}","http://127.0.0.1:8123"]`
+      → `denied "win.setTitle" for http://127.0.0.1:8123`. `win.setTitle` was
+      the method under test on purpose: success would be visible from OUTSIDE
+      the page, and the X11 title timeline shows the main window's title never
+      left `WRAPKIT-MAIN`. Controls both ways in the same run: the honest call
+      is denied, an allowed one (`store.set`) resolves, and the popup on 8124
+      gets `0` denied.
+- [x] **Navigate-then-call race, Linux** — **denied, seen 2026-08-06**, with
+      a caveat that matters more than the tick. `location.href` was pointed at
+      a 3s-slow page on the TRUSTED origin and 24 `win.setTitle` calls were
+      fired at 100ms intervals from the still-live old document: all 24
+      denied, and the window title never became `SPOOFED-race-*`. **But it
+      also denies on the PRE-FIX launcher** — WebKitGTK 2.52.3 does not flip
+      the active uri at provisional-load start (the same navigation's `start`
+      NAV event still names the OLD url), so the hole the review predicted
+      isn't reachable on this engine and this probe cannot fail here. The fix
+      (origin captured at commit, in the token map) is kept as structural: it
+      stops the stamp depending on when an engine flips its uri.
+- [x] **Popup can't steal its opener's call token, Linux** — the token is the
+      launcher's routing identity, so a hostile popup reading
+      `window.opener.__TINY_TOK` would be able to speak AS the opener. Seen
+      2026-08-06: a cross-origin popup got `SecurityError` (same-origin policy
+      does this job; the probe is the proof it isn't bypassed by the
+      related-view/shared-process construction popups need).
+- [x] **Shared-manager mark is lifted when the last popup closes, Linux** —
+      **fixed and seen 2026-08-06** (finding 3). While a popup is alive an
+      untokened raw message on the opener's manager is ambiguous and must be
+      DROPPED; once every popup is gone the same message must be processed
+      again. Differential on one launcher rebuild: pre-fix the post-close
+      message was still dropped ("dropped an untokened call on a shared
+      content manager" — the opener stayed flagged for the process's life),
+      post-fix it produced `CALL main:9905` and was denied on its real origin.
+- [x] **Find state doesn't survive a navigation, Linux** — **fixed and seen
+      2026-08-06**. Same term (`needle`, 3 matches) searched on the first page
+      and again four navigations later: pre-fix the second search reported
+      `activeMatch 2` (the launcher thought it was a step through the previous
+      document's match list), post-fix `1` — a fresh search, which is what it
+      is.
 - [~] **Navigate-then-call race, macOS / Windows** — should already deny
       (macOS stamps the document's own `frameInfo.securityOrigin`; Windows
       stamps the message Source). Confirms the probe itself is sound —
@@ -399,10 +442,18 @@ which is precisely how this got through the first time.
       how much that proves: the page is being torn down while the loop runs,
       so only the first verdict reliably reaches the store — the durable
       evidence is the external one (no spoofed title at any point).
-- [ ] **`tiny.win.id` inside a window-mode popup, Linux** — must be the
-      popup's id, not `main`. UNFIXED: the popup runs the opener's
-      document-start shim with the opener's id baked in, so
-      `app.window(tiny.win.id)` from a popup targets MAIN today.
+- [x] **`tiny.win.id` inside a window-mode popup, Linux** — **fixed and seen
+      2026-08-06.** The popup (on the trusted origin, window mode) reported
+      `main` pre-fix and `popup1` post-fix, from the same harness on the same
+      box. The fix is in `runtime/tiny.js` — `win.id` is a getter, so it reads
+      `window.__TINY_WIN` when asked instead of at client-construction time;
+      the launcher's correction was always landing (the page saw the right
+      `__TINY_WIN` in both runs), the client had just read it too early.
+      Routing was never at risk: the popup's calls are attributed by token,
+      and in the same run its `win.setTitle` retitled the POPUP's window (X11
+      census: `PU-SETTITLE-OK` on the second window, main untouched) and its
+      `capabilities()` reported the 8124 grant (0 denied) rather than the
+      wrapped site's keyhole.
 - [~] **`tiny.win.id` inside a window-mode popup, macOS / Windows** — both
       give the popup its own shim, so this is a regression guard.
       **Windows half seen 2026-08-06: it is the popup's own id.** The popup
@@ -460,10 +511,29 @@ which is precisely how this got through the first time.
       navigation, and the re-issue runs beforeunload again. Browser-consistent
       it is not; it is the cancel-and-replay design showing through, and it is
       the last thing that shape still costs.
-- [ ] **A call from a never-committed document settles, Linux** —
-      `window.open('')` then call, with a 3s timeout. UNFIXED: untokened
-      calls on a shared manager are dropped with no reply, so the page's
-      promise hangs forever.
+- [x] **A call from a never-committed document settles, Linux** — seen
+      2026-08-06: `window.open('')` then `tiny.win.getState()` from the blank
+      popup **rejected** ("disabled by tinyjs.json") well inside the 3s
+      timeout, on the pre-fix build too. The premise turned out not to hold
+      here — WebKitGTK COMMITS the about:blank document (`navigate commit
+      about:blank window popup3` in the hook log), so it gets a token like any
+      other page and its calls are attributed with origin `null`, which the
+      stranger gate denies. A guard was added anyway (a window-mode popup with
+      no token 120ms after `create` gets one) so a document that genuinely
+      never commits errors instead of hanging.
+- [x] **A denied popup opens NO window, Linux** — seen 2026-08-06. Window
+      census under XWayland across a full run: exactly THREE launcher windows
+      existed — main, the allowed popup (which is the control that says the
+      census can see a popup at all), and the `window.open('')` one — plus the
+      two modal GTK dialogs at the end. The `onWindowOpen`-denied popup
+      produced none, and the hook log shows its `policy` ask and its `open`
+      outcome with the deny verdict.
+- [x] **Reported `filename` names the file on disk, Linux** — seen
+      2026-08-06. With a decoy `dup.txt` staged in `~/Downloads`, the download
+      reported `dup (2).txt` in both the `started` and `done` hooks and
+      `dup (2).txt` (17 bytes, the served body) is what is on disk. Linux
+      derived the name from the final path already (both arms do); this is the
+      probe that says so rather than an inference from the source.
 - [x] **A call from a never-committed document settles, Windows** — seen
       2026-08-06: `window.open('')` then `tiny.win.getState()` from the popup
       **rejected** (the gate denied it, origin `null` on an about:blank
@@ -471,7 +541,29 @@ which is precisely how this got through the first time.
 
 ### The harness
 
-`scratchpad/wrapkit` (this session): `server.js` serves two origins — 8123 as
+**Linux (2026-08-06).** The same shape, rebuilt in python: `server.py` serves
+8123 (the wrapped site, narrow keyhole) and 8124 (trusted, `"all"`) with a
+3s `/slow` and an attachment for the download probe; `wraptest/` is a `"url"`
+app whose `src/main.js` records every hook into the app store (the only
+channel that survives the page navigating out from under itself) and denies
+the popup whose url carries `deny=1`; the page runs one PHASE per load
+(`?p=a…d`) because the race probe destroys its own document; `run.py` stages
+the download collision, launches `tinyjs dev` with `TINYJS_DEBUG=1` and
+`TINYJS_TEST_AUTODLG=ok`, polls a window census + title timeline while it
+runs, then prints store, census, Downloads and every denial line. Two things
+it cost:
+- **`GDK_BACKEND=x11`.** This box is a GNOME *Wayland* session, where
+  `_NET_CLIENT_LIST` is empty and `Shell.Introspect` is portal-locked — the
+  census silently saw ZERO windows, which reads exactly like "no popup
+  opened". Under XWayland every window is an X11 window `xprop` can count.
+  (Same rig as "Photographing a window on Linux" below.)
+- **A differential, or it proves nothing.** Every fix here was run BOTH ways
+  — `git stash` the launcher/client change, rebuild from source, re-run —
+  and two of the five predicted bugs turned out not to reproduce on WebKitGTK
+  2.52.3. A probe that passes on the unfixed build is evidence about the
+  ENGINE, not about the fix, and both are written up that way above.
+
+`scratchpad/wrapkit` (Windows session): `server.js` serves two origins — 8123 as
 the wrapped site with a narrow keyhole, 8124 as a trusted origin granted
 `"all"`, with a deliberately slow `/slow` for the race probe — `wraptest/` is a
 `"url"` app pointing at 8123 with hook recorders in `src/main.js`, and

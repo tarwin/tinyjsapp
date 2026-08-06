@@ -397,40 +397,60 @@ extra arguments sit in the middle and are ignored. macOS and Linux build
 their two-element array themselves and were never exposed. Verified: origin
 gating still enforced on macOS (two origins, different grants, in one run).
 
-### Open — Linux box
+### Linux box — ALL FIXED 2026-08-06, and probed on the box
 
-1. **SECURITY: the origin stamp follows the ACTIVE uri, not the committed
-   document.** `launcher-linux.cc:483-486` reads
-   `webkit_web_view_get_uri(wv)` live at message time; WebKitGTK flips the
-   active URI to the *requested* one at provisional-load start, while the
-   old document is still running and still posting. So
-   `location.href='https://trusted/slow'` followed immediately by `tiny.*`
-   calls stamps them with the DESTINATION origin for a whole network RTT
-   (attacker-extendable by choosing a slow target). Fix is half-built:
-   `assign_call_token` already runs at `WEBKIT_LOAD_COMMITTED`, where the
-   active URI IS the committed document's — store the origin next to the
-   winid in `g_call_tokens` (token → {winid, origin}) and stamp from that.
-2. **`tiny.win.id` is the opener's id inside a window-mode popup** — the
-   popup runs the opener's document-start shim (baked id), and the
-   UI-process `evaluate_javascript` that corrects `window.__TINY_WIN` can't
-   beat the web process's own injection. Routing is fine (tokens fix
-   attribution), but `app.window(tiny.win.id)` / `tiny.win.close(tiny.win.id)`
-   from a popup target MAIN. Make tiny.js read `__TINY_WIN` through a
-   getter, or patch `tiny.win.id` in `assign_call_token` too.
-3. **Shared-manager mark cleaned up with the wrong manager**
-   (`:5631` marks the opener's, `:6040` un-marks via the popup's own) — so
-   either the opener stays flagged forever (untokened calls dropped for the
-   process's life) or closing one popup un-marks while a second is alive
-   (re-opening the misattribution hole). Erase by the same key that was set.
-4. **Dropped calls hang the page's promise** (`:464`, `:466-472`) — a
-   `window.open('')` document never commits, so it never gets a token, and
-   every `tiny.*` call from it hangs forever with no reply. Dropping beats
-   misattributing, but reply `RET <id> 1 {...}` so it's an error, not a mystery.
-5. Lower: find state goes stale across navigation (`:5943`); `gtk_dialog_run`
-   reentrancy — a backend `WINCLOSE` during a JS dialog can free the view
-   under `webkit_script_dialog_confirm_set_confirmed` (`:5418`, suspected);
-   `json_escape` passes raw bytes ≥0x20, so a non-UTF-8 filename (legal on
-   Linux) yields invalid UTF-8 in the DOWNLOAD JSON.
+Fixed in `launcher-linux.cc` (plus `runtime/tiny.js` for #2) and run against a
+Linux wrapkit harness the same day, on a launcher rebuilt from source. Two of
+the five reproduced exactly as predicted, two did not reproduce **on this
+engine** (WebKitGTK 2.52.3) — and where a probe can't fail, the entry says so
+rather than claiming a scalp. Per-probe evidence in TODO-verify.md.
+
+1. **SECURITY: the origin stamp followed the ACTIVE uri, not the committed
+   document.** FIXED: `g_call_tokens` is now `token → {winid, origin}` and the
+   origin is captured in `assign_call_token`, at `WEBKIT_LOAD_COMMITTED`, where
+   the active uri IS the committed document's. Message time never re-reads the
+   view (only the untokened fallback still does). **The predicted race did not
+   reproduce on WebKitGTK 2.52.3**: with `location.href` pointed at a 3s-slow
+   page on the TRUSTED origin, all 24 in-flight calls from the still-live old
+   document were denied on the pre-fix build too, and the `start` NAV event for
+   that navigation still names the OLD url — i.e. this engine does not flip the
+   active uri at provisional-load start. The fix stands anyway: it makes the
+   stamp independent of *when* an engine chooses to flip.
+2. **`tiny.win.id` was the opener's id inside a window-mode popup.**
+   REPRODUCED and FIXED (in `runtime/tiny.js`): `win.id` is a **getter** now,
+   so it reads `window.__TINY_WIN` at call time rather than baking in whatever
+   the opener's document-start shim carried. Differential on the same harness:
+   pre-fix the popup reported `main`, post-fix `popup1` — with `__TINY_WIN`
+   already correct in both (the launcher's correction always landed; the client
+   had simply read it too early). The change is in the SHARED client, so macOS
+   and Windows pick it up on their next build — both give a popup its own shim,
+   so `win.id` reads the same value there as before, just later.
+3. **Shared-manager mark was cleaned up with the wrong manager.** REPRODUCED
+   and FIXED: `SecWin` remembers the manager it marked (the OPENER's), and
+   `g_shared_ucms` is a COUNT, so one opener with several popups un-marks only
+   when the last is gone. Differential: an untokened raw message posted after
+   every popup had closed was still dropped pre-fix (the opener stayed flagged
+   for the process's life) and is processed post-fix — then denied by the gate
+   on its real origin, which is the correct end state.
+4. **Dropped calls hanging the page's promise.** The premise did not hold here:
+   a `window.open('')` popup DOES commit its about:blank document on WebKitGTK
+   (`navigate commit about:blank window popup3`), so it gets a token and the
+   call settles — measured as `rejected` (origin `null` → the stranger gate) on
+   both builds, inside the 3s timeout. Kept a guard anyway: a window-mode popup
+   that has no token 120ms after `create` is given one for whatever document it
+   is showing, so a document that genuinely never commits settles as an error
+   instead of hanging.
+5. Lower, all three addressed: **find state no longer survives a navigation**
+   (`find_forget` at commit) — reproduced and differential: the same term
+   searched on a fresh document reported `activeMatch 2` pre-fix (stepping
+   through the previous page's match list) and `1` post-fix; **`gtk_dialog_run`
+   reentrancy** — the handler now refs the view and the `WebKitScriptDialog`
+   across the nested loop and skips the answer if the view was destroyed
+   meanwhile (defensive; the crash was suspected, not seen, and dialogs still
+   answer: confirm `true`, prompt returns its text, alert returns); and
+   **`json_escape` now repairs invalid UTF-8** (`g_utf8_make_valid`) so a
+   non-UTF-8 filename — legal on Linux — can't put an unparseable line on the
+   wire. That last one is fixed by construction, not probed.
 
 ### Windows box — ALL SEVEN FIXED 2026-08-06, six of them verified live
 
@@ -500,6 +520,13 @@ TODO-verify.md's probe section. Launcher rebuilt from source first, as always.
    arrive, and that asymmetry is the thing to explain first.
    Reproducer: `scratchpad/wrapkit`, `"url"` app at
    `http://127.0.0.1:8123/?fast=popup`, ~20s.
+   **Windows-only, now that Linux has been measured the same way** (2026-08-06):
+   a Linux window-mode popup's committed document has a fully working `tiny` —
+   `capabilities()` returned its own origin's grant (0 denied against the
+   wrapped site's 135), `win.setTitle` retitled the POPUP's window and not
+   main, `store.set` landed, and `window.opener.postMessage` reached the
+   opener. So the design is answerable; it is WebView2's message path out of
+   that document that isn't.
 
 ## Remaining
 - **`window` popups keep default chrome** — no `win.open`-style chrome
@@ -603,6 +630,35 @@ Non-JS assertions the runner should make, each from a real finding:
 
 The rule this encodes: a probe that only exercises the happy path through
 our own client proves the client works, not that the gate holds.
+
+Linux adds shapes of its own, because its identity is a per-document TOKEN
+rather than an engine-attested frame (all seen 2026-08-06):
+
+```js
+// The raw transport, three ways. The shim posts "<token>|<seq>:<payload>"
+// to webkit.messageHandlers.tiny — so a hostile page can post whatever it
+// likes there, and the launcher's answer must be "not a window".
+const T = window.webkit.messageHandlers.tiny;
+T.postMessage('ffffffff-dead-beef-dead-ffffffffffff|9901:' + payload); // forged token
+T.postMessage(String(window.__TINY_TOK).replace(/^./, 'a') + '|9903:' + payload); // mutated
+T.postMessage('|9902:' + payload);   // untokened: the pre-token fallback shape
+// PASS = the first two produce NO `CALL` line at all; the third is stamped
+// with the page's REAL origin and denied by the gate.
+
+// A popup must not be able to speak as its opener.
+try { t = window.opener.__TINY_TOK; } catch (e) {}   // PASS = SecurityError
+
+// The shared-manager mark must be lifted when the LAST popup closes: post
+// an untokened message while one is alive (PASS = dropped) and again after
+// they are all closed (PASS = processed, then denied on the real origin).
+
+// Find state must not survive a navigation: same term, N matches, searched
+// on page A and again on a fresh page — PASS = activeMatch 1, not 2.
+```
+
+And run every one of them against the UNFIXED build too. Two of the five
+Linux findings did not reproduce on WebKitGTK 2.52.3; without the
+differential they would have been written up as fixes that were never bugs.
 
 Linux harness notes (2026-08-06), each of which cost a wrong result first:
 - the page must live in `src/frontend/`, and `tiny.quit()` is the page's
