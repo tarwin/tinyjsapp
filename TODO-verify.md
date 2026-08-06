@@ -359,11 +359,17 @@ Tick only after SEEING the denial (or the absent window) on that OS. A gate
 that silently allows looks exactly like a gate that was never consulted —
 which is precisely how this got through the first time.
 
-- [ ] **Forged origin argument, macOS** — `window.__invoke(payload,
-      'file://')` from a non-file origin. Bridge fix bc41aa8 reads the LAST
-      element, so this should be gated as the real origin; macOS builds its
-      own two-element array and was never exposed, so this is a
-      regression guard, not a fix check.
+- [x] **Forged origin argument, macOS** — **DENIED, seen 2026-08-06.** A
+      `"url"` app whose main frame is served from `http://127.0.0.1:8123`
+      (keyhole: store/capabilities/win.open) with `http://127.0.0.1:8124`
+      granted `"all"`. `window.__invoke(payload, 'http://127.0.0.1:8124')`
+      denied; the same with three forged arguments denied; and the raw
+      transport (`webkit.messageHandlers.tiny.postMessage` with a payload
+      crafted to break out of the JSON string the launcher escapes it into,
+      both `","…` and `\","…`) never produced a call at all. Every denial
+      line in the backend log names the REAL origin — four denials, all
+      `http://127.0.0.1:8123`, none `:8124`. Control in the same run: the
+      gated method denied normally, so the probe can fail.
 - [x] **Forged origin argument, Windows** — **DENIED, seen 2026-08-06** on a
       launcher rebuilt from source. A wraptest app served its main frame from
       `http://127.0.0.1:8123` (narrow keyhole: 137 methods denied) with
@@ -432,7 +438,7 @@ which is precisely how this got through the first time.
       `activeMatch 2` (the launcher thought it was a step through the previous
       document's match list), post-fix `1` — a fresh search, which is what it
       is.
-- [~] **Navigate-then-call race, macOS / Windows** — should already deny
+- [x] **Navigate-then-call race, macOS / Windows** — should already deny
       (macOS stamps the document's own `frameInfo.securityOrigin`; Windows
       stamps the message Source). Confirms the probe itself is sound —
       a probe that can't fail anywhere proves nothing.
@@ -442,6 +448,10 @@ which is precisely how this got through the first time.
       how much that proves: the page is being torn down while the loop runs,
       so only the first verdict reliably reaches the store — the durable
       evidence is the external one (no spoofed title at any point).
+      **macOS half seen 2026-08-06 — both halves now done, box closed.**
+      Same rig as the forged-argument box: `location.href` to a 3s-slow page
+      on the `"all"` origin, then the gated call from the still-live old
+      document. Denied, and the backend log names `:8123`, not `:8124`.
 - [x] **`tiny.win.id` inside a window-mode popup, Linux** — **fixed and seen
       2026-08-06.** The popup (on the trusted origin, window mode) reported
       `main` pre-fix and `popup1` post-fix, from the same harness on the same
@@ -454,12 +464,18 @@ which is precisely how this got through the first time.
       census: `PU-SETTITLE-OK` on the second window, main untouched) and its
       `capabilities()` reported the 8124 grant (0 denied) rather than the
       wrapped site's keyhole.
-- [~] **`tiny.win.id` inside a window-mode popup, macOS / Windows** — both
+- [x] **`tiny.win.id` inside a window-mode popup, macOS / Windows** — both
       give the popup its own shim, so this is a regression guard.
       **Windows half seen 2026-08-06: it is the popup's own id.** The popup
       page stamped it into its document title (the only channel that survives
       a popup whose RPC is dead — see the next box) and the window read
-      `PU:id-popup1`, not `main`. macOS still unrun.
+      `PU:id-popup1`, not `main`.
+      **macOS half seen 2026-08-06 — both halves now done, box closed.** The
+      popup wrote `tiny.win.id` to the store and it read `popup1`. Note this
+      is now a real regression guard rather than a formality: cc749b2 made
+      `tiny.win.id` a GETTER in the shared client for Linux's sake, so this
+      box is what proves that change didn't disturb the two platforms whose
+      popups already baked in the right id.
 - [x] **A denied popup opens NO window, Windows** — **fixed and seen
       2026-08-06.** `abandon_popup()` now calls `put_Handled(TRUE)` BEFORE
       completing the deferral (and `ctrl->Close()`s the orphaned controller on
