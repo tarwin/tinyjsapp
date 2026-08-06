@@ -247,17 +247,44 @@ right edge moves (a wrong `HT*` mapping resizes the opposite side).
       a boolean and all 8 grips mount on a frameless secondary, mount on
       neither a titled secondary nor main. The dragging itself needs a hand —
       watched on Windows 2026-07-28 in amp, edge resize working.
-- [ ] **Click an edge without moving** — press and release in place. The window
+**Three of the four closed 2026-08-06 — Tarwin on the mouse, everything else
+measured.** A frameless satellite sampled its own `getState` at 20Hz while the
+backend pushed a 250ms heartbeat, so each verdict is a number rather than an
+impression. Rig: `scratchpad/dragkit`.
+
+- [x] **Click an edge without moving** — press and release in place. The window
       must NOT follow the pointer afterwards. `xxxMoveSize` entered with the
       button already up tracks until the next click; the trip from the grip's
       `mousedown` to `do_ncdrag` is two process hops, so this is easy to hit.
       Guarded with `GetAsyncKeyState(VK_LBUTTON)`, mirroring macOS.
-- [ ] `setResizable(false)` then drag an edge — must do nothing (the style bit
+      **SEEN: after the grip press the pointer travelled 4470px and the window
+      moved 1px over 16.6s** (297 samples, one grip press registered). The
+      guard holds.
+      The first attempt of this one produced a bogus FAIL (215px) and the
+      lesson generalises: it started measuring when the window OPENED, and the
+      window opened flush against the left screen edge, so moving it somewhere
+      clickable was counted as the window following the pointer. The rig now
+      places itself away from the edge and starts the clock only when it sees a
+      grip pressed — a capture-phase `mousedown`, since the grips
+      `stopPropagation` in their own listener and a bubbling listener never
+      sees them. It also counts POINTER travel, so a pass reads "pointer moved
+      4470px, window moved 1px" instead of a bare "0px" that a motionless mouse
+      would also produce.
+- [x] `setResizable(false)` then drag an edge — must do nothing (the style bit
       is read live, because tiny.js gates its grips on one `getState` at load).
-- [ ] Alive mid-drag: hold an edge and confirm posted work still lands (the
+      **SEEN: 0px** while it was leaned on. The control matters as much: with
+      `setResizable(true)` again, the same edge moved **221px** — without that,
+      a 0 is equally consistent with the grips being dead all along.
+- [x] Alive mid-drag: hold an edge and confirm posted work still lands (the
       modal loop pumps `WM_APP`, so dispatch keeps running inside it).
+      **SEEN: 42 heartbeats over 10.8s** — the backend's 250ms tick, arriving
+      uninterrupted — while the window resized 265px. Dispatch is not starved
+      by the modal resize loop.
 - [ ] A monitor LEFT of primary (negative screen x) — exercises the
-      `MAKELPARAM` sign path in the point now passed as `lParam`.
+      `MAKELPARAM` sign path in the point now passed as `lParam`. **Blocked on
+      hardware, not on effort**: this box has one display
+      (`{X=0,Y=0,1728x1084}`), so there are no negative screen coordinates to
+      be had. Needs a second Parallels display placed to the LEFT of primary.
 
 ## ~~macOS — `startDrag` / `startResize` / `dragOut`~~ — done 2026-07-26
 
@@ -868,7 +895,25 @@ exactly the kind of claim that deserves a run:
       (`?.voices ?? []`) but all three launchers implement `VOICES`, so it can
       never receive an unsupported reply — left alone. Everything else coerces
       to an honest `'unsupported'`/`false` default.
-      Still unrun: pressing a media key with Now Playing set.
+      **Media keys on Windows, read from source 2026-08-06 (not yet
+      measured).** Reported from amp: play/pause works, `<<`/`>>` don't, and
+      the suspicion was that the Mac host was eating them. It isn't, and no
+      tinyjs code is involved either way. `MEDIAKEY` and `NOWPLAYING` appear
+      **zero times** in launcher-win.cc (macOS has four), so `onMediaKey` — the
+      hook amp uses (`player.js:1259`) — can never fire on Windows, and
+      `nowPlaying.set()` is dropped. What DOES work is Chromium's own: a
+      playing `<audio>` element registers with Windows SMTC by itself, and
+      play/pause is the one action the engine handles with no page
+      cooperation. Next/previous reach an app only if it registers
+      `navigator.mediaSession.setActionHandler('nexttrack'/'previoustrack')`,
+      and in amp that happens in exactly one place — the geiss-hdr
+      visualiser's `HookUpMediaKeys()` (`src/geiss-hdr/audio_input.js:359`) —
+      never in the main player. So Windows has nothing to send `<<`/`>>` to.
+      App-side fix, not a tinyjs gap. To settle it by measurement rather than
+      by reading: with amp playing, read the SMTC session's `IsNextEnabled`
+      (a `false` is the direct proof), and inject `VK_MEDIA_NEXT_TRACK` /
+      `VK_MEDIA_PLAY_PAUSE` **inside** the VM, which bypasses the Mac keyboard
+      and separates "the host ate it" from "the app has no handler" for good.
 - [x] **Linux/X11** — verified 2026-07-28, both sessions: the three now live
       on `tiny.macos.*` and each rejects with the guard message
       ("tiny.macos.X is macOS-only (this is linux) — guard with
