@@ -337,11 +337,24 @@ which is precisely how this got through the first time.
       element, so this should be gated as the real origin; macOS builds its
       own two-element array and was never exposed, so this is a
       regression guard, not a fix check.
-- [ ] **Forged origin argument, Windows** — the leg this fix was written
-      for: the main window's RPC rides the library's `bind()`, so before
-      bc41aa8 the page's own second argument WAS the origin the gate read.
-      Must now be denied. Also run the raw `window.__webview__.post(...)`
-      variant, which bypasses the shim entirely.
+- [x] **Forged origin argument, Windows** — **DENIED, seen 2026-08-06** on a
+      launcher rebuilt from source. A wraptest app served its main frame from
+      `http://127.0.0.1:8123` (narrow keyhole: 137 methods denied) with
+      `file://*` and `http://127.0.0.1:8124` both granted `"all"`, and the
+      page tried to be seen as either. Four shapes, all denied, and the wire
+      log is the proof — the page's forged value sits in the middle and the
+      launcher's stamp is last:
+      `CALL … ["{\"method\":\"win.setTitle\"…}","file://","http://127.0.0.1:8123"]`
+      → `tinyjs: denied "win.setTitle" for http://127.0.0.1:8123`.
+      Covered: one forged argument (`file://`), one aimed at the other
+      trusted origin, THREE stacked forged arguments (in case "last" is read
+      as "[1]" or "[2]"), and both raw `window.__webview__.post(...)` frames
+      bypassing the shim entirely — including one with a client-shaped 32-hex
+      id. The method under test was `win.setTitle` on purpose: a success is
+      visible from OUTSIDE the page, and the runner's title timeline shows the
+      window title never once became `SPOOFED-*`. The control (the same call
+      made honestly) is denied, and the same call from the trusted origin in
+      the same run is allowed — so the gate is on, not merely silent.
 - [ ] **Forged origin argument, Linux** — regression guard (Linux builds
       its own array).
 - [ ] **Navigate-then-call race, Linux** — `location.href` to a slow URL on
@@ -349,33 +362,97 @@ which is precisely how this got through the first time.
       as of bc41aa8: the stamp reads the view's ACTIVE uri, which flips at
       provisional-load start, so this is expected to FAIL until the origin
       moves into `assign_call_token`'s map. Tick when it denies.
-- [ ] **Navigate-then-call race, macOS / Windows** — should already deny
+- [~] **Navigate-then-call race, macOS / Windows** — should already deny
       (macOS stamps the document's own `frameInfo.securityOrigin`; Windows
       stamps the message Source). Confirms the probe itself is sound —
       a probe that can't fail anywhere proves nothing.
+      **Windows half seen 2026-08-06**: with a 3s-slow destination on the
+      trusted origin, the in-flight call from the still-live old document was
+      **denied**, and the window title never became `SPOOFED-race`. Caveat on
+      how much that proves: the page is being torn down while the loop runs,
+      so only the first verdict reliably reaches the store — the durable
+      evidence is the external one (no spoofed title at any point).
 - [ ] **`tiny.win.id` inside a window-mode popup, Linux** — must be the
       popup's id, not `main`. UNFIXED: the popup runs the opener's
       document-start shim with the opener's id baked in, so
       `app.window(tiny.win.id)` from a popup targets MAIN today.
-- [ ] **`tiny.win.id` inside a window-mode popup, macOS / Windows** — both
+- [~] **`tiny.win.id` inside a window-mode popup, macOS / Windows** — both
       give the popup its own shim, so this is a regression guard.
-- [ ] **A denied popup opens NO window, Windows** — count top-level windows
-      after a `'deny'`. UNFIXED: if the verdict beats controller creation,
-      the deferral completes with `Handled=FALSE` and WebView2 opens its own
-      browser window. Page-side assertions cannot see this.
-- [ ] **Reported `filename` names the file on disk, Windows** — force a
-      ` (2)` dedup and an ask-mode rename, then stat what `filename` claims.
-      UNFIXED: Windows reports WebView2's suggestion, not the result.
-- [ ] **Back/forward after a policy ask, Windows** — `history.back()` must
-      go back. UNFIXED: the ask cancels and replays as a forward `Navigate`.
-- [ ] **A re-visited URL still asks, Windows** — the allow-once marker can
-      go stale and fails OPEN (no policy ask at all).
-- [ ] **`beforeunload` prompts, Windows** — UNFIXED: auto-accepted today, so
-      a wrapped app with unsaved work navigates away silently.
+      **Windows half seen 2026-08-06: it is the popup's own id.** The popup
+      page stamped it into its document title (the only channel that survives
+      a popup whose RPC is dead — see the next box) and the window read
+      `PU:id-popup1`, not `main`. macOS still unrun.
+- [x] **A denied popup opens NO window, Windows** — **fixed and seen
+      2026-08-06.** `abandon_popup()` now calls `put_Handled(TRUE)` BEFORE
+      completing the deferral (and `ctrl->Close()`s the orphaned controller on
+      the early return; `SecCtrlHandler` also got a destructor that abandons,
+      so a completion that never fires can't hang `window.open()` forever).
+      Census: across the whole run exactly three launcher windows existed —
+      main, the allowed popup, and the `window.open('')` one — and the denied
+      popup produced **none**, with no `Chrome_WidgetWin_*` browser window
+      from msedgewebview2 either. The allowed popup appearing in the same
+      census is the control that says the rig can see a popup at all.
+- [x] **Reported `filename` names the file on disk, Windows** — **fixed and
+      seen 2026-08-06**, both arms. `download_finish()` now derives the
+      reported name from the FINAL path. Dedup arm: with a decoy `dup.txt`
+      staged in Downloads, the download reported `dup (1).txt` and
+      `dup (1).txt` is what exists (17 bytes). Ask arm: the save panel was
+      renamed from outside to `renamed-by-hand.txt`, and both the `started`
+      and `done` events report `renamed-by-hand.txt`, matching the file on
+      disk. Before the fix both reported the suggestion, `dup.txt`.
+      Rig note: you CANNOT force dedup by downloading twice from one page —
+      Chromium blocks a page's second automatic download outright and the
+      second click produces no download at all (measured twice). Stage the
+      collision on disk instead. And the Downloads folder here is redirected
+      to `\\Mac\Home\Downloads`, so the runner has to ask the shell for it,
+      exactly as the launcher does.
+- [x] **Back/forward after a policy ask, Windows** — **fixed and seen
+      2026-08-06.** `NavigationStarting` now reads
+      `ICoreWebView2NavigationStartingEventArgs3::get_NavigationKind` and does
+      not ask for `BACK_OR_FORWARD` at all: the ask is cancel-and-re-issue,
+      and a cancelled history move cannot be re-issued — `Navigate()`ing its
+      url pushes a NEW entry, so Back grows the stack and Forward dies. A
+      `RELOAD` is still asked, and re-issued with `Reload()` rather than
+      `Navigate()`. Seen: `history.back()` landed on `/` and the hook log
+      shows a bare `start` for it with **no policy ask**, where every
+      ordinary navigation in the same run has one.
+- [x] **A re-visited URL still asks, Windows** — **fixed and seen
+      2026-08-06.** `g_nav_allow_once` entries are now stamped and consumed
+      three ways (matched, expired after 10s, or superseded by any other
+      navigation in that window) instead of surviving until something happened
+      to match them. Seen: two visits to `http://127.0.0.1:8123/page2` in one
+      run produced **two** `policy` asks.
+- [x] **`beforeunload` prompts, Windows** — **fixed and seen 2026-08-06.**
+      The `else` arm of `JsDialogHandler` auto-Accepted it; it now runs an
+      MB_OKCANCEL and only Accepts on OK. Seen: a "Leave this page?" `#32770`
+      appeared and was answered by the runner. Two things worth carrying:
+      the page needs **sticky user activation** or Chromium suppresses the
+      dialog entirely and "no dialog" looks exactly like the bug (the probe
+      sends a real key through `app.keystroke` first); and an asked navigation
+      prompts **twice** — beforeunload runs, the policy ask cancels the
+      navigation, and the re-issue runs beforeunload again. Browser-consistent
+      it is not; it is the cancel-and-replay design showing through, and it is
+      the last thing that shape still costs.
 - [ ] **A call from a never-committed document settles, Linux** —
       `window.open('')` then call, with a 3s timeout. UNFIXED: untokened
       calls on a shared manager are dropped with no reply, so the page's
       promise hangs forever.
+- [x] **A call from a never-committed document settles, Windows** — seen
+      2026-08-06: `window.open('')` then `tiny.win.getState()` from the popup
+      **rejected** (the gate denied it, origin `null` on an about:blank
+      document) well inside the 3s timeout. It settles, which is the claim.
+
+### The harness
+
+`scratchpad/wrapkit` (this session): `server.js` serves two origins — 8123 as
+the wrapped site with a narrow keyhole, 8124 as a trusted origin granted
+`"all"`, with a deliberately slow `/slow` for the race probe — `wraptest/` is a
+`"url"` app pointing at 8123 with hook recorders in `src/main.js`, and
+`run.ps1` is the part that matters: it enumerates top-level windows, tracks the
+app window's title, and **answers dialogs itself** rather than letting
+`TINYJS_TEST_AUTODLG` do it, so every dialog that appears is recorded before it
+is dismissed. Rebuild it rather than reinvent it; the probes that found things
+are the ones that assert from outside the page.
 
 ## Written 2026-07-26, never run off macOS
 
@@ -1160,6 +1237,22 @@ never-compiled code:
   bug (one live NSMenu, nothing rebuilds); **the Windows launcher has the
   same rebuild-from-spec architecture and should be checked for it** — open
   a window AFTER a `menu.update` and see which state it shows.
+  **Checked on Windows 2026-08-06, and it had the bug — now fixed.** A driver
+  page set an app menu with `{id:'tick', label:'Tick me', checked:false}`,
+  called `menu.update('tick', {checked:true, label:'Ticked!'})`, then opened a
+  satellite that read its own bar back: `win.menu.get('tick')` in the NEW
+  window answered **`"Tick me"`, `checked:false`** while `menu.get('tick')`
+  (the registry) correctly said `"Ticked!"`, `checked:true` — the two
+  disagreeing is the bug stated as data. `do_menu_update` now patches
+  `g_app_menu` (and any window's own override) alongside the live `HMENU`s;
+  re-run after the fix, the satellite reads `"Ticked!"`, `checked:true`.
+  Rig traps this cost, both mine not the launcher's: `tiny.win.open` is
+  `open(id, opts)` — passing one object sends `id` as an object and the
+  satellite never opens; and a satellite page with an unclosed `</script>`
+  loads (the client boots, `client.hello` and `win.getState` reach the wire)
+  while its own script never runs, which reads exactly like dead RPC in a
+  secondary window. Stamp progress into `document.title` — a window title is
+  readable from outside and survives a page that can't call anything.
 
 **Two testing gotchas that produced convincing ghost failures first**, worth
 knowing before trusting any multi-window store-choreographed page on Linux:

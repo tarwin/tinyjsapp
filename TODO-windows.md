@@ -326,6 +326,31 @@ names refer to the protocol table in the README; Windows handlers live in
       `false` in 13ms, no hang). A real verification still needs enrolled
       hardware.
 
+## Verified 2026-08-06 — the site-wrapper adversarial pass
+
+The seven open items in TODO-site-wrapper.md's Windows box are fixed, and six
+of them were then watched failing-then-passing against a hostile harness
+(`scratchpad/wrapkit`): forged origin arguments (four shapes, including two
+raw `window.__webview__.post` frames), a denied popup opening no window at
+all, download `filename` naming the file that exists, back/forward surviving a
+policy ask, a re-visited url still asking, and `beforeunload` prompting.
+Measurements in TODO-verify.md; the fixes are in `launcher-win.cc` plus the
+vendored `win32_edge.hh` origin queue.
+
+Two bugs the pass turned up on its own:
+
+- [x] **`menu.update` did not survive a rebuild** — the Linux bug from
+      2026-07-28, present here as predicted: a window opened AFTER an update
+      was rebuilt from the stored spec and showed the stale label/checked
+      state, while the registry reported the new one. `do_menu_update` now
+      patches `g_app_menu` and any per-window override too. Fixed and
+      re-verified the same day.
+- [ ] **A window-mode popup's committed document can't reach the launcher** —
+      its `tiny` exists and `tiny.win.id` is right, but no call from it
+      produces a `CALL` line, so every promise hangs. Pre-existing (confirmed
+      against `3e1158c`), not a regression. Details and a 20s reproducer in
+      TODO-site-wrapper.md's new Open — Windows box.
+
 ## Not planned / no OS equivalent
 
 `quickLook`, `ocr` (Windows.Media.Ocr someday), `applescript`,

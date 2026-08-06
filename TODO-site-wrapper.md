@@ -432,47 +432,74 @@ gating still enforced on macOS (two origins, different grants, in one run).
    `json_escape` passes raw bytes ≥0x20, so a non-UTF-8 filename (legal on
    Linux) yields invalid UTF-8 in the DOWNLOAD JSON.
 
-### Open — Windows box
+### Windows box — ALL SEVEN FIXED 2026-08-06, six of them verified live
 
-1. **Origin attribution can be stale/wrong (the fix above closes the spoof,
-   not this).** The vendored `win32_edge.hh` slot comment says the callback
-   runs synchronously inside Invoke — it does not: `on_message` does
-   `dispatch([=]{...})` and `dispatch_impl` is `PostMessageW`, so
-   `on_invoke` reads the global slot on a LATER message-loop turn. Two
-   documents' messages arriving back-to-back can cross-attribute, and the
-   slot is never cleared when `TryGetWebMessageAsString` fails. Carry the
-   source through the dispatch (or fix the comment and accept the limit).
-2. **A denied popup can open a WebView2 DEFAULT window, and leaks a
-   controller.** If the POPUPQ verdict lands before
-   `CreateCoreWebView2Controller` completes, the hidden HWND is destroyed,
-   so `SecCtrlHandler::Invoke` takes the `!tw` path → `abandon_popup()`
-   completes the deferral with `Handled` still FALSE, and WebView2's
-   documented fallback is to open its own window — i.e. `'deny'` shows the
-   user a bare browser window. Set `put_Handled(TRUE)` before completing,
-   and `ctrl->Close()` on that early return (today the controller and its
-   renderer are orphaned on a destroyed HWND). Also give `SecCtrlHandler` a
-   destructor that abandons, or a completion that never fires hangs
-   `window.open()` forever.
-3. **`filename` disagrees with the file actually written** — the reported
-   name is WebView2's suggestion, never updated after ` (n)` dedup or the
-   ask-mode save panel, so "Downloaded X" names a file that doesn't exist.
-   macOS reassigns in both arms; do the same.
-4. **Cancel-and-re-Navigate breaks more than POSTs** (the documented
-   caveat): back/forward are cancelled and replayed as a forward
-   `Navigate`, so the back stack grows and Forward dies; `Navigate()` also
-   sends no Referer/user-activation (breaks referrer-gated OAuth returns);
-   and `do_reload` becomes a fresh load. Gate the ask on navigation kind.
-5. **Stale allow-once marker fails OPEN** — `g_nav_allow_once` is only
-   cleared by a matching `NavigationStarting`, so a re-issued navigation
-   that redirects/fails leaves the entry, and a LATER navigation to that
-   URL skips `NAVQ` with no policy ask. Clear it on a timer/next event too.
-6. **`beforeunload` is auto-accepted** — macOS routes it through the confirm
-   panel, so a wrapped app with unsaved work silently navigates away here.
-7. Lower: `IFileSaveDialog::Show` runs a nested modal loop inside the
-   `DownloadStarting` callback (the 400ms nav/popup timers fire re-entrantly
-   during it — take the deferral instead); `params: []` produces a malformed
-   `[,"null"]` CALL body; `prompt()` from a popup is parented to the main
-   window.
+Fixed in `launcher-win.cc` (plus the vendored `win32_edge.hh` for #1) and run
+against the adversarial harness the same day; the per-item evidence is in
+TODO-verify.md's probe section. Launcher rebuilt from source first, as always.
+
+1. **Origin attribution could cross-attribute.** FIXED. The vendored slot
+   comment claimed the callback ran synchronously inside Invoke — it does not:
+   `on_message` does `dispatch([=]{...})` and `dispatch_impl` is
+   `PostMessageW`, so `on_invoke` read the global on a LATER message-loop
+   turn, and two documents posting back-to-back could swap origins (an iframe
+   inheriting the top frame's keyhole is the direction that matters). The
+   patch is now a QUEUE of `{message, source}` matched back by the JSON-RPC
+   id, with everything ahead of the match discarded (undispatched messages —
+   tinyjs posts drop-forwarding the same way — can't make it grow), a 64-entry
+   backstop, and no entry pushed at all when `TryGetWebMessageAsString` fails.
+   No match yields `"null"`, which denies under an origins gate: the failure
+   direction is closed. Not directly probed — it needs two documents racing —
+   so it rides on the forged-origin probes, which all still deny.
+2. **A denied popup could open a WebView2 DEFAULT window, and leaked a
+   controller.** FIXED and SEEN: `abandon_popup()` sets `put_Handled(TRUE)`
+   before completing the deferral, the early return `ctrl->Close()`s the
+   orphaned controller, and `SecCtrlHandler` has a destructor that abandons.
+   A window census across a full run shows the denied popup producing no
+   window of any kind.
+3. **`filename` disagreed with the file written.** FIXED and SEEN in both
+   arms (` (n)` dedup and an ask-mode rename): the reported name is derived
+   from the final path, and it matches what is on disk.
+4. **Cancel-and-re-Navigate broke back/forward.** FIXED and SEEN: the ask is
+   now gated on `get_NavigationKind` — `BACK_OR_FORWARD` is never asked (it
+   cannot be faithfully re-issued), `RELOAD` is asked and re-issued through
+   `Reload()`. Asked POSTs re-issuing as GETs remains, and remains structural.
+5. **Stale allow-once marker failed OPEN.** FIXED and SEEN: entries are
+   stamped and dropped on match, on age (10s), or on any other navigation in
+   that window; a re-visited url asks again.
+6. **`beforeunload` was auto-accepted.** FIXED and SEEN: it runs a confirm
+   box, and only OK accepts. Note it prompts TWICE on an asked navigation —
+   beforeunload runs, the ask cancels, the re-issue runs it again.
+7. Lower, all three FIXED: the ask-mode save panel now takes the download
+   deferral and runs OUT of the `DownloadStarting` callback instead of
+   spinning a nested modal loop inside it; `params: []` no longer produces a
+   malformed `[,"null"]` body; `prompt()` is parented to the calling window.
+
+### Open — Windows box (new, found by the harness 2026-08-06)
+
+1. **A window-mode popup's committed document has a `tiny` whose RPC never
+   returns.** The popup's page runs (it sets its own `document.title`, and
+   `tiny.win.id` correctly reads `popup1`), but every call from it — through
+   `tiny.*` or a raw `window.chrome.webview.postMessage`, which does not throw
+   — produces **no `CALL` line at the launcher at all**, so the page's
+   promises hang forever. Measured with a 4s race: `capabilities()` and
+   `win.setTitle()` both report HUNG. What DOES arrive is the initial
+   `about:blank` document's bootstrap (`client.hello`, `win.getState`, twice,
+   both stamped origin `"null"`). So messages work at the popup's birth and
+   stop before its real document is usable.
+   **Pre-existing, not a regression from the fixes above** — confirmed by
+   stashing them, rebuilding at `3e1158c`, and re-running: byte-identical
+   behaviour. It does mean the Windows leg's "the popup's cross-origin page
+   used its own gated tiny (140 denied vs main's 0)" claim needs re-reading;
+   whatever answered there, it is not what a popup's committed document can do
+   today. Window-mode popups are for OAuth returns, where the popup mostly
+   just needs to exist and postMessage to its opener — untested here, and the
+   opener side is a different path — but a popup that wants `tiny` has none.
+   Not yet root-caused: script injection into that document demonstrably works
+   (the shim and client are both there), while messages out of it do not
+   arrive, and that asymmetry is the thing to explain first.
+   Reproducer: `scratchpad/wrapkit`, `"url"` app at
+   `http://127.0.0.1:8123/?fast=popup`, ~20s.
 
 ## Remaining
 - **`window` popups keep default chrome** — no `win.open`-style chrome
