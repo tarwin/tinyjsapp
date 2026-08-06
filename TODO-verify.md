@@ -909,13 +909,24 @@ exactly the kind of claim that deserves a run:
       `VK_MEDIA_NEXT_TRACK` changed nothing at all, while
       `VK_MEDIA_PLAY_PAUSE` moved Playing → Paused → Playing. The key path
       works; there is simply no handler behind next/previous.
-      Fix is app-side, ~5 lines next to amp's existing `onMediaKey` block
-      (`player.js:1371`): `navigator.mediaSession.setActionHandler` for
-      `nexttrack`/`previoustrack` (and `play`/`pause`), pointing at the same
-      `next`/`prev`/`doPlay`/`doPause` the on-screen buttons use. Costs macOS
-      nothing. `mediaSession.metadata` alongside it is the closest Windows can
-      get to `nowPlaying.set()` until SMTC is wired into the launcher.
-      Rig: `scratchpad/mediakeys.ps1`. `MEDIAKEY` and `NOWPLAYING` appear
+      Fixed app-side the same day, in ~5 lines next to amp's existing
+      `onMediaKey` block (`player.js:1371`):
+      `navigator.mediaSession.setActionHandler('nexttrack'/'previoustrack')`
+      pointing at the same `next`/`prev` the on-screen buttons use. Play/pause
+      is deliberately left to the engine, which drives the audio element
+      directly and so keeps amp's UI in step via its own play/pause events.
+      **Confirmed by re-measuring: `IsNextEnabled` and `IsPreviousEnabled`
+      both flipped `False` → `True`**, and Tarwin confirmed the keys now work.
+      Costs macOS nothing (WebKit routes its media keys through `onMediaKey`,
+      not mediaSession). Shipped from the examples repo by Tarwin.
+      Still true, and still a tinyjs gap rather than an app one:
+      `nowPlaying.set()` reaches nothing on Windows, so the OS card shows the
+      page title and no artist. `mediaSession.metadata` is the closest an app
+      can get until SMTC is wired into the launcher (the route is sketched in
+      TODO-windows.md's `nowPlaying` entry).
+      Rig: `scratchpad/mediakeys.ps1` — reads every SMTC session's controls
+      and injects the virtual keys locally, which is what separates "the host
+      ate it" from "the app has no handler". `MEDIAKEY` and `NOWPLAYING` appear
       **zero times** in launcher-win.cc (macOS has four), so `onMediaKey` — the
       hook amp uses (`player.js:1259`) — can never fire on Windows, and
       `nowPlaying.set()` is dropped. What DOES work is Chromium's own: a
