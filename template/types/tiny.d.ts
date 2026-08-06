@@ -678,8 +678,9 @@ declare interface Tiny {
     printToPDF(path: string): Promise<{ path: string }>;
     /** Find-in-page: selects and scrolls to the next match; call again to
      *  step. matches/activeMatch come from a JS text-walk on top of the
-     *  native find (approximate on exotic pages). macOS today — ask
-     *  tiny.system.capabilities().findInPage. */
+     *  native find — approximate on exotic pages on macOS/Windows (hidden
+     *  text counts, shadow DOM doesn't); Linux's counts come from the
+     *  engine. All three platforms; ask capabilities().findInPage. */
     find(term: string, opts?: { forward?: boolean; matchCase?: boolean }): Promise<{ found: boolean; matches?: number; activeMatch?: number }>;
     /** clear the find selection */
     stopFind(): Promise<any>;
@@ -888,8 +889,13 @@ declare interface Tiny {
     isLinux(): boolean;
     info(): Promise<{ os: string; arch: string; session: string | null; desktop: string | null }>;
     architecture(): Promise<string>;
-    /** what this machine can actually do — anything ABSENT is supported */
-    capabilities(): Promise<Record<string, boolean | string>>;
+    /** What this machine can actually do — anything ABSENT is supported.
+     *  Mostly booleans (`sampler` is 'page' | 'native'), plus `api`: what
+     *  the tinyjs.json "api" gate denies THIS origin, so a wrapped page can
+     *  hide UI for calls it would only watch fail. */
+    capabilities(): Promise<Record<string, boolean | string> & {
+      api?: { gated: boolean; denied: string[] };
+    }>;
     /** the user's languages + time zone, read from the OS. A page already has
      *  navigator.language(s), Intl and the 'languagechange' event; reach for
      *  this on the BACKEND (txiki has no Intl at all), or when you want the
@@ -1299,7 +1305,7 @@ declare type TinyApiHandler = (
   meta: TinyApiMeta,
 ) => unknown | Promise<unknown>;
 
-/** 'navigate' page event / onNavigate backend hook (macOS today).
+/** 'navigate' page event / onNavigate backend hook (all three platforms).
  *  kind 'policy' reaches only the backend hook, for main-frame http(s)
  *  navigations before they run: return 'deny' or 'external' (hand the URL to
  *  the real browser) to stop them; anything else — or answering slower than
@@ -1313,7 +1319,7 @@ declare interface TinyNavEvent {
   error?: string;
 }
 
-/** 'download' page event / onDownload backend hook (macOS today).
+/** 'download' page event / onDownload backend hook (all three platforms).
  *  tinyjs.json "downloads": 'auto' (default; ~/Downloads, de-duped names) |
  *  'ask' (save panel) | 'deny'. 'progress' states carry bytes/total
  *  (total -1 when the response had no Content-Length), throttled to ~4/s. */
@@ -1328,7 +1334,7 @@ declare interface TinyDownloadEvent {
   error?: string;
 }
 
-/** onWindowOpen backend hook / 'popup' page event (macOS today) —
+/** onWindowOpen backend hook / 'popup' page event (all three platforms) —
  *  window.open / target=_blank, per tinyjs.json "popups": 'external'
  *  (default; handed to the browser) | 'window' (a real tinyjs window) |
  *  'deny'.

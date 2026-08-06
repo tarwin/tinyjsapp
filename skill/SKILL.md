@@ -67,6 +67,14 @@ tinyjs.json          { name, title, size, id, version, icon?,
                        signIdentity?, notarize?: { profile },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle
                        frontend?: { build, dist, dev, devUrl },
+                       // wrapping a hosted site (recipes.md) — "url" replaces
+                       // the local frontend, "api" gates what that origin may
+                       // call. NEVER wrap a site you don't control without it.
+                       url?: "https://app.example.com",
+                       inject?: "src/shim.js",        // document-start, every page
+                       downloads?: "auto" | "ask" | "deny",
+                       popups?: "external" | "window" | "deny",
+                       api?: "wrapper" | { disable?, enable?, origins? },
                        macos?/windows?/linux?: { …merged on top per OS } }
 icon.png             1024×1024 app icon
 src/main.js          backend

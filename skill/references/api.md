@@ -162,6 +162,51 @@ await tiny.dialog.confirm(message, { detail, ok, cancel });   // true | false
 await tiny.dialog.prompt(message, { default, ok, cancel });   // string | null
 ```
 
+## Site wrappers: navigation / downloads / popups / find
+
+Only interesting when the main frame is a third-party site (`"url"` in
+tinyjs.json — see recipes.md, and gate the origin with `"api"`). All three
+platforms; `capabilities()` reports `jsDialogs`, `downloads`, `navigation`,
+`popups`, `findInPage`.
+
+```js
+// PAGE side
+await tiny.win.find('needle', { forward: true, matchCase: false });
+// -> { found, matches, activeMatch }  — call again to step; stopFind() clears
+await tiny.win.stopFind();
+tiny.api.on('navigate', (e) => {});   // { window, kind, url, error? }
+tiny.api.on('download', (d) => {});   // { id, url, filename, path, state, bytes?, total? }
+tiny.api.on('popup', (p) => {});      // { window, url, action }
+const caps = await tiny.system.capabilities();
+caps.api;                             // { gated, denied: [...] } for THIS origin
+```
+
+```js
+// BACKEND side (src/main.js) — export these like any other hook
+export function onNavigate(info, app) {
+  // kind: 'policy' | 'start' | 'commit' | 'finish' | 'fail' | 'crash'
+  // 'policy' fires for main-frame http(s) BEFORE the navigation runs:
+  if (info.kind === 'policy' && !info.url.startsWith('https://app.example.com'))
+    return 'external';       // 'deny' | 'external' (open in the real browser)
+  // anything else — or answering slower than ~400ms — allows, so a wrapper
+  // can never deadlock its own first load. 'start'/'finish'/'fail' are the
+  // raw material for loading / offline / crashed overlays.
+}
+export function onDownload(info, app) { /* state: started|progress|done|failed|denied|cancelled */ }
+export function onWindowOpen(info, app) {
+  // kind 'policy' (before anything shows) may return 'window' | 'external' |
+  // 'deny'; 'window' only works if "popups": "window" (the webview has to be
+  // returned synchronously). kind 'open' reports the outcome.
+}
+// api handlers also get meta.origin — the calling frame's origin, engine-
+// attested, the same value the "api" origins gate keys off:
+export const api = { save: async (p, app, meta) => meta.origin };
+```
+
+Per-engine caveats live in platforms.md; they matter if you promise a
+behaviour to a user (e.g. a denied navigation has still made its request on
+Linux).
+
 ## Tray
 
 ```js

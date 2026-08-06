@@ -48,6 +48,11 @@ reason — nothing hangs. `tiny.macos.*` off macOS REJECTS (never null).
 - No `pickColor` (works on mac + linux), no `spotlight` backend, no
   `nowPlaying`/media keys.
 - WebView2 = Chromium: `MediaElementSource` taps post-volume (WebKit: pre).
+- Site wrappers: `NavigationStarting` has no deferral, so a policy ask is
+  cancel-and-re-Navigate — an ASKED main-frame POST re-issues as a GET
+  (form submissions only; fetch/XHR never hit the policy path). Back/forward
+  are not asked, for the same reason. A popup's own `window.close()` is a
+  no-op; close it from the backend by window id.
 
 ## Linux notes
 
@@ -80,6 +85,14 @@ reason — nothing hangs. `tiny.macos.*` off macOS REJECTS (never null).
 - Frameless windows get WM resize grips — declare `minSize` on satellites.
 - Deep links / file associations / single instance work via the
   self-registered `.desktop` entry (first run of a built app).
+- Site wrappers: the navigation policy ask sits at the RESPONSE decision
+  (the only place WebKitGTK distinguishes a main frame), so a DENIED
+  navigation has already made its request — fine for "don't show me this
+  page", not a request blocker. Find is the one engine with real match
+  counts. Origin stamping is frame-blind (the shim only injects top-frame,
+  so ordinary calls are main-frame, but a subframe's hand-rolled
+  postMessage would be attributed to the top frame) — don't wrap a site
+  that embeds untrusted iframes and rely on `"api"` origins alone.
 
 ## Not supported (feature-detect; they fail cleanly)
 

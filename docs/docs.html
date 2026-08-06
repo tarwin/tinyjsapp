@@ -294,6 +294,7 @@
     <a href="#windowfx">window fx</a>
     <a href="#system">system</a>
     <span class="toc-group">ship</span>
+    <a href="#wrapper">site wrappers</a>
     <a href="#open">deep links</a>
     <a href="#update">auto-update</a>
     <span class="toc-group">good to know</span>
@@ -409,8 +410,21 @@
   <i>// live screen; false if your app parks windows off-screen on purpose —</i>
   <i>// win.ensureOnScreen() stays available either way (default: true)</i>
   "offscreenRescue": false,
-  <i>// override the webview UA (UA-sniffing sites; wrapping a devUrl)</i>
+  <i>// override the webview UA (UA-sniffing sites; wrapping a hosted app)</i>
   "userAgent": "Mozilla/5.0 …",
+  <i>// WRAPPING A HOSTED SITE — the main window IS the remote page, so no local</i>
+  <i>// frontend is needed. See "wrapping a hosted site" below.</i>
+  "url": "https://app.example.com",
+  <i>// what that origin may call over the bridge. tiny is injected into EVERY</i>
+  <i>// origin, so without this the site's own JS holds an RPC channel to a</i>
+  <i>// backend with full filesystem access. enable wins over disable.</i>
+  "api": { "origins": { "https://app.example.com": ["notify", "store.*"] } },
+  <i>// document-start script for every page (.ts is bundled with esbuild)</i>
+  "inject": "src/shim.js",
+  <i>// where downloads go: auto (OS Downloads dir) | ask (save panel) | deny</i>
+  "downloads": "auto",
+  <i>// window.open / target=_blank: external (real browser) | window | deny</i>
+  "popups": "external",
   <i>// frameless / translucent window</i>
   "chrome": { "frame": false, "vibrancy": "hud" },
   <i>// backend entry; a .ts path is bundled with esbuild</i>
@@ -444,6 +458,11 @@
   "contextMenu": false,
   "about": "menu",
   "userAgent": "Mozilla/5.0 …",
+  "url": "https://app.example.com",
+  "api": { "origins": { "https://app.example.com": ["notify", "store.*"] } },
+  "inject": "src/shim.js",
+  "downloads": "auto",
+  "popups": "external",
   "chrome": { "frame": false, "vibrancy": "hud" },
   "backend": "backend/main.ts",
   "frontend": {
@@ -1254,6 +1273,50 @@ const { text, calls } = await <b>app.macos.ai.generate</b>('Move the window to 2
     <pre>await <b>tiny.theme.get</b>();            <i>// { dark } | null</i>
 <b>tiny.theme.on</b>((dark) =&gt; …);        <i>// live changes</i>
 <b>tiny.api.on</b>('sleep', fn);  <b>tiny.api.on</b>('wake', fn);</pre>
+  </section>
+
+  <section id="wrapper">
+    <h2>wrapping a hosted site <span class="tag">all three platforms</span></h2>
+    <p class="note"><code>"url"</code> in tinyjs.json makes the main window a
+    remote page — no local frontend needed. Everything a <i>browser</i> does,
+    which a local-page app never missed, then applies: JS dialogs get native
+    panels headlined by the page's origin, downloads land on disk, popups and
+    navigation are yours to route, and <code>tiny.win.find()</code> powers ⌘F.
+    <b><code>frontend.devUrl</code> is dev-only</b> — a packaged app built that
+    way has no page at all.</p>
+    <p class="note"><b>Gate the origin.</b> <code>tiny</code> is injected into
+    every origin, so without <code>"api"</code> the site's own JavaScript holds
+    an RPC channel to a backend with full filesystem and process access. The
+    gate is enforced in the backend — the page-side object is editable by a
+    hostile page, so page-side gating is decoration — and keys off the calling
+    frame's origin as the <i>engine</i> reports it, not as the page claims it.
+    With <code>origins</code> present, an origin matching no key gets nothing,
+    so a redirect to an unlisted domain inherits no access.</p>
+    <pre>{ <i>// preset, lists, or per-origin keyholes — enable wins over disable</i>
+  "api": "wrapper",
+  "api": { "disable": ["*"], "enable": ["notify", "win.*", "store.*"] },
+  "api": { "origins": {
+    "https://app.example.com": ["notify", "store.*"],
+    "file://*": "all" } } }</pre>
+    <pre><i>// page — what the gate denies THIS origin, so you can hide the UI</i>
+const { api } = await <b>tiny.system.capabilities</b>();  <i>// { gated, denied: [...] }</i>
+await <b>tiny.win.find</b>('needle', { forward: true, matchCase: false });
+<i>// -&gt; { found, matches, activeMatch } — call again to step</i>
+await <b>tiny.win.stopFind</b>();</pre>
+    <pre><i>// backend (src/main.js) — route links, watch loads, veto navigations</i>
+export function <b>onNavigate</b>(info, app) {
+  <i>// kind: 'policy' | 'start' | 'commit' | 'finish' | 'fail' | 'crash'</i>
+  if (info.kind === 'policy' &amp;&amp; !info.url.startsWith('https://app.example.com'))
+    return 'external';   <i>// 'deny' | 'external' (hand to the real browser)</i>
+}
+export function <b>onDownload</b>(info, app) { }  <i>// started|progress|done|failed|denied|cancelled</i>
+export function <b>onWindowOpen</b>(info, app) { }  <i>// 'window' | 'external' | 'deny'</i></pre>
+    <p class="note">A policy answer slower than ~400ms allows, so a wrapper can
+    never deadlock its own first load. Engine caveats worth knowing before you
+    promise a behaviour: on Linux a denied navigation has already made its
+    request (the only place WebKitGTK can tell a main frame from a subframe is
+    the response decision), and on Windows an <i>asked</i> main-frame POST
+    re-issues as a GET.</p>
   </section>
 
   <section id="open">
