@@ -168,6 +168,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.39.0 <span class="date">2026-08-06</span></h2>
+      <ul>
+        <li><b><code>{ role: 'app' }</code> puts items in the macOS application menu.</b> The one slot in the bar <code>setMenu</code> could not reach — and the one macOS reserves for <b>Settings… (⌘,)</b>, which every app is expected to put there and none built on tinyjs could. Items declared in an <code>app</code> role block land between About and Quit and behave like any other: ids, key equivalents, ticks, <code>menu.update</code> / <code>menu.get</code>, and clicks through <code>tiny.menu.on</code>. Windows and Linux have no application menu, so the role is unknown there and its items are dropped rather than landing somewhere arbitrary — declare the same item in a menu of your own for those platforms. Only the first <code>app</code> block is used.</li>
+        <li>The id→item registry now resets at the top of the bar build rather than just before the custom menus, because the application menu is built first and the old order threw its registrations away — an item that clicked correctly (the id rides on <code>representedObject</code>) but that <code>menu.get</code> and <code>menu.update</code> could not see.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.38.0 <span class="date">2026-08-06</span></h2>
       <ul>
         <li><b>Wrap a hosted web app as a real desktop app.</b> <code>"url": "https://…"</code> in tinyjs.json makes the main window a remote page (no local frontend needed), and the things a <i>browser</i> does — which a local-page app never missed — now exist on all three platforms: <code>alert</code>/<code>confirm</code>/<code>prompt</code> get native panels headlined by the page's origin (<code>confirm()</code> used to return <code>false</code> silently, a permanent "Cancel" for any site guarding a destructive action); downloads actually download (<code>"downloads"</code>: <code>auto</code> to ~/Downloads with de-duplicated names, <code>ask</code> for a save panel, or <code>deny</code>) with start/progress/done events; <code>window.open</code> is configurable (<code>"popups"</code>: <code>external</code> to the real browser, <code>window</code>, or <code>deny</code>); navigation start/commit/finish/fail/crash reach <code>onNavigate</code>, which can also <i>veto</i> a main-frame navigation or send it to the browser; and <code>tiny.win.find()</code> searches the page.</li>

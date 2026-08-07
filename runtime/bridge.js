@@ -1142,7 +1142,13 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   function sendMenuBlock(menus, win) {
     send('MENUBEGIN' + (win ? '@' + win : ''));
     for (const m of menus ?? []) {
-      if (m?.role) { send('MENUROLE ' + one(m.role)); continue; }
+      // A role block claims a slot the LAUNCHER fills. 'edit' brings its own
+      // items and ignores anything you pass; 'app' (macOS) puts your items
+      // INSIDE the application menu, beside About — which is where Settings…
+      // belongs and the one place setMenu could not previously reach.
+      // Elsewhere the role is unknown and its items are dropped, which is why
+      // an app declares Settings here AND in a menu of its own off-macOS.
+      if (m?.role) { send('MENUROLE ' + one(m.role)); sendItems(m.items); continue; }
       send('MENU ' + one(m.title));
       sendItems(m.items);
     }

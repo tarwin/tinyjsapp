@@ -4,6 +4,24 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.39.0 — 2026-08-06
+
+- **`{ role: 'app' }` puts items in the macOS application menu.** The one slot
+  in the bar `setMenu` could not reach — and the one macOS reserves for
+  **Settings… (⌘,)**, which every app is expected to put there and none built
+  on tinyjs could. Items declared in an `app` role block land between About and
+  Quit and behave like any other: ids, key equivalents, ticks, `menu.update` /
+  `menu.get`, and clicks through `tiny.menu.on`. Windows and Linux have no
+  application menu, so the role is unknown there and its items are dropped
+  rather than landing somewhere arbitrary — declare the same item in a menu of
+  your own for those platforms. Only the first `app` block is used.
+
+  The id→item registry now resets at the top of the bar build rather than just
+  before the custom menus, because the application menu is built first and the
+  old order threw its registrations away — an item that clicked correctly (the
+  id rides on `representedObject`) but that `menu.get` and `menu.update` could
+  not see.
+
 ## 0.38.0 — 2026-08-06
 
 - **Wrap a hosted web app as a real desktop app.** `"url": "https://…"` in

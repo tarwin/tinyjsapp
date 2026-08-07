@@ -823,6 +823,34 @@ tiny.menu.set([
 Windows and Linux have no launcher-owned menu, so they skip the entry and keep
 the order you declared.
 
+`{ role: 'app', items: [...] }` is the other slot the launcher owns: on macOS
+those items go **inside the application menu**, between About and Quit, which
+is where the platform keeps **Settings…** (⌘,) and the one part of the bar
+`setMenu` could not reach before. They behave like any other item — ids,
+key equivalents, ticks, `menu.update` / `menu.get` — and clicks arrive through
+the same `tiny.menu.on`:
+
+```js
+const mac = tjs.env.OS !== 'Windows_NT'
+  && !/linux/i.test(navigator.platform ?? '');
+
+tiny.menu.set([
+  ...(mac ? [{ role: 'app', items: [
+    { id: 'settings', label: 'Settings…', key: ',' },
+  ] }] : []),
+  { title: 'File', items: [
+    ...(mac ? [] : [{ id: 'settings', label: 'Settings…', key: ',' }]),
+  ] },
+  { role: 'edit' },
+]);
+```
+
+Windows and Linux have no application menu at all, so the role is unknown
+there and its items are dropped rather than landing somewhere arbitrary —
+which is why the example declares Settings twice and shows it once. Only the
+first `app` block is used; a second is a mistake, and appending it would
+silently double the items.
+
 The macOS **About** item normally shows the standard panel (app name, version,
 a tinyjs credit) for free. To draw your own instead, set `"about": "menu"` in
 tinyjs.json — the click then arrives like any other menu item, with the

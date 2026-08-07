@@ -43,7 +43,12 @@
 //                                                    flags: c=checked,
 //                                                    d=disabled; SUB nests;
 //                                                    MENUROLE edit places the
-//                                                    standard Edit menu)
+//                                                    standard Edit menu;
+//                                                    MENUROLE app + ITEMs puts
+//                                                    them in the APPLICATION
+//                                                    menu, between About and
+//                                                    Quit — where Settings…
+//                                                    goes)
 //                         MENUUPD[@<win>] <id>\t<label>\t<checked>\t<enabled>
 //                                                    patch a live item ('' =
 //                                                    leave unchanged); @<win>
@@ -263,7 +268,8 @@
 // A default app menu (About + Quit) is always present; About shows the
 // standard panel with the app name, version, and a tinyjs credit — unless
 // ABOUTHOOK 1 arrived, in which case the click reports `MENU about` and the
-// app draws its own.
+// app draws its own. `MENUROLE app` adds the app's own items between the
+// two (Settings…, ⌘,).
 //
 // Built as Objective-C++ on macOS (needs AppKit for NSOpenPanel/NSSavePanel).
 //
@@ -724,7 +730,9 @@ static void do_dialog(webview_t w, void *arg) {
 // --- menu bar (macOS) --------------------------------------------------------
 // A default app menu (About + Quit) is always installed; MENUBEGIN…MENUEND
 // declares additional custom menus. Item clicks are reported to the backend
-// as `MENU <id>` lines.
+// as `MENU <id>` lines — including clicks on items the app put INSIDE the
+// application menu with `MENUROLE app`, which is the slot macOS reserves for
+// Settings… and which setMenu had no way to reach before.
 //
 // The standard Edit menu is installed too — the webview needs its key
 // equivalents for ⌘C/⌘V to work — and it goes first unless a MENUROLE edit
@@ -918,7 +926,16 @@ static void build_bar(MacBar &mb) {
 
     NSMenu *bar = [[NSMenu alloc] init];
 
-    // Default app menu: About + Quit.
+    // The id→NSMenuItem registry, emptied HERE rather than just before the
+    // custom menus below: items in the application menu (`MENUROLE app`) are
+    // built first, and resetting after them would throw their registrations
+    // away — leaving a Settings… that clicks perfectly well (the id rides on
+    // representedObject) but that getMenuItem and MENUUPD cannot see.
+    [mb.reg release];
+    mb.reg = [[NSMutableDictionary alloc] init];
+
+    // Default app menu: About + Quit, with whatever the app asked to put
+    // between them.
     NSMenuItem *appItem = [[NSMenuItem alloc] init];
     [bar addItem:appItem];
     NSMenu *appMenu = [[NSMenu alloc] init];
@@ -929,6 +946,23 @@ static void build_bar(MacBar &mb) {
     about.target = g_menu_target;
     [appMenu addItem:about];
     [appMenu addItem:[NSMenuItem separatorItem]];
+
+    // `MENUROLE app` + ITEMs: the application menu is the one slot in the bar
+    // an app could not previously reach, and it is where macOS keeps
+    // Settings… (⌘,). The items land between About and Quit — the place the
+    // platform puts them — and go through the same build_menu_into as any
+    // other menu, so ids, key equivalents, ticks and MENUUPD all work here
+    // exactly as they do elsewhere. One slot only: a second `app` block is a
+    // mistake, and appending it would silently double the items.
+    for (const MenuSpec &m : *menus) {
+      if (m.role != "app") continue;
+      if (!m.items.empty()) {
+        build_menu_into(appMenu, m.items, @selector(itemClicked:), mb.reg);
+        [appMenu addItem:[NSMenuItem separatorItem]];
+      }
+      break;
+    }
+
     NSMenuItem *quit =
         [[NSMenuItem alloc] initWithTitle:ns("Quit " + g_app_name)
                                    action:@selector(doQuit:)
@@ -968,13 +1002,14 @@ static void build_bar(MacBar &mb) {
     }
     if (!has_edit_slot) add_edit_menu();
 
-    // Custom menus from the backend.
-    [mb.reg release];
-    mb.reg = [[NSMutableDictionary alloc] init];
+    // Custom menus from the backend. (The registry was emptied at the top —
+    // the application menu's items are already in it.)
     if (menus) {
       for (const MenuSpec &m : *menus) {
         if (!m.role.empty()) {
           if (m.role == "edit") add_edit_menu();
+          // "app" was placed inside the application menu above, before this
+          // loop ran — it claims a slot in the SPEC, never one in the bar.
           continue;                          // unknown roles are ignored
         }
         NSMenuItem *holder = [[NSMenuItem alloc] init];

@@ -35,8 +35,18 @@ declare interface TinyMenu {
    * key equivalents — and goes first unless you say where it belongs, which
    * is how you get File before Edit. Windows and Linux have no such menu and
    * skip the entry.
+   *
+   * 'app' (macOS) is the application menu itself: the `items` you declare
+   * land inside it, between About and Quit, which is where the platform
+   * keeps Settings… (⌘,) and the one slot setMenu could not otherwise
+   * reach. They behave like any other item — ids, keys, ticks,
+   * `menu.update` / `menu.get`, clicks through `menu.on`. Windows and Linux
+   * have no application menu, so the role is unknown there and its items are
+   * DROPPED rather than landing somewhere arbitrary — declare the same item
+   * in a menu of your own for those platforms. Only the first 'app' block is
+   * used.
    */
-  role?: 'edit';
+  role?: 'edit' | 'app';
 }
 
 declare interface TinyMenuItemState {

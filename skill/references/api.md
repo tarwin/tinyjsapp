@@ -114,6 +114,14 @@ tiny.win.id; tiny.win.close(); await tiny.win.windows();
 tiny.menu.set([
   { role: 'edit' },                          // put the standard Edit menu HERE
                                              // (omit = it goes first on macOS)
+  { role: 'app', items: [                    // macOS: INSIDE the application
+    { id: 'settings', label: 'Settings…', key: ',' },  // menu, between About
+  ]},                                        // and Quit — where Settings…
+                                             // belongs. win/linux have no
+                                             // application menu, so these
+                                             // items are DROPPED: declare
+                                             // them in a menu of your own
+                                             // there too. First block wins.
   { title: 'Actions', items: [
     { id: 'open', label: 'Open…', key: 'o' },        // ⌘O (Ctrl+O win/linux)
     { id: 'find', label: 'Find', key: 'alt+shift+f' },// ⌥⇧⌘F — extra modifiers
