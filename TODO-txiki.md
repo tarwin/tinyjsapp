@@ -13,8 +13,9 @@ every browser and curl but not in the app. Neither is theoretical: eight of
 amp's ~60 baked-in FAVES feeds hit one or the other. The shim is verified on
 all three OSes through amp's full stack (Windows 2026-07-30: feeds and
 streams in the built app, plus the console-flash the curl spawns caused
-there, now fixed). POST request bodies are the one path nothing has
-exercised anywhere — see TODO-verify.md.
+there, now fixed). POST request bodies were the one path nothing had
+exercised anywhere — now measured, and they found Bug D below: a small POST
+body through the shim hangs forever. See TODO-verify.md.
 
 ## Bug A — root-path URLs go out as `GET //`
 
@@ -41,6 +42,17 @@ cloudfront`. Verified byte-for-byte with a raw TLS replay: `GET /` → 200,
   so the re-mangling can't be dodged by normalizing the input URL. There is
   NO JS-level workaround short of not using the built-in fetch: both `/` and
   pathless URLs mangle, so nothing you write in the URL avoids it.
+- **Method-agnostic** (re-measured 2026-08-14, macOS arm64, same shipped
+  `bin/tjs` v26.6.0): `POST http://127.0.0.1:8899/` goes out as
+  `POST // HTTP/1.1` with an otherwise perfect request — correct
+  `content-length`, body intact on the wire. So it really is the URL join,
+  not anything method- or body-specific.
+- **Do NOT verify this against `tjs.serve` — it masks the bug.** A txiki
+  client posting to a txiki server reports `pathname === '/'`, because
+  `tjs.serve` normalizes `//` back to `/` on the receiving side. Two of our
+  own runtimes talking to each other look perfectly healthy while the wire
+  carries `//`. Only a raw listener (the `nc` harness above) tells the
+  truth. This nearly produced a "Bug A is fixed" conclusion on 2026-08-14.
 - Where to look: txiki's fetch/XHR request-line construction — almost
   certainly a `'/' + path` join where path already starts with (or is) `/`.
   Likely a one-line fix.
@@ -76,12 +88,17 @@ follows the http→https redirect internally and then fails the handshake.
 
 ## The plan
 
-1. **Patch + pin.** Clone txiki v26.6.0, fix A (request-line join) and B
-   (mbedtls config), build with the existing CI recipe (setup.sh already
-   knows how — Linux builds ship from our releases today; add macOS and
-   Windows jobs), pin `TJS_VERSION` to the patched build everywhere.
-2. **Upstream.** PR both fixes to saghul/txiki.js — A with the nc repro,
-   B with the host table above. Small, uncontroversial patches.
+0. **Unblock D first** — it's the only one that hangs a caller with no error,
+   and unlike A and B it can be fixed entirely in our code (temp-file body,
+   see Bug D). Do this before any txiki work; it doesn't depend on it.
+1. **Patch + pin.** Clone txiki v26.6.0, fix A (request-line join), B
+   (mbedtls config) and C (the `uv_try_write` fast path, which retires D at
+   the source), build with the existing CI recipe (setup.sh already knows
+   how — Linux builds ship from our releases today; add macOS and Windows
+   jobs), pin `TJS_VERSION` to the patched build everywhere.
+2. **Upstream.** PR the fixes to saghul/txiki.js — A with the nc repro,
+   B with the host table above, C with the `tr` repro (check against
+   PR #1028 first). Small, uncontroversial patches.
 3. **Delete the shim.** Once a fixed tjs is pinned on all three platforms,
    remove the fetch repair shim from bridge.js and the reachability notes it
    earned in README.md / docs/docs.html — the built-in fetch should just
@@ -99,7 +116,10 @@ follows the http→https redirect internally and then fails the handshake.
   landing in a broken case divert individually.
 - Bodies stream both ways (curl stdout → ReadableStream; string/Uint8Array
   request bodies via `--data-binary @-`). Stream/Request-object inputs and
-  non-http(s) schemes bypass the shim entirely.
+  non-http(s) schemes bypass the shim entirely. **`@-` is a stdin pipe, so
+  this line is Bug D** — small request bodies never settle. Fix by staging
+  the body in a temp file (`@<file>`); until then the shim can only be
+  trusted for GETs and large POSTs.
 - Every redirect hop is re-validated as http(s) — a hostile `Location:
   file:///etc/passwd` throws instead of reaching curl (which would read it).
   curl is additionally pinned with `--proto =http,https` and the URL sits
@@ -151,3 +171,112 @@ tagged release we pin has it, before anyone builds on the stdin pipe again.
   intact and has no size limit. That workaround should stay until a fixed
   runtime is pinned — but if the pipe ever works, `startRun` is the one place
   to change.
+
+## Bug D — a SMALL POST body through the shim hangs forever (C, in our own code)
+
+Bug C is not confined to apps that spawn things. **The fetch repair shim
+itself pipes request bodies to curl over `--data-binary @-`** — i.e. the
+exact broken stdin path — so any POST small enough to hit the fast path
+never completes. Found 2026-08-14 by reasoning from C's contract to the
+shim's, then reproduced first try (macOS arm64, shipped `bin/tjs` v26.6.0):
+
+```
+POST http://127.0.0.1:8913/  body = 7 bytes       → never settles (killed at 6s)
+POST http://127.0.0.1:8913/  body = 320 KB        → completes, 200, echo correct
+```
+
+The cruel detail: **the request succeeds.** The listener logs
+`POST / bodylen=7` and replies. curl sent the body and got a response — only
+the `write()`/`close()` promise inside the shim never settles, so the shim
+never advances to reading curl's stdout and the caller's `await fetch(...)`
+hangs on a request the server already answered. No error, no timeout, no
+log. Symptomatically indistinguishable from a dead network.
+
+Reach: any POST whose URL (or any redirect hop) has a root path, or whose
+host is TLS 1.2-only — those are the only two cases that divert to curl.
+Small JSON payloads to an API root (`POST https://api.example.com/`) are
+precisely the shape that hits it. Nothing in amp POSTs, which is why five
+weeks of three-OS shim verification never touched it.
+
+- **Fix properly** by fixing C (or pinning a tjs with upstream #1028 in it).
+- **Fix now, cheaply**, if C outlives this: give the shim nib's workaround —
+  stage the body in a temp file and hand curl `--data-binary @<file>`
+  instead of `@-`. That deletes the stdin pipe from the shim entirely, has
+  no size limit, and is a smaller change than it sounds (one branch in the
+  body-handling path). Worth doing regardless — the shim has no business
+  depending on a runtime bug's fast path.
+- Repro harness (two files, `tjs run` each; peer may be `tjs.serve` here —
+  we're testing body delivery, not the request line Bug A mangles):
+
+  ```js
+  // sink.js
+  const s = await tjs.serve({ port: 8913, async fetch(req) {
+    const b = await req.text();
+    console.log('SERVER saw', req.method, 'bodylen=', b.length);
+    return new Response('got ' + b.length);
+  }});
+
+  // shim-post.js  — start sink.js first
+  await import('<repo>/runtime/bridge.js');        // installs the shim
+  const body = JSON.stringify({ a: 1 });           // 7 bytes -> hangs
+  // const body = JSON.stringify({ a: 'x'.repeat(320*1024) });  // -> passes
+  setTimeout(() => { console.log('*** STILL HANGING ***'); tjs.exit(2); }, 6000);
+  const r = await fetch('http://127.0.0.1:8913/',  // ROOT PATH -> diverts to curl
+    { method: 'POST', body, headers: { 'content-type': 'application/json' } });
+  console.log('completed:', r.status, await r.text());
+  ```
+
+  The tell is `SERVER saw POST bodylen= 7` printing while the client still
+  hangs — that's what makes it Bug C and not a transport failure.
+- Only measured on macOS arm64. The stdin path is libuv-generic so all three
+  OSes are presumed affected, but that is inference, not observation —
+  TODO-verify.md.
+
+## Runtime surface: what txiki actually HAS (audited 2026-08-14)
+
+Audited while sizing up whether a *wrapped-agent-backend* app could run its
+whole backend on tjs (prompted by taking KiroCrew apart — an Electron shell
+whose only job is `loadURL('http://localhost:PORT?token=…')` in front of a
+590 MB bundled Python gateway that serves a Vite SPA). Four things were
+assumed missing that are present and working — writing them down so nobody
+re-derives an architecture around absences that aren't there. All probed on
+the shipped `bin/tjs` v26.6.0, macOS arm64:
+
+| Surface | State | Proof |
+|---|---|---|
+| `tjs:sqlite` | works | `Database(':memory:')`, `prepare().all()` round-trip |
+| `tjs:ffi` | works | `Lib('libSystem.B.dylib')` → `strlen("hello world")` = 11 |
+| `Worker` (global) | works, real threads | 20M-iteration loop in a worker; main loop ticked 80× at 10 ms during it |
+| `tjs.serve` | works | fetch-style handler; GET + POST, bodies to 2 MB |
+| `crypto.subtle` | present | WebCrypto global, not `tjs:crypto` |
+
+Also present: `SharedArrayBuffer`, `Atomics`, `WebAssembly`, `ReadableStream`,
+`tjs:hashing`, `tjs:path`, `tjs:uuid`, `tjs:posix-socket`. Genuinely absent:
+`MessageChannel`, `BroadcastChannel`, `tjs:worker` (the *module* — the
+`Worker` global is the supported spelling), `tjs:signal`, `tjs:engine`.
+
+Perf, same machine, same workload (an 8 MB transcript-shaped object plus a
+20M-iteration interpreted loop) — QuickJS is in CPython's class, and beats
+it on interpreted code:
+
+| | CPython 3.12 | tjs (QuickJS) | node (V8) |
+|---|---|---|---|
+| JSON stringify 8 MB | 15 ms | 38 ms | 12 ms |
+| JSON parse 8 MB | 15 ms | 20 ms | 9 ms |
+| tight loop, 20M iters | 1553 ms | **876 ms** | 126 ms |
+
+### What this means for the KiroCrew shape
+
+An agent backend is IO-bound — it waits seconds on model round-trips, and
+its genuinely hot work (embedding inference, vector search, PDF raster) is
+already native code being marshalled. So the interpreter is not the ceiling;
+`tjs:ffi` reaches the same llama.cpp/pdfium `.so`s Python was calling, and
+`tjs:sqlite` covers the session/history store. The ceiling is the four bugs
+in this file, and **Bug D is the one that matters most for this shape**: an
+agent backend is nothing *but* small JSON POSTs. A backend built on tjs
+today would hang the first time a model endpoint sat behind a root-path URL
+or a TLS 1.2 host — silently, on a request the server had already answered.
+
+Fixing A, B and D is what turns "viable in principle" into "safe to build
+on". None of that argues for rewriting KiroCrew's own 502k lines of Python;
+it argues that the *next* app of that shape doesn't need Python at all.

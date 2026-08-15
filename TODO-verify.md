@@ -1449,7 +1449,7 @@ knowing before trusting any multi-window store-choreographed page on Linux:
   previous run reads the OLD replies instantly and reports a full set of
   plausible, internally consistent, completely stale results.
 
-## The fetch repair shim — verified on all three, POST bodies excepted
+## The fetch repair shim — verified on all three, POST bodies BROKEN (Bug D)
 
 bridge.js now wraps `globalThis.fetch` (search "fetch repair shim"): follows
 redirects hop-by-hop and hands exactly two broken cases to the system curl —
@@ -1457,11 +1457,29 @@ root-path URLs (txiki emits `GET //`; strict CDNs 404) and TLS 1.2-only
 hosts (`mbedtls connect -1 5 0`). Full background: TODO-txiki.md. Every
 `tiny.fetch` and backend `fetch()` in every app now goes through it.
 
+> **2026-08-14 — the excepted path was finally exercised, and it fails.**
+> A SMALL POST body through the shim never settles: the shim pipes request
+> bodies to curl over `--data-binary @-`, which is Bug C's broken stdin
+> path. 7 bytes hangs forever; 320 KB is fine. The request itself SUCCEEDS
+> (the listener logs the body and replies) — only the caller's promise never
+> resolves, so it presents as a dead network on a request that was answered.
+> Filed as **Bug D** in TODO-txiki.md with a repro and a temp-file fix.
+> Measured macOS arm64 only; presumed all three (libuv-generic) but not
+> observed elsewhere — the boxes below stay unticked for it:
+>
+> - [ ] **Windows** — small-POST hang through the shim, and the temp-file fix
+> - [ ] **Linux** — same
+>
+> Note for whoever verifies: **`tjs.serve` cannot be the peer.** It
+> normalizes `//` back to `/`, so a txiki client against a txiki server
+> looks healthy while the wire carries the bug. Use a raw `nc` listener.
+
 Verified on macOS (unit via importing bridge.js under `tjs run`, then
 end-to-end: amp's podcast backend through a TINYJS_HTML driver page — the 8
 formerly-broken FAVES feeds all load, a real 404 stays 404, redirect chains
 report the final `res.url`, somafm streams live through it, POST bodies
-echo). Never run on:
+echo — but see the 2026-08-14 note above: that echo was a LARGE body, which
+is exactly the size class Bug D spares. Small ones hang). Never run on:
 
 - [x] **Windows** — verified 2026-07-30. Built amp: the podcasts all load
       and streams play (Tarwin, by hand — page → tiny.fetch → backend →
