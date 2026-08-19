@@ -5609,7 +5609,12 @@ static void apply_chrome_fields(NSWindow *win, WKWebView *wv,
                                 NSVisualEffectView **effect, bool is_main,
                                 ChromeReq *req) {
     bool req_frameless = req->frame == "0";
-    bool req_traffic_off = req->traffic == "0";
+    // `traffic` is a TOKEN, not a bit ('' keep · 'all' · 'none' · a comma
+    // list) — windowControls:false arrives as "none". Comparing it against
+    // "0" is never true, which left every secondary frameless window with a
+    // live NSTitlebarContainerView: invisible bar, but its 1px rounded top
+    // edge drew over the page and it swallowed the top strip's mouse events.
+    bool req_traffic_off = req->traffic == "none";
     if (!req->frame.empty()) {
       bool frameless = req_frameless;
       if (is_main)

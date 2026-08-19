@@ -168,6 +168,13 @@
   <section>
 
     <div class="rel">
+      <h2>0.39.1 <span class="date">2026-08-18</span></h2>
+      <ul>
+        <li><b>macOS: a frameless secondary window is really frameless.</b> <code>windowControls</code> rides the wire as a <i>token</i> — <code>all</code>, <code>none</code>, or a comma list — so the <code>['close','minimize']</code> form survives, but the titlebar-hiding branch tested it as a bit (<code>== "0"</code>), which is never true. So every window opened by <code>app.openWindow</code> with <code>chrome: { frame: false, windowControls: false }</code> kept a live titlebar container: invisible, but its rounded top edge drew over the page and it swallowed the top strip's mouse events. The main window was never affected — it derives the same decision from its own tracked state.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.39.0 <span class="date">2026-08-06</span></h2>
       <ul>
         <li><b><code>{ role: 'app' }</code> puts items in the macOS application menu.</b> The one slot in the bar <code>setMenu</code> could not reach — and the one macOS reserves for <b>Settings… (⌘,)</b>, which every app is expected to put there and none built on tinyjs could. Items declared in an <code>app</code> role block land between About and Quit and behave like any other: ids, key equivalents, ticks, <code>menu.update</code> / <code>menu.get</code>, and clicks through <code>tiny.menu.on</code>. Windows and Linux have no application menu, so the role is unknown there and its items are dropped rather than landing somewhere arbitrary — declare the same item in a menu of your own for those platforms. Only the first <code>app</code> block is used.</li>

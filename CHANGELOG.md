@@ -4,6 +4,17 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.39.1 — 2026-08-18
+
+- **macOS: a frameless secondary window is really frameless.** `windowControls`
+  rides the wire as a TOKEN — `all`, `none`, or a comma list — so the
+  `['close','minimize']` form survives, but the titlebar-hiding branch tested it
+  as a bit (`== "0"`), which is never true. So every window opened by
+  `app.openWindow` with `chrome: { frame: false, windowControls: false }` kept a
+  live titlebar container: invisible, but its rounded top edge drew over the
+  page and it swallowed the top strip's mouse events. The main window was never
+  affected — it derives the same decision from its own tracked state.
+
 ## 0.39.0 — 2026-08-06
 
 - **`{ role: 'app' }` puts items in the macOS application menu.** The one slot
