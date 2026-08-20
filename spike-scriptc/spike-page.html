@@ -1,0 +1,18 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>scriptc spike</title>
+<style>
+  body { font: 16px/1.5 -apple-system, sans-serif; background: #0d1117; color: #e6edf3;
+         display: grid; place-items: center; height: 100vh; margin: 0; }
+  .card { text-align: center; max-width: 30em; }
+  h1 { font-size: 1.4em; }
+  #status { color: #7ee787; font-size: 1.1em; min-height: 1.5em; }
+  .sub { color: #8b949e; font-size: .85em; }
+</style>
+<div class="card">
+  <h1>tinyjs window, no txiki behind it</h1>
+  <p id="status">waiting for the backend…</p>
+  <p class="sub">This window is the stock tinyjs launcher-macos. The backend on
+  the other end of the socket is a single native binary compiled from
+  TypeScript by scriptc — no QuickJS, no interpreter, no tjs.</p>
+</div>

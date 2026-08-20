@@ -1,0 +1,16 @@
+-- backend listening on 127.0.0.1:8897
+-- relay pid 66082
+-- relay attached to TCP side
+-- launcher pid 66087
+<- SYS theme dark
+-> TITLE driven by scriptc ✨
+-> EVAL document.getElementById("status").textContent = "backend says hello — compiled TypeScript, " + (2 ** 10) + " bytes of runtime between us";
+<- WINSTATE main {"fullscreen":false,"maximized":false,"minimized":false,"focused":false}
+<- WINSTATE main {"fullscreen":false,"maximized":false,"minimized":false,"focused":true}
+<- NAV {"window":"main","kind":"start","url":"file:///private/tmp/claude-503/-Users-tarwin-all-development-tinyjsapp/470b41e5-d7f1-4ecf-ad20-596ae1607530/scratchpad/probe/spike-page.html"}
+<- NAV {"window":"main","kind":"commit","url":"file:///private/tmp/claude-503/-Users-tarwin-all-development-tinyjsapp/470b41e5-d7f1-4ecf-ad20-596ae1607530/scratchpad/probe/spike-page.html"}
+<- CALL main:1 ["{\"method\":\"client.hello\"}","file://"]
+<- NAV {"window":"main","kind":"finish","url":"file:///private/tmp/claude-503/-Users-tarwin-all-development-tinyjsapp/470b41e5-d7f1-4ecf-ad20-596ae1607530/scratchpad/probe/spike-page.html"}
+-> QUIT
+<- WINSTATE main {"fullscreen":false,"maximized":false,"minimized":false,"focused":false}
+-- launcher exited code=0

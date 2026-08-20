@@ -1,0 +1,5 @@
+node_modules/
+spike-backend
+package-lock.json
+*.log
+.build/

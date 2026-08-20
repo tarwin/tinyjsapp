@@ -1,0 +1,8 @@
+{
+  "name": "tinyjs-scriptc-spike",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "scriptc": "^0.0.33"
+  }
+}
