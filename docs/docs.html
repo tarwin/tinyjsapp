@@ -557,11 +557,19 @@
     macOS and Linux, where there's no console to flash).</p>
     <p>SQLite ships in the runtime:</p>
     <pre><b>import</b> { Database } <b>from</b> 'tjs:sqlite';
-const db = new Database(dir + '/notes.db');
+<b>await</b> tjs.makeDir(dir, { recursive: true });  <i>// tjs.* fs is ASYNC — skip the</i>
+<i>// await and new Database() below races the mkdir ("database not initialized")</i>
+const db = new Database(dir + '/notes.db');   <i>// sqlite itself is SYNC — no await</i>
 db.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text)');
 const st = db.prepare('INSERT INTO notes (text) VALUES (?)');
 st.run('hello'); st.finalize();
 db.prepare('SELECT * FROM notes').all();  <i>// [{ id: 1, text: 'hello' }]</i></pre>
+    <p class="note">Coming from better-sqlite3: a statement has only
+    <code>run()</code> / <code>all()</code> / <code>finalize()</code> — no
+    <code>get()</code> (use <code>.all()[0]</code>) — and <code>run()</code>
+    returns nothing. For the last insert id, ask SQLite:
+    <code>db.prepare('INSERT … RETURNING id').all(…)[0].id</code> or
+    <code>SELECT last_insert_rowid()</code>.</p>
   </section>
 
   <section id="frontend">
@@ -1419,7 +1427,13 @@ const gaps = await <b>tiny.system.missing</b>();  <i>// [{ id, feature, detail, 
     <h2>gotchas <span class="tag">things that cost real debugging</span></h2>
     <p class="note">Mostly txiki.js (v26.6.0) and WebKit sharp edges, kept here
     so you don't rediscover them:</p>
-    <pre><i>// txiki streams have no `for await` — use a reader</i>
+    <pre><i>// every tjs.* fs call is ASYNC (returns a Promise) while tjs:sqlite is</i>
+<i>// fully SYNC — a missing await on makeDir/writeFile before opening the db</i>
+<i>// is a race that fails only sometimes</i>
+<b>await</b> tjs.makeDir(dir, { recursive: true });
+const db = new Database(dir + '/app.db');   <i>// no await, ever</i>
+
+<i>// txiki streams have no `for await` — use a reader</i>
 const reader = res.body.<b>getReader</b>();
 
 <i>// tjs.cwd is a PROPERTY, not a function</i>

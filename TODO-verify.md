@@ -2163,3 +2163,39 @@ accelerator call above, and composing with it):
       unless `attach-request` is opted into". `_WKInspector`'s `show`/
       `detach` pair is the same shape and may have the same timing hole —
       watch where the inspector actually appears, not just that it appears.
+
+## Headless fail-fast in the launchers — macOS verified, Linux + Windows UNRUN (2026-08-24)
+
+Feedback from a tester whose sandbox couldn't open the WebKit window: the
+failure was indistinguishable from an app bug, and they misdiagnosed it
+(npm cache) before finding the real problem. Each launcher now checks for
+a usable display BEFORE connecting the backend socket and, if there is
+none, prints a two-line `tinyjs:`-prefixed explanation ("the app code is
+likely fine; run from …") and exits 3 — early enough that bridge.js's
+existing race reports `launcher exited before connecting` instead of
+hanging on a peer that already gave up.
+
+- [x] **macOS** — `CGSessionCopyCurrentDictionary()` NULL ⇒ no
+      window-server session. Verified 2026-08-24 with the rebuilt
+      `native/launcher-macos` under
+      `sandbox-exec -p '(version 1)(allow default)(deny mach-lookup
+      (global-name-regex "com.apple.windowserver.*")(global-name-regex
+      "com.apple.CoreGraphics.*"))'`: message printed, exit 3. Positive
+      path also verified: with a GUI session the check passes through to
+      the socket-connect error, and the full smoke page
+      (`TINYJS_HTML=test/smoke.html`) still runs clean.
+- [ ] **Linux** — `DISPLAY`/`WAYLAND_DISPLAY` both unset ⇒ message +
+      exit 3; else `gtk_init_check()` false ⇒ message + exit 3. The old
+      bare `gtk_init()` call after the socket connect is GONE (init now
+      runs before the connect — g_set_prgname still precedes it, as the
+      WM_CLASS comment requires). NOT COMPILED — written on the Mac.
+      Check: `env -u DISPLAY -u WAYLAND_DISPLAY tinyjs dev` prints the
+      tinyjs: lines and the bridge says "launcher exited before
+      connecting"; a normal desktop run still opens the window.
+- [ ] **Windows** — window station lacks `WSF_VISIBLE`
+      (`GetUserObjectInformationW(UOI_FLAGS)`) ⇒ message + exit 3, before
+      the pipe connect. NOT COMPILED — written on the Mac. Check both
+      ways: an `ssh` (non-console) session or a service context fails
+      loud; a normal desktop run is unaffected. Note the check is
+      deliberately permissive — if the UOI_FLAGS query itself fails we
+      proceed rather than block a working desktop.

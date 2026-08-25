@@ -8675,6 +8675,25 @@ int main(int argc, char *argv[]) {
   int width = 960, height = 640;
   std::sscanf(size_s.c_str(), "%dx%d", &width, &height);
 
+#ifdef __APPLE__
+  // No window-server session = no webview, ever (SSH, CI, sandboxes that
+  // deny WindowServer). Without this check AppKit dies deep inside
+  // webview_create with an opaque crash that reads as an app bug — agents
+  // in headless sandboxes have burned real time on that. Checked BEFORE the
+  // socket connect so the bridge's "launcher exited before connecting" race
+  // reports the death instead of waiting on a peer that already gave up.
+  if (CFDictionaryRef gui = CGSessionCopyCurrentDictionary(); gui) {
+    CFRelease(gui);
+  } else {
+    std::fprintf(stderr,
+        "tinyjs: cannot create the webview window: no window-server session "
+        "(SSH, CI, or a sandbox that blocks WindowServer?).\n"
+        "tinyjs: the app code is likely fine; run from a logged-in GUI "
+        "session on this Mac.\n");
+    return 3;
+  }
+#endif
+
   if (!bundle_mode) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     struct sockaddr_un addr;

@@ -6882,6 +6882,32 @@ int main(int argc, char** argv) {
   // WM_CLASS ↔ .desktop matching (StartupWMClass); must precede gtk_init
   g_set_prgname((g_app_id.empty() ? g_app_name : g_app_id).c_str());
 
+  // No display = no webview, ever. Say so loudly and specifically: bare
+  // gtk_init() would exit with an unprefixed "cannot open display" (easily
+  // mistaken for an app bug — agents in headless sandboxes have burned real
+  // time on that). Checked BEFORE the socket connect so the bridge's
+  // "launcher exited before connecting" race reports the death instead of
+  // waiting on a peer that already gave up.
+  if (!getenv("DISPLAY") && !getenv("WAYLAND_DISPLAY")) {
+    fprintf(stderr,
+        "tinyjs: cannot create the webview window: no display "
+        "(DISPLAY and WAYLAND_DISPLAY are both unset — headless "
+        "environment?).\n"
+        "tinyjs: the app code is likely fine; run inside a desktop session "
+        "or a virtual display (e.g. xvfb-run).\n");
+    return 3;
+  }
+  if (!gtk_init_check(&argc, &argv)) {
+    const char* d = getenv("DISPLAY");
+    if (!d) d = getenv("WAYLAND_DISPLAY");
+    fprintf(stderr,
+        "tinyjs: cannot create the webview window: GTK could not open "
+        "display '%s'.\n"
+        "tinyjs: the app code is likely fine; this environment cannot show "
+        "windows.\n", d ? d : "");
+    return 3;
+  }
+
   // connect to the backend
   g_sock = socket(AF_UNIX, SOCK_STREAM, 0);
   if (g_sock < 0) { perror("socket"); return 1; }
@@ -6894,7 +6920,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  gtk_init(&argc, &argv);
+  // (gtk_init_check already ran, before the socket connect above)
 
   // tiny-media:// proxy scheme must be registered on the default context
   // before any webview exists

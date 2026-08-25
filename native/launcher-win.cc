@@ -7645,6 +7645,26 @@ static int run(int argc, char **argv) {
       SetCurrentDirectoryW(tmp);
   }
 
+  // No visible window station = no webview, ever (Session 0 services, some
+  // CI/sandbox sessions). Mirrors the mac/linux launchers: fail loudly and
+  // BEFORE the pipe connect, so the bridge's "launcher exited before
+  // connecting" race reports the death and the failure reads as an
+  // environment problem, not an app bug.
+  {
+    HWINSTA ws = GetProcessWindowStation();
+    USEROBJECTFLAGS f = {};
+    DWORD n = 0;
+    if (ws && GetUserObjectInformationW(ws, UOI_FLAGS, &f, sizeof(f), &n) &&
+        !(f.dwFlags & WSF_VISIBLE)) {
+      std::fprintf(stderr,
+          "tinyjs: cannot create the webview window: this process has no "
+          "visible window station (service/CI/sandbox session?).\n"
+          "tinyjs: the app code is likely fine; run from an interactive "
+          "desktop session.\n");
+      return 3;
+    }
+  }
+
   // Connect to the backend's named pipe (it listens before spawning us, but
   // retry briefly to be safe).
   for (int i = 0; i < 50; i++) {

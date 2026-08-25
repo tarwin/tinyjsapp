@@ -251,11 +251,23 @@ is too small for:
 
 ```js
 import { Database } from 'tjs:sqlite';
+await tjs.makeDir(dataDir, { recursive: true });  // every tjs.* fs call is
+// async — miss this await and the Database() below races the mkdir
 const db = new Database(dataDir + '/notes.db');
 db.exec('CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, text)');
 const st = db.prepare('INSERT INTO notes (text) VALUES (?)');
 st.run('hello'); st.finalize();
 db.prepare('SELECT * FROM notes').all();   // [{ id: 1, text: 'hello' }]
+```
+
+Coming from better-sqlite3, mind the shape: `tjs:sqlite` itself is fully
+synchronous (never await it), a statement has only `run()` / `all()` /
+`finalize()` — no `get()`, so use `.all()[0]` — and `run()` returns
+nothing. For the last insert id, ask SQLite:
+
+```js
+db.prepare('INSERT INTO notes (text) VALUES (?) RETURNING id').all('hi')[0].id;
+// or: db.prepare('SELECT last_insert_rowid() AS id').all()[0].id
 ```
 
 Frontend — the `tiny` global is injected into every page automatically:
@@ -1400,6 +1412,9 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
 - `import.meta.url` throws inside a compiled binary; resolve shipped files
   relative to `tjs.exePath`.
 - txiki streams don't support `for await`; use `getReader()`.
+- Every `tjs.*` fs call is async while `tjs:sqlite` is fully synchronous —
+  an unawaited `tjs.makeDir` before `new Database(dir + '/x.db')` is a race
+  that surfaces as "database not initialized", but only sometimes.
 - `tjs.cwd` is a property, not a function; spawn's stdio silencer is
   `'ignore'` (`'null'` silently inherits).
 - The launcher loads local pages as real `file://` documents

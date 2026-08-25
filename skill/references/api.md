@@ -335,7 +335,11 @@ await tiny.store.set('key', anyJsonValue); await tiny.store.get('key');
 await tiny.store.delete('key'); await tiny.store.all();
 // per-app data dir; fine for settings. Query-shaped data -> sqlite (backend):
 //   import { Database } from 'tjs:sqlite';
+//   await tjs.makeDir(dir, { recursive: true });  // fs is async; db is NOT
 //   new Database(path).prepare(sql).run(...)/.all()
+// sqlite is fully SYNC (never await); statements have only run/all/finalize —
+// no get() (use .all()[0]) — and run() returns void: for the insert id use
+// 'INSERT ... RETURNING id' via .all(), not a better-sqlite3-style return.
 await tiny.app.secrets.set(key, value);  // Keychain / Credential Manager /
 await tiny.app.secrets.get(key);         // Secret Service. Tokens go HERE,
 await tiny.app.secrets.delete(key);      // never tiny.store. get -> string|null.
@@ -506,7 +510,9 @@ instead, it does something on at least one other OS.
 `tjs.readFile/writeFile/readDir/stat`, `tjs.spawn`, `tjs.watch`,
 `tjs.listen/connect`, `fetch` (bridge-wrapped: redirects + TLS1.2 hosts
 handled), `WebSocket`, `tjs:sqlite`, WebCrypto, FFI. Docs: txikijs.org.
-Gotchas: streams need `getReader()` (no `for await`); `tjs.cwd` is a
+Gotchas: every `tjs.*` fs call is async (await it — an unawaited `makeDir`
+before `new Database(...)` is a race) while `tjs:sqlite` is fully sync;
+streams need `getReader()` (no `for await`); `tjs.cwd` is a
 property; spawn stdio silencer is `'ignore'`; NO Intl (format in the page,
 `system.locale()` for backend branching); no Node builtins ever — see
 references/electron-migration.md.

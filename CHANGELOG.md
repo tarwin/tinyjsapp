@@ -4,6 +4,31 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.40.0 — 2026-08-24
+
+- **No display now fails fast, loud, and diagnosably — on all three
+  platforms.** An agent (or CI job) running where no window can exist —
+  headless Linux, an SSH'd or sandboxed Mac, a Windows service session —
+  used to see the launcher die with an opaque message or nothing at all,
+  indistinguishable from an app bug (one tester burned real time blaming
+  their npm cache). Each launcher now checks its environment before
+  connecting to the backend: Linux for `DISPLAY`/`WAYLAND_DISPLAY` +
+  `gtk_init_check`, macOS for a window-server session (SSH/CI/sandboxes
+  that block WindowServer), Windows for a visible window station. All
+  print a `tinyjs:`-prefixed explanation — saying the app code is likely
+  fine and what kind of environment can show the window — and exit 3
+  before the socket connect, so the bridge reports "launcher exited
+  before connecting" instead of hanging on a dead peer.
+- **Docs: the `tjs.*`-async / `tjs:sqlite`-sync footguns are now written
+  down.** Every `tjs.*` fs call returns a Promise while sqlite is fully
+  synchronous — an unawaited `makeDir` before `new Database(...)` is a
+  race. The sqlite examples (README, docs, agent skill) now show the
+  `await`, and the better-sqlite3 differences are spelled out: statements
+  have only `run()`/`all()`/`finalize()` (no `get()` — use `.all()[0]`),
+  `run()` returns void, and the last-insert-id idioms
+  (`INSERT … RETURNING id` / `last_insert_rowid()`) are documented and
+  verified against the shipped runtime.
+
 ## 0.39.1 — 2026-08-18
 
 - **macOS: a frameless secondary window is really frameless.** `windowControls`

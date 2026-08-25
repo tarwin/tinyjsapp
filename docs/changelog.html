@@ -168,6 +168,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.40.0 <span class="date">2026-08-24</span></h2>
+      <ul>
+        <li><b>No display now fails fast, loud, and diagnosably — on all three platforms.</b> An agent (or CI job) running where no window can exist — headless Linux, an SSH'd or sandboxed Mac, a Windows service session — used to see the launcher die with an opaque message or nothing at all, indistinguishable from an app bug. Each launcher now checks its environment before connecting to the backend: Linux for <code>DISPLAY</code>/<code>WAYLAND_DISPLAY</code> + <code>gtk_init_check</code>, macOS for a window-server session (SSH/CI/sandboxes that block WindowServer), Windows for a visible window station. All print a <code>tinyjs:</code>-prefixed explanation — saying the app code is likely fine and what kind of environment can show the window — and exit 3 before the socket connect, so the bridge reports "launcher exited before connecting" instead of hanging on a dead peer.</li>
+        <li><b>Docs: the <code>tjs.*</code>-async / <code>tjs:sqlite</code>-sync footguns are now written down.</b> Every <code>tjs.*</code> fs call returns a Promise while sqlite is fully synchronous — an unawaited <code>makeDir</code> before <code>new Database(...)</code> is a race. The sqlite examples now show the <code>await</code>, and the better-sqlite3 differences are spelled out: statements have only <code>run()</code>/<code>all()</code>/<code>finalize()</code> (no <code>get()</code> — use <code>.all()[0]</code>), <code>run()</code> returns void, and the last-insert-id idioms (<code>INSERT … RETURNING id</code> / <code>last_insert_rowid()</code>) are documented and verified against the shipped runtime.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.39.1 <span class="date">2026-08-18</span></h2>
       <ul>
         <li><b>macOS: a frameless secondary window is really frameless.</b> <code>windowControls</code> rides the wire as a <i>token</i> — <code>all</code>, <code>none</code>, or a comma list — so the <code>['close','minimize']</code> form survives, but the titlebar-hiding branch tested it as a bit (<code>== "0"</code>), which is never true. So every window opened by <code>app.openWindow</code> with <code>chrome: { frame: false, windowControls: false }</code> kept a live titlebar container: invisible, but its rounded top edge drew over the page and it swallowed the top strip's mouse events. The main window was never affected — it derives the same decision from its own tracked state.</li>

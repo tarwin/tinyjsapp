@@ -107,7 +107,9 @@ Runtime is txiki.js (`tjs` global): `tjs.readFile/writeFile/readDir/stat`,
 NOT Node (no require, no Node builtins, no native npm modules) and it has
 no JIT — compute-heavy work belongs in the page
 (references/performance.md). Streams need `getReader()` (no `for await`);
-`tjs.cwd` is a property; no Intl (format in the page).
+`tjs.cwd` is a property; no Intl (format in the page). Every `tjs.*` fs
+call is async — await it — while `tjs:sqlite` is fully sync (never await;
+statements have run/all/finalize only, no get(), run() returns void).
 
 ## Frontend essentials
 
