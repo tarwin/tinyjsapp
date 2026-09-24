@@ -1,0 +1,4 @@
+# The sh wrapper must keep LF even in Windows checkouts (core.autocrlf=true,
+# the default on Git for Windows and the CI runners): the Windows release zip
+# ships it for Git Bash, and a CRLF shebang breaks strict shells.
+tinyjs text eol=lf

@@ -75,8 +75,9 @@ Write-Host "==> compiling launcher ($gxx)"
 if ($LASTEXITCODE -ne 0) { throw "launcher compile failed ($LASTEXITCODE)" }
 
 # --- put `tinyjs` on the PATH (per-user; the mac installer's symlink step) ---
-# tinyjs.cmd lives in this folder, so appending the folder to the USER Path
-# makes `tinyjs` resolve in any new terminal. Idempotent; -SkipPath opts out.
+# tinyjs.cmd (cmd/PowerShell) and the sh wrapper tinyjs (Git Bash) live in
+# this folder, so appending the folder to the USER Path makes `tinyjs`
+# resolve in any new terminal. Idempotent; -SkipPath opts out.
 $onPath = $false
 if (-not $SkipPath) {
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')

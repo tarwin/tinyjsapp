@@ -34,7 +34,9 @@ jobs:
           Copy-Item bin\tjs.exe "$stage\bin\"
           Copy-Item native\launcher-win.exe "$stage\native\"
           Copy-Item -Recurse runtime, template, test, skill "$stage\"
-          Copy-Item cli.js, tinyjs.cmd, VERSION, README.md, LICENSE "$stage\"
+          # tinyjs.cmd serves cmd/PowerShell; the sh wrapper `tinyjs` next to
+          # it serves Git Bash (MSYS runs the .exe-less `bin/tjs` as tjs.exe).
+          Copy-Item cli.js, tinyjs, tinyjs.cmd, VERSION, README.md, LICENSE "$stage\"
           New-Item -ItemType Directory -Force out | Out-Null
           # Zip the CONTENTS (no wrapper dir): install.ps1 extracts straight
           # into the install dir.
@@ -65,6 +67,13 @@ jobs:
           if ($out -notmatch 'SMOKE RESULTS') { throw 'GUI smoke produced no results' }
           if ($out -match 'FAIL') { throw 'GUI smoke has failures' }
           Write-Host 'windows GUI smoke OK'
+
+      - name: Smoke test (Git Bash wrapper)
+        shell: bash
+        run: |
+          out=$("$(cygpath -u "$TEMP")/tinyjs-ci/tinyjs" version)
+          echo "$out"
+          case "$out" in "tinyjs $GITHUB_REF_NAME "*) ;; *) echo 'sh wrapper broken'; exit 1;; esac
 
       - uses: actions/upload-artifact@v4
         with:

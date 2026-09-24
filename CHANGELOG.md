@@ -4,6 +4,19 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **`tinyjs` works in Git Bash on Windows.** The Windows download shipped
+  only `tinyjs.cmd`. cmd and PowerShell find it when you type `tinyjs`, but
+  Git Bash doesn't try `.cmd` when it looks up a command, so there you got
+  "command not found" and had to type `tinyjs.cmd`. The zip now also has
+  the sh wrapper that macOS and Linux use, next to `tinyjs.cmd`: Git Bash
+  runs the wrapper, cmd and PowerShell keep running `tinyjs.cmd`. To get it,
+  run `tinyjs update` (from Git Bash: `tinyjs.cmd update`). A source
+  checkout set up with `setup.ps1` already had the wrapper. The release
+  build now runs it in Git Bash before publishing, so it can't go missing
+  unnoticed again.
+
 ## 0.41.1 — 2026-09-23
 
 - **`tinyjs new --template` finishes again with create-vite 9.** create-vite
