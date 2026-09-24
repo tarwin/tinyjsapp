@@ -168,6 +168,13 @@
   <section>
 
     <div class="rel">
+      <h2>Unreleased</h2>
+      <ul>
+        <li><b><code>tinyjs</code> works in Git Bash on Windows.</b> The Windows download shipped only <code>tinyjs.cmd</code>. cmd and PowerShell find it when you type <code>tinyjs</code>, but Git Bash doesn't try <code>.cmd</code> when it looks up a command, so there you got “command not found” and had to type <code>tinyjs.cmd</code>. The zip now also has the sh wrapper that macOS and Linux use, next to <code>tinyjs.cmd</code>: Git Bash runs the wrapper, cmd and PowerShell keep running <code>tinyjs.cmd</code>. To get it, run <code>tinyjs update</code> (from Git Bash: <code>tinyjs.cmd update</code>). A source checkout set up with <code>setup.ps1</code> already had the wrapper. The release build now runs it in Git Bash before publishing, so it can't go missing unnoticed again.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.41.1 <span class="date">2026-09-23</span></h2>
       <ul>
         <li><b><code>tinyjs new --template</code> finishes again with create-vite 9.</b> create-vite now asks “Install with npm and start now?” after scaffolding. npm's <code>--yes</code> doesn't answer it, since that flag only covers npm's own prompts. Saying yes started a Vite dev server that never exits, so tinyjs never got to add its own files: the project had no <code>tinyjs.json</code>, <code>backend/</code>, types, icon or agent skill. tinyjs now passes <code>--no-interactive --no-immediate</code>, and create-vite scaffolds and exits without asking. Thanks to <a href="https://github.com/favasconcelos">@favasconcelos</a> for the report, which arrived with the root cause and the verified fix (<a href="https://github.com/tarwin/tinyjsapp/issues/5">#5</a>).</li>

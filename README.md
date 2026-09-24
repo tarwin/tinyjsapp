@@ -1428,7 +1428,8 @@ template/             what `tinyjs new` copies
 skill/SKILL.md        tinyjs reference for coding agents (copied into new
                       projects at .claude/skills/tinyjs/ and, for other
                       agents, .agents/skills/tinyjs/)
-cli.js + tinyjs       the CLI (tinyjs.cmd is the Windows wrapper)
+cli.js + tinyjs       the CLI (tinyjs.cmd is the Windows wrapper; Git Bash
+                      on Windows uses the sh wrapper tinyjs)
 test/smoke.html       self-driving test page
 docs/                 tinyjs.app site (GitHub Pages): landing page + installer
                       (docs/install is what `curl tinyjs.app/install` fetches)
