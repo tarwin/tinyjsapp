@@ -16,6 +16,13 @@ https://tinyjs.app/changelog.
   checkout set up with `setup.ps1` already had the wrapper. The release
   build now runs it in Git Bash before publishing, so it can't go missing
   unnoticed again.
+- **`tinyjs build` on macOS now says which Macs the `.app` will open on.**
+  The bundle needs both the launcher and `tjs` to carry the CPU's
+  architecture. The stock `tjs` only carries the build machine's, so an app
+  built on Apple Silicon is refused on Intel Macs ("not supported on this
+  type of Mac"), and the build gave no warning. The build now prints e.g.
+  `runs on: Apple Silicon (arm64)` and names the binary that is missing the
+  other slice. ([#2](https://github.com/tarwin/tinyjsapp/issues/2))
 
 ## 0.41.1 — 2026-09-23
 

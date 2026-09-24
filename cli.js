@@ -1236,10 +1236,32 @@ async function cmdBuild() {
   // from the stapled bundle so it validates offline.
   if (args.includes('--dmg')) await makeDmg(cfg, APP);
   await maybeWriteCliShim(cfg, APP);
+  await reportMacArchs(cfg, APP);
 
   console.log('==> done');
   await run(['ls', '-lh', 'dist/' + cfg.name, 'dist/launcher']);
   console.log(`run it:  ./dist/${cfg.name}   (or open "${APP}")`);
+}
+
+// Which Macs can open the .app: the launcher AND tjs both need the CPU's
+// slice. The stock tjs is host-arch only (and so is a source-built launcher),
+// so a bundle built on Apple Silicon is refused on Intel with "not supported
+// on this type of Mac" — and nothing at build time said so (issue #2).
+// `file` rather than `lipo`: it ships with macOS, lipo needs the CLT.
+async function reportMacArchs(cfg, APP) {
+  const archsOf = async (p) =>
+    [...new Set((await capture(['file', '-b', p])).match(/\b(?:arm64|x86_64)\b/g) ?? [])];
+  const exe = await archsOf(APP + '/Contents/MacOS/' + cfg.name);
+  const rt = await archsOf(APP + '/Contents/MacOS/tjs');
+  if (!exe.length || !rt.length) return; // couldn't tell — don't guess
+  const runsOn = exe.filter((a) => rt.includes(a));
+  const label = { arm64: 'Apple Silicon', x86_64: 'Intel' };
+  console.log('==> runs on: ' + (runsOn.map((a) => `${label[a]} (${a})`).join(', ') || 'nothing — no common architecture'));
+  const missing = ['arm64', 'x86_64'].filter((a) => !runsOn.includes(a));
+  for (const a of missing) {
+    const lacking = [!exe.includes(a) && 'launcher', !rt.includes(a) && 'tjs'].filter(Boolean).join(' and ');
+    console.log(`note: won't open on ${label[a]} Macs — the ${lacking} ${lacking.includes(' and ') ? 'have' : 'has'} no ${a} slice`);
+  }
 }
 
 // Submit dist/<Title>.app to Apple notarization and staple the ticket.
