@@ -719,13 +719,18 @@ async function ensureLauncherFresh() {
     const m = await mtime(TOOL_DIR + src);
     if (m !== null && (built === null || m > built)) stale = true;
   }
-  if (!stale) return;
-  console.log('==> launcher sources changed — rebuilding (' + (IS_WIN ? 'setup.ps1' : 'setup.sh') + ')');
+  // `build --universal` needs both slices; a checkout's launcher has only
+  // this Mac's, so rebuild it fat (setup.sh honours TINYJS_UNIVERSAL=1).
+  const wantFat = UNIVERSAL && !(await hasMacArchs(exe));
+  if (!stale && !wantFat) return;
+  console.log('==> ' + (stale ? 'launcher sources changed' : 'universal build needs an arm64 + x86_64 launcher') +
+              ' — rebuilding (' + (IS_WIN ? 'setup.ps1' : 'setup.sh') + ')');
   if (IS_WIN) {
     await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                '-File', TOOL_DIR + 'setup.ps1', '-SkipPath'], { cwd: TOOL_DIR });
   } else {
-    await run(['sh', TOOL_DIR + 'setup.sh'], { cwd: TOOL_DIR });
+    await run(['sh', TOOL_DIR + 'setup.sh'],
+              { cwd: TOOL_DIR, env: UNIVERSAL ? { ...tjs.env, TINYJS_UNIVERSAL: '1' } : tjs.env });
   }
 }
 
@@ -1015,8 +1020,12 @@ async function cmdBuild() {
   // The launcher IS the bundle executable ("bundle mode"): it owns the window,
   // receives Apple Events (deep links, file opens, single-instance activation),
   // and spawns the backend (tjs) itself.
+  if (UNIVERSAL && !(await hasMacArchs(TOOL_DIR + 'native/launcher-macos'))) {
+    fail('--universal: the launcher lacks an arm64 or x86_64 slice — rebuild it with ' +
+         '`TINYJS_UNIVERSAL=1 sh setup.sh` in ' + TOOL_DIR);
+  }
   await run(['cp', TOOL_DIR + 'native/launcher-macos', APP + '/Contents/MacOS/' + cfg.name]);
-  await run(['cp', tjs.exePath, APP + '/Contents/MacOS/tjs']);
+  await run(['cp', UNIVERSAL ? await universalTjs() : tjs.exePath, APP + '/Contents/MacOS/tjs']);
   await run(['cp', '-R', '.build/app', APP + '/Contents/Resources/app']);
   // App icon: icon.png in the project root (1024×1024; the template ships a
   // default) becomes AppIcon.icns via sips + iconutil.
@@ -1264,6 +1273,68 @@ async function reportMacArchs(cfg, APP) {
   }
 }
 
+// `build --universal` (or TINYJS_UNIVERSAL=1): an .app that opens on Apple
+// Silicon AND Intel. Both bundle executables need both slices. The launcher
+// gets them from setup.sh (release installs already ship it fat); tjs is
+// the host's txiki.js, which is single-arch, so the other arch's build of
+// the SAME txiki release is fetched and lipo'd onto it. The bare
+// dist/<name> binary stays host-only (it's a local convenience, not the
+// thing that ships). macOS only: Windows is x86_64 and Linux is per-arch.
+const UNIVERSAL = !IS_WIN && !IS_LINUX &&
+  ['build', 'publish'].includes(cmd) &&
+  (args.includes('--universal') || tjs.env.TINYJS_UNIVERSAL === '1');
+const MAC_ARCHS = ['arm64', 'x86_64'];
+if ((IS_WIN || IS_LINUX) && args.includes('--universal')) {
+  console.log('tinyjs: --universal only applies to macOS builds — ignoring it here');
+}
+
+// lipo is in the Command Line Tools, not base macOS — fine for this opt-in
+// path, but say what's missing rather than failing on an empty answer.
+async function macArchs(p) {
+  const out = (await capture(['lipo', '-archs', p])).trim();
+  if (!out) fail('could not read architectures of ' + p + ' — --universal needs lipo (xcode-select --install)');
+  return out.split(/\s+/);
+}
+async function hasMacArchs(p) {
+  if (!(await exists(p))) return false;
+  const have = await macArchs(p);
+  return MAC_ARCHS.every((a) => have.includes(a));
+}
+
+async function universalTjs() {
+  const have = await macArchs(tjs.exePath);
+  if (MAC_ARCHS.every((a) => have.includes(a))) return tjs.exePath;
+  // Same URL setup.sh and release.yml download the host tjs from, cached
+  // per version so repeat builds stay offline.
+  const ver = 'v' + tjs.version;
+  const cache = tjs.env.HOME + '/Library/Caches/tinyjs/txiki-' + ver;
+  const slices = [tjs.exePath];
+  for (const a of MAC_ARCHS.filter((x) => !have.includes(x))) {
+    const exe = `${cache}/tjs-${a}`;
+    if (!(await exists(exe))) {
+      console.log(`==> downloading txiki.js ${ver} (${a}) for a universal tjs`);
+      await tjs.makeDir(cache, { recursive: true });
+      const zip = `${cache}/txiki-macos-${a}.zip`;
+      await run(['curl', '-fSsL', '-o', zip,
+                 `https://github.com/saghul/txiki.js/releases/download/${ver}/txiki-macos-${a}.zip`]);
+      await run(['unzip', '-q', '-o', zip, '-d', cache]);
+      // mv last: the cached exe only exists once it's complete.
+      await run(['mv', `${cache}/txiki-macos-${a}/tjs`, exe]);
+      await run(['rm', '-rf', zip, `${cache}/txiki-macos-${a}`]);
+    }
+    if (!(await macArchs(exe)).includes(a)) fail(`${exe} is not an ${a} binary — delete it and rebuild`);
+    slices.push(exe);
+  }
+  const out = '.build/tjs-universal';
+  await run(['lipo', '-create', ...slices, '-output', out]);
+  // lipo drops the slices' signatures. The bundle signing below does the
+  // launcher before tjs, and codesign refuses a main executable whose nested
+  // code is unsigned — so ad-hoc sign it now (a real identity re-signs it).
+  await run(['codesign', '--force', '--sign', '-', out], { stdout: 'ignore', stderr: 'ignore' });
+  console.log('==> universal tjs: ' + (await macArchs(out)).join(' + '));
+  return out;
+}
+
 // Submit dist/<Title>.app to Apple notarization and staple the ticket.
 // Needs a real Developer ID signature plus a notarytool keychain profile
 // (create one: xcrun notarytool store-credentials <name> --apple-id … --team-id …).
@@ -1438,8 +1509,9 @@ usage:
                         --template react-ts|vue-ts|solid-ts|svelte-ts|vanilla-ts|…
                         scaffolds create-vite + tinyjs overlay instead
   tinyjs dev          run the app in the current directory
-  tinyjs build        build dist/<name> and dist/<Name>.app (--dmg: also a disk image)
-  tinyjs publish      build + zip the .app + auto-update manifest
+  tinyjs build        build dist/<name> and dist/<Name>.app (--dmg: also a disk image;
+                      --universal: macOS .app for Apple Silicon + Intel)
+  tinyjs publish      build + zip the .app + auto-update manifest (takes --universal)
                       (--notes "text" | --notes-file FILE → manifest notes)
   tinyjs notarize     submit dist/<Name>.app to Apple notarization + staple
                       (--dmg: also rebuild dist/<name>-<version>.dmg from the

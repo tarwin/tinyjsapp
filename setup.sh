@@ -156,28 +156,44 @@ if [ "${TINYJS_AI:-1}" != "0" ] && command -v swiftc >/dev/null 2>&1 \
   AI_BUILD=1
 fi
 
+# TINYJS_UNIVERSAL=1 builds an arm64 + x86_64 launcher (what release.yml
+# ships), which `tinyjs build --universal` needs for an .app that also opens
+# on Intel. Default is this Mac's arch only. Each slice is built on its own
+# and lipo'd, since swiftc takes a single -target (see below).
+ARCHS="$TJS_ARCH"
+[ "${TINYJS_UNIVERSAL:-0}" = "1" ] && ARCHS="arm64 x86_64"
+BUILD_TMP="$(mktemp -d)"
+trap 'rm -rf "$BUILD_TMP"' EXIT
 if [ "$AI_BUILD" = "1" ]; then
-  # The binary keeps the macOS 14 floor and weak-links FoundationModels, so it
-  # still launches on macOS 14+ — AI just reports 'unsupported' there.
-  # Two-step: compile each object, then link with swiftc so the Swift runtime
-  # is pulled in. swiftc takes the floor via -target (ONE target only — it
-  # accepts two and silently keeps the last) and needs -Xlinker to pass
-  # -weak_framework through to the linker.
   echo "==> compiling with on-device AI (FoundationModels found in the SDK)"
-  SWIFT_TARGET="$(uname -m)-apple-macos14.0"
-  c++ -std=c++17 -c -x objective-c++ -DTINYJS_AI $MIN_OS -isystem native/include \
-    native/launcher-macos.cc -o /tmp/tinyjs-launcher.o
-  swiftc -parse-as-library -target "$SWIFT_TARGET" \
-    -c native/tiny_ai.swift -o /tmp/tinyjs-ai.o
-  swiftc /tmp/tinyjs-launcher.o /tmp/tinyjs-ai.o -o native/launcher-macos -lc++ \
-    -target "$SWIFT_TARGET" $FW \
-    -Xlinker -weak_framework -Xlinker ScreenCaptureKit \
-    -Xlinker -weak_framework -Xlinker FoundationModels -ldl
 else
   echo "==> compiling without on-device AI (no FoundationModels in this SDK)"
-  c++ -std=c++17 -x objective-c++ $MIN_OS -isystem native/include native/launcher-macos.cc \
-    -o native/launcher-macos $FW -weak_framework ScreenCaptureKit -ldl
 fi
+for ARCH in $ARCHS; do
+  OUT="$BUILD_TMP/launcher-$ARCH"
+  if [ "$AI_BUILD" = "1" ]; then
+    # The binary keeps the macOS 14 floor and weak-links FoundationModels, so it
+    # still launches on macOS 14+ — AI just reports 'unsupported' there.
+    # Two-step: compile each object, then link with swiftc so the Swift runtime
+    # is pulled in. swiftc takes the floor via -target (ONE target only — it
+    # accepts two and silently keeps the last) and needs -Xlinker to pass
+    # -weak_framework through to the linker.
+    SWIFT_TARGET="$ARCH-apple-macos14.0"
+    c++ -std=c++17 -c -x objective-c++ -DTINYJS_AI $MIN_OS -arch "$ARCH" -isystem native/include \
+      native/launcher-macos.cc -o "$OUT.o"
+    swiftc -parse-as-library -target "$SWIFT_TARGET" \
+      -c native/tiny_ai.swift -o "$BUILD_TMP/ai-$ARCH.o"
+    swiftc "$OUT.o" "$BUILD_TMP/ai-$ARCH.o" -o "$OUT" -lc++ \
+      -target "$SWIFT_TARGET" $FW \
+      -Xlinker -weak_framework -Xlinker ScreenCaptureKit \
+      -Xlinker -weak_framework -Xlinker FoundationModels -ldl
+  else
+    c++ -std=c++17 -x objective-c++ $MIN_OS -arch "$ARCH" -isystem native/include native/launcher-macos.cc \
+      -o "$OUT" $FW -weak_framework ScreenCaptureKit -ldl
+  fi
+done
+# shellcheck disable=SC2046
+lipo -create $(for ARCH in $ARCHS; do echo "$BUILD_TMP/launcher-$ARCH"; done) -output native/launcher-macos
 
 codesign --force --sign - native/launcher-macos 2>/dev/null || true
 

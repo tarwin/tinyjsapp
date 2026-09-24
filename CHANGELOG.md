@@ -23,6 +23,15 @@ https://tinyjs.app/changelog.
   type of Mac"), and the build gave no warning. The build now prints e.g.
   `runs on: Apple Silicon (arm64)` and names the binary that is missing the
   other slice. ([#2](https://github.com/tarwin/tinyjsapp/issues/2))
+- **`tinyjs build --universal` makes a macOS .app that opens on Intel Macs
+  too.** Until now the bundled `tjs` only carried the build Mac's
+  architecture, so apps built on Apple Silicon were refused on Intel ("not
+  supported on this type of Mac"). `--universal` (or `TINYJS_UNIVERSAL=1`,
+  also honoured by `tinyjs publish`) fetches the other architecture's build
+  of the same txiki.js release, caches it in `~/Library/Caches/tinyjs`, and
+  `lipo`s it onto the host `tjs`. In a source checkout it also rebuilds the
+  launcher for arm64 + x86_64. `setup.sh` accepts `TINYJS_UNIVERSAL=1` to do
+  that by hand. ([#2](https://github.com/tarwin/tinyjsapp/issues/2))
 
 ## 0.41.1 — 2026-09-23
 

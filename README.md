@@ -1224,6 +1224,15 @@ generates `AppIcon.icns` from `icon.png` via `sips` + `iconutil` and
 codesigns everything (ad-hoc by default; set `signIdentity` in tinyjs.json
 or `TINYJS_SIGN_IDENTITY` for a Developer ID).
 
+By default the .app runs only on the build Mac's CPU type: the bundled `tjs`
+runtime is single-arch, so an app built on Apple Silicon won't open on an
+Intel Mac. `tinyjs build --universal` (or `TINYJS_UNIVERSAL=1`, also honoured
+by `tinyjs publish`) makes it open on both: it fetches the other arch's build
+of the same txiki.js release (cached in `~/Library/Caches/tinyjs`), `lipo`s it
+onto the host `tjs`, and in a source checkout rebuilds the launcher for arm64 +
+x86_64 (`TINYJS_UNIVERSAL=1 ./setup.sh` does the same by hand). Needs the Xcode
+Command Line Tools for `lipo`. The bare `dist/<name>` binary stays host-only.
+
 `tinyjs build --dmg` additionally produces `dist/<name>-<version>.dmg` — the
 .app plus an /Applications shortcut, the classic installer image. With a real
 Developer ID, `tinyjs notarize` submits the built .app via `notarytool`

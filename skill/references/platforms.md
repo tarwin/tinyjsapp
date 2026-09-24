@@ -5,7 +5,7 @@ same tinyjs.json, same `tiny.*` api, same commands on all three.
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| app users need | macOS 14+ (universal: Apple Silicon + Intel) | Windows 10/11 with the WebView2 runtime (preinstalled on 11) | glibc 2.35+: Ubuntu 22.04 / Debian 12 / Mint 21 and newer, `webkit2gtk-4.1`, X11 or Wayland |
+| app users need | macOS 14+ (the build Mac's arch; `build --universal` for Apple Silicon + Intel) | Windows 10/11 with the WebView2 runtime (preinstalled on 11) | glibc 2.35+: Ubuntu 22.04 / Debian 12 / Mint 21 and newer, `webkit2gtk-4.1`, X11 or Wayland |
 | webview | WKWebView | WebView2 (Chromium) | WebKitGTK 4.1 |
 | `tinyjs build` output | `dist/<Name>.app` (codesigned) + bare `dist/<name>` | portable `dist/`: `<name>.exe` + `launcher.exe` + `frontend/` | portable `dist/`: backend binary + `launcher` + `icon.png`; per-arch tarballs from `publish` |
 | publish / auto-update | zip + dmg, notarized | `-win.zip`; https+sha256 trust | `-linux-<arch>.tar.gz` × {x86_64, arm64}; `.desktop` self-registers on first run |

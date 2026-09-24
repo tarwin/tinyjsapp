@@ -38,6 +38,7 @@ tinyjs dev          # run with hot reload (frontend edits swap in place;
                     #   backend edits restart the process)
 tinyjs build        # dist/<name> binary + dist/<Name>.app (codesigned)
                     #   --dmg installer image; --cli [name] terminal shim
+                    #   --universal: macOS .app for Apple Silicon + Intel
 tinyjs publish      # build + dist/publish/<name>-<ver>.zip|tarball + manifest
 tinyjs notarize     # macOS: notarytool submit + staple (--dmg re-makes dmg)
 tinyjs update       # update tinyjs itself (--check); also: uninstall, version
