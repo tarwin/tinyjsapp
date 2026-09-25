@@ -13,8 +13,10 @@ HTTP server, no ports. The page NEVER has system access; everything
 privileged crosses `tiny.api`, which is why anything interpolated into
 `innerHTML` must be escaped.
 
-Current release: 0.34.0. App floors: macOS 14+ (universal), Windows 10/11
-(WebView2), Linux glibc 2.35+ (Ubuntu 22.04 / Debian 12 / Mint 21 and up).
+Current release: 0.42.0. App floors: macOS 15+ — a default build opens only
+on the build Mac's CPU (`build --arch arm64|x86_64` or `--universal` for the
+other); Windows 10/11 (WebView2); Linux glibc 2.35+ (Ubuntu 22.04 / Debian 12
+/ Mint 21 and up).
 
 ## Read the reference for the job at hand
 
@@ -38,9 +40,12 @@ tinyjs dev          # run with hot reload (frontend edits swap in place;
                     #   backend edits restart the process)
 tinyjs build        # dist/<name> binary + dist/<Name>.app (codesigned)
                     #   --dmg installer image; --cli [name] terminal shim
-                    #   --universal: macOS .app for Apple Silicon + Intel
+                    #   --arch arm64|x86_64: macOS .app for that CPU (any Mac;
+                    #   0.42+); --universal: one .app for both (needs the
+                    #   Command Line Tools' lipo). Bare dist/<name> = host CPU
 tinyjs publish      # build + dist/publish/<name>-<ver>.zip|tarball + manifest
 tinyjs notarize     # macOS: notarytool submit + staple (--dmg re-makes dmg)
+                    # publish/notarize take --arch too — repeat the build's
 tinyjs update       # update tinyjs itself (--check); also: uninstall, version
 TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 ```
@@ -49,16 +54,17 @@ TINYJS_DEBUG=1 tinyjs dev   # trace every bridge message
 
 ```
 tinyjs.json          { name, title, size, id, version, icon?,
-                       minTinyjsVersion?,     // refuse older runtimes with a
-                                              // real message — declare the
-                                              // newest API family you use
-                                              // (sampler → "0.34.0")
+                       minTinyjsVersion?,     // refuse older tinyjs with a
+                                              // real message; `tinyjs new`
+                                              // stamps its own version — raise
+                                              // it for newer APIs you adopt
                        update?: { url: "https://…/manifest.json", auto? },
                        urlScheme?: "myapp", fileExtensions?: ["md"],
                        openFolders?: true, readAccess?: true | "/path",
                        userAgent?: "…", activation?: "accessory",
                        offscreenRescue?: false, windowPlacement?: true,
                        contextMenu?: false, audioTap?: "app" | "system",
+                       audioTapReason?: "why", about?: "menu",
                        debug?: true | "open", browserAccelerators?: true,
                        permissions?: { microphone?: "why", camera?: "why",
                                        speechRecognition?: "why" },
@@ -93,14 +99,17 @@ export const api = {
 };
 export function init(app) {
   app.push('event-name', data);            // page: tiny.api.on('event-name')
-  // app mirrors the page surface: app.window(id).*, app.openWindow,
+  // app mostly mirrors the page: app.window(id).*, app.openWindow,
   // app.tray.*, app.audio.sampler.*, app.clipboard.*, app.store.*,
-  // app.paths (plain object), notify, quit, …  — full tour: references/api.md
+  // app.paths (plain object), notify, quit, … — but some names differ
+  // (app.setMenu, app.setChrome, …): name map in references/api.md
 }
-// other exports the scaffold wires: onMenu, onTray, onContextMenu, onHotkey,
-// onSystem, onWindowState, onWindowClosed, onOpenUrl, onOpenFiles,
-// onMediaKey, onNotificationClick, onNotificationAction, onUpdateAvailable,
-// onClipboardChange — each (info, app)
+// other exports the scaffold wires, each (info, app): onMenu, onTray (id
+// null = bare icon click), onContextMenu, onHotkey, onWindowState,
+// onWindowClosed, onOpenUrl, onOpenFiles, onMediaKey, onNotificationClick,
+// onNotificationAction, onUpdateAvailable, onClipboardChange, onLocale,
+// onAudioTap, onNavigate, onDownload, onWindowOpen — except
+// onSystem(kind, value, app)
 ```
 
 Runtime is txiki.js (`tjs` global): `tjs.readFile/writeFile/readDir/stat`,
@@ -167,7 +176,11 @@ audioTap / proxyURL), store/secrets, permissions, deep links, auto-update,
   `tiny.audio.filters`; details in references/platforms.md.
 - Occluded/hidden windows are throttled (rAF stops) — continuous work lives
   in a visible window or the backend.
-- Verify changes with the smoke pattern:
-  `TINYJS_HTML=<tinyjs-install>/test/smoke.html tinyjs dev` — expect a
-  `[web] SMOKE RESULTS {...}` line with no FAIL entries and a clean exit.
+- Verify changes with a self-driving test page (references/recipes.md):
+  `TINYJS_HTML=/abs/page.html tinyjs dev`. The bundled `test/smoke.html`
+  only fits an UNMODIFIED zero-dependency scaffold (it calls the template's
+  `sysinfo`/`listDir` and waits for its `tick` push).
+- No display (SSH, CI, sandbox, headless Linux): the launcher prints a
+  `tinyjs:` explanation and exits 3 ("launcher exited before connecting") —
+  the environment, not your code; there is no headless mode.
 - `dist/<Name>.app` is the distributable; bare `dist/<name>` is local-only.

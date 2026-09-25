@@ -591,6 +591,10 @@ async function systemCapabilities(query, aiStatus) {
     // message Source, so "api" origin sub-gates work here too.
     jsDialogs: true, downloads: true, navigation: true, popups: true,
     findInPage: true,
+    // Fire-and-forget calls that no-op here — listed so `caps.x !== false`
+    // doesn't read them as supported: no tiny-media:// scheme handler in the
+    // WebView2 launcher, and no all-desktops window flag on Windows.
+    proxyURL: false, setAllSpaces: false,
   };
   const macos = { vibrancy: true, applescript: true, quickLook: true, share: true,
     // Browser affordances for wrapped sites (TODO-site-wrapper.md): JS

@@ -811,7 +811,7 @@
         reveal: (path) => call('shell.reveal', { path }),
         trash: (path) => call('shell.trash', { path }),
       },
-      // Launch at login (packaged .app on macOS 13+, else 'unsupported').
+      // Launch at login (built apps on all three OSes; dev mode → 'unsupported').
       // get()/set(v) -> 'enabled' | 'disabled' | 'requires-approval' |
       // 'unsupported'; 'requires-approval' = user must allow it in System
       // Settings > General > Login Items.

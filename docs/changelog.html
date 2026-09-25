@@ -145,8 +145,9 @@
   @media (max-width: 620px) {
     .rel code { white-space: normal; overflow-wrap: anywhere; }
   }
-  /* the mascot signs the page off, centered above the footer rule */
-  .mascot { margin-top: 72px; display: flex; justify-content: center; position: relative; z-index: 1; }
+  /* the mascot signs the page off, centered above the footer rule —
+     identical on index, docs and changelog */
+  .mascot { margin-top: 96px; display: flex; justify-content: center; position: relative; z-index: 1; }
   .mascot img { width: 128px; height: 128px; }
   footer {
     margin-top: 40px; padding: 28px 0 56px; border-top: 1px solid var(--line);
@@ -155,6 +156,7 @@
   }
   footer a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); }
   footer a:hover { color: var(--accent); border-color: var(--accent); }
+  footer .by { margin-left: auto; }
 </style>
 </head>
 <body>
@@ -168,9 +170,20 @@
   <section>
 
     <div class="rel">
-      <h2>Unreleased</h2>
+      <h2>0.42.0 <span class="date">2026-09-24</span></h2>
       <ul>
-        <li><b><code>tinyjs</code> works in Git Bash on Windows.</b> The Windows download shipped only <code>tinyjs.cmd</code>. cmd and PowerShell find it when you type <code>tinyjs</code>, but Git Bash doesn't try <code>.cmd</code> when it looks up a command, so there you got “command not found” and had to type <code>tinyjs.cmd</code>. The zip now also has the sh wrapper that macOS and Linux use, next to <code>tinyjs.cmd</code>: Git Bash runs the wrapper, cmd and PowerShell keep running <code>tinyjs.cmd</code>. To get it, run <code>tinyjs update</code> (from Git Bash: <code>tinyjs.cmd update</code>). A source checkout set up with <code>setup.ps1</code> already had the wrapper. The release build now runs it in Git Bash before publishing, so it can't go missing unnoticed again.</li>
+        <li><b><code>tinyjs</code> works in Git Bash on Windows.</b> The Windows download shipped only <code>tinyjs.cmd</code>. cmd and PowerShell find it when you type <code>tinyjs</code>, but Git Bash doesn't try <code>.cmd</code> when it looks up a command, so there you got “command not found” and had to type <code>tinyjs.cmd</code>. The zip now also has the sh wrapper that macOS and Linux use, next to <code>tinyjs.cmd</code>: Git Bash runs the wrapper, cmd and PowerShell keep running <code>tinyjs.cmd</code>. To get it, run <code>tinyjs update</code> (from Git Bash: <code>tinyjs.cmd update</code>). A source checkout set up with <code>setup.ps1</code> already had the wrapper. The release build now runs it in Git Bash before publishing, so it can't go missing unnoticed again. Thanks to <a href="https://github.com/nudopnu">@nudopnu</a> for the report and the fix (<a href="https://github.com/tarwin/tinyjsapp/issues/9">#9</a>, <a href="https://github.com/tarwin/tinyjsapp/pull/10">#10</a>).</li>
+        <li><b>macOS apps for Intel Macs too.</b> A macOS build only carried the build Mac's CPU, so an app built on Apple Silicon was refused on Intel Macs (“not supported on this type of Mac”), and the build didn't warn you (<a href="https://github.com/tarwin/tinyjsapp/issues/2">#2</a>). Three changes:
+          <ul>
+            <li><code>tinyjs build</code> now prints which Macs the .app opens on, e.g. <code>runs on: Apple Silicon (arm64)</code>, and says how to reach the others.</li>
+            <li><code>tinyjs build --arch x86_64</code> (or <code>arm64</code>) builds the .app for that CPU from any Mac. The other CPU's txiki.js comes from the same release and is cached in <code>~/Library/Caches/tinyjs</code>. The dmg and zip are named <code>&lt;name&gt;-&lt;ver&gt;-macos-&lt;arch&gt;</code>, so both builds can sit in one release. <code>tinyjs publish --arch arm64</code> followed by <code>--arch x86_64</code> merges both into one update manifest: a new <code>mac</code> block keyed by CPU. The arm64 build also stays in the top-level <code>url</code>, so apps already out there keep updating. The updater picks the build for the Mac it's running on. An Intel build running on Apple Silicon under Rosetta moves to the native one.</li>
+            <li><code>tinyjs build --universal</code> makes one .app with both CPUs instead. It's about 6 MB bigger and needs the Command Line Tools for <code>lipo</code>.</li>
+          </ul>
+          Per-CPU builds are opt-in: without <code>--arch</code> or <code>--universal</code> a build targets the Mac it's built on, as before. Thanks to <a href="https://github.com/akii09">@akii09</a> for the build report (<a href="https://github.com/tarwin/tinyjsapp/pull/6">#6</a>) and <code>--universal</code> (<a href="https://github.com/tarwin/tinyjsapp/pull/7">#7</a>), and for finding that the bundled txiki.js needs macOS 15, not the documented 14. The docs now say macOS 15+.</li>
+        <li><b><code>onLocale</code> works.</b> The backend hook existed, but the generated app entry never passed it on, so exporting <code>onLocale</code> did nothing.</li>
+        <li><b>Windows <code>capabilities()</code> owns up to <code>proxyURL</code> and <code>setAllSpaces</code>.</b> Both quietly do nothing there, but the capabilities table left them out, so <code>caps.x !== false</code> read them as supported.</li>
+        <li><b>The agent skill's release reference ships again.</b> A case-insensitive <code>.gitignore</code> rule meant for the root <code>RELEASE.md</code> also ignored <code>skill/references/release.md</code>, so SKILL.md linked to a file new projects never got. The skill is also brought up to date: current version, the full list of backend hooks, the page-to-backend name map, Windows' real toast notifications, and several wrong examples fixed.</li>
+        <li><b>Docs refresh.</b> The docs page gains the tinyjs.json keys, CLI commands and APIs it was missing (<code>debug</code>, <code>readAccess</code>, <code>windowPlacement</code>, dialog <code>types</code>, <code>role: 'app'</code>, <code>tiny.fileURL</code>, <code>mouseTracking</code>, <code>requirements</code>, <code>tinyjs version</code>/<code>uninstall</code>, and more), and drops per-feature macOS version notes that no longer mean anything now that apps need macOS 15. pickColor and spotlight are correctly marked as not on Windows yet, and the launcher's size is corrected to 1–2 MB.</li>
       </ul>
     </div>
 
@@ -783,13 +796,17 @@
 
   </section>
 
-  <div class="mascot"><img src="images/rakali-badge-small.webp" alt="rakali, the tinyjs mascot" width="128" height="128" loading="lazy"></div>
+  <div class="mascot"><a href="https://en.wikipedia.org/wiki/Rakali" title="Rakali — the Australian native water rat the mascot is named for"><img src="images/rakali-badge.svg" alt="Rakali, the tinyjs mascot — an Australian native water rat" width="128" height="128" loading="lazy"></a></div>
 
   <footer>
     <a href="./index.html">home</a>
     <a href="./docs.html">docs</a>
+    <a href="./changelog.html">changelog</a>
+    <a href="https://github.com/tarwin/tinyjsapp-examples">examples</a>
     <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
-    <a href="https://github.com/tarwin/tinyjsapp/blob/main/CHANGELOG.md">CHANGELOG.md</a>
+    <a href="https://github.com/tarwin/tinyjsapp">source</a>
+    <a href="https://github.com/tarwin/tinyjsapp#readme">readme</a>
+    <span class="by">By <a href="https://tarwin.art/" target="_blank" rel="noopener">tarwin</a></span>
   </footer>
 </div>
 <script>

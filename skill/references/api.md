@@ -1,9 +1,14 @@
-# The tiny.* / app API — full tour (current as of tinyjs 0.34.0)
+# The tiny.* / app API — full tour (current as of tinyjs 0.42.0)
 
 The `tiny` global is injected into every page automatically (no script tag);
 TypeScript definitions ship in types/tiny.d.ts. Backend handlers receive the
-`app` object with a mirrored surface (`app.window(id).*`, `app.audio.*`,
-`app.clipboard.*` …).
+`app` object with a mirrored surface (`app.window(id).*`, `app.audio.sampler`,
+`app.clipboard.*` …). Where backend names differ from the page's:
+`tiny.menu.set` → `app.setMenu`, `menu.update/get` → `app.updateMenuItem/
+getMenuItem`, `menu.setContext` → `app.setContextMenu`, `win.setChrome` →
+`app.setChrome`, `tiny.audio.filters/filter/balance` →
+`app.setAudioFilters/setAudioFilter/setAudioBalance` (`app.audio` holds only
+`sampler`). There is no `app.menu.*` / `app.audio.filters`.
 
 ## Bridge basics
 
@@ -16,6 +21,8 @@ tiny.api.off('event', fn)                   // remove by reference
 // passes the unsubscribe through — and for those it's the ONLY way to
 // unhook (the sugar wraps your callback, off() can't match it).
 // api handlers get meta: (params, app, meta) — meta.window = calling window id
+tiny.log(msg);   // line in the terminal running `tinyjs dev`
+tiny.quit();
 ```
 
 ## Windows
@@ -96,12 +103,19 @@ el.addEventListener('mousedown', () => tiny.win.startDrag({ files: [path] }));
 // drag OUT (Finder/Slack); call while the button is held; image: custom png
 
 tiny.win.print();                 // native print panel — the CALLING window
-await tiny.win.printToPDF(path);  // vector PDF of the calling window
+await tiny.win.printToPDF(path);  // vector PDF of the calling window —
+                                  // macOS: ONE tall page; win/linux paginate
+tiny.win.share({ text, url, paths, x, y });  // native share sheet, anchored at
+                                  // the click's clientX/Y — macOS only
 
 // multiple windows — any frontend html file can be a window
 tiny.win.open('settings', { page: 'settings.html', title: 'Settings',
                             size: '420x300', minSize: '300x200',
-                            x: 40, y: 40, chrome: { frame: false } });
+                            x: 40, y: 40, chrome: { frame: false },
+                            parent: true });  // true = main, or a window id
+// parent: stays above THAT window (not other apps, unlike setLevel), hides/
+// minimizes/closes with it; no taskbar entry on Windows; macOS also moves it
+// with the parent. Open-time only.
 // chrome + x/y + minSize apply BEFORE first paint. win.* calls target the
 // caller's window; backend: app.openWindow(...), app.window(id).eval/push/
 // close/setTitle/…, app.push broadcasts; export onWindowClosed(id, app).
@@ -145,7 +159,8 @@ tiny.menu.set([
     { separator: true },
     { id: 'more', label: 'More', submenu: [{ id: 'a', label: 'Sub' }] },
   ]}]);
-tiny.menu.on((id) => ...);
+tiny.menu.on((id) => ...);   // "about": "menu" in tinyjs.json routes macOS's
+                             // About item here as id 'about' (own panel)
 tiny.menu.update('mute', { checked: false, label: 'Unmuted' });
 await tiny.menu.get('mute');   // { exists, label, checked, enabled }
 ```
@@ -173,11 +188,14 @@ tiny.menu.onContext((id) => ...);       // backend: export onContextMenu
 ## Dialogs (native, application-modal, all three OSes)
 
 ```js
-await tiny.dialog.openFile();     // path | null       openFiles() -> paths[]
+await tiny.dialog.openFile();     // path | null       openFiles() -> paths[] | null
 await tiny.dialog.pickFolder();   // path | null       saveFile() -> path|null
 // File pickers take { types: ['md', 'txt'] } (extensions, no dots) to limit
 // what's choosable — allowedContentTypes / COMDLG_FILTERSPEC / GtkFileFilter.
 // Windows and Linux also show an "All files" escape hatch. Omit for no filter.
+// saveFile with types appends the first extension to a bare name on every
+// OS (Linux: only with the type filter selected; its overwrite prompt sees
+// the name as typed).
 await tiny.dialog.openFile({ types: ['md', 'markdown', 'txt'] });
 await tiny.dialog.alert(message, detail);
 await tiny.dialog.confirm(message, { detail, ok, cancel });   // true | false
@@ -249,8 +267,8 @@ tiny.app.onNotificationClick((id) => ...);   // backend: export onNotificationCl
 tiny.notify(title, body, { actions: [{ id, title, reply?, placeholder?, destructive? }] });
 tiny.app.onNotificationAction(({ id, action, reply }) => ...);
 // Packaged+signed = native banners with click routing; ad-hoc dev falls back
-// to osascript. Action buttons: macOS and Linux (freedesktop) — Windows
-// balloons have no buttons/reply.
+// to osascript. Actions + reply fields: macOS and Windows (WinRT toasts;
+// balloon fallback on old Windows); Linux (freedesktop) buttons, no reply.
 ```
 
 ## Audio
@@ -284,7 +302,7 @@ s.stopAll(); s.master(0.5); s.unload('coo');   // unload CUTS its voices
 
 // ── tiny.audio — EQ/DSP chain on the app's WHOLE output. Native (below the
 // browser: reaches native HLS/tainted streams, survives reload) on Linux +
-// macOS 14.2+; capabilities().audioFilters is FALSE on Windows (measured
+// macOS; capabilities().audioFilters is FALSE on Windows (measured
 // permanent). pageChain(ctx) is the Windows fallback: same verbs, same RBJ
 // curves, but PAGE-scoped — route your source through it. NEVER pageChain on
 // Linux (Web Audio to destination crackles there — that's why the native
@@ -301,8 +319,9 @@ await eq.balance(-0.2); await eq.clear();
 
 // ── tiny.audioTap — the app's rendered OUTPUT as PCM (VU meters, viz),
 // including audio that bypasses Web Audio. Needs "audioTap":"app"|"system"
-// in tinyjs.json. macOS 14.4+ / Windows ('system') / Linux ('system'; 'app'
-// approximated by system mix). Post-filter where a chain is active.
+// in tinyjs.json ("audioTapReason": "why" overrides the macOS prompt text).
+// macOS / Windows ('system') / Linux ('system'; 'app' approximated by
+// system mix). Post-filter where a chain is active.
 await tiny.audioTap.start({ scope: 'app', interval: 80 });
 tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
   const bin = atob(pcm), n = bin.length >> 1;   // base64 -> interleaved LE Int16
@@ -311,7 +330,7 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
 // Recording" even for scope 'app'; under `tinyjs dev` the grant belongs to
 // the terminal. Denial = silent chunks, not an error.
 
-// ── cross-origin stream INTO Web Audio (mac): MediaElementSource on a
+// ── cross-origin stream INTO Web Audio (mac + linux): MediaElementSource on a
 // cross-origin <audio> is silent by spec; proxyURL streams through the
 // native layer with permissive CORS so it's untainted.
 audio.crossOrigin = 'anonymous';
@@ -431,7 +450,7 @@ await tiny.app.mouseTracking.start();  // true, or throws { code: 'unsupported'
 tiny.app.mouseTracking.stop();
 
 await tiny.app.captureScreen(screenId?);  // { path (png), width, height };
-                                          // 'screen' perm + macOS 14; win: no
+                                          // mac: 'screen' perm; win: no
                                           // perm; linux: X11 sessions only
 await tiny.app.pickColor();     // eyedropper -> '#rrggbb' | null (mac + linux)
 await tiny.app.spotlight(q);    // file search -> paths (mac; linux via locate)
@@ -531,10 +550,14 @@ property; spawn stdio silencer is `'ignore'`; NO Intl (format in the page,
 `system.locale()` for backend branching); no Node builtins ever — see
 references/electron-migration.md.
 
-Backend exports the scaffold wires: `api`, `init(app)`, `onMenu`, `onTray`,
-`onContextMenu`, `onHotkey`, `onSystem`, `onWindowState`, `onWindowClosed`,
-`onOpenUrl`, `onOpenFiles`, `onMediaKey`, `onNotificationClick`,
-`onNotificationAction`, `onUpdateAvailable`, `onClipboardChange`.
+Backend exports the scaffold wires: `api`, `init(app)`, `onMenu`, `onTray`
+(id `null` = bare icon click), `onContextMenu`, `onHotkey`, `onWindowState`,
+`onWindowClosed`, `onOpenUrl`, `onOpenFiles`, `onMediaKey`,
+`onNotificationClick`, `onNotificationAction`, `onUpdateAvailable`,
+`onClipboardChange`, `onLocale`, `onAudioTap`, `onNavigate`, `onDownload`,
+`onWindowOpen` — all `(info, app)` except `onSystem(kind, value, app)`
+(kind 'theme' | 'sleep' | 'wake'; value 'dark'|'light' for theme). A throw
+in any of them is logged by name; the app keeps running.
 
 ## Clipboard, media keys, speech — quick reference
 
@@ -546,6 +569,7 @@ await tiny.clipboard.read();   // { kind: 'files'|'image'|'color'|'text'|'empty'
 tiny.clipboard.write({ text, html, paths, image, color });   // any combo
 await tiny.clipboard.changeCount();
 tiny.clipboard.watch(500); tiny.clipboard.onChange(({ changeCount, self }) => ...);
+tiny.clipboard.unwatch();
 
 tiny.app.nowPlaying.set({ title, artist, album, duration, elapsed, playing });
 tiny.app.onMediaKey(({ command, time }) => ...);  // play|pause|toggle|next|

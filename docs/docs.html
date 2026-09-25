@@ -174,6 +174,8 @@
     font: 12px var(--mono); letter-spacing: .04em; padding: 7px 16px;
     border-radius: 8px; cursor: pointer;
   }
+  .os-tab { display: inline-flex; align-items: center; gap: 7px; }
+  .os-tab svg { width: 13px; height: 13px; fill: currentColor; flex: none; }
   .os-tab:hover { color: var(--text); }
   .os-tab.on { color: var(--accent); border-color: var(--accent); background: var(--wash); }
   html[data-os="mac"] [data-os-panel="win"],
@@ -236,8 +238,9 @@
   @media (max-width: 620px) {
     code { white-space: normal; overflow-wrap: anywhere; }
   }
-  /* the mascot signs the page off, centered above the footer rule */
-  .mascot { margin-top: 72px; display: flex; justify-content: center; position: relative; z-index: 1; }
+  /* the mascot signs the page off, centered above the footer rule —
+     identical on index, docs and changelog */
+  .mascot { margin-top: 96px; display: flex; justify-content: center; position: relative; z-index: 1; }
   .mascot img { width: 128px; height: 128px; }
   footer {
     margin-top: 40px; padding: 28px 0 56px; border-top: 1px solid var(--line);
@@ -246,9 +249,21 @@
   }
   footer a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); }
   footer a:hover { color: var(--accent); border-color: var(--accent); }
+  footer .by { margin-left: auto; }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- OS marks for the macOS / Windows / Linux tabs; fill follows the tab's text color -->
+  <symbol id="ico-mac" viewBox="0 0 24 24"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></symbol>
+  <symbol id="ico-win" viewBox="0 0 24 24"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></symbol>
+  <symbol id="ico-linux" viewBox="0 0 24 24">
+    <mask id="ico-tux-cut"><rect width="24" height="24" fill="#fff"/><ellipse cx="12" cy="15.6" rx="4.1" ry="5.3" fill="#000"/><circle cx="10.2" cy="6.4" r="1.15" fill="#000"/><circle cx="13.8" cy="6.4" r="1.15" fill="#000"/><path d="M10.4 8.6h3.2L12 10.3z" fill="#000"/></mask>
+    <path mask="url(#ico-tux-cut)" d="M12 1.2c-3.1 0-5.1 2.5-5.1 5.8 0 1.2.2 2.2-.7 3.5C4.8 12.7 3.8 15 3.8 17.3c0 3 3.5 4.9 8.2 4.9s8.2-1.9 8.2-4.9c0-2.3-1-4.6-2.4-6.8-.9-1.3-.7-2.3-.7-3.5 0-3.3-2-5.8-5.1-5.8z"/>
+    <ellipse cx="7.3" cy="22.3" rx="3.1" ry="1.4"/><ellipse cx="16.7" cy="22.3" rx="3.1" ry="1.4"/>
+  </symbol>
+</svg>
+
 <div class="wrap">
   <header>
     <div class="brand"><a class="mark" href="./index.html"><img src="images/rakali-badge.svg" alt="Rakali, the tinyjs mascot — an Australian native water rat" width="30" height="30">tinyjs</a> <span class="links"><a href="./docs.html" class="here">docs</a><a href="./changelog.html">changelog</a><a href="https://github.com/tarwin/tinyjsapp-examples">examples ↗</a><a href="https://github.com/tarwin/tinyjsapp">github ↗</a></span><button class="theme" onclick="cycleTheme()" title="Theme — click to cycle auto / light / dark" aria-label="Change theme"></button></div>
@@ -306,16 +321,16 @@
   <section id="install">
     <h2>install <span class="tag">one line, no dependencies</span></h2>
     <div class="os-tabs" role="tablist">
-      <button class="os-tab" data-os="mac" onclick="setOS('mac')">macOS</button>
-      <button class="os-tab" data-os="win" onclick="setOS('win')">Windows</button>
-      <button class="os-tab" data-os="linux" onclick="setOS('linux')">Linux</button>
+      <button class="os-tab" data-os="mac" onclick="setOS('mac')"><svg aria-hidden="true"><use href="#ico-mac"/></svg>macOS</button>
+      <button class="os-tab" data-os="win" onclick="setOS('win')"><svg aria-hidden="true"><use href="#ico-win"/></svg>Windows</button>
+      <button class="os-tab" data-os="linux" onclick="setOS('linux')"><svg aria-hidden="true"><use href="#ico-linux"/></svg>Linux</button>
     </div>
     <div data-os-panel="mac">
       <div class="install">
         <code><b>curl</b> -fsSL https://tinyjs.app/install | <b>sh</b></code>
         <button onclick="copyCmd(this)">copy</button>
       </div>
-      <div class="platform">macOS · apple silicon + intel · MIT</div>
+      <div class="platform">macOS 15+ · apple silicon + intel · MIT</div>
     </div>
     <div data-os-panel="win">
       <div class="install">
@@ -332,7 +347,8 @@
         <button onclick="copyCmd(this)">copy</button>
       </div>
       <div class="platform">linux (beta) · x86_64 + arm64 · same script as macOS,
-      detects Linux · needs libwebkit2gtk-4.1-0
+      detects Linux · glibc 2.35+ (Ubuntu 22.04 / Debian 12 and newer) · needs
+      libwebkit2gtk-4.1-0
       (<code style="font-size:11px">sudo apt install libwebkit2gtk-4.1-0</code>) · MIT</div>
     </div>
     <p class="note">Then <code>tinyjs new myapp &amp;&amp; cd myapp &amp;&amp; tinyjs dev</code>
@@ -354,19 +370,35 @@
   <i># restarts (TINYJS_DEBUG=1 traces the bridge)</i>
 
 <b>tinyjs build</b>
-  <i># dist/&lt;name&gt; binary + codesigned dist/&lt;Name&gt;.app</i>
+  <i># macOS: dist/&lt;name&gt; binary + codesigned dist/&lt;Name&gt;.app</i>
+  <i># Windows / Linux: a portable dist/ folder (backend + launcher + frontend)</i>
   <i># --dmg: also a disk image installer</i>
-  <i># --universal: .app opens on Apple Silicon + Intel</i>
+  <i># --arch arm64|x86_64: .app for that CPU, from any Mac (TINYJS_ARCH);</i>
+  <i>#   per-arch dmgs survive rebuilds, so both arches' dmgs sit side by side</i>
+  <i># --universal: one .app for Apple Silicon + Intel (TINYJS_UNIVERSAL=1;</i>
+  <i>#   needs the Command Line Tools for lipo)</i>
+  <i># --arch / --universal are macOS-only — ignored on Windows and Linux</i>
+  <i># --cli [name]: also dist/bin/&lt;name&gt;, a command-line shim — the</i>
+  <i>#   files it's given arrive in onOpenFiles</i>
 
 <b>tinyjs publish</b>
   <i># build + zip + auto-update manifest in dist/publish/</i>
+  <i># --arch arm64, then --arch x86_64: both Mac builds, one manifest</i>
+  <i># --notes "text" | --notes-file CHANGES.md: notes for the update prompt</i>
 
 <b>tinyjs notarize</b>
   <i># notarytool submit + staple (needs a Developer ID)</i>
   <i># --dmg: rebuild the dmg from the stapled .app</i>
+  <i># after a build --arch, pass the same --arch (it names the dmg)</i>
 
 <b>tinyjs update</b>
-  <i># update the tinyjs CLI itself (--check: report only)</i></pre>
+  <i># update the tinyjs CLI itself (--check: report only)</i>
+
+<b>tinyjs version</b>
+  <i># print the tinyjs + txiki.js versions</i>
+
+<b>tinyjs uninstall</b>
+  <i># remove the install dir and the PATH symlink (--yes: no prompt)</i></pre>
   </section>
 
   <section id="config">
@@ -397,6 +429,8 @@
   "urlScheme": "myapp",
   <i>// "Open With" file associations</i>
   "fileExtensions": ["md"],
+  <i>// folders can be opened with the app too (they have no extension to list)</i>
+  "openFolders": true,
   <i>// getUserMedia prompts — the string is the reason shown to the user</i>
   "permissions": { "microphone": "why", "camera": "why",
                    "speechRecognition": "why" },
@@ -404,6 +438,15 @@
   "audioTap": "app",
   <i>// suppress WebKit's default right-click menu (default: true)</i>
   "contextMenu": false,
+  <i>// devtools: true = F12 opens them, "open" = every window opens them at</i>
+  <i>// creation. Default off in shipped apps; `tinyjs dev` always has F12</i>
+  "debug": true,
+  <i>// re-enable the webview's own keys (Ctrl+P, Ctrl+F, Ctrl+R…) — Windows</i>
+  <i>// only; suppressed by default so they can't fire under your app</i>
+  "browserAccelerators": true,
+  <i>// let file:// media load from outside the frontend dir: true = home dir,</i>
+  <i>// or one directory. tiny.fileURL(path) builds the URL</i>
+  "readAccess": true,
   <i>// macOS About menu item fires onMenu('about') / the 'menu' event instead of</i>
   <i>// showing the standard panel ('about' becomes a reserved menu-item id)</i>
   "about": "menu",
@@ -411,6 +454,9 @@
   <i>// live screen; false if your app parks windows off-screen on purpose —</i>
   <i>// win.ensureOnScreen() stays available either way (default: true)</i>
   "offscreenRescue": false,
+  <i>// the app places its own windows: on Linux this runs it under X11</i>
+  <i>// (XWayland), since Wayland ignores setPosition/center. No-op elsewhere</i>
+  "windowPlacement": true,
   <i>// override the webview UA (UA-sniffing sites; wrapping a hosted app)</i>
   "userAgent": "Mozilla/5.0 …",
   <i>// WRAPPING A HOSTED SITE — the main window IS the remote page, so no local</i>
@@ -437,8 +483,9 @@
   },
   <i>// menu-bar agent: no Dock icon, starts hidden (no launch flash)</i>
   "activation": "accessory",
-  <i>// auto-update manifest published by `tinyjs publish`</i>
-  "update": { "url": "https://…/manifest.json" },
+  <i>// auto-update manifest published by `tinyjs publish`; auto: "launch" |</i>
+  <i>// "daily" checks for you and fires 'update-available'</i>
+  "update": { "url": "https://…/manifest.json", "auto": "launch" },
   <i>// notarytool keychain profile used by `tinyjs notarize`</i>
   "notarize": { "profile": "my-notary-profile" }
 }</pre>
@@ -453,11 +500,17 @@
   "signIdentity": "Developer ID Application: …",
   "urlScheme": "myapp",
   "fileExtensions": ["md"],
+  "openFolders": true,
   "permissions": { "microphone": "why", "camera": "why",
                    "speechRecognition": "why" },
   "audioTap": "app",
   "contextMenu": false,
+  "debug": true,
+  "browserAccelerators": true,
+  "readAccess": true,
   "about": "menu",
+  "offscreenRescue": false,
+  "windowPlacement": true,
   "userAgent": "Mozilla/5.0 …",
   "url": "https://app.example.com",
   "api": { "origins": { "https://app.example.com": ["notify", "store.*"] } },
@@ -471,7 +524,7 @@
     "dev": "npm run dev", "devUrl": "http://127.0.0.1:5173"
   },
   "activation": "accessory",
-  "update": { "url": "https://…/manifest.json" },
+  "update": { "url": "https://…/manifest.json", "auto": "launch" },
   "notarize": { "profile": "my-notary-profile" }
 }</pre>
     <p class="note"><b>Secrets stay out of the file.</b> Two keys fall back to the
@@ -497,7 +550,9 @@
                     <i># load a different page — self-driving test pages</i>
 <b>TINYJS_LAUNCHER</b>=/path/to/launcher
                     <i># run against a different launcher binary</i>
-<b>TINYJS_HOME</b>=/opt/tinyjs   <i># where the CLI installs and looks for itself</i></pre>
+<b>TINYJS_HOME</b>=/opt/tinyjs   <i># where the CLI installs and looks for itself</i>
+<b>TINYJS_ARCH</b>=x86_64      <i># = build/publish/notarize --arch (macOS)</i>
+<b>TINYJS_UNIVERSAL</b>=1      <i># = --universal (macOS)</i></pre>
 
     <h3 style="margin-top:26px;font:700 15px var(--mono)">per-OS overrides</h3>
     <p class="note">Root keys apply everywhere. An optional
@@ -542,7 +597,13 @@
 <b>export function onContextMenu(id, app)</b> {}
 <b>export function onSystem(kind, value, app)</b> {}  <i>// 'theme'|'sleep'|'wake'</i>
 <b>export function onOpenUrl(url, app)</b> {}
-<b>export function onOpenFiles(paths, app)</b> {}</pre>
+<b>export function onOpenFiles(paths, app)</b> {}
+<b>export function onLocale(info, app)</b> {}       <i>// the OS language/region changed</i>
+<b>export function onClipboardChange(info, app)</b> {}  <i>// auto-starts the watcher</i>
+<b>export function onAudioTap(chunk, app)</b> {}    <i>// same chunk as tiny.audioTap.on</i>
+<i>// more further down, beside their features: onWindowClosed, onWindowState,</i>
+<i>// onMediaKey, onNotificationClick/Action, onUpdateAvailable, onNavigate,</i>
+<i>// onDownload, onWindowOpen</i></pre>
     <p>The <code>app</code> handle mirrors the frontend surface:
     <code>setTitle</code>, <code>setSize</code>, <code>setMenu</code>,
     <code>setContextMenu</code>, <code>eval(js)</code>, <code>reload()</code>,
@@ -594,10 +655,17 @@ const stop = <b>tiny.api.on</b>('tick', fn);  stop();
 <i>// get native Notification Center banners — your icon, permission prompt,</i>
 <i>// and clicks back:</i>
 <b>tiny.app.onNotificationClick</b>((id) =&gt; …);
-<i>// ad-hoc/dev builds fall back to osascript banners automatically</i>
+<i>// ad-hoc/dev builds fall back to osascript banners automatically.</i>
+<i>// Windows shows WinRT toasts (a tray balloon if those fail); Linux goes</i>
+<i>// through the desktop's notification daemon.</i>
 <i>// notify() never rejects — it resolves false if delivery failed, so</i>
 <i>// fire-and-forget is safe</i>
-await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i></pre>
+await <b>tiny.app.info</b>();             <i>// { version, tinyjs, runtime }</i>
+
+<i>// a file:// URL for a local path, escaped right on every OS (Windows drive</i>
+<i>// letters, UNC shares) — for &lt;img&gt;/&lt;audio&gt; src. Outside the frontend</i>
+<i>// dir it also needs "readAccess" in tinyjs.json, or the element just errors.</i>
+<b>tiny.fileURL</b>('/Users/me/Music/song.mp3');</pre>
   </section>
 
   <section id="fetch">
@@ -689,6 +757,11 @@ audio.play();</pre>
 <i>// area ({ x, y, inside } — clientX/clientY units, valid even while the</i>
 <i>// cursor is outside it); screen = the display the cursor is on</i>
 const { x, y, window, screen } = await <b>tiny.app.mousePosition</b>();
+<i>// Wayland hides the global pointer, so there it only tracks over your own</i>
+<i>// window. start() arms real global coords via the ScreenCast portal (one</i>
+<i>// consent dialog; the screen-sharing indicator shows while armed). Throws</i>
+<i>// .code 'unsupported' | 'denied' | 'failed'; elsewhere it's not needed.</i>
+await <b>tiny.app.mouseTracking.start</b>();  <b>tiny.app.mouseTracking.stop</b>();
 
 <i>// every display, same coords — position windows on any monitor</i>
 const screens = await <b>tiny.app.screens</b>();
@@ -778,6 +851,10 @@ await <b>tiny.win.windows</b>();     <i>// ['main', 'settings', …]</i>
 await <b>tiny.dialog.openFiles</b>();     <i>// paths[] | null</i>
 await <b>tiny.dialog.pickFolder</b>();    <i>// path | null</i>
 await <b>tiny.dialog.saveFile</b>();      <i>// path | null</i>
+<i>// types: limit what's choosable (extensions; same on openFiles + saveFile).</i>
+<i>// Windows and Linux keep an "All files" entry; saveFile appends the first</i>
+<i>// extension when the typed name has none</i>
+await <b>tiny.dialog.openFile</b>({ types: ['md', 'markdown', 'txt'] });
 await <b>tiny.dialog.alert</b>(message, detail);
 await <b>tiny.dialog.confirm</b>(message, { detail, ok, cancel });   <i>// true | false</i>
 await <b>tiny.dialog.prompt</b>(message, { default, ok, cancel });   <i>// string | null</i></pre>
@@ -792,7 +869,7 @@ await <b>tiny.dialog.prompt</b>(message, { default, ok, cancel });   <i>// strin
     each window.</p>
     <pre><b>tiny.menu.set</b>([
   { title: 'Actions', items: [
-    { id: 'open', label: 'Open…', key: 'o' },   <i>// key = ⌘+key</i>
+    { id: 'open', label: 'Open…', key: 'o' },   <i>// ⌘+key (Ctrl on win/linux)</i>
     { id: 'mute', label: 'Mute', checked: true },     <i>// ✓ checkmark</i>
     { id: 'no', label: 'Not Yet', enabled: false },   <i>// grayed out</i>
     { separator: true },
@@ -800,6 +877,11 @@ await <b>tiny.dialog.prompt</b>(message, { default, ok, cancel });   <i>// strin
   ]},
 ]);
 <b>tiny.menu.on</b>((id) =&gt; …);
+
+<i>// macOS application menu, between About and Quit — where Settings… (⌘,)</i>
+<i>// belongs. Windows/Linux have no such menu and drop these items, so put the</i>
+<i>// same item in a menu of your own there</i>
+{ role: 'app', items: [{ id: 'settings', label: 'Settings…', key: ',' }] }
 
 <i>// the Edit menu's slot — File before Edit, the Mac way. Your items go</i>
 <i>// below Select All (macOS); win/linux add nothing, so there the menu is</i>
@@ -842,7 +924,7 @@ await <b>tiny.menu.get</b>('mute');   <i>// { exists, label, checked, enabled }<
     <h2>tiny.tray <span class="tag">menu bar apps</span></h2>
     <pre><b>tiny.tray.set</b>({
   title: 'MyApp',          <i>// text and/or icon (template by default)</i>
-  icon: 'sf:cup.and.saucer.fill',  <i>// SF Symbol by name — or a png path ('tray.png')</i>
+  icon: 'sf:cup.and.saucer.fill',  <i>// SF Symbol (macOS only) — or a png path ('tray.png')</i>
   tooltip: '…',
   menu: [{ id: 'show', label: 'Show' }, { separator: true }, { id: 'q', label: 'Quit' }],
   primaryAction: true,     <i>// left click fires onClick; menu opens on right-click</i>
@@ -859,9 +941,12 @@ await <b>tiny.menu.get</b>('mute');   <i>// { exists, label, checked, enabled }<
 
   <section id="store">
     <h2>tiny.store <span class="tag">persistent settings</span></h2>
-    <p class="note">Flat keys, JSON values, atomic writes —
-    <code>~/Library/Application Support/&lt;bundle id&gt;/store.json</code>.
-    Reach for SQLite when it gets query-shaped.</p>
+    <p class="note">Flat keys, JSON values, atomic writes — a
+    <code>store.json</code> in the per-app data dir
+    (<code>tiny.app.paths().data</code>): <code>~/Library/Application
+    Support/&lt;id&gt;</code> on macOS, <code>%APPDATA%\&lt;id&gt;</code> on
+    Windows, <code>~/.local/share/&lt;id&gt;</code> on Linux. Reach for SQLite
+    when it gets query-shaped.</p>
     <pre>await <b>tiny.store.set</b>('key', value);
 await <b>tiny.store.get</b>('key');      <i>// value | null</i>
 await <b>tiny.store.delete</b>('key');
@@ -869,7 +954,7 @@ await <b>tiny.store.all</b>();           <i>// { … }</i></pre>
   </section>
 
   <section id="clipboard">
-    <h2>tiny.clipboard <span class="tag">native NSPasteboard</span></h2>
+    <h2>tiny.clipboard <span class="tag">native, all three OSes</span></h2>
     <p class="note">Lives in the long-lived launcher process — no
     <code>pbpaste</code>/<code>osascript</code> spawns, no scratch files, and
     multi-file writes never lose their tail to a flush race.</p>
@@ -911,7 +996,7 @@ await <b>tiny.clipboard.changeCount</b>();   <i>// cheap "did it change?" probe<
     <p>A DSP chain — graphic EQ, headphone correction, a crossover — on
     <b>this app's own output</b>. Native (applied below the browser, so it
     reaches audio the page never gets samples for and survives a reload) on
-    Linux (PipeWire) and macOS 14.2+ (a muted Core Audio process tap);
+    Linux (PipeWire) and macOS (a muted Core Audio process tap);
     <code>capabilities().audioFilters</code> is <b>false on Windows</b> — the
     only way to silence the direct signal there is session volume, which
     Windows persists on a key every WebView2 app shares, so a crash while
@@ -993,7 +1078,8 @@ const v = await <b>s.play</b>('coo', { vol: 0.8, pan: -0.3, rate: 1.06, loop: fa
     mix in sync with what's audible, it can't process it (EQ still needs the
     signal in the graph — see <a href="#fetch">proxyURL</a>). Add
     <code>"audioTap": "app"</code> (or <code>"system"</code>) to tinyjs.json.
-    macOS 14.4+.</p>
+    Windows and Linux tap the system mix, so there <code>scope:'app'</code>
+    is approximated by it.</p>
     <pre>await <b>tiny.audioTap.start</b>({ scope: 'app', interval: 80 }); <i>// resolves true, or throws { code }</i>
 <b>tiny.audioTap.on</b>(({ pcm, sampleRate, channels, frames, t }) =&gt; {
   const bin = atob(pcm), n = bin.length &gt;&gt; 1;   <i>// base64 -&gt; interleaved LE Int16</i>
@@ -1013,8 +1099,8 @@ const v = await <b>s.play</b>('coo', { vol: 0.8, pan: -0.3, rate: 1.06, loop: fa
     <code>com.apple.WebKit.GPU</code> helper, making the tap a cross-process
     capture; the grant persists per app. <code>scope:'system'</code> also hears
     other apps (<code>excludeSelf</code> drops your own). <code>start()</code>
-    throws an Error with a <code>.code</code>: <code>unsupported</code>
-    (pre-14.4), <code>not-declared</code> (manifest missing the scope),
+    throws an Error with a <code>.code</code>: <code>unsupported</code>,
+    <code>not-declared</code> (manifest missing the scope),
     <code>denied</code> (TCC refused) or <code>failed</code>; a denied tap
     can't be reported synchronously — it arrives as silent (all-zero) chunks.
     Under <code>tinyjs dev</code> the audio "owner" is your terminal, not your
@@ -1024,10 +1110,11 @@ const v = await <b>s.play</b>('coo', { vol: 0.8, pan: -0.3, rate: 1.06, loop: fa
 
   <section id="keystrokes">
     <h2>keystrokes <span class="tag">paste into other apps</span></h2>
-    <p class="note">A CGEvent posted by the launcher — one permission
+    <p class="note">On macOS, a CGEvent posted by the launcher — one permission
     (Accessibility) whose prompt names <em>your app</em>, instead of
     osascript→System Events needing two grants that name osascript or the
-    terminal.</p>
+    terminal. Windows needs no grant (<code>cmd</code> maps to Ctrl); Linux
+    synthesises through XTest, so X11/XWayland only — not pure Wayland.</p>
     <pre>await <b>tiny.app.keystroke</b>('cmd+v');   <i>// -&gt; { ok, trusted }</i>
 await <b>tiny.app.paste</b>();              <i>// = keystroke('cmd+v')</i>
 <i>// hide the window first so the paste lands in the frontmost app:</i>
@@ -1079,7 +1166,12 @@ await <b>tiny.app.paths</b>();  <i>// { home, data, cache, logs, temp, downloads
                          <i>//   app id; create on first write. Backend twin</i>
                          <i>//   app.paths is a plain object (no await).</i>
 
-<i>// launch at login (packaged .app on macOS 13+; dev mode -&gt; 'unsupported')</i>
+<i>// become the default opener for an extension (or 'folder') — only because</i>
+<i>// the user asked. Linux today; macOS/Windows answer 'unsupported'</i>
+await <b>tiny.app.setAsDefaultHandler</b>('md');  <i>// 'ok' | 'unsupported' | 'failed'</i>
+
+<i>// launch at login — built apps only (dev mode -&gt; 'unsupported'): a login</i>
+<i>// item on macOS, HKCU Run on Windows, an autostart .desktop on Linux</i>
 await <b>tiny.app.launchAtLogin.get</b>();      <i>// 'enabled' | 'disabled' |</i>
 await <b>tiny.app.launchAtLogin.set</b>(true);  <i>//  'requires-approval' | 'unsupported'</i>
 <i>// 'requires-approval': the user must allow it in System Settings &gt; Login Items</i>
@@ -1088,6 +1180,7 @@ await <b>tiny.app.launchAtLogin.set</b>(true);  <i>//  'requires-approval' | 'un
 <b>tiny.app.badge</b>('3');   <b>tiny.app.badge</b>('');    <i>// '' clears</i>
 <b>tiny.app.attention</b>();                    <i>// until the app is activated</i>
 <b>tiny.app.attention</b>({ critical: true });  <i>// until the user acts</i>
+<b>tiny.app.progress</b>(0.4);  <b>tiny.app.progress</b>(null);  <i>// icon progress bar</i>
 <b>tiny.app.presence</b>('menubar');            <i>// 'normal' | 'menubar'</i>
 
 <i>// keep the system awake — replaces spawning `caffeinate` (the assertion</i>
@@ -1103,10 +1196,6 @@ await <b>tiny.app.frontmostApp</b>();   <i>// { name, bundleId, pid } | null</i>
 await <b>tiny.app.beep</b>();
 await <b>tiny.app.playSound</b>('Ping');   <i>// -&gt; false if it didn't load</i>
 
-<i>// native share sheet — anchor it at the click</i>
-btn.addEventListener('click', (e) =&gt;
-  <b>tiny.win.share</b>({ url, text, paths, x: e.clientX, y: e.clientY }));
-
 <i>// seconds since the user's last input — pause polling when they're away</i>
 await <b>tiny.system.idleTime</b>();
 
@@ -1114,13 +1203,11 @@ await <b>tiny.system.idleTime</b>();
 const { language, languages, system, region, timeZone } = await <b>tiny.system.locale</b>();
 <i>// languages = filtered to the app's declared localizations; system = the</i>
 <i>// raw user preference. They differ for an English-only app on a French Mac.</i>
-
-<i>// Quick Look — the Finder-spacebar preview panel (no qlmanage spawn)</i>
-<b>tiny.macos.quickLook</b>('/path/photo.heic'); <i>// array pages with arrow keys</i>
-<b>tiny.macos.quickLook</b>();                   <i>// close</i>
+<i>// macOS only so far — capabilities().locale is false on Windows and Linux.</i>
 
 <i>// screenshot a display (id from screens(); default primary) — png in the</i>
-<i>// temp dir, you own the file. Needs the 'screen' permission + macOS 14.</i>
+<i>// temp dir, you own the file. Needs the 'screen' permission on macOS;</i>
+<i>// X11 sessions only on Linux.</i>
 const { path, width, height } = await <b>tiny.app.captureScreen</b>();</pre>
   </section>
 
@@ -1130,7 +1217,7 @@ const { path, width, height } = await <b>tiny.app.captureScreen</b>();</pre>
     and, despite where these used to be documented, <b>not macOS-only</b>.
     Ask <code>tiny.system.capabilities()</code> if in doubt.</p>
     <pre><i>// the system eyedropper — any pixel, any app, NO screen-recording perm</i>
-<i>// macOS · Windows · Linux (xdg portal)</i>
+<i>// macOS · Linux (xdg portal) — not on Windows yet</i>
 const color = await <b>tiny.app.pickColor</b>();   <i>// '#rrggbb' | null on cancel</i>
 
 <i>// a thumbnail png for ANY path — a real preview where Quick Look has a</i>
@@ -1140,8 +1227,8 @@ const color = await <b>tiny.app.pickColor</b>();   <i>// '#rrggbb' | null on can
 const thumb = await <b>tiny.app.thumbnail</b>('/path/file.psd', 256);
 <i>// -&gt; { path, width, height } — @2x, aspect preserved</i>
 
-<i>// find files by name or content — macOS Spotlight, Windows Search,</i>
-<i>// plocate/locate on Linux (falling back to a bounded find)</i>
+<i>// find files by name or content — macOS Spotlight, plocate/locate on</i>
+<i>// Linux (falling back to a bounded find); not on Windows yet</i>
 const hits = await <b>tiny.app.spotlight</b>('invoice');   <i>// up to 100 paths</i></pre>
   </section>
 
@@ -1193,7 +1280,8 @@ const { text, blocks } = await <b>tiny.macos.ocr</b>('/path/scan.png');
 
 <i>// share stays on tiny.win — it anchors to a specific window, and</i>
 <i>// window-scoped calls belong on the window namespace even when macOS-only</i>
-await <b>tiny.win.share</b>({ url });        <i>// native share sheet, anchored in the window</i>
+btn.addEventListener('click', (e) =&gt;      <i>// native share sheet, anchored at the click</i>
+  <b>tiny.win.share</b>({ url, text, paths, x: e.clientX, y: e.clientY }));
 await <b>tiny.macos.recorder.start</b>({ path }); <i>// screen recording to .mp4</i>
 await <b>tiny.macos.selectedText</b>();        <i>// text selected in the front app</i></pre>
   </section>
@@ -1214,7 +1302,8 @@ const voices = await <b>tiny.app.voices</b>();   <i>// [{ id, name, lang, qualit
 await <b>tiny.app.say</b>('Export finished', { voice: voices[0].id, rate: 0.5 });
 <b>tiny.app.stopSpeaking</b>();
 
-<i>// notifications with action buttons + a reply field (packaged apps)</i>
+<i>// notifications with action buttons + a reply field — packaged apps on</i>
+<i>// macOS, WinRT toasts on Windows; Linux has the buttons but no reply field</i>
 <b>tiny.notify</b>('New message', 'from Alex', { actions: [
   { id: 'reply', title: 'Reply', reply: true, placeholder: 'Message…' },
   { id: 'del', title: 'Delete', destructive: true },
@@ -1225,7 +1314,7 @@ await <b>tiny.app.say</b>('Export finished', { voice: voices[0].id, rate: 0.5 })
 <i>// backend twins: export onMediaKey(info, app), onNotificationAction(info, app)</i>
 
 <i>// record a display to an .mp4 (SCStream → H.264; video only for now).</i>
-<i>// Needs the 'screen' permission + macOS 14; one recording at a time.</i>
+<i>// Needs the 'screen' permission; one recording at a time.</i>
 await <b>tiny.macos.recorder.start</b>({ path: '/tmp/demo.mp4' });  <i>// screenId optional</i>
 const { path, duration } = await <b>tiny.macos.recorder.stop</b>();  <i>// finalized file</i></pre>
   </section>
@@ -1266,9 +1355,6 @@ const { path } = await <b>tiny.win.printToPDF</b>('/tmp/report.pdf');
 <i>// battery + Wi-Fi for menu-bar monitors</i>
 const bat = await <b>tiny.system.battery</b>();  <i>// { percent, charging, plugged, minutesRemaining } | null</i>
 const net = await <b>tiny.system.wifi</b>();     <i>// { ssid, bssid, rssi, txRate } | null (ssid needs Location)</i>
-
-<i>// find files by name/content (Spotlight, no mdfind spawn) — 100 paths max</i>
-const docs = await <b>tiny.app.spotlight</b>('quarterly report');
 
 <i>// on-device LLM — Apple's FoundationModels (offline, no API key, private).</i>
 <i>// Needs macOS 26 + Apple Intelligence on; guard on availability().</i>
@@ -1358,7 +1444,11 @@ export function <b>onWindowOpen</b>(info, app) { }  <i>// 'window' | 'external' 
     <p class="note">Each release: <code>tinyjs publish</code>, upload
     <code>dist/publish/*</code> next to your manifest url. Installs verify
     sha256 + code signature (Team-ID pinned for Developer ID builds), swap
-    atomically with rollback, and relaunch.</p>
+    atomically with rollback, and relaunch. Separate Apple Silicon and Intel
+    builds (<code>publish --arch</code>) share one manifest; each Mac fetches
+    its own, and an Intel build running under Rosetta moves to the arm64 one.
+    Installs from before per-arch manifests read only the top-level url, which
+    the arm64 build fills — so always publish the arm64 build too.</p>
     <pre>const { available, latest, notes } = await <b>tiny.api.call</b>('update.check');
 if (available) await <b>tiny.api.call</b>('update.install');
 
@@ -1378,7 +1468,7 @@ if (available) await <b>tiny.api.call</b>('update.install');
     access) and a native window, talking over a private socket. No HTTP
     server, no ports, nothing listening for anything else to find.</p>
     <pre>┌──────────────────────┐  unix socket   ┌──────────────────────────┐
-│ backend (txiki.js)   │◄──────────────►│ launcher (C++, ~380 KB)  │
+│ backend (txiki.js)   │◄──────────────►│ launcher (C++, ~1–2 MB)  │
 │ your src/main.js     │  line protocol │ native/launcher-macos.cc │
 │ + runtime/bridge.js  │                │ · WKWebView window       │
 │ · owns app logic     │                │ · webview_bind bridge    │
@@ -1427,8 +1517,16 @@ if (caps.badge) <b>tiny.app.badge</b>('3');
 <i>// on Apple silicon, so ask the backend</i>
 await <b>tiny.system.architecture</b>();   <i>// 'arm64' | 'x86_64'</i>
 
-<i>// requirements() filtered to the ones that failed — [] on macOS/Windows</i>
-const gaps = await <b>tiny.system.missing</b>();  <i>// [{ id, feature, detail, install }]</i></pre>
+<i>// Linux assembles media codecs, speech etc. from packages, so a feature can</i>
+<i>// be missing on one box — ask, and tell the user the fix. All ok elsewhere.</i>
+await <b>tiny.system.requirements</b>(['media.aac']);
+<i>// -&gt; [{ id, ok, feature, detail, install: { manager, packages, command } }]</i>
+<i>// ids: media.aac, media.h264, media.mp3, speech, spotlight.index, audioTap,</i>
+<i>// mouseTracking, tray, windowPosition. { refresh: true } re-probes.</i>
+const gaps = await <b>tiny.system.missing</b>();  <i>// just the ones that failed</i>
+<i>// or: a native dialog naming what's missing, offering to copy ONE install</i>
+<i>// command; shows nothing when all is present, so call it from a failure path</i>
+audio.addEventListener('error', () =&gt; <b>tiny.system.promptMissing</b>(['media.aac']));</pre>
     <p class="note">Some things are not "not ported yet" but concepts the other
     OSes don't have — AppleScript, Quick Look. Those live in
     <code>tiny.macos.*</code> and reject elsewhere, so the split is visible in
@@ -1472,13 +1570,17 @@ tjs.spawn(argv, { stdout: <b>'ignore'</b> });
     audio filters exist precisely because of it.</p>
   </section>
 
-  <div class="mascot"><img src="images/rakali-badge-small.webp" alt="rakali, the tinyjs mascot" width="128" height="128" loading="lazy"></div>
+  <div class="mascot"><a href="https://en.wikipedia.org/wiki/Rakali" title="Rakali — the Australian native water rat the mascot is named for"><img src="images/rakali-badge.svg" alt="Rakali, the tinyjs mascot — an Australian native water rat" width="128" height="128" loading="lazy"></a></div>
 
   <footer>
     <a href="./index.html">home</a>
+    <a href="./docs.html">docs</a>
     <a href="./changelog.html">changelog</a>
-    <a href="https://github.com/tarwin/tinyjsapp#readme">readme</a>
+    <a href="https://github.com/tarwin/tinyjsapp-examples">examples</a>
+    <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
     <a href="https://github.com/tarwin/tinyjsapp">source</a>
+    <a href="https://github.com/tarwin/tinyjsapp#readme">readme</a>
+    <span class="by">By <a href="https://tarwin.art/" target="_blank" rel="noopener">tarwin</a></span>
   </footer>
 </div>
 <script>

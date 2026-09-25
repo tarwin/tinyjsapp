@@ -476,7 +476,7 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames }) => {
   meter.style.height = (peak * 100) + '%';       // channels/frames describe the layout
 });
 // tiny.audioTap.stop();  // (or the owning window closing) tears the tap down.
-// macOS 14.4+. Authorization is deferred to the first start() — declaring the
+// Authorization is deferred to the first start() — declaring the
 // manifest key does nothing until you call it — so you can lazy-arm the tap the
 // first time a meter is shown. The FIRST start() prompts for "System Audio
 // Recording" (even scope:'app' — WKWebView renders audio in a separate
@@ -575,7 +575,7 @@ const paths = await tiny.app.paths();
 // data/cache/logs are per app id; create them on first write
 // (backend: app.paths is a plain object, no await)
 
-// launch at login (packaged .app on macOS 13+; dev mode -> 'unsupported')
+// launch at login (built apps on all three OSes; dev mode -> 'unsupported')
 await tiny.app.launchAtLogin.get();       // 'enabled' | 'disabled' |
 await tiny.app.launchAtLogin.set(true);   //   'requires-approval' | 'unsupported'
 // 'requires-approval': macOS wants the user to allow it in
@@ -637,7 +637,7 @@ tiny.macos.quickLook('/path/to/photo.heic');
 tiny.macos.quickLook([a, b, c]);   tiny.macos.quickLook();
 
 // screenshot a display (id from screens(); default primary) — png in the
-// temp dir, you own the file. Needs the 'screen' permission + macOS 14;
+// temp dir, you own the file. Needs the 'screen' permission;
 // rejects with the reason otherwise.
 const { path, width, height } = await tiny.app.captureScreen();
 
@@ -708,7 +708,7 @@ tiny.app.onNotificationAction(({ id, action, reply }) => {
 });
 
 // record a display to an .mp4 (SCStream → H.264; video only for now).
-// Needs the 'screen' permission + macOS 14; one recording at a time.
+// Needs the 'screen' permission; one recording at a time.
 await tiny.macos.recorder.start({ path: '/tmp/demo.mp4' });   // screenId optional
 // … later …
 const { path, duration } = await tiny.macos.recorder.stop();  // finalized file
@@ -1226,12 +1226,23 @@ or `TINYJS_SIGN_IDENTITY` for a Developer ID).
 
 By default the .app runs only on the build Mac's CPU type: the bundled `tjs`
 runtime is single-arch, so an app built on Apple Silicon won't open on an
-Intel Mac. `tinyjs build --universal` (or `TINYJS_UNIVERSAL=1`, also honoured
-by `tinyjs publish`) makes it open on both: it fetches the other arch's build
-of the same txiki.js release (cached in `~/Library/Caches/tinyjs`), `lipo`s it
-onto the host `tjs`, and in a source checkout rebuilds the launcher for arm64 +
-x86_64 (`TINYJS_UNIVERSAL=1 ./setup.sh` does the same by hand). Needs the Xcode
-Command Line Tools for `lipo`. The bare `dist/<name>` binary stays host-only.
+Intel Mac (the build says so: `runs on: Apple Silicon (arm64)`). Two opt-ins,
+both from any Mac:
+
+- `tinyjs build --arch x86_64` (or `arm64`; `TINYJS_ARCH` does the same) builds
+  the .app for that CPU only. The other arch's `tjs` comes from the same
+  txiki.js release, downloaded once and cached in `~/Library/Caches/tinyjs`.
+  Artifacts are named `<name>-<ver>-macos-<arch>.dmg` / `.zip`, so an
+  Apple Silicon and an Intel build can ship side by side — the usual way to
+  release for both. Apple Silicon Macs can also run the Intel build under
+  Rosetta.
+- `tinyjs build --universal` (or `TINYJS_UNIVERSAL=1`) makes one .app with
+  both slices, `lipo`'d together — about 6 MB bigger, and it needs the Xcode
+  Command Line Tools.
+
+In a source checkout either one rebuilds the launcher for arm64 + x86_64 first
+(`TINYJS_UNIVERSAL=1 ./setup.sh` does it by hand); release installs already
+ship it universal. The bare `dist/<name>` binary stays host-only.
 
 `tinyjs build --dmg` additionally produces `dist/<name>-<version>.dmg` — the
 .app plus an /Applications shortcut, the classic installer image. With a real
@@ -1304,7 +1315,12 @@ GitHub Releases, S3, nginx):
 Each release: `tinyjs publish --notes "What changed"` → `dist/publish/`
 contains `myapp-1.1.0.zip` + `manifest.json` (version, download url, sha256,
 notes) — upload both to the directory `update.url` points at
-(`--notes-file CHANGES.md` for longer notes). In the app:
+(`--notes-file CHANGES.md` for longer notes). Shipping separate Apple
+Silicon and Intel builds? Run `tinyjs publish --arch arm64` then
+`tinyjs publish --arch x86_64`: the second run keeps the first's zip and
+merges both into one manifest (a `"mac": { "arm64": …, "x86_64": … }` block,
+with the arm64 build also in the top-level `url` for apps that predate the
+block). Each installed app downloads the build for its own Mac. In the app:
 
 ```js
 const { available, latest, notes } = await tiny.api.call('update.check');
@@ -1361,7 +1377,7 @@ only remaining step.
 
 ```
 ┌──────────────────────┐  unix socket   ┌──────────────────────────┐
-│ backend (txiki.js)   │◄──────────────►│ launcher (C++, ~380 KB)  │
+│ backend (txiki.js)   │◄──────────────►│ launcher (C++, ~1–2 MB)  │
 │ your src/main.js     │  line protocol │ native/launcher-macos.cc │
 │ + runtime/bridge.js  │                │ · WKWebView window       │
 │ · owns app logic     │                │ · webview_bind bridge    │
@@ -1564,8 +1580,10 @@ SDK it's compiling against carries FoundationModels, and quietly builds
 without when it doesn't, so an older toolchain still works. It says which it
 did.
 
-Either way the binary keeps the **macOS 14 floor** and weak-links
-FoundationModels, so it still launches on macOS 14+ — `ai.availability()`
+Either way the launcher keeps its **macOS 14 floor** and weak-links
+FoundationModels, so FoundationModels never raises what the launcher needs.
+A built app still needs **macOS 15+**, because the bundled txiki.js runtime
+is built for 15. `ai.availability()`
 just returns `'unsupported'` below macOS 26, as does a launcher compiled
 without the shim. So app code that guards on `availability()` is always safe, and
 guarding is not optional: the honest states are *available*, *unavailable*
@@ -1634,8 +1652,6 @@ Works:
 
 Not yet ported:
 
-- notification action buttons — balloons only; real toasts need an
-  AppUserModelID story
 - `nowPlaying` / media keys — wants the WinRT `SystemMediaTransportControls`
 - `otherWindows` / `moveWindow`, `pickColor`, `spotlight`, `system.locale`
 - the genuinely macOS-only APIs: Quick Look, OCR, AppleScript, `proxyURL`
@@ -1708,7 +1724,8 @@ Burn-down list with implementation notes: [TODO-linux.md](TODO-linux.md).
 
 Nothing here is planned work — these are directions worth measuring, mostly
 aimed at the same thing: the ~6 MB a shipped app costs today, of which
-`bin/tjs` is 5.6 MB and the launcher ~380 KB.
+`bin/tjs` is 5.6 MB and the launcher 1–2 MB (1.6 MB on macOS, 2.0 MB on
+Windows, 1.2 MB on Linux).
 
 ### A slimmer txiki.js
 

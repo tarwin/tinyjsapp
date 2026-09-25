@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.42.0 — 2026-09-24
 
 - **`tinyjs` works in Git Bash on Windows.** The Windows download shipped
   only `tinyjs.cmd`. cmd and PowerShell find it when you type `tinyjs`, but
@@ -15,23 +15,53 @@ https://tinyjs.app/changelog.
   run `tinyjs update` (from Git Bash: `tinyjs.cmd update`). A source
   checkout set up with `setup.ps1` already had the wrapper. The release
   build now runs it in Git Bash before publishing, so it can't go missing
-  unnoticed again.
-- **`tinyjs build` on macOS now says which Macs the `.app` will open on.**
-  The bundle needs both the launcher and `tjs` to carry the CPU's
-  architecture. The stock `tjs` only carries the build machine's, so an app
-  built on Apple Silicon is refused on Intel Macs ("not supported on this
-  type of Mac"), and the build gave no warning. The build now prints e.g.
-  `runs on: Apple Silicon (arm64)` and names the binary that is missing the
-  other slice. ([#2](https://github.com/tarwin/tinyjsapp/issues/2))
-- **`tinyjs build --universal` makes a macOS .app that opens on Intel Macs
-  too.** Until now the bundled `tjs` only carried the build Mac's
-  architecture, so apps built on Apple Silicon were refused on Intel ("not
-  supported on this type of Mac"). `--universal` (or `TINYJS_UNIVERSAL=1`,
-  also honoured by `tinyjs publish`) fetches the other architecture's build
-  of the same txiki.js release, caches it in `~/Library/Caches/tinyjs`, and
-  `lipo`s it onto the host `tjs`. In a source checkout it also rebuilds the
-  launcher for arm64 + x86_64. `setup.sh` accepts `TINYJS_UNIVERSAL=1` to do
-  that by hand. ([#2](https://github.com/tarwin/tinyjsapp/issues/2))
+  unnoticed again. Thanks to [@nudopnu](https://github.com/nudopnu) for the
+  report and the fix ([#9](https://github.com/tarwin/tinyjsapp/issues/9),
+  [#10](https://github.com/tarwin/tinyjsapp/pull/10)).
+- **macOS apps for Intel Macs too.** A macOS build only carried the build
+  Mac's CPU, so an app built on Apple Silicon was refused on Intel Macs
+  ("not supported on this type of Mac"), and the build didn't warn you
+  ([#2](https://github.com/tarwin/tinyjsapp/issues/2)). Three changes:
+  - `tinyjs build` now prints which Macs the .app opens on, e.g.
+    `runs on: Apple Silicon (arm64)`, and says how to reach the others.
+  - `tinyjs build --arch x86_64` (or `arm64`) builds the .app for that CPU
+    from any Mac. The other CPU's txiki.js comes from the same release and
+    is cached in `~/Library/Caches/tinyjs`. The dmg and zip are named
+    `<name>-<ver>-macos-<arch>`, so both builds can sit in one release.
+    `tinyjs publish --arch arm64` followed by `--arch x86_64` merges both
+    into one update manifest: a new `mac` block keyed by CPU. The arm64 build
+    also stays in the top-level `url`, so apps already out there keep
+    updating. The updater picks the build for the Mac it's running on. An
+    Intel build running on Apple Silicon under Rosetta moves to the native
+    one.
+  - `tinyjs build --universal` makes one .app with both CPUs instead. It's
+    about 6 MB bigger and needs the Command Line Tools for `lipo`.
+  Per-CPU builds are opt-in: without `--arch` or `--universal` a build
+  targets the Mac it's built on, as before. Thanks to
+  [@akii09](https://github.com/akii09) for the build report
+  ([#6](https://github.com/tarwin/tinyjsapp/pull/6)) and `--universal`
+  ([#7](https://github.com/tarwin/tinyjsapp/pull/7)), and for finding that
+  the bundled txiki.js needs macOS 15, not the documented 14. The docs now
+  say macOS 15+.
+
+- **`onLocale` works.** The backend hook existed, but the generated app
+  entry never passed it on, so exporting `onLocale` did nothing.
+- **Windows `capabilities()` owns up to `proxyURL` and `setAllSpaces`.**
+  Both quietly do nothing there, but the capabilities table left them out,
+  so `caps.x !== false` read them as supported.
+- **The agent skill's release reference ships again.** A case-insensitive
+  `.gitignore` rule meant for the root `RELEASE.md` also ignored
+  `skill/references/release.md`, so SKILL.md linked to a file new projects
+  never got. The skill is also brought up to date: current version, the
+  full list of backend hooks, the page-to-backend name map, Windows'
+  real toast notifications, and several wrong examples fixed.
+- **Docs refresh.** The docs page gains the tinyjs.json keys, CLI commands
+  and APIs it was missing (`debug`, `readAccess`, `windowPlacement`, dialog
+  `types`, `role: 'app'`, `tiny.fileURL`, `mouseTracking`, `requirements`,
+  `tinyjs version`/`uninstall`, and more), and drops per-feature macOS
+  version notes that no longer mean anything now that apps need macOS 15.
+  pickColor and spotlight are correctly marked as not on Windows yet, and
+  the launcher's size is corrected to 1–2 MB.
 
 ## 0.41.1 — 2026-09-23
 

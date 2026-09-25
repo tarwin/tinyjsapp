@@ -163,6 +163,8 @@
     border-radius: 8px; cursor: pointer;
   }
   .os-tab em { font-style: normal; font-size: 10px; color: var(--accent); opacity: .8; }
+  .os-tab { display: inline-flex; align-items: center; gap: 7px; }
+  .os-tab svg { width: 13px; height: 13px; fill: currentColor; flex: none; }
   .os-tab:hover { color: var(--text); }
   .os-tab.on { color: var(--accent); border-color: var(--accent); background: var(--wash); }
   /* Example tabs — same chip language as the OS strip, plus the app's own
@@ -267,7 +269,7 @@
   .try-icon { display: block; width: 64px; height: 64px; border-radius: 14px; margin-bottom: 10px; }
   .try-dl span { font-weight: 400; font-size: 11px; line-height: 1.6; color: var(--muted); letter-spacing: .02em; white-space: normal; }
   a.try-dl:hover { background: var(--wash-2); }
-  /* linux: two architectures, so the archs are the buttons */
+  /* linux + mac: two architectures, so the archs are the buttons */
   .try-dl .arch { display: flex; gap: 8px; margin: 10px 0 2px; }
   .try-dl .arch a {
     color: var(--text); text-decoration: none; font: 600 12px var(--mono); letter-spacing: .02em;
@@ -372,10 +374,10 @@
   .stack .wire::before { content: "⇅"; font-size: 19px; line-height: 1; }
   .stack .wire em { font-style: normal; opacity: .8; }
 
-  /* the mascot signs the page off, centered above the footer rule */
+  /* the mascot signs the page off, centered above the footer rule —
+     identical on index, docs and changelog */
   .mascot { margin-top: 96px; display: flex; justify-content: center; position: relative; z-index: 1; }
   .mascot img { width: 128px; height: 128px; }
-
   footer {
     margin-top: 40px; padding: 28px 0 56px; border-top: 1px solid var(--line);
     font: 12.5px var(--mono); color: var(--muted); display: flex; gap: 22px; flex-wrap: wrap;
@@ -383,10 +385,21 @@
   }
   footer a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); }
   footer a:hover { color: var(--accent); border-color: var(--accent); }
-  footer .flex { margin-left: auto; }
+  footer .by { margin-left: auto; }
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <!-- OS marks for the macOS / Windows / Linux tabs; fill follows the tab's text color -->
+  <symbol id="ico-mac" viewBox="0 0 24 24"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></symbol>
+  <symbol id="ico-win" viewBox="0 0 24 24"><path d="M0 3.449 9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></symbol>
+  <symbol id="ico-linux" viewBox="0 0 24 24">
+    <mask id="ico-tux-cut"><rect width="24" height="24" fill="#fff"/><ellipse cx="12" cy="15.6" rx="4.1" ry="5.3" fill="#000"/><circle cx="10.2" cy="6.4" r="1.15" fill="#000"/><circle cx="13.8" cy="6.4" r="1.15" fill="#000"/><path d="M10.4 8.6h3.2L12 10.3z" fill="#000"/></mask>
+    <path mask="url(#ico-tux-cut)" d="M12 1.2c-3.1 0-5.1 2.5-5.1 5.8 0 1.2.2 2.2-.7 3.5C4.8 12.7 3.8 15 3.8 17.3c0 3 3.5 4.9 8.2 4.9s8.2-1.9 8.2-4.9c0-2.3-1-4.6-2.4-6.8-.9-1.3-.7-2.3-.7-3.5 0-3.3-2-5.8-5.1-5.8z"/>
+    <ellipse cx="7.3" cy="22.3" rx="3.1" ry="1.4"/><ellipse cx="16.7" cy="22.3" rx="3.1" ry="1.4"/>
+  </symbol>
+</svg>
+
 
 <div class="wrap">
   <header>
@@ -398,16 +411,16 @@
     No Electron. No bundled Chromium. No HTTP server. <strong>No ports.</strong></p>
 
     <div class="os-tabs r r4" role="tablist">
-      <button class="os-tab" data-os="mac" onclick="setOS('mac')">macOS</button>
-      <button class="os-tab" data-os="win" onclick="setOS('win')">Windows</button>
-      <button class="os-tab" data-os="linux" onclick="setOS('linux')">Linux</button>
+      <button class="os-tab" data-os="mac" onclick="setOS('mac')"><svg aria-hidden="true"><use href="#ico-mac"/></svg>macOS</button>
+      <button class="os-tab" data-os="win" onclick="setOS('win')"><svg aria-hidden="true"><use href="#ico-win"/></svg>Windows</button>
+      <button class="os-tab" data-os="linux" onclick="setOS('linux')"><svg aria-hidden="true"><use href="#ico-linux"/></svg>Linux</button>
     </div>
     <div data-os-panel="mac">
       <div class="install r r4">
         <code><b>curl</b> -fsSL https://tinyjs.app/install | <b>sh</b></code>
         <button onclick="copyCmd(this)">copy</button>
       </div>
-      <div class="platform r r5">macOS · apple silicon + intel · MIT</div>
+      <div class="platform r r5">macOS 15+ · apple silicon + intel · MIT</div>
     </div>
     <div data-os-panel="win">
       <div class="install r r4">
@@ -421,7 +434,7 @@
         <code><b>curl</b> -fsSL https://tinyjs.app/install | <b>sh</b></code>
         <button onclick="copyCmd(this)">copy</button>
       </div>
-      <div class="platform r r5">linux (beta) · x86_64 + arm64 · same script as macOS, detects Linux · needs libwebkit2gtk-4.1-0 (<code style="font-size:11px">sudo apt install libwebkit2gtk-4.1-0</code>) · MIT</div>
+      <div class="platform r r5">linux (beta) · x86_64 + arm64 · same script as macOS, detects Linux · glibc 2.35+ (Ubuntu 22.04 / Debian 12 and newer) · needs libwebkit2gtk-4.1-0 (<code style="font-size:11px">sudo apt install libwebkit2gtk-4.1-0</code>) · MIT</div>
     </div>
   </header>
 
@@ -435,7 +448,7 @@
       <div class="bar tiny"><span class="label">tinyjs</span>
         <div class="track"><div class="fill"><span>~6 MB</span></div></div></div>
     </div>
-    <p class="bars-note">Your backend, a ~600 KB window process, and your
+    <p class="bars-note">Your backend, a ~1–2 MB window process, and your
     plain HTML/CSS/JS — ~6 MB on all three platforms. The window is the
     webview the OS already ships.</p>
     <p class="bars-note">Tauri does the same, and does it well — but its
@@ -461,9 +474,9 @@
   <section>
     <h2>See it running</h2>
     <div class="os-tabs small" role="tablist">
-      <button class="os-tab" data-os="mac" onclick="setOS('mac')">macOS</button>
-      <button class="os-tab" data-os="win" onclick="setOS('win')">Windows</button>
-      <button class="os-tab" data-os="linux" onclick="setOS('linux')">Linux</button>
+      <button class="os-tab" data-os="mac" onclick="setOS('mac')"><svg aria-hidden="true"><use href="#ico-mac"/></svg>macOS</button>
+      <button class="os-tab" data-os="win" onclick="setOS('win')"><svg aria-hidden="true"><use href="#ico-win"/></svg>Windows</button>
+      <button class="os-tab" data-os="linux" onclick="setOS('linux')"><svg aria-hidden="true"><use href="#ico-linux"/></svg>Linux</button>
     </div>
     <div class="try">
       <div class="try-body">
@@ -476,9 +489,14 @@
       <a class="try-dl" data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.8/shelf-0.2.8-win.zip">
         <img class="try-icon" src="images/shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf<span>-win.zip · 4.0 MB · win 10/11</span>
       </a>
-      <a class="try-dl" data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.8/shelf-0.2.8.dmg">
-        <img class="try-icon" src="images/shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf<span>.dmg · 4.4 MB · signed &amp; notarized</span>
-      </a>
+      <div class="try-dl" data-os-panel="mac">
+        <img class="try-icon" src="images/shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf
+        <span class="arch">
+          <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.9/shelf-0.2.9-macos-arm64.dmg">Apple Silicon</a>
+          <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/shelf-v0.2.9/shelf-0.2.9-macos-x86_64.dmg">Intel</a>
+        </span>
+        <span>.dmg · 4.5 MB · signed &amp; notarized · macOS 15+</span>
+      </div>
       <div class="try-dl" data-os-panel="linux">
         <img class="try-icon" src="images/shelf-icon.png" alt="shelf app icon" width="64" height="64">⬇ Download shelf
         <span class="arch">
@@ -517,7 +535,10 @@
           it, via the OpenMPT engine). A webview can't play any of those
           last two; amp renders them itself.</p>
           <span class="show-dl">
-            <a data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/amp-v0.12.0/amp-0.12.0.dmg">⬇ .dmg · 7.4 MB</a>
+            <span class="lin" data-os-panel="mac">⬇ .dmg · 8.2 MB
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/amp-v0.13.0/amp-0.13.0.dmg">Apple Silicon</a>
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/amp-v0.13.0/amp-0.13.0-macos-x86_64.dmg">Intel</a>
+            </span>
             <a data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/amp-v0.13.0/amp-0.13.0-win.zip">⬇ .zip · 7.4 MB</a>
             <span class="lin" data-os-panel="linux">⬇ .tar.gz
               <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/amp-v0.12.0/amp-0.12.0-linux-x86_64.tar.gz">x86_64</a>
@@ -538,7 +559,10 @@
           any <code style="font-size:13px">.md</code> in Finder and it opens
           here.</p>
           <span class="show-dl">
-            <a data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/nib-v0.2.0/nib-0.2.0.dmg">⬇ .dmg · 5.6 MB</a>
+            <span class="lin" data-os-panel="mac">⬇ .dmg · 5.7 MB
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/nib-v0.3.0/nib-0.3.0.dmg">Apple Silicon</a>
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/nib-v0.3.0/nib-0.3.0-macos-x86_64.dmg">Intel</a>
+            </span>
             <a data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/nib-v0.3.0/nib-0.3.0-win.zip">⬇ .zip · 4.8 MB</a>
             <span class="lin" data-os-panel="linux">⬇ .tar.gz
               <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/nib-v0.2.0/nib-0.2.0-linux-x86_64.tar.gz">x86_64</a>
@@ -562,7 +586,10 @@
           — it ships with a sample record to spin, and connects Spotify if
           you'd rather bring your own.</p>
           <span class="show-dl">
-            <a data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.4.0/platter-0.4.0.dmg">⬇ .dmg · 6.0 MB</a>
+            <span class="lin" data-os-panel="mac">⬇ .dmg · 6.0 MB
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.4.0/platter-0.4.0.dmg">Apple Silicon</a>
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.4.0/platter-0.4.0-macos-x86_64.dmg">Intel</a>
+            </span>
             <a data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.4.0/platter-0.4.0-win.zip">⬇ .zip · 4.9 MB</a>
             <span class="lin" data-os-panel="linux">⬇ .tar.gz
               <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/platter-v0.4.0/platter-0.4.0-linux-x86_64.tar.gz">x86_64</a>
@@ -590,7 +617,10 @@
           carries no label — the clock becomes something you hover to read,
           which rather misses the point.</p>
           <span class="show-dl">
-            <a data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.4/worldclock-0.3.4.dmg">⬇ .dmg · 4.4 MB</a>
+            <span class="lin" data-os-panel="mac">⬇ .dmg · 4.5 MB
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.5/worldclock-0.3.5-macos-arm64.dmg">Apple Silicon</a>
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.5/worldclock-0.3.5-macos-x86_64.dmg">Intel</a>
+            </span>
             <a data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.5/worldclock-0.3.5-win.zip">⬇ .zip · 3.8 MB</a>
             <span class="lin" data-os-panel="linux">⬇ .tar.gz
               <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/worldclock-v0.3.5/worldclock-0.3.5-linux-x86_64.tar.gz">x86_64</a>
@@ -610,7 +640,10 @@
           windows, tray, hotkeys, share sheets, screenshots, battery,
           clipboard, Spotlight. If you want to know what a call does, press it.</p>
           <span class="show-dl">
-            <a data-os-panel="mac" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/kitchen-sink-v0.18.0/kitchen-sink-0.18.0.dmg">⬇ .dmg · 5.6 MB</a>
+            <span class="lin" data-os-panel="mac">⬇ .dmg · 5.6 MB
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/kitchen-sink-v0.18.0/kitchen-sink-0.18.0.dmg">Apple Silicon</a>
+              <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/kitchen-sink-v0.18.0/kitchen-sink-0.18.0-macos-x86_64.dmg">Intel</a>
+            </span>
             <a data-os-panel="win" href="https://github.com/tarwin/tinyjsapp-examples/releases/download/kitchen-sink-v0.17.0/kitchen-sink-0.17.0-win.zip">⬇ .zip · 4.9 MB</a>
             <span class="lin" data-os-panel="linux">⬇ .tar.gz
               <a href="https://github.com/tarwin/tinyjsapp-examples/releases/download/kitchen-sink-v0.18.0/kitchen-sink-0.18.0-linux-x86_64.tar.gz">x86_64</a>
@@ -785,7 +818,9 @@ tiny.menu.set([…]);
           launcher with the host's signing tools, so you build on the OS you
           ship for. A three-legged CI matrix covers it in one push — that's
           how tinyjs itself releases macOS, Windows and both Linux
-          architectures from a single tag.</p>
+          architectures from a single tag. One Mac does cover both Mac CPUs:
+          <code>--arch x86_64</code> (or <code>arm64</code>) builds for the
+          other one, and <code>--universal</code> builds one app for both.</p>
         </div>
       </details>
 
@@ -839,7 +874,7 @@ tiny.menu.set([…]);
         <summary>Why ~6 MB and not 1 MB?</summary>
         <div class="ans">
           <p>5.6 MB of it is the txiki.js binary — QuickJS, libuv, sqlite,
-          wasm — and ~380 KB is the launcher that owns the window. Your HTML,
+          wasm — and ~1–2 MB is the launcher that owns the window. Your HTML,
           CSS and JS are the rest. Building the runtime without wasm and
           sqlite would save roughly 2 MB for apps that don't need them; it's a
           measured direction, not a promise.</p>
@@ -851,13 +886,14 @@ tiny.menu.set([…]);
   <div class="mascot"><a href="https://en.wikipedia.org/wiki/Rakali" title="Rakali — the Australian native water rat the mascot is named for"><img src="images/rakali-badge.svg" alt="Rakali, the tinyjs mascot — an Australian native water rat" width="128" height="128" loading="lazy"></a></div>
 
   <footer>
-    <a href="https://github.com/tarwin/tinyjsapp">source</a>
-    <a href="https://github.com/tarwin/tinyjsapp-examples">examples</a>
-    <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
+    <a href="./index.html">home</a>
     <a href="./docs.html">docs</a>
     <a href="./changelog.html">changelog</a>
+    <a href="https://github.com/tarwin/tinyjsapp-examples">examples</a>
+    <a href="https://github.com/tarwin/tinyjsapp/releases">releases</a>
+    <a href="https://github.com/tarwin/tinyjsapp">source</a>
     <a href="https://github.com/tarwin/tinyjsapp#readme">readme</a>
-    <span class="flex">this page: one file, no js frameworks, no external requests</span>
+    <span class="by">By <a href="https://tarwin.art/" target="_blank" rel="noopener">tarwin</a></span>
   </footer>
 </div>
 

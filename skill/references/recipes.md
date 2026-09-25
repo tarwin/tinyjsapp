@@ -57,9 +57,9 @@ Decision table first — audio routing is the most platform-divergent area:
 |---|---|
 | play music / long streams | `<audio>` element (streams from disk/net; never decode whole songs) |
 | game/UI sound effects, pitch/pan per shot | `tiny.audio.sampler` (native mixer on Linux, Web Audio host elsewhere — same API) |
-| EQ / DSP on the app's whole output | `tiny.audio.filters` (native: Linux + macOS 14.2+); Windows: `capabilities().audioFilters === false` → `tiny.audio.pageChain(ctx)` |
+| EQ / DSP on the app's whole output | `tiny.audio.filters` (native: Linux + macOS); Windows: `capabilities().audioFilters === false` → `tiny.audio.pageChain(ctx)` |
 | VU meter / visualizer of what's playing | `tiny.audioTap` (PCM chunks at meter rate; post-filter where a chain is active) |
-| cross-origin stream INTO Web Audio | `audio.crossOrigin='anonymous'; audio.src = tiny.proxyURL(url)` (macOS) |
+| cross-origin stream INTO Web Audio | `audio.crossOrigin='anonymous'; audio.src = tiny.proxyURL(url)` (mac + linux; not Windows) |
 
 - **Linux hard rule: no Web Audio graph into `ctx.destination`** — WebKitGTK
   renders the graph on a normal-priority thread and it crackles on an idle
@@ -70,8 +70,8 @@ Decision table first — audio routing is the most platform-divergent area:
   natively on WebKitGTK — set the element's own volume to 0 on Linux if you
   must route one.
 - WebKitGTK has no native HLS (vendor hls.js) and codec support depends on
-  the user's GStreamer plugins — `tiny.system.requirements(['codecs'])` can
-  prompt what to install.
+  the user's GStreamer plugins — `tiny.system.promptMissing(['media.aac',
+  'media.h264', 'media.mp3'])` puts the install in front of the user.
 - Chromium taps `MediaElementSource` post-volume, WebKit pre — don't use the
   element volume as a mixer knob if you analyze the tap.
 
@@ -99,7 +99,7 @@ Decision table first — audio routing is the most platform-divergent area:
 
 ```jsonc
 { "url": "https://app.example.com",      // the main window IS the site
-  "userAgent": "Mozilla/5.0 … Version/17.4 Safari/605.1.15",
+  "userAgent": "Mozilla/5.0 … Version/17.4 Safari/605.1.15",  // per OS, below
   "api": { "origins": {                  // ← do not skip this, see below
     "https://app.example.com": ["notify", "store.*", "win.*", "app.badge"],
     "file://*": "all"                    // your own bootstrap pages, if any
@@ -139,7 +139,10 @@ What a wrapped site gets that a local-page app never needed:
 
 Other notes:
 - The default webview UA lacks `Version/x Safari/x`; UA-sniffing sites
-  reject it — set a real one. Some SaaS apps feature-detect embedded
+  reject it — set a real one. It REPLACES the UA, and `tiny.system.os()`/
+  `isWindows()`/`isLinux()` read the UA: put a matching UA in each OS block
+  (`"windows": { "userAgent": … }`), or branch on `(await
+  tiny.system.info()).os`. Some SaaS apps feature-detect embedded
   webviews and refuse regardless; nothing to do about that.
 - Cookies/logins persist in the webview's default store per app id.
 - Per-engine caveats worth knowing before you promise a behaviour (a denied

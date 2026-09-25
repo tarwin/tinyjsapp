@@ -19,4 +19,6 @@ demo/
 .DS_Store
 native/tiny_client.h
 
-RELEASE.md
+# the root release checklist only — anchored, since case-insensitive git
+# otherwise also ignores skill/references/release.md (which ships)
+/RELEASE.md

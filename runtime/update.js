@@ -27,6 +27,16 @@ const IS_WIN = tjs.env.OS === 'Windows_NT';
 const IS_LINUX = !IS_WIN && /linux/i.test(globalThis.navigator?.platform ?? '');
 const LINUX_ARCH = /aarch64|arm64/i.test(globalThis.navigator?.platform ?? '') ? 'arm64' : 'x86_64';
 
+// macOS reports navigator.platform "MacIntel" on every Mac, so ask the
+// hardware. hw.optional.arm64 is 1 on Apple Silicon even for a process under
+// Rosetta — an Intel build running there updates to the native arm64 build.
+// Intel Macs don't have the key at all (sysctl fails → x86_64).
+let macArchP = null;
+function macArch() {
+  return (macArchP ??= runCapture(['sysctl', '-n', 'hw.optional.arm64'])
+    .then((r) => (r.ok && r.out.trim() === '1' ? 'arm64' : 'x86_64'), () => 'x86_64'));
+}
+
 function assertSafeUrl(u, what) {
   const s = String(u ?? '');
   if (/^https:\/\//i.test(s)) return;
@@ -159,6 +169,23 @@ export async function checkForUpdate({ url, version }) {
       manifest.sha256 = lin.sha256;
       if (lin.version) latest = lin.version;
       if (manifest.linux.notes) manifest.notes = manifest.linux.notes;
+    } else {
+      return { available: false, current: version, latest,
+               notes: manifest?.notes ?? null, manifest };
+    }
+  }
+  // macOS per-arch builds (`tinyjs publish --arch …`): "mac": { "arm64":
+  // { url, sha256 }, "x86_64": … }. The top-level url/sha256 stays the arm64
+  // (or universal) build for apps that predate the block. With a block
+  // present, take this Mac's entry or report "no update" — never a build for
+  // the other CPU, which would install and then refuse to open.
+  if (!IS_WIN && !IS_LINUX && manifest?.mac) {
+    const m = manifest.mac[await macArch()];
+    if (m?.url && m.sha256) {
+      manifest.url = m.url;
+      manifest.sha256 = m.sha256;
+      if (m.version) latest = m.version;
+      if (m.notes) manifest.notes = m.notes;
     } else {
       return { available: false, current: version, latest,
                notes: manifest?.notes ?? null, manifest };

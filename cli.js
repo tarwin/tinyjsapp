@@ -515,6 +515,7 @@ const app = await createApp({
   onClipboardChange: appMod.onClipboardChange,
   onUpdateAvailable: appMod.onUpdateAvailable,
   onAudioTap: appMod.onAudioTap,
+  onLocale: appMod.onLocale,
   onNavigate: appMod.onNavigate,
   onDownload: appMod.onDownload,
   onWindowOpen: appMod.onWindowOpen,
@@ -719,18 +720,22 @@ async function ensureLauncherFresh() {
     const m = await mtime(TOOL_DIR + src);
     if (m !== null && (built === null || m > built)) stale = true;
   }
-  // `build --universal` needs both slices; a checkout's launcher has only
-  // this Mac's, so rebuild it fat (setup.sh honours TINYJS_UNIVERSAL=1).
-  const wantFat = UNIVERSAL && !(await hasMacArchs(exe));
-  if (!stale && !wantFat) return;
-  console.log('==> ' + (stale ? 'launcher sources changed' : 'universal build needs an arm64 + x86_64 launcher') +
+  // `build --arch` / `--universal` may need a slice a checkout's host-only
+  // launcher lacks, so rebuild it fat (setup.sh honours TINYJS_UNIVERSAL=1).
+  // Once fat, a rebuild for changed sources stays fat — otherwise the next
+  // cross-arch build would rebuild both slices all over again.
+  const have = IS_WIN || IS_LINUX ? [] : await macArchsOf(exe);
+  const wantArch = MAC_NEED.some((a) => !have.includes(a));
+  const fat = wantArch || have.length > 1;
+  if (!stale && !wantArch) return;
+  console.log('==> ' + (stale ? 'launcher sources changed' : 'this build needs an arm64 + x86_64 launcher') +
               ' — rebuilding (' + (IS_WIN ? 'setup.ps1' : 'setup.sh') + ')');
   if (IS_WIN) {
     await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
                '-File', TOOL_DIR + 'setup.ps1', '-SkipPath'], { cwd: TOOL_DIR });
   } else {
     await run(['sh', TOOL_DIR + 'setup.sh'],
-              { cwd: TOOL_DIR, env: UNIVERSAL ? { ...tjs.env, TINYJS_UNIVERSAL: '1' } : tjs.env });
+              { cwd: TOOL_DIR, env: fat ? { ...tjs.env, TINYJS_UNIVERSAL: '1' } : tjs.env });
   }
 }
 
@@ -835,7 +840,7 @@ async function makeDmg(cfg, APP) {
   await tjs.makeDir(STAGE, { recursive: true });
   await run(['cp', '-R', APP, STAGE + '/']);
   await run(['ln', '-s', '/Applications', STAGE + '/Applications']);
-  const dmg = 'dist/' + cfg.name + '-' + (cfg.version || '0.0.0') + '.dmg';
+  const dmg = 'dist/' + cfg.name + '-' + (cfg.version || '0.0.0') + MAC_SUFFIX + '.dmg';
   await run(['hdiutil', 'create', '-volname', cfg.title, '-srcfolder', STAGE,
              '-ov', '-quiet', '-format', 'UDZO', dmg]);
   console.log('    ' + dmg);
@@ -905,8 +910,24 @@ async function cmdBuild() {
   const cwd = tjs.cwd;
 
   console.log('==> compiling backend');
+  // Per-arch builds share dist/: keep this version's per-arch dmgs across the
+  // wipe, so `build --arch arm64 --dmg` then `--arch x86_64 --dmg` (each
+  // notarized in between) ends with both installers side by side — and the
+  // `publish --arch` runs after them (which rebuild) don't eat the notarized
+  // ones. A new --dmg for the same arch simply overwrites its own.
+  const keptDmgs = [];
+  if (MAC_SUFFIX) {
+    for (const a of MAC_ARCHS) {
+      const f = `${cfg.name}-${cfg.version || '0.0.0'}-macos-${a}.dmg`;
+      if (await exists('dist/' + f)) {
+        await tjs.rename('dist/' + f, '.build/' + f);
+        keptDmgs.push(f);
+      }
+    }
+  }
   await rmTree('dist');
   await tjs.makeDir('dist');
+  for (const f of keptDmgs) await tjs.rename('.build/' + f, 'dist/' + f);
   // `tjs app compile` runs from the parent of the app/ dir and bundles the
   // whole module graph into a standalone executable.
   let compiler = tjs.exePath;
@@ -1020,12 +1041,9 @@ async function cmdBuild() {
   // The launcher IS the bundle executable ("bundle mode"): it owns the window,
   // receives Apple Events (deep links, file opens, single-instance activation),
   // and spawns the backend (tjs) itself.
-  if (UNIVERSAL && !(await hasMacArchs(TOOL_DIR + 'native/launcher-macos'))) {
-    fail('--universal: the launcher lacks an arm64 or x86_64 slice — rebuild it with ' +
-         '`TINYJS_UNIVERSAL=1 sh setup.sh` in ' + TOOL_DIR);
-  }
-  await run(['cp', TOOL_DIR + 'native/launcher-macos', APP + '/Contents/MacOS/' + cfg.name]);
-  await run(['cp', UNIVERSAL ? await universalTjs() : tjs.exePath, APP + '/Contents/MacOS/tjs']);
+  // --arch / --universal pick the slices both executables carry (see MAC_TARGET).
+  await run(['cp', await macLauncher(), APP + '/Contents/MacOS/' + cfg.name]);
+  await run(['cp', await macTjs(), APP + '/Contents/MacOS/tjs']);
   await run(['cp', '-R', '.build/app', APP + '/Contents/Resources/app']);
   // App icon: icon.png in the project root (1024×1024; the template ships a
   // default) becomes AppIcon.icns via sips + iconutil.
@@ -1227,9 +1245,12 @@ async function cmdBuild() {
 `));
     sigFlags.push('--entitlements', ENT);
   }
+  // Inside-out: tjs before the bundle executable, since codesign refuses a
+  // main executable whose nested code is unsigned — and a lipo'd or freshly
+  // downloaded tjs arrives with no usable signature.
   for (const bin of ['dist/launcher',
-                     APP + '/Contents/MacOS/' + cfg.name,
                      APP + '/Contents/MacOS/tjs',
+                     APP + '/Contents/MacOS/' + cfg.name,
                      APP]) {
     // Keychain errors (locked keychain, missing key) matter with a real
     // identity, so only silence stderr for the ad-hoc path.
@@ -1252,87 +1273,144 @@ async function cmdBuild() {
   console.log(`run it:  ./dist/${cfg.name}   (or open "${APP}")`);
 }
 
-// Which Macs can open the .app: the launcher AND tjs both need the CPU's
-// slice. The stock tjs is host-arch only (and so is a source-built launcher),
-// so a bundle built on Apple Silicon is refused on Intel with "not supported
-// on this type of Mac" — and nothing at build time said so (issue #2).
-// `file` rather than `lipo`: it ships with macOS, lipo needs the CLT.
-async function reportMacArchs(cfg, APP) {
-  const archsOf = async (p) =>
-    [...new Set((await capture(['file', '-b', p])).match(/\b(?:arm64|x86_64)\b/g) ?? [])];
-  const exe = await archsOf(APP + '/Contents/MacOS/' + cfg.name);
-  const rt = await archsOf(APP + '/Contents/MacOS/tjs');
-  if (!exe.length || !rt.length) return; // couldn't tell — don't guess
-  const runsOn = exe.filter((a) => rt.includes(a));
-  const label = { arm64: 'Apple Silicon', x86_64: 'Intel' };
-  console.log('==> runs on: ' + (runsOn.map((a) => `${label[a]} (${a})`).join(', ') || 'nothing — no common architecture'));
-  const missing = ['arm64', 'x86_64'].filter((a) => !runsOn.includes(a));
-  for (const a of missing) {
-    const lacking = [!exe.includes(a) && 'launcher', !rt.includes(a) && 'tjs'].filter(Boolean).join(' and ');
-    console.log(`note: won't open on ${label[a]} Macs — the ${lacking} ${lacking.includes(' and ') ? 'have' : 'has'} no ${a} slice`);
-  }
-}
-
-// `build --universal` (or TINYJS_UNIVERSAL=1): an .app that opens on Apple
-// Silicon AND Intel. Both bundle executables need both slices. The launcher
-// gets them from setup.sh (release installs already ship it fat); tjs is
-// the host's txiki.js, which is single-arch, so the other arch's build of
-// the SAME txiki release is fetched and lipo'd onto it. The bare
-// dist/<name> binary stays host-only (it's a local convenience, not the
+// ---- macOS target architecture ---------------------------------------------
+// An .app opens on a Mac only if BOTH bundle executables (the launcher and
+// tjs) carry that Mac's CPU slice. The host tjs is single-arch, so by default
+// a build targets this Mac only. Two opt-ins, from any Mac:
+//   --arch arm64|x86_64  (or TINYJS_ARCH) — a separate app per CPU. The
+//                        other arch's tjs comes from the SAME txiki release,
+//                        cached in ~/Library/Caches/tinyjs. dmg/zip names
+//                        gain -macos-<arch> so both fit in one release, and
+//                        publish merges them into one manifest.
+//   --universal          (or TINYJS_UNIVERSAL=1) — one app with both slices,
+//                        lipo'd together (lipo needs the Command Line Tools).
+// The bare dist/<name> binary stays host-only (a local convenience, not the
 // thing that ships). macOS only: Windows is x86_64 and Linux is per-arch.
-const UNIVERSAL = !IS_WIN && !IS_LINUX &&
-  ['build', 'publish'].includes(cmd) &&
-  (args.includes('--universal') || tjs.env.TINYJS_UNIVERSAL === '1');
 const MAC_ARCHS = ['arm64', 'x86_64'];
-if ((IS_WIN || IS_LINUX) && args.includes('--universal')) {
-  console.log('tinyjs: --universal only applies to macOS builds — ignoring it here');
+const MAC_LABEL = { arm64: 'Apple Silicon', x86_64: 'Intel' };
+const MAC_TARGET = (() => {
+  if (!['build', 'publish', 'notarize'].includes(cmd)) return null;
+  const ai = args.indexOf('--arch');
+  if (IS_WIN || IS_LINUX) {
+    if (ai >= 0 || args.includes('--universal'))
+      console.log('tinyjs: --arch / --universal only apply to macOS builds — ignoring them here');
+    return null;
+  }
+  const raw = String((ai >= 0 ? args[ai + 1] : tjs.env.TINYJS_ARCH) ?? '').toLowerCase();
+  const universal = args.includes('--universal') || tjs.env.TINYJS_UNIVERSAL === '1';
+  if (!raw) return universal ? 'universal' : null;
+  const arch = { arm64: 'arm64', aarch64: 'arm64', x86_64: 'x86_64', x64: 'x86_64',
+                 amd64: 'x86_64', intel: 'x86_64', universal: 'universal' }[raw];
+  if (!arch) fail(`--arch ${raw}: expected arm64, x86_64 or universal`);
+  if (universal && arch !== 'universal') fail('--arch and --universal are exclusive — pick one');
+  return arch;
+})();
+const UNIVERSAL = MAC_TARGET === 'universal';
+// Per-arch artifacts are named <name>-<ver>-macos-<arch>.{dmg,zip}; default
+// and universal builds keep the historical <name>-<ver>.{dmg,zip}.
+const MAC_SUFFIX = MAC_ARCHS.includes(MAC_TARGET) ? '-macos-' + MAC_TARGET : '';
+// The slices a macOS build needs from the launcher and tjs ([] = host default).
+const MAC_NEED = UNIVERSAL ? MAC_ARCHS : MAC_SUFFIX ? [MAC_TARGET] : [];
+
+// Architectures of a Mach-O, via `file` (ships with macOS; lipo needs the
+// CLT, and only the paths that actually merge or thin binaries require it).
+async function macArchsOf(p) {
+  if (!(await exists(p))) return [];
+  return [...new Set((await capture(['file', '-b', p])).match(/\b(?:arm64|x86_64)\b/g) ?? [])];
 }
 
-// lipo is in the Command Line Tools, not base macOS — fine for this opt-in
-// path, but say what's missing rather than failing on an empty answer.
-async function macArchs(p) {
-  const out = (await capture(['lipo', '-archs', p])).trim();
-  if (!out) fail('could not read architectures of ' + p + ' — --universal needs lipo (xcode-select --install)');
-  return out.split(/\s+/);
-}
-async function hasMacArchs(p) {
-  if (!(await exists(p))) return false;
-  const have = await macArchs(p);
-  return MAC_ARCHS.every((a) => have.includes(a));
+// /usr/bin/lipo is a shim that pops the "install the Command Line Tools"
+// dialog when they're missing, so ask xcode-select (silent) before using it.
+let haveLipoP = null;
+const haveLipo = () => (haveLipoP ??= tryRun(['xcode-select', '-p']));
+async function needLipo(why) {
+  if (!(await haveLipo())) fail(why + ' needs lipo — install the Command Line Tools (xcode-select --install)');
 }
 
-async function universalTjs() {
-  const have = await macArchs(tjs.exePath);
-  if (MAC_ARCHS.every((a) => have.includes(a))) return tjs.exePath;
-  // Same URL setup.sh and release.yml download the host tjs from, cached
-  // per version so repeat builds stay offline.
+// txiki.js for one arch, downloaded from the same release URL setup.sh and
+// release.yml use, cached per version so repeat builds stay offline.
+async function fetchTxiki(arch) {
   const ver = 'v' + tjs.version;
   const cache = tjs.env.HOME + '/Library/Caches/tinyjs/txiki-' + ver;
-  const slices = [tjs.exePath];
-  for (const a of MAC_ARCHS.filter((x) => !have.includes(x))) {
-    const exe = `${cache}/tjs-${a}`;
-    if (!(await exists(exe))) {
-      console.log(`==> downloading txiki.js ${ver} (${a}) for a universal tjs`);
-      await tjs.makeDir(cache, { recursive: true });
-      const zip = `${cache}/txiki-macos-${a}.zip`;
-      await run(['curl', '-fSsL', '-o', zip,
-                 `https://github.com/saghul/txiki.js/releases/download/${ver}/txiki-macos-${a}.zip`]);
-      await run(['unzip', '-q', '-o', zip, '-d', cache]);
-      // mv last: the cached exe only exists once it's complete.
-      await run(['mv', `${cache}/txiki-macos-${a}/tjs`, exe]);
-      await run(['rm', '-rf', zip, `${cache}/txiki-macos-${a}`]);
-    }
-    if (!(await macArchs(exe)).includes(a)) fail(`${exe} is not an ${a} binary — delete it and rebuild`);
-    slices.push(exe);
+  const exe = `${cache}/tjs-${arch}`;
+  if (!(await exists(exe))) {
+    console.log(`==> downloading txiki.js ${ver} (${arch})`);
+    await tjs.makeDir(cache, { recursive: true });
+    const zip = `${cache}/txiki-macos-${arch}.zip`;
+    await run(['curl', '-fSsL', '-o', zip,
+               `https://github.com/saghul/txiki.js/releases/download/${ver}/txiki-macos-${arch}.zip`]);
+    await run(['unzip', '-q', '-o', zip, '-d', cache]);
+    // mv last: the cached exe only exists once it's complete.
+    await run(['mv', `${cache}/txiki-macos-${arch}/tjs`, exe]);
+    await run(['rm', '-rf', zip, `${cache}/txiki-macos-${arch}`]);
   }
+  if (!(await macArchsOf(exe)).includes(arch)) fail(`${exe} is not an ${arch} binary — delete it and rebuild`);
+  return exe;
+}
+
+// The tjs to bundle for MAC_TARGET.
+async function macTjs() {
+  if (!MAC_NEED.length) return tjs.exePath;
+  const have = await macArchsOf(tjs.exePath);
+  if (!UNIVERSAL) {
+    const [arch] = MAC_NEED;
+    if (have.length === 1 && have[0] === arch) return tjs.exePath;
+    if (!have.includes(arch)) return fetchTxiki(arch);
+    // A fat host tjs that has the slice: thin it when lipo is around,
+    // otherwise the fat copy runs fine, it's just bigger.
+    const out = '.build/tjs-' + arch;
+    return (await haveLipo()) && (await tryRun(['lipo', tjs.exePath, '-thin', arch, '-output', out]))
+      ? out : tjs.exePath;
+  }
+  if (MAC_ARCHS.every((a) => have.includes(a))) return tjs.exePath;
+  await needLipo('--universal');
+  const slices = [tjs.exePath];
+  for (const a of MAC_ARCHS.filter((x) => !have.includes(x))) slices.push(await fetchTxiki(a));
   const out = '.build/tjs-universal';
   await run(['lipo', '-create', ...slices, '-output', out]);
-  // lipo drops the slices' signatures. The bundle signing below does the
-  // launcher before tjs, and codesign refuses a main executable whose nested
-  // code is unsigned — so ad-hoc sign it now (a real identity re-signs it).
-  await run(['codesign', '--force', '--sign', '-', out], { stdout: 'ignore', stderr: 'ignore' });
-  console.log('==> universal tjs: ' + (await macArchs(out)).join(' + '));
+  console.log('==> universal tjs: ' + (await macArchsOf(out)).join(' + '));
   return out;
+}
+
+// The launcher to bundle for MAC_TARGET. Release installs ship it universal;
+// a source checkout's is rebuilt with both slices by ensureLauncherFresh()
+// when a build asks for one it lacks.
+async function macLauncher() {
+  const src = TOOL_DIR + 'native/launcher-macos';
+  if (!MAC_NEED.length) return src;
+  const have = await macArchsOf(src);
+  const missing = MAC_NEED.filter((a) => !have.includes(a));
+  if (missing.length) {
+    fail(`the launcher has no ${missing.join(' / ')} slice — rebuild it with ` +
+         '`TINYJS_UNIVERSAL=1 sh setup.sh` in ' + TOOL_DIR);
+  }
+  if (UNIVERSAL || have.length === 1) return src;
+  // Per-arch build from a universal launcher: keep only the slice this app
+  // runs (halves it). Without lipo the fat launcher works just as well.
+  const out = '.build/launcher-' + MAC_TARGET;
+  return (await haveLipo()) && (await tryRun(['lipo', src, '-thin', MAC_TARGET, '-output', out]))
+    ? out : src;
+}
+
+// Which Macs can open the .app: the launcher AND tjs both need the CPU's
+// slice, and a bundle built on Apple Silicon without --arch / --universal is
+// refused on Intel with "not supported on this type of Mac" (issue #2).
+async function reportMacArchs(cfg, APP) {
+  const exe = await macArchsOf(APP + '/Contents/MacOS/' + cfg.name);
+  const rt = await macArchsOf(APP + '/Contents/MacOS/tjs');
+  if (!exe.length || !rt.length) return; // couldn't tell — don't guess
+  const runsOn = exe.filter((a) => rt.includes(a));
+  console.log('==> runs on: ' + (runsOn.map((a) => `${MAC_LABEL[a]} (${a})`).join(', ') || 'nothing — no common architecture'));
+  if (runsOn.length === 1 && runsOn[0] === 'x86_64') {
+    // Intel-only still opens on Apple Silicon, translated.
+    console.log('    Apple Silicon Macs run it under Rosetta 2');
+    return;
+  }
+  if (!runsOn.includes('x86_64') && MAC_TARGET !== 'arm64') {
+    const lacking = [!exe.includes('x86_64') && 'the launcher', !rt.includes('x86_64') && 'tjs'].filter(Boolean).join(' and ');
+    console.log(`note: won't open on Intel Macs — ${lacking} ${lacking.includes(' and ') ? 'have' : 'has'} no x86_64 slice.`);
+    console.log('      Build an Intel copy with --arch x86_64, or one app for both with --universal.');
+  }
 }
 
 // Submit dist/<Title>.app to Apple notarization and staple the ticket.
@@ -1382,7 +1460,7 @@ async function cmdNotarize() {
   // time contains the pre-staple bundle (no ticket), which offline Gatekeeper
   // rejects — so refresh it whenever --dmg is passed, or whenever one already
   // exists on disk (from `build --dmg`), since that copy is guaranteed stale.
-  const dmg = 'dist/' + cfg.name + '-' + (cfg.version || '0.0.0') + '.dmg';
+  const dmg = 'dist/' + cfg.name + '-' + (cfg.version || '0.0.0') + MAC_SUFFIX + '.dmg';
   if (args.includes('--dmg') || (await exists(dmg))) await makeDmg(cfg, APP);
   console.log('==> done: ' + APP + ' is notarized');
 }
@@ -1399,16 +1477,33 @@ async function cmdPublish() {
   const cfg = await loadConfig();
   const version = cfg.version;
   if (!version) fail('tinyjs.json needs a "version" to publish (e.g. "1.0.0")');
+  const PUB = 'dist/publish';
+  // Per-arch macOS publishes accumulate: `publish --arch arm64` then
+  // `publish --arch x86_64` leaves both zips and ONE manifest carrying both.
+  // The build wipes dist/, so park the previous output outside it meanwhile
+  // (a stash left by a failed build is picked up the same way).
+  const KEEP = '.publish-prev';
+  if (MAC_SUFFIX && (await exists(PUB))) {
+    await rmTree(KEEP);
+    await tjs.rename(PUB, KEEP);
+  }
   await cmdBuild();
+  let prev = null;
+  if (MAC_SUFFIX && (await exists(KEEP))) {
+    try { prev = JSON.parse(dec.decode(await tjs.readFile(KEEP + '/manifest.json'))); } catch {}
+    // Another version's leftovers don't belong in this release.
+    if (prev?.version === version) await tjs.rename(KEEP, PUB);
+    else prev = null;
+    await rmTree(KEEP);
+  }
 
   // Windows zips are suffixed -win, Linux tarballs -linux-<arch>; the
   // manifest carries them in "win" / "linux" blocks alongside the macOS
   // url/sha256, so one manifest serves every OS.
   const linuxArch = IS_LINUX ? (/aarch64|arm64/i.test(globalThis.navigator?.platform ?? '') ? 'arm64' : 'x86_64') : '';
   const zipName = cfg.name + '-' + version +
-    (IS_WIN ? '-win.zip' : IS_LINUX ? '-linux-' + linuxArch + '.tar.gz' : '.zip');
-  const PUB = 'dist/publish';
-  await rmTree(PUB);
+    (IS_WIN ? '-win.zip' : IS_LINUX ? '-linux-' + linuxArch + '.tar.gz' : MAC_SUFFIX + '.zip');
+  if (!prev) await rmTree(PUB);
   console.log('==> packing ' + zipName);
   if (IS_LINUX) {
     // Stage dist/ under a named folder so the tarball's one top-level entry
@@ -1443,10 +1538,17 @@ async function cmdPublish() {
     ? { version, win: { url: zipUrl, sha256: sha } }
     : IS_LINUX
     ? { version, linux: { [linuxArch]: { url: zipUrl, sha256: sha } } }
+    : MAC_SUFFIX
+    // Per-arch mac builds go in a "mac" block keyed by arch. The top-level
+    // url/sha256 is what apps from before that block read, and every one of
+    // those is Apple Silicon (or universal) — so the arm64 build fills it.
+    ? { ...prev, version,
+        mac: { ...prev?.mac, [MAC_TARGET]: { url: zipUrl, sha256: sha } },
+        ...(MAC_TARGET === 'arm64' ? { url: zipUrl, sha256: sha } : {}) }
     : { version, url: zipUrl, sha256: sha };
   // Publishing several platforms? Merge this manifest's fields into your
-  // hosted one — mac owns url/sha256, Windows the win block, Linux the
-  // per-arch linux block; they coexist.
+  // hosted one — mac owns url/sha256 (+ the per-arch mac block), Windows the
+  // win block, Linux the per-arch linux block; they coexist.
   // Release notes for the in-app update prompt: --notes "text" or
   // --notes-file CHANGES.md (fed to update.check() as `notes`).
   const ni = args.findIndex((a) => a === '--notes' || a === '--notes-file');
@@ -1458,7 +1560,13 @@ async function cmdPublish() {
   await tjs.writeFile(PUB + '/manifest.json', enc.encode(JSON.stringify(manifest, null, 2) + '\n'));
 
   console.log('==> dist/publish/ ready:');
+  for (const z of Object.values(manifest.mac ?? {}).map((m) => m.url.replace(/.*\//, '')).filter((z) => z !== zipName))
+    console.log('    ' + z + '   (kept from the earlier --arch publish)');
   console.log('    ' + zipName);
+  if (MAC_SUFFIX && !manifest.mac.arm64) {
+    console.log('note: no arm64 build in this manifest yet — apps built before per-arch');
+    console.log('      manifests only read the top-level url; publish --arch arm64 too.');
+  }
   console.log('    manifest.json (version ' + version + ', url ' + zipUrl + ')');
   if (!base) {
     console.log('note: no "update": { "url": … } in tinyjs.json — the manifest url is a');
@@ -1486,9 +1594,10 @@ function warnIfIntelMac() {
   // nothing, stay quiet rather than false-alarm an Apple Silicon user.
   if (!model || /^Apple /.test(model)) return;
   console.log('tinyjs: heads-up — tinyjs targets Apple Silicon (M1 and later).');
-  console.log('        This looks like an Intel Mac; apps you build here will');
-  console.log('        not launch on Apple Silicon Macs, and some features are');
-  console.log('        untested. Continuing anyway.\n');
+  console.log('        This looks like an Intel Mac; apps you build here are');
+  console.log('        Intel-only (Apple Silicon runs them under Rosetta) unless');
+  console.log('        you pass --arch arm64 or --universal, and some features');
+  console.log('        are untested. Continuing anyway.\n');
 }
 if (['new', 'dev', 'build', 'publish', 'notarize'].includes(cmd)) warnIfIntelMac();
 
@@ -1510,12 +1619,15 @@ usage:
                         scaffolds create-vite + tinyjs overlay instead
   tinyjs dev          run the app in the current directory
   tinyjs build        build dist/<name> and dist/<Name>.app (--dmg: also a disk image;
-                      --universal: macOS .app for Apple Silicon + Intel)
-  tinyjs publish      build + zip the .app + auto-update manifest (takes --universal)
+                      --arch arm64|x86_64: macOS .app for that CPU, from any Mac;
+                      --universal: one macOS .app for Apple Silicon + Intel)
+  tinyjs publish      build + zip the .app + auto-update manifest (takes --arch /
+                      --universal; run once per --arch, the manifest merges both)
                       (--notes "text" | --notes-file FILE → manifest notes)
   tinyjs notarize     submit dist/<Name>.app to Apple notarization + staple
                       (--dmg: also rebuild dist/<name>-<version>.dmg from the
-                      stapled .app; auto-rebuilt if a dmg already exists)
+                      stapled .app; auto-rebuilt if a dmg already exists;
+                      after a build --arch, pass the same --arch)
   tinyjs update       update the tinyjs CLI itself (--check: only report)
   tinyjs uninstall    remove ~/.tinyjs and the PATH symlink (--yes: no prompt)
   tinyjs version      print version`);

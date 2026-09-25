@@ -2203,3 +2203,20 @@ hanging on a peer that already gave up.
       loud; a normal desktop run is unaffected. Note the check is
       deliberately permissive — if the UOI_FLAGS query itself fails we
       proceed rather than block a working desktop.
+
+## macOS per-arch builds (`--arch x86_64`) — never run on a real Intel Mac (2026-09-24)
+
+Built on Apple Silicon only. An `--arch x86_64` .app (thin launcher +
+txiki's x86_64 tjs) was launched under Rosetta: launcher and tjs both ran
+translated and stayed up. `update.js`'s `mac` block choice was checked with
+a mocked fetch, natively and under Rosetta (both pick arm64, by design —
+`hw.optional.arm64` is 1 on Apple Silicon even for translated processes).
+Still owed, on an actual Intel Mac:
+
+- [ ] an `--arch x86_64` notarized dmg opens and runs (window, menus, a
+      bridge call)
+- [ ] a `--universal` .app opens and runs
+- [ ] `sysctl -n hw.optional.arm64` fails / prints 0 there, so the updater
+      picks `mac.x86_64` — an update from one Intel build to the next
+      installs and relaunches
+- [ ] a Shelf install on Intel pulls the `-macos-x86_64.dmg`
