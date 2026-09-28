@@ -930,6 +930,25 @@ function makeStore(appId) {
   };
 }
 
+// Single-instance rendezvous path (built apps, Windows/Linux). The name must
+// be derivable — a second launch has to FIND the first instance — so a random
+// component is not an option here (unlike the dev socket). With
+// XDG_RUNTIME_DIR missing, the old /tmp fallback put that fixed name in a
+// world-writable directory: a pre-placed socket made the app hand over and
+// exit (local DoS), and the default-umask socket let any local user connect
+// and feed activate/paths/url lines. Fall back to a per-user cache dir
+// instead — created 0700 — which keeps the name derivable while staying out
+// of reach of other local users. Last resort (no HOME either): tmpDir as
+// before, still chmod'd.
+async function instPipePath(id) {
+  if (IS_WIN) return '\\\\.\\pipe\\tinyjs-app-' + (id || 'tinyjs-app');
+  if (tjs.env.XDG_RUNTIME_DIR) return tjs.env.XDG_RUNTIME_DIR + '/tinyjs-app-' + (id || 'tinyjs-app') + '.sock';
+  const dir = (tjs.env.XDG_CACHE_HOME || (tjs.env.HOME ?? tjs.tmpDir) + '/.cache') + '/tinyjs';
+  await tjs.makeDir(dir, { recursive: true, mode: 0o700 }).catch(() => {});
+  await tjs.chmod(dir, 0o700).catch(() => {}); // makeDir mode loses to the umask
+  return dir + '/tinyjs-app-' + (id || 'tinyjs-app') + '.sock';
+}
+
 export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, onNavigate, onDownload, onWindowOpen, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null, downloads = null, popups = null, apiAccess = null, inject = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
 
@@ -2889,9 +2908,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   // over it, starting the app first when needed. A second direct launch of
   // the exe detects the pipe, activates the running instance, and exits.
   if ((IS_WIN || IS_LINUX) && (await bundlePath())) {
-    const instPipe = IS_WIN
-      ? '\\\\.\\pipe\\tinyjs-app-' + (id || 'tinyjs-app')
-      : (tjs.env.XDG_RUNTIME_DIR || tjs.tmpDir) + '/tinyjs-app-' + (id || 'tinyjs-app') + '.sock';
+    const instPipe = await instPipePath(id);
     let haveInstancePipe = false;
     try {
       const conn = await tjs.connect('pipe', instPipe);
@@ -2911,6 +2928,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
       const srv = await tjs.listen('pipe', instPipe);
       const srvInfo = await srv.opened;
       haveInstancePipe = true;
+      // Defense in depth: the 0700 dir is the real boundary, but the socket
+      // itself shouldn't be connectable by other local users either.
+      if (!IS_WIN) await tjs.chmod(instPipe, 0o600).catch(() => {});
       (async () => {
         const acceptReader = srvInfo.readable.getReader();
         for (;;) {
