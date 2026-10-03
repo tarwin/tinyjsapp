@@ -241,8 +241,10 @@ export function onWindowOpen(info, app) {
   // 'deny'; 'window' only works if "popups": "window" (the webview has to be
   // returned synchronously). kind 'open' reports the outcome.
 }
-// api handlers also get meta.origin — the calling frame's origin, engine-
-// attested, the same value the "api" origins gate keys off:
+// api handlers also get meta.origin — the same value the "api" origins
+// gate keys off, stamped by the launcher from the engine, never the page.
+// macOS and Windows report the calling frame; Linux reports the window's
+// MAIN-frame origin (WebKitGTK can't say which frame sent it):
 export const api = { save: async (p, app, meta) => meta.origin };
 ```
 
