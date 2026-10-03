@@ -207,6 +207,19 @@ async function maybeNotifyUpdate() {
   } catch {}
 }
 
+// SHA-256 pins for the installer scripts served at https://tinyjs.app/install
+// and /install.ps1 — built from docs/install(.ps1) at the release tag.
+// `tinyjs update` downloads the script to a file and verifies it against the
+// pin BEFORE running it: a pipe straight into sh/iex would let a compromised
+// tinyjs.app execute whatever it wants on every self-update. Bump both pins
+// whenever docs/install(.ps1) changes; until then updates refuse, with the
+// downloaded copy kept for review and the site's one-liner as the escape
+// hatch.
+const INSTALLER_SHA256 = {
+  posix: '3cd86702916ed1e8c46232466ec7809f862a5f0fa8adb73f5e2b23b7cb1ebebf',
+  win: '3c8738152204a626e4d8c566d7d9f125678df8b45a7a8e6613136683909b7ea1',
+};
+
 async function cmdUpdate() {
   const current = await toolVersion();
   if (current === 'dev') {
@@ -225,13 +238,32 @@ async function cmdUpdate() {
   }
   console.log(`==> updating ${current} → ${latest}`);
   // The installer re-resolves "latest", verifies checksums, and swaps the
-  // install dir (~/.tinyjs / %LOCALAPPDATA%\tinyjs, or $TINYJS_HOME) in place.
-  if (IS_WIN) {
-    await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-               '-Command', 'irm https://tinyjs.app/install.ps1 | iex']);
-  } else {
-    await run(['sh', '-c', 'curl -fsSL https://tinyjs.app/install | sh']);
+  // install dir (~/.tinyjs / %LOCALAPPDATA%\tinyjs, or $TINYJS_HOME) in
+  // place. Downloaded to a file and hash-pinned before it runs.
+  const script = await fetchCapped(IS_WIN ? 'https://tinyjs.app/install.ps1' : 'https://tinyjs.app/install',
+    'tinyjs-update', { timeout: 15000, cap: 1024 * 1024 });
+  if (!script) fail('could not download the installer — run the one-liner from https://tinyjs.app to update');
+  const tmp = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-update-XXXXXX');
+  const scriptPath = tmp + (IS_WIN ? '\\install.ps1' : '/install.sh');
+  await tjs.writeFile(scriptPath, script);
+  const got = await sha256File(scriptPath);
+  const pin = IS_WIN ? INSTALLER_SHA256.win : INSTALLER_SHA256.posix;
+  if (got !== pin) {
+    const keep = tjs.tmpDir + '/tinyjs-install-' + latest + (IS_WIN ? '.ps1' : '.sh');
+    await tjs.rename(scriptPath, keep).catch(() => {});
+    await tjs.remove(tmp, { recursive: true }).catch(() => {});
+    console.log(`the installer changed since this tinyjs was released — not executing it.`);
+    console.log(`  downloaded sha256: ${got}`);
+    console.log(`  kept for review at: ${keep}`);
+    console.log(`if you trust https://tinyjs.app right now, run the one-liner from the site manually.`);
+    fail('installer hash does not match the pin');
   }
+  if (IS_WIN) {
+    await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath]);
+  } else {
+    await run(['sh', scriptPath]);
+  }
+  await tjs.remove(tmp, { recursive: true }).catch(() => {});
   tjs.exit(0);
 }
 
