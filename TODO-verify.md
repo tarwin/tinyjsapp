@@ -2898,9 +2898,29 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
     still work, and the page's own gated call is still denied.
   - With the seq check disabled for one run, the writer guard alone dropped
     both lines ("dropped a wire line with a raw line break").
-- [ ] **Linux, same** — **not compiled on Linux.** Run the probe page.
-  Also click through an ordinary app (kitchen-sink) to confirm normal calls,
-  menus and dialogs still work.
+- [x] **Linux, same** — compiles clean (no warnings). *(2026-10-03,
+  headless, `tinyjs dev` with `TINYJS_DEBUG=1`. A scratch app wraps
+  `http://127.0.0.1:8765/<probe>` with `"file://*": "all"` and the page
+  origin gated to `["ping"]`, and its `onMenu` writes the id to a file. The
+  maintainer's `forge.html` is macOS-shaped, and on Linux it's dropped at
+  the missing `|` before and after the fix, so it proves nothing here. A
+  Linux variant posts `<__TINY_TOK>|<seq>:<payload>` with the real token
+  and puts the forged `MENU` + `CALL q [store.set …, "file://"]` in the
+  seq, with colons `:`-escaped since the first `:` ends the seq. It
+  sends LF, CRLF and bare-CR variants, plus a bare `abc` seq.)*
+  - **Before** (launcher built from 4340c98): LF and CRLF both got past the
+    gate. `onMenu` fired, and `forged-lf`/`forged-crlf` landed in the
+    store under `file://`. `CALL main:abc` reached the backend. Bare CR
+    arrived as a single junk line (the bridge splits on LF only).
+  - **After:** none of the probe's messages reached the backend. No
+    `forged` keys, no `onMenu`, no `<< MENU`/`<< CALL q`/`main:abc`. The
+    page's own `store.set` was still `denied`, and `ping` → `RET 0 "pong"`.
+  - With the seq check stripped for one run, the writer guard alone dropped
+    all three forged lines (LF, CRLF, CR). `main:abc` got through there,
+    as expected.
+  - kitchen-sink startup: 22 CALLs, 22 `RET … 0`, nothing dropped.
+  - [ ] Hand click-through of kitchen-sink menus and dialogs — not done
+    (headless session).
 - [x] **Windows, same** — compiles clean (MinGW g++ 16.1). *(2026-10-04,
   a probe app gated `"file://*": [ping, log, store.*, win.*]` with
   `"https://trusted.example": "all"`. The probe forges a `CALL` for the
