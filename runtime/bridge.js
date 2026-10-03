@@ -769,7 +769,33 @@ const isAbs = (p) => p.startsWith('/') || /^[A-Za-z]:[\\/]/.test(p);
 if (IS_WIN && !tjs.env.HOME) tjs.env.HOME = tjs.homeDir;
 
 function dbg(dir, line) {
-  if (DEBUG) console.log(dir, line.length > 160 ? line.slice(0, 160) + '…' : line);
+  if (!DEBUG) return;
+  line = redact(line);
+  console.log(dir, line.length > 160 ? line.slice(0, 160) + '…' : line);
+}
+
+// The trace goes to stderr, which ends up in terminals, CI logs and bug
+// reports — so clipboard contents and keychain values never reach it (#30).
+// Ops that carry them print as `OP <id> [redacted]`; their answers (GOT for
+// the bridge's own reads, RET for a page's call) are matched by id and
+// redacted too. Only the built-in channels are known here: an app's own
+// method that ships a token is its business.
+const quietIds = new Set();
+const QUIET_CALL = /\\?"method\\?"\s*:\s*\\?"(secrets|clip)\./;
+function redact(line) {
+  const sp = line.indexOf(' ');
+  const op = sp < 0 ? line : line.slice(0, sp);
+  const rest = sp < 0 ? '' : line.slice(sp + 1);
+  const id = rest.slice(0, (rest + ' ').indexOf(' '));
+  const hide = () => op + (id ? ' ' + id : '') + ' [redacted]';
+  switch (op.replace(/@.*/, '')) {
+    case 'CLIPWRITE': case 'CLIPCHANGE': return op + ' [redacted]';
+    case 'SECRET': quietIds.add(id); return hide();
+    case 'GET': if (/ clipboard$/.test(line)) quietIds.add(id); return line;
+    case 'CALL': if (!QUIET_CALL.test(rest)) return line; quietIds.add(id); return hide();
+    case 'GOT': case 'RET': return quietIds.delete(id) ? hide() : line;
+    default: return line;
+  }
 }
 
 // Dialogs run in the launcher, which answers the page's call directly.

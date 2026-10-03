@@ -2681,3 +2681,20 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   wire (`GET 1 screens`, …). **After (3 runs):** it still connects, reads 0
   bytes and is hung up (109); the app comes up normally each time, menus and
   backend calls work, `tinyjs dev` too, and the instance pipe is still locked.
+
+## #30 hardening (`fix/30-hardening`, 2026-10-02)
+
+- [x] **macOS, `TINYJS_DEBUG` trace redaction (#30.7)** — the `>>`/`<<`
+  trace no longer prints clipboard contents or keychain values. `SECRET`,
+  `CLIPWRITE` and `CLIPCHANGE` print as `OP <id> [redacted]`, and so do a
+  page's `secrets.*`/`clip.*` CALLs. Their answers (`GOT` for a `GET
+  clipboard` or `SECRET`, `RET` for the page call) are matched by id and
+  redacted too. *(2026-10-02: `TINYJS_DEBUG=1 tinyjs dev` with a page doing
+  secrets set/get/delete plus a clipboard read: all 15 related lines show
+  `[redacted]`, and the value appears only where the probe itself wrote it
+  into `tiny.store`. A node test of `redact()` covered the same lines,
+  `clipboard:count` left visible, and no ids left over.)*
+- [ ] **Windows, same** — the code is shared JS, but check that the CALL
+  framing matches: run with `TINYJS_DEBUG=1`, call `tiny.app.secrets.set/get`
+  from the page, and confirm the value never shows on stderr.
+- [ ] **Linux, same.**
