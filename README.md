@@ -1333,7 +1333,12 @@ Silicon and Intel builds? Run `tinyjs publish --arch arm64` then
 `tinyjs publish --arch x86_64`: the second run keeps the first's zip and
 merges both into one manifest (a `"mac": { "arm64": …, "x86_64": … }` block,
 with the arm64 build also in the top-level `url` for apps that predate the
-block). Each installed app downloads the build for its own Mac. In the app:
+block). Each installed app downloads the build for its own Mac. **Windows
+signing:** when the built exe is Authenticode-signed, `tinyjs publish`
+records the signing certificate's SHA-256 in the manifest (`"win": {
+"signer": … }`) — installed apps then refuse an update whose exe doesn't
+carry exactly that signature, before anything is swapped. An unsigned build
+just omits the field and falls back to the https + sha256 anchor. In the app:
 
 ```js
 const { available, latest, notes } = await tiny.api.call('update.check');

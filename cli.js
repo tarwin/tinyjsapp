@@ -2087,11 +2087,29 @@ async function cmdPublish() {
   }
   const sha = await sha256File(PUB + '/' + zipName);
 
+  // When the built exe is Authenticode-signed, record the signing
+  // certificate's SHA-256 (of the DER) as "win"."signer" — shipped apps then
+  // refuse an update whose exe doesn't carry exactly that signature
+  // (runtime/update.js checks it before the swap). Same expression as the
+  // runtime check, so the two sides always agree on the algorithm.
+  let signer = null;
+  if (IS_WIN) {
+    const exe = 'dist/' + cfg.name + '.exe';
+    const ps = "$s = Get-AuthenticodeSignature -LiteralPath '" + exe.replace(/'/g, "''") +
+               "'; if ($s.Status -ne 'Valid' -or -not $s.SignerCertificate) { exit 1 }; " +
+               "[BitConverter]::ToString([Security.Cryptography.SHA256]::Create()" +
+               ".ComputeHash($s.SignerCertificate.RawData)).Replace('-','').ToLower()";
+    const r = await runCapture(['powershell', '-NoProfile', '-NonInteractive', '-Command', ps]);
+    if (r.ok && r.out.trim()) signer = r.out.trim().toLowerCase();
+    else console.log('note: ' + exe + ' is not Authenticode-signed — the manifest carries no signer pin;');
+    if (!r.ok || !r.out.trim()) console.log('       updates for this app fall back to https + sha256.');
+  }
+
   // Zips live next to the manifest, so derive the download url from update.url.
   const base = cfg.update?.url ? cfg.update.url.replace(/\/[^/]*$/, '') : null;
   const zipUrl = (base ?? 'https://YOUR-HOST/updates') + '/' + zipName;
   const manifest = IS_WIN
-    ? { version, win: { url: zipUrl, sha256: sha } }
+    ? { version, win: { url: zipUrl, sha256: sha, ...(signer ? { signer } : {}) } }
     : IS_LINUX
     ? { version, linux: { [linuxArch]: { url: zipUrl, sha256: sha } } }
     : MAC_SUFFIX

@@ -20,7 +20,10 @@
 // code signature must verify, and when the running app is signed with a real
 // identity, the update's Team ID must match (ad-hoc builds have no identity
 // to pin, so the https+sha256 manifest is their only anchor — use a real
-// Developer ID for anything security-sensitive).
+// Developer ID for anything security-sensitive). Windows mirrors the Team-ID
+// pin through the manifest: a signed build's `tinyjs publish` records the
+// signing certificate's SHA-256 as "win"."signer", and an update whose exe
+// doesn't carry exactly that Authenticode signature refuses to install.
 
 const dec = new TextDecoder();
 const IS_WIN = tjs.env.OS === 'Windows_NT';
@@ -203,6 +206,22 @@ export async function checkForUpdate({ url, version }) {
 // Downloads, verifies, swaps the bundle. Returns the bundle path on success;
 // the caller is expected to relaunch() + quit. Throws with a human-readable
 // reason on any failure (the running app is untouched or rolled back).
+// The SHA-256 of an Authenticode-signed exe's signing certificate (the DER
+// bytes, hex). Both sides of the pin — `tinyjs publish` writing the manifest
+// and this check — run the same expression, so they agree on the algorithm.
+// Runs through the launcher's --run, the same way tar does: a GUI-subsystem
+// app must not flash a PowerShell window.
+async function winSignerThumbprint(exePath) {
+  const ps = "$s = Get-AuthenticodeSignature -LiteralPath '" +
+             exePath.replace(/'/g, "''") +
+             "'; if ($s.Status -ne 'Valid' -or -not $s.SignerCertificate) { exit 1 }; " +
+             "[BitConverter]::ToString([Security.Cryptography.SHA256]::Create()" +
+             ".ComputeHash($s.SignerCertificate.RawData)).Replace('-','').ToLower()";
+  const launcher = (await bundlePath()) + '\\launcher.exe';
+  const r = await runCapture([launcher, '--run', 'powershell', '-NoProfile', '-NonInteractive', '-Command', ps]);
+  return r.ok ? r.out.trim().toLowerCase() || null : null;
+}
+
 export async function installUpdate({ url, version, manifest }) {
   const bundle = await bundlePath();
   if (!bundle) {
@@ -277,8 +296,22 @@ export async function installUpdate({ url, version, manifest }) {
         }
       }
     }
-    // (Windows has no codesign equivalent here; the https + sha256 manifest
-    // is the trust anchor.)
+    // Windows: when the manifest pins a signer ("win": { "signer": "…" } —
+    // the SHA-256 of the signing certificate's DER, written by `tinyjs
+    // publish` from a signed build), the freshly extracted exe must carry
+    // exactly that Authenticode signature. Checked before the swap, so a
+    // download that lost its signature or was re-signed by someone else is
+    // refused while the running app is untouched. Without the field — an
+    // unsigned app, or a manifest from before this existed — the https +
+    // sha256 manifest stays the only anchor, the same fail-open posture
+    // ad-hoc macOS builds have.
+    if (IS_WIN && manifest.win?.signer) {
+      const signed = await winSignerThumbprint(newApp + '\\' + EXE_NAME);
+      if (signed !== String(manifest.win.signer).toLowerCase()) {
+        throw new Error('update is not signed with the expected certificate' +
+                        (signed ? '' : ' (or is unsigned)') + ' — refusing to install');
+      }
+    }
 
     if (IS_WIN) {
       // Windows cannot rename a directory that contains a running exe, but a
