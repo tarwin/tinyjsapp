@@ -2747,9 +2747,10 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   - A `crossorigin` `<audio>` through the proxy loads (2 s) and plays from
     the app page. My analyser read zero samples, but the v0.46.0 launcher
     reads zero in the same rig, so that's the rig, not the change.
-- [ ] **macOS, by ear** — an app that plays internet radio through
-  `tiny.proxyURL` with an EQ or analyser still sounds and moves the meter,
-  in both `tinyjs dev` and a built `.app`.
+- [x] **macOS, by ear** — an app that plays internet radio through
+  `tiny.proxyURL` with an EQ or analyser still sounds and moves the meter.
+  *(2026-10-02: amp's internet radio confirmed working by the user on this
+  branch's macOS launcher.)*
 - [ ] **Linux, `tiny-media://` proxy gated (#30.1)** — same rule as macOS
   in `media_scheme_cb`. **Built on macOS only, never compiled on Linux**,
   so build it first. Run `test/proxy-gate/` (README there): `app` should
