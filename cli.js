@@ -2232,7 +2232,8 @@ usage:
                       (--dmg: also rebuild dist/<name>-<version>.dmg from the
                       stapled .app; auto-rebuilt if a dmg already exists;
                       after a build --arch, pass the same --arch)
-  tinyjs update       update the tinyjs CLI itself (--check: only report)
+  tinyjs update       update the tinyjs CLI itself (--check: only report,
+                      --dry-run: print what it would run)
   tinyjs uninstall    remove ~/.tinyjs and the PATH symlink (--yes: no prompt)
   tinyjs version      print version`);
     tjs.exit(cmd ? 1 : 0);

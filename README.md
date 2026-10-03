@@ -26,8 +26,9 @@ curl -fsSL https://tinyjs.app/install | sh
 
 The same script now handles Linux too (it detects the OS). Installs to
 `~/.tinyjs` and symlinks `tinyjs` onto your PATH. Pin a version with
-`TINYJS_VERSION=vX.Y.Z`. Later, `tinyjs update` re-runs the installer if a
-newer release exists (`tinyjs update --check` only reports); `tinyjs dev`
+`TINYJS_VERSION=vX.Y.Z`. Later, `tinyjs update` runs the copy of the
+installer that came with your install if a newer release exists (`--check`
+only reports, `--dry-run` shows what it would run); `tinyjs dev`
 also mentions new releases, checking at most once a day. Linux needs the
 system WebKitGTK runtime: `sudo apt install libwebkit2gtk-4.1-0` on
 Debian/Ubuntu, `sudo zypper install libwebkit2gtk-4_1-0` on openSUSE.
@@ -61,7 +62,7 @@ irm https://tinyjs.app/install.ps1 | iex
 Installs prebuilt binaries to `%LOCALAPPDATA%\tinyjs` (override with
 `TINYJS_HOME`; pin with `TINYJS_VERSION`) and adds it to your user PATH —
 open a new terminal afterwards. Needs only the WebView2 runtime
-(preinstalled on Windows 11). `tinyjs update` re-runs the installer.
+(preinstalled on Windows 11). `tinyjs update` runs the installer's bundled copy.
 (Requires a release that ships Windows assets — the first one after Windows
 support merged; the installer says so plainly against older releases.)
 
