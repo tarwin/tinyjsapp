@@ -2919,8 +2919,8 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
     all three forged lines (LF, CRLF, CR). `main:abc` got through there,
     as expected.
   - kitchen-sink startup: 22 CALLs, 22 `RET … 0`, nothing dropped.
-  - [ ] Hand click-through of kitchen-sink menus and dialogs — not done
-    (headless session).
+  - [x] Hand click-through of kitchen-sink menus and dialogs. *(2026-10-03:
+    confirmed by the user.)*
 - [x] **Windows, same** — compiles clean (MinGW g++ 16.1). *(2026-10-04,
   a probe app gated `"file://*": [ping, log, store.*, win.*]` with
   `"https://trusted.example": "all"`. The probe forges a `CALL` for the
