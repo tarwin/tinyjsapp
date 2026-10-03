@@ -28,7 +28,9 @@ Expected:
   appears.
 - With `external`: the OS is asked to open both URLs. With these made-up
   schemes, macOS shows "There is no application set to open the URL…"
-  twice; Cancel them.
+  twice; Cancel them. On Linux nothing visible happens (GIO finds no
+  handler and fails silently) — to see the launch, register a throwaway
+  `x-scheme-handler/tinyjstest-b` handler with `xdg-mime default`.
 
 Windows: before #30.2, WebView2 showed its own "open this app?" prompt for
 these. Now it shouldn't show one at all.

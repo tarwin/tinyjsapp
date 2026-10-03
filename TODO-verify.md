@@ -2800,11 +2800,19 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
     schemes.
   - Regression: a main-frame `https://example.com/` is still asked with
     `isMainFrame: true` and default-allowed.
-- [ ] **Linux, same (#30.2)** — **not compiled on Linux.** The ask
-  happens at the NAVIGATION_ACTION stage (other schemes never reach
-  RESPONSE). Run `test/other-scheme/`; `isMainFrame` should be `null`.
-  Also check that ordinary navigation and the http(s) policy ask still
-  work (the frame flag was added to those NAVQs too).
+- [x] **Linux, same (#30.2)** — the ask happens at the NAVIGATION_ACTION
+  stage (other schemes never reach RESPONSE). *(2026-10-03: compiled
+  cleanly via `tinyjs dev`'s auto-rebuild; ran `test/other-scheme/`.)*
+  - With no verdict, `deny` and `allow`: both URLs were logged with
+    `isMainFrame` `null`, the page stayed on its `file://` href.
+  - `external`: nothing visible with the made-up schemes (GIO has no
+    handler and fails silently). With a throwaway user-level
+    `x-scheme-handler/tinyjstest-b` handler registered, `external`
+    launched it with `tinyjstest-b://main`; no-verdict and `deny` did not.
+    Handler removed afterwards.
+  - Regression: a main-frame `https://example.com/` is asked with
+    `isMainFrame: true`, default-allowed, and start/commit/finish NAV
+    events still arrive.
 - [ ] **Windows, same (#30.2)** — **not compiled on Windows.** Uses
   `ICoreWebView2_18::LaunchingExternalUriScheme`: cancel, ask, and
   ShellExecute on `external`. Run `test/other-scheme/`. With no verdict,
