@@ -2726,8 +2726,19 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   only the `bin\tjs.exe` that was running the update. Windows won't delete a
   running exe, so the installer's best-effort removal skips it, and the next
   update's `Remove-Item $old` clears it.)*
-- [ ] **Linux, same** (the same `sh` installer as macOS; check
+- [x] **Linux, same** (the same `sh` installer as macOS; check
   `--dry-run` plus one real run with a scratch HOME).
+  *(2026-10-03, Ubuntu ARM VM: the v0.46.0 linux-arm64 tarball unpacked to
+  scratch, with this branch's cli.js and `docs/install` as `install`
+  overlaid, VERSION set to 0.45.0, plus a marker file. Run under `env -i`
+  with a scratch HOME and `PATH=/usr/bin:/bin`. `--dry-run` printed the
+  local installer, TINYJS_HOME and v0.46.0. The real run used the bundled
+  installer (no tinyjs.app fallback line), downloaded and verified
+  checksums, and swapped the dir: marker gone, VERSION v0.46.0, the new tjs
+  reported "tinyjs v0.46.0", and the symlink landed in the scratch
+  `~/.local/bin`. No `/tmp/tinyjs-update-*` or `/tmp/tmp.*` was left. The
+  real `~/.tinyjs` and `~/.local/bin/tinyjs` were untouched (VERSION and
+  full-iso listings identical before and after).)*
 - [ ] **After the next release:** the published tarballs and zip actually
   contain `install` / `install.ps1` (`tar -tzf … | grep install`).
 - [x] **macOS, `tiny-media://` proxy gated (#30.1)** — the proxy answers
