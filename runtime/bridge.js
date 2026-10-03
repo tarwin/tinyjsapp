@@ -944,14 +944,27 @@ function compileNameGate(spec) {
 // FRAME's origin — stamped onto each CALL by the launcher from WebKit's own
 // frameInfo.securityOrigin, so a hostile page can't spoof it. Keys are origin
 // patterns ('*' wildcards anywhere: "file://*", "https://*.airtable.com");
-// first matching key in manifest order wins. An origin matching NO key gets
+// a wildcard stays inside one path/query-free run of characters, so it can
+// span subdomains but never reach across a path, a query, or another host.
+// First matching key in manifest order wins. An origin matching NO key gets
 // the top-level lists if any, else NOTHING (origins present = deny-by-default
 // for strangers — redirects to unlisted domains shouldn't inherit the keys).
 // All three launchers stamp now (macOS: frameInfo.securityOrigin; Windows:
 // the WebMessageReceived Source; Linux: the webview's main-frame URI —
-// engine-attested but frame-blind, see TODO-site-wrapper.md). A call with
-// no stamp (an older launcher) skips origin scoping and uses the top-level
-// lists.
+// engine-attested but frame-blind, see TODO-site-wrapper.md). Stamps are
+// normalized below to whatever the manifest keys actually name: http(s)
+// stamps become their origin (Linux commits the full URI, so an exact key
+// like "https://x.com" must not miss "https://x.com/page?q=1" — and a
+// wildcard must not match through the query), and every file:// stamp
+// collapses to "file://" (one origin, the way Windows already reports it).
+// A call with no stamp (an older launcher) skips origin scoping and uses the
+// top-level lists.
+function attestedOrigin(raw) {
+  const s = String(raw ?? '');
+  if (/^file:\/\//i.test(s)) return 'file://';
+  if (!/^https?:\/\//i.test(s)) return s;
+  try { return new URL(s).origin; } catch { return s; }
+}
 function compileApiGate(spec) {
   if (!spec) return null;
   const base = compileNameGate(typeof spec === 'string' || Array.isArray(spec)
@@ -959,7 +972,7 @@ function compileApiGate(spec) {
   const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const origins = spec.origins && typeof spec.origins === 'object'
     ? Object.entries(spec.origins).map(([pat, sub]) => ({
-        re: new RegExp('^' + pat.split('*').map(escRe).join('.*') + '$'),
+        re: new RegExp('^' + pat.split('*').map(escRe).join('[^/?#]*') + '$'),
         gate: compileNameGate(sub),
       }))
     : null;
@@ -2836,7 +2849,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
       // are ignored.) Found by review 2026-08-06, before any of this shipped.
       const callArgs = JSON.parse(line.slice(sp + 1));
       const payload = callArgs[0];
-      const origin = callArgs.length > 1 ? callArgs[callArgs.length - 1] : undefined;
+      const origin = attestedOrigin(callArgs.length > 1 ? callArgs[callArgs.length - 1] : undefined);
       const { method, params } = JSON.parse(payload);
 
       // Capability gate FIRST — the dialog and find paths below short-circuit
