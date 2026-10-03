@@ -1,0 +1,7 @@
+<!doctype html><script>
+setTimeout(async () => {
+  let r;
+  try { r = await (await fetch(tiny.proxyURL('http://127.0.0.1:8765/secret.txt'))).text(); } catch (e) { r = 'err ' + e; }
+  await tiny.store.set('wrap', r);
+}, 2000);
+</script>

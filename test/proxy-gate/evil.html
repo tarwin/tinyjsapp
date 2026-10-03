@@ -1,0 +1,9 @@
+<!doctype html><script>
+// a cross-origin frame (http://127.0.0.1:8765) trying the proxy
+const u = 'tiny-media://proxy/?u=' + encodeURIComponent('http://127.0.0.1:8765/secret.txt');
+fetch(u, { mode: 'cors' }).then(r => r.text()).then(t => parent.postMessage('iframe-cors:' + t, '*'), e => parent.postMessage('iframe-cors-err:' + e, '*'));
+fetch(u, { mode: 'no-cors' }).then(r => parent.postMessage('iframe-nocors:' + r.type, '*'), e => parent.postMessage('iframe-nocors-err:' + e, '*'));
+const f = document.createElement('iframe');
+f.src = 'tiny-media://proxy/?u=' + encodeURIComponent('http://127.0.0.1:8765/evil2.html');
+document.body ? document.body.appendChild(f) : addEventListener('DOMContentLoaded', () => document.body.appendChild(f));
+</script>

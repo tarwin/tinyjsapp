@@ -879,9 +879,50 @@ static void enable_features(WebKitSettings* s) {
 
 // tiny-media://proxy/?u=<url> — stream a remote http(s) resource with
 // permissive CORS so cross-origin audio is untainted for Web Audio.
+//
+// Who may use it (#30): the response carries ACAO:*, so whoever can fetch it
+// can read any URL the launcher reaches, CORS bypassed. The requester is the
+// Origin header WebKit stamps on every request whose response a page could
+// read (cors fetch, crossorigin media; pages can't set it), else the
+// window's main-frame origin. It must be trusted for "proxy": the app's own
+// pages, or an "api.origins" key allowing media.proxy (mediaTrustLines).
+// Document loads (Accept: text/html) are refused — a frame navigated to
+// tiny-media://proxy/?u=<its own page> would otherwise run as the proxy's
+// origin and fetch it same-origin with no Origin to check — and every
+// response carries CSP sandbox as a backstop. Request headers need
+// WebKitGTK 2.36; older ones fall back to the main-frame origin alone.
 static SoupSession* g_media_session = nullptr;
 
+static bool media_proxy_allowed(WebKitURISchemeRequest* req) {
+  std::string who, accept;
+#if WEBKIT_CHECK_VERSION(2, 36, 0)
+  if (SoupMessageHeaders* rh = webkit_uri_scheme_request_get_http_headers(req)) {
+    if (const char* o = soup_message_headers_get_one(rh, "Origin")) who = o;
+    if (const char* a = soup_message_headers_get_one(rh, "Accept")) accept = a;
+  }
+#endif
+  if (who.empty()) {
+    WebKitWebView* wv = webkit_uri_scheme_request_get_web_view(req);
+    who = origin_from_uri(wv ? webkit_web_view_get_uri(wv) : nullptr);
+  }
+  bool doc = accept.find("text/html") != std::string::npos;
+  if (doc || !media_trusted("proxy", who)) {
+    fprintf(stderr, "tinyjs: tiny-media proxy refused for %s%s\n", who.c_str(),
+            doc ? " (document load)"
+                : " (not trusted: allow media.proxy in tinyjs.json \"api\".origins)");
+    return false;
+  }
+  return true;
+}
+
 static void media_scheme_cb(WebKitURISchemeRequest* req, gpointer) {
+  if (!media_proxy_allowed(req)) {
+    GError* err = g_error_new_literal(WEBKIT_NETWORK_ERROR, 1,
+        "tiny.proxyURL: this origin may not use the media proxy");
+    webkit_uri_scheme_request_finish_error(req, err);
+    g_error_free(err);
+    return;
+  }
   const char* uri = webkit_uri_scheme_request_get_uri(req);
   std::string upstream;
   if (uri) {
@@ -930,6 +971,7 @@ static void media_scheme_cb(WebKitURISchemeRequest* req, gpointer) {
           ctype && *ctype ? ctype : "application/octet-stream");
       SoupMessageHeaders* rh = soup_message_headers_new(SOUP_MESSAGE_HEADERS_RESPONSE);
       soup_message_headers_append(rh, "Access-Control-Allow-Origin", "*");
+      soup_message_headers_append(rh, "Content-Security-Policy", "sandbox");
       webkit_uri_scheme_response_set_http_headers(resp, rh);
       webkit_uri_scheme_request_finish_with_response(req, resp);
       g_object_unref(resp);

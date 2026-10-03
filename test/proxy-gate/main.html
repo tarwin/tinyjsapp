@@ -1,0 +1,10 @@
+<!doctype html><body><iframe src="http://127.0.0.1:8765/evil.html"></iframe><script>
+const out = {};
+addEventListener('message', (e) => { out[String(e.data).split(':')[0]] = String(e.data); });
+setTimeout(async () => {
+  const u = tiny.proxyURL('http://127.0.0.1:8765/secret.txt');
+  try { out.app = await (await fetch(u)).text(); } catch (e) { out.app = 'err ' + e; }
+  const a = new Audio(); a.crossOrigin = 'anonymous'; a.src = u; a.load();
+  setTimeout(async () => { await tiny.store.set('px', out); }, 2500);
+}, 1500);
+</script>

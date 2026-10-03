@@ -2750,3 +2750,13 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
 - [ ] **macOS, by ear** — an app that plays internet radio through
   `tiny.proxyURL` with an EQ or analyser still sounds and moves the meter,
   in both `tinyjs dev` and a built `.app`.
+- [ ] **Linux, `tiny-media://` proxy gated (#30.1)** — same rule as macOS
+  in `media_scheme_cb`. **Built on macOS only, never compiled on Linux**,
+  so build it first. Run `test/proxy-gate/` (README there): `app` should
+  read the secret, `iframe-cors` should fail, and `nav` should be absent.
+  Then the wrapped-site trio, and one internet-radio app by ear. Also
+  check: does WebKitGTK give the scheme handler an `Origin` header? If the
+  refusal line for the iframe names `file://` instead of
+  `http://127.0.0.1:8765`, it doesn't, and only the main-frame fallback is
+  working. Note which, since that decides whether iframes inside an app
+  page are covered on Linux.
