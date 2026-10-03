@@ -1568,6 +1568,11 @@ async function cmdBuild() {
   await run(['cp', await macLauncher(), APP + '/Contents/MacOS/' + cfg.name]);
   await run(['cp', await macTjs(), APP + '/Contents/MacOS/tjs']);
   await run(['cp', '-R', '.build/app', APP + '/Contents/Resources/app']);
+  // macOS convention: Resources/Credits.html feeds the standard About panel —
+  // the launcher defers to it when present instead of the tinyjs credit (#8).
+  if (await exists('Credits.html')) {
+    await run(['cp', 'Credits.html', APP + '/Contents/Resources/Credits.html']);
+  }
   // App icon: icon.png in the project root (1024×1024; the template ships a
   // default) becomes AppIcon.icns via sips + iconutil.
   let iconKey = '';

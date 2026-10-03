@@ -850,13 +850,17 @@ static const NSInteger kTinyItemDisabled = 1;  // NSMenuItem.tag: app said disab
     sock_write_line("MENU about");
     return;
   }
-  [NSApp orderFrontStandardAboutPanelWithOptions:@{
+  // AppKit shows Resources/Credits.html only when no Credits key is passed
+  // (#8) — defer to a bundled one instead of the tinyjs credit line.
+  NSMutableDictionary *about = [NSMutableDictionary dictionaryWithDictionary:@{
     @"ApplicationName" : ns(g_app_name),
     @"ApplicationVersion" : ns("Version " + g_app_version),
     @"Version" : @"",
-    @"Credits" : [[NSAttributedString alloc]
-        initWithString:@"Made with tinyjs — https://tinyjs.app"],
   }];
+  if (![[NSBundle mainBundle] pathForResource:@"Credits" ofType:@"html"])
+    about[@"Credits"] = [[NSAttributedString alloc]
+        initWithString:@"Made with tinyjs — https://tinyjs.app"];
+  [NSApp orderFrontStandardAboutPanelWithOptions:about];
 }
 - (void)doQuit:(id)sender {
   webview_terminate(g_w);
