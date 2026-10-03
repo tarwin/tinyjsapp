@@ -1944,6 +1944,8 @@ static std::string unescape_lines(const std::string& s) {
   return out;
 }
 
+static std::string downloads_dir();
+
 static void do_dialog(const std::string& callid, const std::string& body) {
   auto f = split_tabs(body);
   std::string op = tab_field(f, 0);
@@ -1965,8 +1967,12 @@ static void do_dialog(const std::string& callid, const std::string& body) {
       gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
       // Field 2 (save): suggested file name (optional).
       std::string name = tab_field(f, 2);
-      if (!name.empty())
+      // A suggested name is the backend's #36 panel; start it in Downloads, as
+      // the other OSes do, not the process cwd GTK falls back to.
+      if (!name.empty()) {
+        gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dlg), downloads_dir().c_str());
         gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg), name.c_str());
+      }
     }
     // Field 1 (open/openmulti/save): comma-separated extensions from the
     // bridge, pre-normalized to lowercase. GTK patterns are case-sensitive,

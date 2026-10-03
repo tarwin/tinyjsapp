@@ -1048,6 +1048,27 @@ function appDataDir(appId) {
   return tjs.homeDir + '/Library/Application Support/' + id;
 }
 
+// Linux XDG user dirs (Downloads, Desktop, Documents) from user-dirs.dirs, the
+// file g_get_user_special_dir reads, so the bridge agrees with the launcher
+// on a localized desktop (~/Téléchargements). Missing keys fall back to
+// ~/<Name>. Only "$HOME/…" and absolute values are valid there.
+async function linuxUserDirs() {
+  const home = tjs.homeDir;
+  const dirs = { DOWNLOAD: home + '/Downloads', DESKTOP: home + '/Desktop', DOCUMENTS: home + '/Documents' };
+  const conf = (tjs.env.XDG_CONFIG_HOME || home + '/.config') + '/user-dirs.dirs';
+  let txt = '';
+  try { txt = new TextDecoder().decode(await tjs.readFile(conf)); } catch {}
+  for (const line of txt.split('\n')) {
+    const m = /^\s*XDG_([A-Z]+)_DIR\s*=\s*"(.*)"\s*$/.exec(line);
+    if (!m || !(m[1] in dirs)) continue;
+    const v = m[2].replace(/^\$HOME(?=\/|$)/, home).replace(/\/+$/, '');
+    // Not home itself (or /): Downloads is a #36 write root for other
+    // origins' PDFs, and a whole-home root would undo that confinement.
+    if (v.startsWith('/') && v !== home) dirs[m[1]] = v;
+  }
+  return dirs;
+}
+
 // Tiny persistent JSON store in the per-app data dir.
 // Flat string keys, JSON values, atomic writes.
 function makeStore(appId) {
@@ -1112,6 +1133,7 @@ function makeStore(appId) {
 
 export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, onNavigate, onDownload, onWindowOpen, chrome = null, update = null, activation = null, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null, downloads = null, popups = null, apiAccess = null, inject = null }) {
   const exeDir = dirOf(tjs.exePath) + '/';
+  const xdgDirs = IS_LINUX ? await linuxUserDirs() : null;
 
   async function exists(p) {
     try {
@@ -1437,7 +1459,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     if (origin !== undefined && ownPageOrigins.has(origin)) return p;
     const fold = (x) => (IS_WIN ? x.toLowerCase() : x);
     const home = IS_WIN ? (tjs.env.USERPROFILE || tjs.homeDir) : tjs.homeDir;
-    const downloads = home + '/Downloads';
+    const downloads = IS_LINUX ? xdgDirs.DOWNLOAD : home + '/Downloads';
     const roots = [downloads, appDataDir(id), tjs.tmpDir];
     if (!IS_WIN) roots.push('/tmp', '/private/tmp');
     if (p && !p.includes('\0') && !(/^[A-Za-z][\w+.-]*:/.test(p) && !/^[A-Za-z]:[\\/]/.test(p))) {
@@ -2213,9 +2235,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
           cache: (tjs.env.XDG_CACHE_HOME || tjs.homeDir + '/.cache') + '/' + (id || 'tinyjs-app'),
           logs: (tjs.env.XDG_STATE_HOME || tjs.homeDir + '/.local/state') + '/' + (id || 'tinyjs-app'),
           temp: tjs.tmpDir,
-          downloads: tjs.homeDir + '/Downloads',
-          desktop: tjs.homeDir + '/Desktop',
-          documents: tjs.homeDir + '/Documents',
+          downloads: xdgDirs.DOWNLOAD,
+          desktop: xdgDirs.DESKTOP,
+          documents: xdgDirs.DOCUMENTS,
         }
       : {
           home: tjs.homeDir,

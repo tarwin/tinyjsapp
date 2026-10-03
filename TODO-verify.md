@@ -2960,10 +2960,38 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   - `probe36.pdf` → `~/Downloads/probe36.pdf`; `/tmp/probe36.pdf` written.
   - `~/Downloads/../probe36-walk.pdf` → panel → cancelled → rejected.
   - An app `file://` page wrote to an arbitrary scratch path as before.
-- [ ] **Linux, same** — **not compiled on Linux** (`reply_to_call` routes
-  `q<digits>` back as GOT; `gtk_file_chooser_set_current_name`). Same
-  four cases plus the own-page one. The panel should show the suggested
-  name.
+- [x] **Linux, same** — compiles clean (`reply_to_call` routes
+  `q<digits>` back as GOT; `gtk_file_chooser_set_current_name`).
+  *(2026-10-03, arm64 VM, a wrapped `http://127.0.0.1:8766` page with
+  `win.*` + `store.*` + `app.keystroke` granted, in `tinyjs dev`,
+  `GDK_BACKEND=x11`. This panel isn't armed by `TINYJS_TEST_AUTODLG`, so
+  the page answered it with the launcher's own XTest `keystroke`.)*
+  - `~/probe36-victim.txt` got a panel and was **not** written (still
+    `ORIGINAL`). Photographed: the panel is transient for the app window,
+    with `probe36-victim.txt` filled in and `*.pdf` as the filter.
+  - Written directly: `probe36.pdf` → `~/Downloads/probe36.pdf`;
+    `/tmp/probe36.pdf`; `~/.local/share/<id>/probe36-data.pdf`.
+  - Panel → Escape → rejected with `"printToPDF: cancelled"`:
+    `~/Downloads/../x`, `../x` (bare relative walk), `file:///home/…`,
+    `/tmp/../home/…`.
+  - Panel → Return wrote the PDF where the panel pointed.
+  - An app `file://` page wrote `~/probe36-own.pdf` directly, as before.
+  - **Found, then FIXED the same day:** the panel opened in the process cwd
+    (the app dir under `tinyjs dev`) because `do_dialog` set no current
+    folder, and the bridge's Downloads root was a hard-coded
+    `$HOME/Downloads` rather than `XDG_DOWNLOAD_DIR` (the Linux twin of the
+    Windows `FOLDERID_Downloads` finding). Now a save with a suggested name
+    starts in the launcher's `downloads_dir()`. The bridge reads
+    `user-dirs.dirs` for the #36 root and for Linux `app.paths`
+    downloads/desktop/documents, ignoring a value of `$HOME` or `/` so the
+    root can never become the whole home. Re-run with `XDG_CONFIG_HOME`
+    pointing at a `user-dirs.dirs` with `XDG_DOWNLOAD_DIR="$HOME/Téléchargements-probe"`:
+    `app.paths.downloads` read that dir, `~/Downloads/x.pdf` now got a panel
+    and was refused, and the panel was photographed opening in
+    `Téléchargements-probe`. The run was stopped before the bare-name case,
+    so **a bare name landing in the XDG dir is not yet seen**.
+  - Page calls reject with the raw string, not an `Error` (`e.message` is
+    undefined). That's the existing convention, not specific to #36.
 - [x] **Windows, same** — compiles clean (MinGW g++ 16.1) (`route_ret` routes
   `q<digits>`; `IFileSaveDialog::SetFileName`). *(2026-10-04, a wrapped
   `http://127.0.0.1:8766` page with `win.*` + `store.*` granted, in
