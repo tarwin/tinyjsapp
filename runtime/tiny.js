@@ -109,7 +109,9 @@
     //   audio.crossOrigin = 'anonymous';
     //   audio.src = tiny.proxyURL('https://example.com/stream.mp3');
     // The native layer does the HTTP (redirects, byte-range/seek), so playback
-    // keeps CoreMedia's buffering/reconnect. http/https upstreams only.
+    // keeps CoreMedia's buffering/reconnect. http/https upstreams only. The
+    // launcher serves it only to the app's own origins and to "api".origins
+    // keys that allow media.proxy (#30).
     proxyURL: (url) => 'tiny-media://proxy/?u=' + encodeURIComponent(String(url)),
 
     // A correct file:// URL for a disk path on BOTH platforms — hand-rolled

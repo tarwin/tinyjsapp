@@ -2720,3 +2720,33 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   `--dry-run` plus one real run with a scratch HOME).
 - [ ] **After the next release:** the published tarballs and zip actually
   contain `install` / `install.ps1` (`tar -tzf … | grep install`).
+- [x] **macOS, `tiny-media://` proxy gated (#30.1)** — the proxy answers
+  with `Access-Control-Allow-Origin: *`, so any page that could fetch it
+  could read any URL, CORS bypassed. Now the requester is the `Origin`
+  header WebKit stamps (or the window's top document when there is none),
+  and it must be trusted for `proxy`: `file://`, the dev server, or an
+  `"api".origins` key that allows `media.proxy`. Document loads
+  (`Accept: text/html`) are refused, and every response carries
+  `Content-Security-Policy: sandbox`. Probe pages in scratch: a `file://`
+  app page, a cross-origin iframe from `http://127.0.0.1:8765`, and that
+  iframe navigating a child to `tiny-media://proxy/?u=<evil2.html>`, which
+  then fetches the proxy same-origin. *(2026-10-02, `tinyjs dev`.)*
+  - **Before:** the iframe's CORS fetch read the secret, and so did the
+    proxied page, which ran as origin `tiny-media://proxy`.
+  - **After:**
+    - The app page still reads it.
+    - The iframe's CORS fetch fails ("refused for http://127.0.0.1:8765").
+    - A no-cors fetch still gets an opaque response.
+    - The document load is refused.
+    - With the document check disabled for one run, the proxied page loaded
+      but its script never ran (CSP sandbox), so that backstop works by
+      itself.
+  - **Wrapped site** (`"url": "http://127.0.0.1:8765/wrap.html"`): refused
+    with no `"api"`, readable with `origins: { "http://127.0.0.1:8765":
+    ["media.proxy", "store.*"] }`, and refused again with `["store.*"]` only.
+  - A `crossorigin` `<audio>` through the proxy loads (2 s) and plays from
+    the app page. My analyser read zero samples, but the v0.46.0 launcher
+    reads zero in the same rig, so that's the rig, not the change.
+- [ ] **macOS, by ear** — an app that plays internet radio through
+  `tiny.proxyURL` with an EQ or analyser still sounds and moves the meter,
+  in both `tinyjs dev` and a built `.app`.

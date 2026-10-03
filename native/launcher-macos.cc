@@ -2421,6 +2421,21 @@ static std::string media_origin_str(WKSecurityOrigin *so) {
   return o;
 }
 
+// Same spelling for a plain URL (the tiny-media proxy's fallback requester):
+// file:// for file URLs, scheme://host[:port] otherwise, "null" when absent.
+static std::string url_origin_str(NSURL *u) {
+  NSString *sch = u.scheme.lowercaseString;
+  if (!sch.length) return "null";
+  if ([sch isEqualToString:@"file"]) return "file://";
+  std::string o = std::string(sch.UTF8String) + "://";
+  if (u.host.length) o += u.host.lowercaseString.UTF8String;
+  NSNumber *port = u.port;
+  if (port && !((port.intValue == 80 && [sch isEqualToString:@"http"]) ||
+                (port.intValue == 443 && [sch isEqualToString:@"https"])))
+    o += ":" + std::to_string(port.intValue);
+  return o;
+}
+
 // '*' matches any run of characters, everything else literally — the same
 // globs the bridge's api gate compiles to regexes.
 static bool media_glob(const char *p, const char *s) {
@@ -4768,6 +4783,35 @@ static void install_first_mouse_hook() {
   return (st && [_live containsObject:st]) ? st : nil;
 }
 - (void)webView:(WKWebView *)wv startURLSchemeTask:(id<WKURLSchemeTask>)task {
+  // Who may use it (#30): a proxied response carries ACAO:*, so whoever can
+  // fetch it can read any URL the launcher can reach, CORS bypassed. The
+  // requester's origin is the Origin header WebKit stamps on every request
+  // whose response a page could read (cors fetch, crossorigin media) — pages
+  // can't set it. Without one (no-cors: opaque to a cross-origin frame
+  // anyway) fall back to the window's top document. That origin must be
+  // trusted for "proxy": the app's own pages, or an "api.origins" key
+  // allowing media.proxy (mediaTrustLines). And never serve a DOCUMENT:
+  // a frame navigated to tiny-media://proxy/?u=<its own page> would run as
+  // the proxy's origin and fetch it same-origin, with no Origin header to
+  // check. Navigations ask for text/html; media and fetch send */* (or
+  // whatever the page set, which can't make it a navigation). Every
+  // response also carries CSP sandbox, so a document that slipped through
+  // anyway would get an opaque origin and send Origin: null.
+  {
+    NSString *acc = [task.request valueForHTTPHeaderField:@"Accept"];
+    NSString *org = [task.request valueForHTTPHeaderField:@"Origin"];
+    std::string who = org ? std::string(org.UTF8String)
+                          : url_origin_str(task.request.mainDocumentURL);
+    BOOL doc = acc && [acc rangeOfString:@"text/html"].location != NSNotFound;
+    if (doc || !media_trusted("proxy", who)) {
+      fprintf(stderr, "tinyjs: tiny-media proxy refused for %s%s\n", who.c_str(),
+              doc ? " (document load)" : " (not trusted: allow media.proxy in tinyjs.json \"api\".origins)");
+      [task didFailWithError:[NSError errorWithDomain:@"tinyjs" code:403
+          userInfo:@{NSLocalizedDescriptionKey:
+                     @"tiny.proxyURL: this origin may not use the media proxy"}]];
+      return;
+    }
+  }
   NSURLComponents *c = [NSURLComponents componentsWithURL:task.request.URL
                                   resolvingAgainstBaseURL:NO];
   NSString *upstream = nil;
@@ -4836,6 +4880,7 @@ didReceiveResponse:(NSURLResponse *)response
     for (id k in hr.allHeaderFields) {
       NSString *lk = [[k description] lowercaseString];
       if ([lk hasPrefix:@"access-control-"]) continue;
+      if ([lk hasPrefix:@"content-security-policy"]) continue;
       if (endless && ([lk isEqualToString:@"transfer-encoding"] ||
                       [lk isEqualToString:@"accept-ranges"] ||
                       [lk isEqualToString:@"content-length"] ||
@@ -4850,6 +4895,7 @@ didReceiveResponse:(NSURLResponse *)response
   h[@"Access-Control-Allow-Origin"] = @"*";
   h[@"Access-Control-Allow-Headers"] = @"*";
   h[@"Access-Control-Expose-Headers"] = @"*";
+  h[@"Content-Security-Policy"] = @"sandbox";
   NSHTTPURLResponse *out = [[[NSHTTPURLResponse alloc]
       initWithURL:st.request.URL statusCode:code HTTPVersion:@"HTTP/1.1"
      headerFields:h] autorelease];

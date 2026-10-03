@@ -340,7 +340,8 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
 
 // ── cross-origin stream INTO Web Audio (mac + linux): MediaElementSource on a
 // cross-origin <audio> is silent by spec; proxyURL streams through the
-// native layer with permissive CORS so it's untainted.
+// native layer with permissive CORS so it's untainted. App's own pages only;
+// another origin needs "media.proxy" in its "api".origins key.
 audio.crossOrigin = 'anonymous';
 audio.src = tiny.proxyURL('https://host/stream.mp3');
 

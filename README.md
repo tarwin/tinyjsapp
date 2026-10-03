@@ -448,6 +448,9 @@ const ctx = new AudioContext();
 ctx.createMediaElementSource(audio).connect(ctx.createAnalyser()); // …→ EQ → destination
 audio.play();
 // The native layer does the HTTP (following redirects), http/https only.
+// Only the app's own pages may use it: any other origin (a wrapped site, a
+// third-party iframe) is refused unless its tinyjs.json "api".origins key
+// allows "media.proxy".
 // Live internet radio works too: a non-seekable stream that answers 200 with no
 // Content-Length (icecast/shoutcast) is served to the element with a synthetic
 // large length so CoreMedia plays it progressively and the analyser sees real

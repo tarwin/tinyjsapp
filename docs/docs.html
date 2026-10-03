@@ -716,6 +716,12 @@ const ctx = new AudioContext();
 ctx.createMediaElementSource(audio)
    .connect(ctx.createAnalyser());   <i>// …→ your EQ → ctx.destination</i>
 audio.play();</pre>
+    <p class="note"><b>Your pages only.</b> Since the proxy reads any URL with CORS
+    out of the way, only the app's own pages (and the dev server) may use it. A
+    wrapped site, an iframe from elsewhere, or a page the app navigated to is
+    refused unless its <code>"api"</code> <code>origins</code> key allows the
+    pseudo-method <code>media.proxy</code>; proxied responses are never served
+    as pages.</p>
     <p class="note">The native layer does the HTTP (following redirects), http/https
     only. Live internet radio works too: a non-seekable stream that answers
     <code>200</code> with no <code>Content-Length</code> (icecast/shoutcast) is served
@@ -1410,7 +1416,8 @@ const { text, calls } = await <b>app.macos.ai.generate</b>('Move the window to 2
     frame's origin as the <i>engine</i> reports it, not as the page claims it.
     With <code>origins</code> present, an origin matching no key gets nothing,
     so a redirect to an unlisted domain inherits no access. The same keys
-    decide mic/camera: only an origin whose key allows
+    decide <code>tiny.proxyURL</code> (only an origin whose key allows
+    <code>media.proxy</code> may use it) and mic/camera: only an origin whose key allows
     <code>media.microphone</code> / <code>media.camera</code> skips the
     per-site prompt on macOS or is allowed at all on Linux (presets and
     top-level lists never do; Windows always shows WebView2's own prompt).</p>

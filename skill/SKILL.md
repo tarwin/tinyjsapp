@@ -12,9 +12,10 @@ WebKitGTK 4.1 on Linux (both beta). They talk over a private socket — no
 HTTP server, no ports. The page has no direct system access: everything
 privileged crosses `tiny.api` (which the tinyjs.json `"api"` gate can
 narrow), which is why anything interpolated into `innerHTML` must be
-escaped. Two launcher-side paths skip that crossing: `tiny.proxyURL`'s
-`tiny-media://` proxy (cross-origin http(s) reads, macOS + Linux) and
-mic/camera grants for the origins `"api"` trusts.
+escaped. Two launcher-side paths skip that crossing, both limited to the
+app's own pages and the origins `"api"` trusts: `tiny.proxyURL`'s
+`tiny-media://` proxy (cross-origin http(s) reads, macOS + Linux;
+`media.proxy`) and mic/camera (`media.microphone` / `media.camera`).
 
 Current release: 0.44.0. App floors: macOS 15+ — a default build opens only
 on the build Mac's CPU (`build --arch arm64|x86_64` or `--universal` for the

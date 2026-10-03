@@ -1011,7 +1011,9 @@ function compileApiGate(spec) {
   return fn;
 }
 
-// getUserMedia consent (#24). The launcher grants mic/camera silently only to
+// getUserMedia consent (#24), and the tiny-media proxy (#30, kind "proxy",
+// pseudo-method media.proxy: a proxied response is CORS-open, so the proxy
+// is a read-anything key). The launcher grants mic/camera silently only to
 // the app's own pages (file://, plus the frontend dev server in dev) and to
 // origins the manifest EXPLICITLY trusts: an "api.origins" key whose gate
 // allows the pseudo-method "media.camera" / "media.microphone". Top-level
@@ -1024,13 +1026,13 @@ function compileApiGate(spec) {
 // `tinyjs build` writes the same lines into Info.plist (TinyjsMediaOrigins).
 export function mediaTrustLines(spec, ownOrigins) {
   const lines = [];
-  for (const o of ownOrigins) lines.push('camera ' + o, 'microphone ' + o);
+  for (const o of ownOrigins) lines.push('camera ' + o, 'microphone ' + o, 'proxy ' + o);
   if (spec && typeof spec === 'object' && !Array.isArray(spec) &&
       spec.origins && typeof spec.origins === 'object') {
     for (const [pat, sub] of Object.entries(spec.origins)) {
       if (/\s/.test(pat)) continue; // can't be an origin; would break the wire
       const g = compileNameGate(sub);
-      for (const kind of ['camera', 'microphone'])
+      for (const kind of ['camera', 'microphone', 'proxy'])
         if (!g || g('media.' + kind)) lines.push(kind + ' ' + pat);
     }
   }

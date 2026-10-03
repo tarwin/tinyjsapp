@@ -613,7 +613,9 @@ declare interface Tiny {
    *  spec, but this URL is CORS-approved so the EQ/analyser graph gets real
    *  samples. Set the element's crossOrigin to 'anonymous':
    *    audio.crossOrigin = 'anonymous';
-   *    audio.src = tiny.proxyURL('https://example.com/stream.mp3'); */
+   *    audio.src = tiny.proxyURL('https://example.com/stream.mp3');
+   *  Only the app's own pages may use it; any other origin needs
+   *  "media.proxy" in its tinyjs.json "api".origins key. */
   proxyURL(url: string): string;
 
   /** A correct file:// URL for a disk path on BOTH platforms — use for
