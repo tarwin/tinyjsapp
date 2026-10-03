@@ -208,6 +208,7 @@ async function maybeNotifyUpdate() {
 }
 
 async function cmdUpdate() {
+  const dryRun = args.includes('--dry-run');
   const current = await toolVersion();
   if (current === 'dev') {
     fail('running from a source checkout — update with `git pull` (+ ' +
@@ -223,14 +224,51 @@ async function cmdUpdate() {
     console.log(`${latest} is available (you have ${current}) — run \`tinyjs update\` to install`);
     tjs.exit(0);
   }
-  console.log(`==> updating ${current} → ${latest}`);
-  // The installer re-resolves "latest", verifies checksums, and swaps the
-  // install dir (~/.tinyjs / %LOCALAPPDATA%\tinyjs, or $TINYJS_HOME) in place.
-  if (IS_WIN) {
-    await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-               '-Command', 'irm https://tinyjs.app/install.ps1 | iex']);
-  } else {
-    await run(['sh', '-c', 'curl -fsSL https://tinyjs.app/install | sh']);
+  // Run the installer that shipped WITH this install, not a fresh copy from
+  // tinyjs.app: the website would otherwise be trusted to run code on every
+  // update, on top of GitHub serving the release (#30). It downloads the
+  // pinned tag from GitHub, checks it against the release's checksums.txt,
+  // and swaps the install dir — TINYJS_HOME keeps a custom location where it
+  // is. It runs from a temp copy because the swap deletes (Unix) or moves
+  // (Windows) the directory it would otherwise be running from. Only a
+  // hand-assembled install lacks the copy; that falls back to the website.
+  // Backslashes on Windows: install.ps1 matches TINYJS_HOME against the user
+  // PATH entries verbatim, and a forward-slash spelling would add a second.
+  let installDir = TOOL_DIR.replace(/[\\/]+$/, '');
+  if (IS_WIN) installDir = installDir.replace(/\//g, '\\');
+  const local = TOOL_DIR + (IS_WIN ? 'install.ps1' : 'install');
+  const haveLocal = await exists(local);
+  const env = { ...tjs.env, TINYJS_HOME: installDir, TINYJS_VERSION: latest };
+  console.log(`==> updating ${current} → ${latest} in ${installDir}`);
+  if (dryRun) {
+    console.log(haveLocal
+      ? `    would run the installer shipped with this install: ${local}`
+      : `    no installer in this install — would fall back to ${IS_WIN ? 'https://tinyjs.app/install.ps1' : 'https://tinyjs.app/install'}`);
+    console.log(`    with TINYJS_HOME=${installDir} TINYJS_VERSION=${latest}`);
+    console.log(`    it downloads from https://github.com/${REPO}/releases/tag/${latest} and checks checksums.txt`);
+    tjs.exit(0);
+  }
+  if (!haveLocal) {
+    console.log('    (this install has no bundled installer — using the one on tinyjs.app)');
+    if (IS_WIN) {
+      await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                 '-Command', 'irm https://tinyjs.app/install.ps1 | iex'], { env });
+    } else {
+      await run(['sh', '-c', 'curl -fsSL https://tinyjs.app/install | sh'], { env });
+    }
+    tjs.exit(0);
+  }
+  const tmp = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-update-XXXXXX');
+  const script = tmp + (IS_WIN ? '/install.ps1' : '/install');
+  await copyFile(local, script);
+  try {
+    if (IS_WIN) {
+      await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { env });
+    } else {
+      await run(['sh', script], { env });
+    }
+  } finally {
+    await tjs.remove(tmp, { recursive: true }).catch(() => {});
   }
   tjs.exit(0);
 }

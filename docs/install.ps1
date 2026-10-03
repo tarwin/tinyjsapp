@@ -5,7 +5,7 @@
 # Downloads the latest release (or $env:TINYJS_VERSION = 'vX.Y.Z') into
 # %LOCALAPPDATA%\tinyjs (or $env:TINYJS_HOME) and adds it to your user PATH.
 # Needs the WebView2 runtime (preinstalled on Windows 11) — no git, no
-# compiler. `tinyjs update` re-runs this installer.
+# compiler. Each release ships a copy, and `tinyjs update` runs that one.
 #
 # For local testing: $env:TINYJS_INSTALL_ZIP = path to a release-layout zip
 # skips the download + checksum and installs that file instead.

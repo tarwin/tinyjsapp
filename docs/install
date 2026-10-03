@@ -5,6 +5,8 @@
 #
 # Downloads the latest release (or TINYJS_VERSION=vX.Y.Z) into ~/.tinyjs
 # and symlinks the `tinyjs` CLI onto your PATH.
+# Each release ships a copy, and `tinyjs update` runs that one
+# (with TINYJS_HOME and TINYJS_VERSION set) instead of fetching this again.
 set -e
 
 REPO="tarwin/tinyjsapp"

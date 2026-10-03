@@ -2698,3 +2698,25 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   framing matches: run with `TINYJS_DEBUG=1`, call `tiny.app.secrets.set/get`
   from the page, and confirm the value never shows on stderr.
 - [ ] **Linux, same.**
+- [x] **macOS, `tinyjs update` runs the bundled installer (#30.3)** — each
+  release now ships `install` (or `install.ps1` on Windows) at the top of
+  the package. `tinyjs update` copies it to a temp dir and runs it with
+  `TINYJS_HOME=<this install>` and `TINYJS_VERSION=<latest tag>`, so
+  tinyjs.app is no longer fetched on update. `--dry-run` prints the plan.
+  *(2026-10-02: the v0.46.0 macOS tarball unpacked to scratch, with the new
+  cli.js and `install` overlaid and VERSION set to 0.45.0. `--dry-run`
+  printed the local installer, TINYJS_HOME and the tag. The real run
+  downloaded and verified v0.46.0 and swapped the scratch dir: the marker
+  file was gone, VERSION read v0.46.0, and no temp dir was left. HOME and
+  PATH were scratch, so `/usr/local/bin/tinyjs` was untouched.)*
+- [ ] **Windows, same** — unzip the v0.46.0 Windows zip somewhere, copy in
+  this branch's `cli.js` plus `docs\install.ps1` as `install.ps1`, set
+  `VERSION` to `0.45.0`, then run `tinyjs.cmd update --dry-run` and
+  `tinyjs.cmd update` from there. Check: the folder becomes v0.46.0, no
+  `tinyjs-update-*` is left in `%TEMP%`, and the user PATH gets **one**
+  backslash entry for that folder (the installer adds it, so remove it
+  afterwards).
+- [ ] **Linux, same** (the same `sh` installer as macOS; check
+  `--dry-run` plus one real run with a scratch HOME).
+- [ ] **After the next release:** the published tarballs and zip actually
+  contain `install` / `install.ps1` (`tar -tzf … | grep install`).

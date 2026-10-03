@@ -37,6 +37,8 @@ jobs:
           # tinyjs.cmd serves cmd/PowerShell; the sh wrapper `tinyjs` next to
           # it serves Git Bash (MSYS runs the .exe-less `bin/tjs` as tjs.exe).
           Copy-Item cli.js, tinyjs, tinyjs.cmd, VERSION, README.md, LICENSE "$stage\"
+          # `tinyjs update` runs this copy rather than the website's (#30).
+          Copy-Item docs\install.ps1 "$stage\"
           New-Item -ItemType Directory -Force out | Out-Null
           # Zip the CONTENTS (no wrapper dir): install.ps1 extracts straight
           # into the install dir.
@@ -211,6 +213,8 @@ jobs:
           cp native/launcher-linux "$STAGE/native/"
           cp -R runtime template test skill "$STAGE/"
           cp cli.js tinyjs VERSION README.md LICENSE "$STAGE/"
+          # `tinyjs update` runs this copy rather than the website's (#30).
+          cp docs/install "$STAGE/install"
           tar -czf "out/tinyjs-linux-${{ matrix.arch }}.tar.gz" -C /tmp/stage tinyjs
           gzip -9 -c bin/tjs > "out/tjs-linux-${{ matrix.arch }}.gz"
 
@@ -324,6 +328,8 @@ jobs:
             cp native/launcher-macos native/make-icon.jxa "$STAGE/native/"
             cp -R runtime template test skill "$STAGE/"
             cp cli.js tinyjs VERSION README.md LICENSE "$STAGE/"
+            # `tinyjs update` runs this copy rather than the website's (#30).
+            cp docs/install "$STAGE/install"
 
             tar -czf "out/tinyjs-macos-$ARCH.tar.gz" -C "/tmp/stage-$ARCH" tinyjs
           done
