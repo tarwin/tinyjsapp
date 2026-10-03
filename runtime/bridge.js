@@ -969,8 +969,12 @@ function compileNameGate(spec) {
 // The full gate: (method, origin) -> allowed. "origins" scopes by the CALLING
 // FRAME's origin — stamped onto each CALL by the launcher from WebKit's own
 // frameInfo.securityOrigin, so a hostile page can't spoof it. Keys are origin
-// patterns ('*' wildcards anywhere: "file://*", "https://*.airtable.com");
-// first matching key in manifest order wins. An origin matching NO key gets
+// patterns ('*' wildcards anywhere: "file://*", "https://*.airtable.com").
+// A '*' is an unbounded .* — dots and colons included, whole origin
+// anchored — so "https://*.a.com" is every subdomain at any depth, and a
+// key ending in '*' after the host ("https://a.com*") also matches
+// "https://a.com.evil.net". Intended and documented (docs.html #wrapper).
+// First matching key in manifest order wins. An origin matching NO key gets
 // the top-level lists if any, else NOTHING (origins present = deny-by-default
 // for strangers — redirects to unlisted domains shouldn't inherit the keys).
 // All three launchers stamp now (macOS: frameInfo.securityOrigin; Windows:

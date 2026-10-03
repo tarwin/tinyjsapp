@@ -1419,6 +1419,17 @@ const { text, calls } = await <b>app.macos.ai.generate</b>('Move the window to 2
   "api": { "origins": {
     "https://app.example.com": ["notify", "store.*"],
     "file://*": "all" } } }</pre>
+    <p class="note"><b>Pattern rules.</b> Method names take <code>*</code>
+    (everything) or a <code>prefix.*</code> (<code>store.*</code> covers
+    <code>store.get</code> and anything else under <code>store.</code>). In
+    an origin key, <code>*</code> matches <i>any</i> run of characters,
+    dots and colons included, and the key must match the whole origin
+    (<code>scheme://host[:port]</code>, no path). So
+    <code>https://*.example.com</code> covers every subdomain at any depth,
+    but a key that ends in <code>*</code> after the host —
+    <code>https://app.example.com*</code> — also matches
+    <code>https://app.example.com.evil.com</code>. Write the host out in
+    full, and use a separate key for each port.</p>
     <pre><i>// page — what the gate denies THIS origin, so you can hide the UI</i>
 const { api } = await <b>tiny.system.capabilities</b>();  <i>// { gated, denied: [...] }</i>
 await <b>tiny.win.find</b>('needle', { forward: true, matchCase: false });
@@ -1427,7 +1438,7 @@ await <b>tiny.win.stopFind</b>();</pre>
     <pre><i>// backend (src/main.js) — route links, watch loads, veto navigations</i>
 export function <b>onNavigate</b>(info, app) {
   <i>// kind: 'policy' | 'start' | 'commit' | 'finish' | 'fail' | 'crash'</i>
-  if (info.kind === 'policy' &amp;&amp; !info.url.startsWith('https://app.example.com'))
+  if (info.kind === 'policy' &amp;&amp; new URL(info.url).origin !== 'https://app.example.com')
     return 'external';   <i>// 'deny' | 'external' (hand to the real browser)</i>
 }
 export function <b>onDownload</b>(info, app) { }  <i>// started|progress|done|failed|denied|cancelled</i>
