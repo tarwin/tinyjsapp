@@ -1457,6 +1457,13 @@ export function <b>onWindowOpen</b>(info, app) { }  <i>// 'window' | 'external' 
     request (the only place WebKitGTK can tell a main frame from a subframe is
     the response decision), and on Windows an <i>asked</i> main-frame POST
     re-issues as a GET.</p>
+    <p class="note"><b>Other URL schemes</b> (<code>mailto:</code>,
+    <code>tel:</code>, <code>someapp://</code>…) never load in the webview,
+    from any frame. <code>onNavigate</code> still gets the
+    <code>'policy'</code> call; return <code>'external'</code> to hand the URL
+    to the OS (e.g. open the mail client). Anything else, no handler, or no
+    answer in ~400ms blocks it. <code>isMainFrame</code> is <code>null</code>
+    where the engine can't tell (Linux and Windows).</p>
   </section>
 
   <section id="open">

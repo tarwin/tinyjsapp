@@ -6649,8 +6649,10 @@ static void do_title_win(webview_t, void *arg) { delete static_cast<EvalReq *>(a
 // Wire additions:
 //   launcher -> backend:
 //     NAV {"window","kind","url","error"?}     kind: start|commit|finish|fail|crash
-//     NAVQ <qid> <winid>\t<url>                main-frame http(s) policy ask;
-//                                              unanswered after 400ms = allow
+//     NAVQ <qid> <winid>\t<url>\t<frame>       policy ask, frame main|sub|'' (unknown):
+//                                              main-frame http(s), unanswered after
+//                                              400ms = allow; other schemes in any
+//                                              frame, unanswered = deny (#30)
 //     DOWNLOAD {"id","url","filename","path","state","error"?}
 //     POPUP {"window","url","action"}          action: window|external|deny
 //   backend -> launcher:
@@ -6683,6 +6685,24 @@ static void tiny_nav_event(WKWebView *wv, const char *kind, NSURL *url,
     j += ",\"error\":" + json_escape(d ? d : "");
   }
   sock_write_line("NAV " + j + "}");
+}
+
+// Other URL schemes (#30): mailto:, ms-settings:, someapp://… — anything a
+// page can name that isn't a web document, the app's own file:// pages, or
+// an engine-internal scheme. The webview never handles these (WKWebView
+// would just fail them, and nothing told the app); every frame's attempt is
+// put to onNavigate as a policy ask instead, and only an 'external' verdict
+// hands the URL to the OS. No answer in 400ms, or no backend, is a deny.
+static bool tiny_other_scheme(const std::string &u) {
+  size_t c = u.find(':');
+  if (c == std::string::npos || c == 0) return false;
+  std::string sch = u.substr(0, c);
+  for (auto &ch : sch) ch = (char)tolower((unsigned char)ch);
+  static const char *mine[] = {"http", "https", "file", "about", "data",
+                               "blob", "javascript", "tiny-media"};
+  for (const char *m : mine)
+    if (sch == m) return false;
+  return true;
 }
 
 // Held policy decisions: qid -> block(int verdict). Main thread only (delegate
@@ -6764,6 +6784,30 @@ static void tiny_test_autodlg_arm(); // test hook, defined with the JS dialogs
     decide(WKNavigationActionPolicyCancel);
     return;
   }
+  if (tiny_other_scheme(u)) {
+    if (g_sock < 0) {
+      decide(WKNavigationActionPolicyCancel);
+      return;
+    }
+    std::string qid = "n" + std::to_string(++g_nav_seq);
+    void (^decideCopy)(WKNavigationActionPolicy) = [decide copy];
+    NSURL *ext = [url retain];
+    void (^resolver)(int) = [^(int verdict) {
+      if (verdict == 2 && ext)
+        [[NSWorkspace sharedWorkspace] openURL:ext];
+      decideCopy(WKNavigationActionPolicyCancel);
+      [decideCopy release];
+      [ext release];
+    } copy];
+    g_nav_pending[qid] = (void *)resolver;
+    sock_write_line("NAVQ " + qid + " " + tiny_winid_for_webview(wv) + "\t" + u +
+                    (action.targetFrame.mainFrame ? "\tmain" : "\tsub"));
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(400 * NSEC_PER_MSEC)),
+                   dispatch_get_main_queue(), ^{
+                     tiny_nav_resolve(qid, 1);
+                   });
+    return;
+  }
   // Policy asks cover main-frame http(s) only — file:// pages are the app's
   // own frontend, subframes are the page's business. Unanswered (backend not
   // yet attached, no onNavigate handler answering in time) = allow, so a
@@ -6786,7 +6830,7 @@ static void tiny_test_autodlg_arm(); // test hook, defined with the JS dialogs
     [ext release];
   } copy];
   g_nav_pending[qid] = (void *)resolver;
-  sock_write_line("NAVQ " + qid + " " + tiny_winid_for_webview(wv) + "\t" + u);
+  sock_write_line("NAVQ " + qid + " " + tiny_winid_for_webview(wv) + "\t" + u + "\tmain");
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(400 * NSEC_PER_MSEC)),
                  dispatch_get_main_queue(), ^{
                    tiny_nav_resolve(qid, 0);

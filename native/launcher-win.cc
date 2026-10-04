@@ -5113,7 +5113,9 @@ static void do_winclose(webview_t, void *arg) {
 // launcher-macos.cc section of the same name (which carries the canonical
 // wire doc). Summary:
 //   emit:  NAV {"window","kind","url","error"?}   start|commit|finish|fail|crash
-//          NAVQ <qid> <winid>\t<url>              main-frame http(s) policy ask
+//          NAVQ <qid> <winid>\t<url>\t<frame>     policy ask (frame main|''): main-frame
+//                                                  http(s), or another scheme in any
+//                                                  frame (unanswered = deny, #30)
 //          DOWNLOAD {"id","url","filename","path","state","bytes"?,"total"?,"error"?}
 //          POPUPQ <qid> <pid|->\t<opener>\t<url>\t<mode>
 //          POPUP {"window","url","action"}
@@ -5214,6 +5216,7 @@ struct NavPending {
   std::string win, url;
   UINT_PTR timer = 0;
   bool reload = false; // re-issue with Reload(), not Navigate()
+  bool other = false;  // other URL scheme (#30): only 'external' launches it
 };
 static std::map<std::string, NavPending> g_nav_pending; // qid -> ask
 static std::map<UINT_PTR, std::string> g_nav_timer_qid; // timer -> qid
@@ -5239,6 +5242,12 @@ static void nav_apply_verdict(const std::string &qid, int verdict) {
   if (p.timer) {
     KillTimer(nullptr, p.timer);
     g_nav_timer_qid.erase(p.timer);
+  }
+  if (p.other) { // the launch was cancelled up front; external = do it ourselves
+    if (verdict == 2)
+      ShellExecuteW(nullptr, L"open", widen(p.url).c_str(), nullptr, nullptr,
+                    SW_SHOWNORMAL);
+    return;
   }
   if (verdict == 1) // deny — the cancel already happened
     return;
@@ -5361,7 +5370,43 @@ struct NavStartHandler : public ICoreWebView2NavigationStartingEventHandler {
     g_nav_pending[qid] = {winid, url, t,
                           kind == COREWEBVIEW2_NAVIGATION_KIND_RELOAD};
     g_nav_timer_qid[t] = qid;
-    pipe_write_line("NAVQ " + qid + " " + winid + "\t" + url);
+    pipe_write_line("NAVQ " + qid + " " + winid + "\t" + url + "\tmain");
+    return S_OK;
+  }
+};
+
+// Other URL schemes (#30): mailto:, ms-settings:, someapp://… WebView2 hands
+// these to the OS behind its own "open this app?" prompt — from the main
+// frame, an iframe or a popup alike, and NavigationStarting (http(s)-only
+// asks above) never put them to the app. LaunchingExternalUriScheme sees
+// every one: cancel it up front, so the prompt never shows, and ask
+// onNavigate; only an 'external' verdict launches it, through the shell.
+// No answer in 400ms (the timer's 'allow'), or no backend, is a deny. The
+// frame is unknown here (flag left empty). Runtimes without
+// ICoreWebView2_18 keep WebView2's prompt.
+struct ExtSchemeHandler
+    : public ICoreWebView2LaunchingExternalUriSchemeEventHandler {
+  TINY_COM_BOILERPLATE(ICoreWebView2LaunchingExternalUriSchemeEventHandler)
+  std::string winid;
+  HRESULT STDMETHODCALLTYPE
+  Invoke(ICoreWebView2 *,
+         ICoreWebView2LaunchingExternalUriSchemeEventArgs *args) override {
+    args->put_Cancel(TRUE);
+    LPWSTR u = nullptr;
+    if (FAILED(args->get_Uri(&u)) || !u)
+      return S_OK;
+    std::string url = narrow(u);
+    CoTaskMemFree(u);
+    std::string qid = "n" + std::to_string(++g_nav_seq);
+    UINT_PTR t = SetTimer(nullptr, 0, 400, nav_timer_proc);
+    NavPending p;
+    p.win = winid;
+    p.url = url;
+    p.timer = t;
+    p.other = true;
+    g_nav_pending[qid] = p;
+    g_nav_timer_qid[t] = qid;
+    pipe_write_line("NAVQ " + qid + " " + winid + "\t" + url + "\t");
     return S_OK;
   }
 };
@@ -6105,6 +6150,17 @@ static void install_browser_affordances(ICoreWebView2 *wv,
     h->winid = winid;
     wv->add_NavigationStarting(h, &tok);
     h->Release();
+  }
+  {
+    ICoreWebView2_18 *wv18 = nullptr;
+    if (SUCCEEDED(wv->QueryInterface(IID_ICoreWebView2_18, (void **)&wv18)) &&
+        wv18) {
+      ExtSchemeHandler *h = new ExtSchemeHandler();
+      h->winid = winid;
+      wv18->add_LaunchingExternalUriScheme(h, &tok);
+      h->Release();
+      wv18->Release();
+    }
   }
   {
     ContentLoadingHandler *h = new ContentLoadingHandler();

@@ -1,0 +1,7 @@
+<!doctype html><body><script>
+setTimeout(() => {
+  const f = document.createElement('iframe'); f.src = 'tinyjstest-a://sub'; document.body.appendChild(f);
+  setTimeout(() => { location.href = 'tinyjstest-b://main'; }, 500);
+  setTimeout(() => tiny.store.set('alive', { href: location.href, t: Date.now() }), 2000);
+}, 1500);
+</script>

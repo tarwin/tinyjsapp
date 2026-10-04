@@ -2785,3 +2785,29 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
 - [x] **Windows, regression** — no proxy on Windows (`proxyURL` is
   mac + Linux), but internet radio was re-checked on this branch.
   *(2026-10-04: confirmed working by the user.)*
+- [x] **macOS, other URL schemes reach `onNavigate` (#30.2)** — a
+  navigation to anything other than http(s), file, about, data, blob,
+  javascript or tiny-media, in any frame, is never loaded by the webview.
+  The app gets a `kind: 'policy'` ask (the NAVQ now ends in a
+  `main`/`sub`/empty frame flag); only `'external'` opens it with the OS,
+  and no handler or no answer in 400 ms denies. *(2026-10-04: ran
+  `test/other-scheme/` in `tinyjs dev`.)*
+  - With no verdict, `deny` and `allow`: both URLs were logged with
+    `isMainFrame` `false`/`true`, the page stayed on its `file://` href,
+    and nothing opened.
+  - `external`: macOS was asked to open both, and showed its "no
+    application set to open the URL" dialog for each of the made-up
+    schemes.
+  - Regression: a main-frame `https://example.com/` is still asked with
+    `isMainFrame: true` and default-allowed.
+- [ ] **Linux, same (#30.2)** — **not compiled on Linux.** The ask
+  happens at the NAVIGATION_ACTION stage (other schemes never reach
+  RESPONSE). Run `test/other-scheme/`; `isMainFrame` should be `null`.
+  Also check that ordinary navigation and the http(s) policy ask still
+  work (the frame flag was added to those NAVQs too).
+- [ ] **Windows, same (#30.2)** — **not compiled on Windows.** Uses
+  `ICoreWebView2_18::LaunchingExternalUriScheme`: cancel, ask, and
+  ShellExecute on `external`. Run `test/other-scheme/`. With no verdict,
+  WebView2's own "open this app?" prompt should **not** appear. Then try
+  a real one by hand: a `mailto:` link in a page, refused by default and
+  opening the mail client once `onNavigate` returns `'external'`.

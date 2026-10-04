@@ -1321,13 +1321,17 @@ declare type TinyApiHandler = (
  *  kind 'policy' reaches only the backend hook, for main-frame http(s)
  *  navigations before they run: return 'deny' or 'external' (hand the URL to
  *  the real browser) to stop them; anything else — or answering slower than
- *  ~400ms — allows. The rest narrate the load: start | commit | finish |
- *  fail (with error) | crash (web content process died). */
+ *  ~400ms — allows. It also fires for any other URL scheme (mailto:,
+ *  someapp://…) in ANY frame; the webview never loads those, and only
+ *  'external' hands them to the OS. No answer denies. isMainFrame is null
+ *  where the engine can't tell (other schemes on Linux and Windows). The
+ *  rest narrate the load: start | commit | finish | fail (with error) |
+ *  crash (web content process died). */
 declare interface TinyNavEvent {
   window: string;
   kind: 'policy' | 'start' | 'commit' | 'finish' | 'fail' | 'crash';
   url: string;
-  isMainFrame?: boolean;
+  isMainFrame?: boolean | null;
   error?: string;
 }
 

@@ -229,10 +229,14 @@ caps.api;                             // { gated, denied: [...] } for THIS origi
 export function onNavigate(info, app) {
   // kind: 'policy' | 'start' | 'commit' | 'finish' | 'fail' | 'crash'
   // 'policy' fires for main-frame http(s) BEFORE the navigation runs:
-  if (info.kind === 'policy' && !info.url.startsWith('https://app.example.com'))
+  if (info.kind === 'policy' && /^https?:/.test(info.url) &&
+      new URL(info.url).origin !== 'https://app.example.com')
     return 'external';       // 'deny' | 'external' (open in the real browser)
   // anything else — or answering slower than ~400ms — allows, so a wrapper
-  // can never deadlock its own first load. 'start'/'finish'/'fail' are the
+  // can never deadlock its own first load. Other schemes (mailto:,
+  // someapp://…, any frame) are asked too, but the webview never loads
+  // them: 'external' hands them to the OS, and anything else denies.
+  if (info.kind === 'policy' && info.url.startsWith('mailto:')) return 'external'; 'start'/'finish'/'fail' are the
   // raw material for loading / offline / crashed overlays.
 }
 export function onDownload(info, app) { /* state: started|progress|done|failed|denied|cancelled */ }

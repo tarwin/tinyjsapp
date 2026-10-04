@@ -1572,7 +1572,8 @@ The same page also runs against a built `dist/<name>` or the `.app`'s
   `window.open` (`"popups"`: `external` | `window` | `deny`, refinable
   per-popup from `onWindowOpen`'s `kind: 'policy'` call), navigation events +
   policy (`onNavigate` — return `'deny'`/`'external'` from a `kind: 'policy'`
-  call), and `tiny.win.find` make a wrapped site behave like an app. The
+  call; other URL schemes such as `mailto:` are blocked unless it returns
+  `'external'`), and `tiny.win.find` make a wrapped site behave like an app. The
   `"api"` capability gate makes it shippable: `"api": "wrapper"` preset,
   `{ disable, enable }` lists of wire method names (enable wins), or
   per-origin keyholes — `"api": { "origins": { "file://*": "all",

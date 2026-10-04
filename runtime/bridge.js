@@ -3073,18 +3073,25 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
             fire('onOpenFiles', onOpenFiles, paths, app);
           } catch {}
         } else if (line.startsWith('NAVQ ')) {
-          // Main-frame navigation policy ask: NAVQ <qid> <winid>\t<url>.
-          // The launcher holds the webview's decision handler and
-          // default-allows after 400ms, so answer promptly — an app with no
-          // onNavigate (or one that returns nothing) allows immediately.
+          // Navigation policy ask: NAVQ <qid> <winid>\t<url>\t<frame>.
+          // The launcher holds the webview's decision handler, so answer
+          // promptly. Main-frame http(s): an app with no onNavigate (or one
+          // that returns nothing) allows; the launcher allows after 400ms.
+          // Any other scheme (mailto:, ms-settings:, someapp://…, in any
+          // frame — #30): only 'external' hands it to the OS; no handler or
+          // no verdict denies, and the launcher denies after 400ms. frame is
+          // main|sub, or empty where the engine can't tell (older launchers
+          // send none: those only ever asked about the main frame).
           const sp = line.indexOf(' ', 5);
           const qid = line.slice(5, sp);
-          const [win, navUrl] = line.slice(sp + 1).split('\t');
+          const [win, navUrl, frame] = line.slice(sp + 1).split('\t');
+          const web = /^(https?|file|about|data|blob):/i.test(navUrl ?? '');
+          const isMainFrame = frame === undefined || frame === 'main' ? true : frame === 'sub' ? false : null;
           (async () => {
-            let verdict = 'allow';
+            let verdict = web ? 'allow' : 'deny';
             if (onNavigate) {
               try {
-                const r = await onNavigate({ window: win, url: navUrl, kind: 'policy', isMainFrame: true }, app);
+                const r = await onNavigate({ window: win, url: navUrl, kind: 'policy', isMainFrame }, app);
                 if (r === 'deny' || r === 'external') verdict = r;
               } catch (e) {
                 console.log('tinyjs onNavigate policy failed:', e);

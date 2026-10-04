@@ -5535,8 +5535,10 @@ static gboolean on_debug_key(GtkWidget* w, GdkEventKey* ev, gpointer) {
 // twins (see TODO-site-wrapper.md):
 //   launcher -> backend:
 //     NAV {"window","kind","url","error"?}     kind: start|commit|finish|fail|crash
-//     NAVQ <qid> <winid>\t<url>                main-frame http(s) policy ask;
-//                                              unanswered after 400ms = allow
+//     NAVQ <qid> <winid>\t<url>\t<frame>       policy ask, frame main|'' (unknown):
+//                                              main-frame http(s), unanswered after
+//                                              400ms = allow; other schemes in any
+//                                              frame, unanswered = deny (#30)
 //     DOWNLOAD {"id","url","filename","path","state","error"?}
 //     POPUP {"window","url","action"}          action: window|external|deny
 //   backend -> launcher:
@@ -5810,6 +5812,7 @@ static void on_web_process_terminated(WebKitWebView* wv,
 struct NavPending {
   WebKitPolicyDecision* decision;
   std::string url;
+  bool other = false;  // other URL scheme: never used, only 'external' launches
 };
 static long g_nav_seq = 0;
 static std::map<std::string, NavPending> g_nav_pending;
@@ -5821,7 +5824,7 @@ static void nav_resolve(const std::string& qid, int verdict) {  // 0 allow 1 den
   g_nav_pending.erase(it);
   if (verdict == 2)
     g_app_info_launch_default_for_uri(p.url.c_str(), nullptr, nullptr);
-  if (verdict == 0) webkit_policy_decision_use(p.decision);
+  if (verdict == 0 && !p.other) webkit_policy_decision_use(p.decision);
   else webkit_policy_decision_ignore(p.decision);
   g_object_unref(p.decision);
 }
@@ -5996,8 +5999,49 @@ static GtkWidget* on_create_webview(WebKitWebView* parent,
 
 // -- policy decisions (downloads at RESPONSE, NAVQ ask, popups untouched) --
 
+// Other URL schemes (#30): mailto:, someapp://… — anything that isn't a web
+// document, the app's own file:// pages, or an engine-internal scheme. These
+// never reach the RESPONSE stage (there's no response), so they're caught at
+// the action stage instead, in any frame (WebKitGTK can't say which — frame
+// flag left empty). The webview never handles them; onNavigate gets a
+// policy ask and only 'external' hands the URL to the OS. No answer in 400ms,
+// or no backend, is a deny.
+static bool other_scheme(const char* u) {
+  const char* c = u ? strchr(u, ':') : nullptr;
+  if (!c || c == u) return false;
+  std::string sch(u, c - u);
+  for (auto& ch : sch) ch = (char)g_ascii_tolower(ch);
+  static const char* mine[] = {"http", "https", "file", "about", "data",
+                               "blob", "javascript", "tiny-media"};
+  for (const char* m : mine)
+    if (sch == m) return false;
+  return true;
+}
+
 static gboolean on_decide_policy(WebKitWebView* wv, WebKitPolicyDecision* decision,
                                  WebKitPolicyDecisionType type, gpointer) {
+  if (type == WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION) {
+    WebKitNavigationAction* a = webkit_navigation_policy_decision_get_navigation_action(
+        WEBKIT_NAVIGATION_POLICY_DECISION(decision));
+    WebKitURIRequest* r = a ? webkit_navigation_action_get_request(a) : nullptr;
+    const char* uri = r ? webkit_uri_request_get_uri(r) : nullptr;
+    if (!other_scheme(uri)) return FALSE;
+    if (g_sock < 0) {
+      webkit_policy_decision_ignore(decision);
+      return TRUE;
+    }
+    std::string qid = "n" + std::to_string(++g_nav_seq);
+    g_object_ref(decision);
+    g_nav_pending[qid] = {decision, uri, true};
+    pipe_write_line("NAVQ " + qid + " " + tiny_winid_for_wv(wv) + "\t" + uri + "\t");
+    g_timeout_add(400, +[](gpointer d) -> gboolean {
+      std::string* q = (std::string*)d;
+      nav_resolve(*q, 1);
+      delete q;
+      return G_SOURCE_REMOVE;
+    }, new std::string(qid));
+    return TRUE;
+  }
   if (type != WEBKIT_POLICY_DECISION_TYPE_RESPONSE)
     return FALSE;  // NEW_WINDOW_ACTION's default use makes `create` fire
   WebKitResponsePolicyDecision* rd = WEBKIT_RESPONSE_POLICY_DECISION(decision);
@@ -6017,7 +6061,7 @@ static gboolean on_decide_policy(WebKitWebView* wv, WebKitPolicyDecision* decisi
   std::string qid = "n" + std::to_string(++g_nav_seq);
   g_object_ref(decision);
   g_nav_pending[qid] = {decision, u};
-  pipe_write_line("NAVQ " + qid + " " + tiny_winid_for_wv(wv) + "\t" + u);
+  pipe_write_line("NAVQ " + qid + " " + tiny_winid_for_wv(wv) + "\t" + u + "\tmain");
   g_timeout_add(400, +[](gpointer d) -> gboolean {
     std::string* q = (std::string*)d;
     nav_resolve(*q, 0);
