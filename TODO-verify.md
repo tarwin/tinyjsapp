@@ -2847,11 +2847,17 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
 - [x] **Linux, same** — run `test/file-access/` (README there). This is the
   OS the issue named. *(2026-10-04: confirmed by the user. The wrapped
   `http` site can't fetch, frame or navigate to `file://`.)*
-- [ ] **Windows, no handle growth from closed windows (#30.7)** — the
+- [x] **Windows, no handle growth from closed windows (#30.7)** — the
   `UncHandler` "registered without unregister" item. It's tied to its
   webview, and closing a window Close()s the controller and releases
   ctrl + wv (code read; comment at `install_unc_for`), so no code change.
   To confirm: in kitchen-sink, open and close a `tiny.win.open` window
   about 30 times and watch the launcher's Handles column in Task Manager
   (Details tab, add the column). It should level off rather than climb
-  with each window.
+  with each window. *(2026-10-04, headless: a `TINYJS_HTML` page in a
+  `tinyjs new` scratch app ran 60 `win.open` → 1.2 s → `win.close` cycles
+  while PowerShell sampled `launcher-win`'s `HandleCount` once a second.
+  It went 351 at start, 354↔358 as each window opened and closed, then
+  drifted down to 342↔346, and ended at 337. `win.windows()` was
+  `['main']` after every close. WebView2 renderers are out of process, so
+  each window costs the launcher only about 4 handles.)*
