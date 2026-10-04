@@ -2835,3 +2835,13 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
     events still arrive.
   - Not done: `mailto:` + `'external'` opening the real mail client. It
     goes through the same ShellExecute path the custom scheme took.
+- [x] **macOS, `file://` universal access only reaches app pages
+  (#30.7)** — no code change. Both launchers turn on file and universal
+  access from file URLs (Vite needs them), and WebKit applies them to
+  `file://` documents only. The probe checks that a wrapped `http` site
+  can't become one. *(2026-10-04: `test/file-access/` in `tinyjs dev`:
+  `fetch('file:///etc/hosts')` fails, the `file://` iframe never loads,
+  and `location = 'file:///etc/hosts'` is ignored, so the page stays on
+  its `http://` URL.)* Comments in both launchers record why this is safe.
+- [ ] **Linux, same** — run `test/file-access/` (README there). This is the
+  OS the issue named.

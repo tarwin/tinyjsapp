@@ -847,6 +847,14 @@ static WebKitSettings* make_settings() {
   webkit_settings_set_enable_developer_extras(s, debug_mode() ? TRUE : FALSE);
   webkit_settings_set_enable_webgl(s, TRUE);
   webkit_settings_set_javascript_can_access_clipboard(s, TRUE);
+  // file:// pages are opaque origins, so Vite's `crossorigin` module scripts
+  // fail CORS without these (macOS sets the same two). On every webview, but
+  // WebKit applies them to file:// DOCUMENTS only, and the only file://
+  // documents are the app's own pages: an http(s) page can't navigate,
+  // frame or fetch file:// (test/file-access), win.open from a page is
+  // confined to the frontend dir (#29.3), and built apps ignore TINYJS_HTML
+  // (#29.4). Those pages already hold the whole backend via tiny.api, so
+  // universal access adds nothing an attacker could reach (#30.7).
   webkit_settings_set_allow_file_access_from_file_urls(s, TRUE);
   webkit_settings_set_allow_universal_access_from_file_urls(s, TRUE);
   webkit_settings_set_enable_media_stream(s, TRUE);

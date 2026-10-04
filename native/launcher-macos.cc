@@ -8006,7 +8006,10 @@ static void enable_webgpu_prefs(id preferences) {
 }
 // file:// pages are opaque origins, so module scripts with `crossorigin`
 // (every Vite build) fail CORS. These private-but-stable flags make
-// file→file loads same-origin, exactly like Tauri's wry does.
+// file→file loads same-origin, exactly like Tauri's wry does. WebKit applies
+// them to file:// documents only, which are only ever the app's own pages:
+// an http(s) page can't navigate, frame or fetch file:// (test/file-access),
+// and page win.open is confined to the frontend dir (#29.3, #30.7).
 static void enable_file_access(WKWebViewConfiguration *cfg) {
   @try {
     [cfg.preferences setValue:@YES forKey:@"allowFileAccessFromFileURLs"];

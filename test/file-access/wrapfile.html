@@ -1,0 +1,14 @@
+<!doctype html><body><script>
+const out = {};
+setTimeout(async () => {
+  try { out.fetch = (await (await fetch('file:///etc/hosts')).text()).slice(0, 40); } catch (e) { out.fetch = 'err ' + e; }
+  const f = document.createElement('iframe'); f.src = 'file:///etc/hosts';
+  f.onload = () => { try { out.iframe = 'loaded, readable: ' + String(f.contentDocument && f.contentDocument.body && f.contentDocument.body.innerText).slice(0, 40); } catch (e) { out.iframe = 'loaded, unreadable: ' + e; } };
+  document.body.appendChild(f);
+  setTimeout(async () => {
+    await tiny.store.set('wf', out);
+    location.href = 'file:///etc/hosts';
+    setTimeout(() => tiny.store.set('wfnav', location.href), 1500);
+  }, 1500);
+}, 1500);
+</script>
