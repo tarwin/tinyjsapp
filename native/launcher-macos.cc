@@ -677,6 +677,7 @@ static void apply_type_filter(NSSavePanel *panel, const std::string &csv) {
 }
 #endif
 
+static void tiny_test_autodlg_arm(); // test hook, defined with the JS dialogs
 static void do_dialog(webview_t w, void *arg) {
   DlgReq *req = static_cast<DlgReq *>(arg);
   std::string json = "null";
@@ -684,9 +685,12 @@ static void do_dialog(webview_t w, void *arg) {
 #ifdef __APPLE__
   @autoreleasepool {
     if (req->op == "save") {
-      // args: typeFilter (comma-separated extensions, may be empty)
+      // args: typeFilter (comma-separated extensions, may be empty),
+      // suggested file name (optional)
       NSSavePanel *panel = [NSSavePanel savePanel];
       apply_type_filter(panel, a(0));
+      if (!a(1).empty()) panel.nameFieldStringValue = ns(a(1));
+      tiny_test_autodlg_arm();
       if ([panel runModal] == NSModalResponseOK && panel.URL != nil) {
         json = json_escape([panel.URL.path UTF8String]);
       }
@@ -6434,6 +6438,13 @@ static void attach_tiny_bridge(WKUserContentController *ucc,
 // Resolve a page call: RET <winid>:<seq> routes here (dialogs too).
 static void reply_to_call(webview_t w, const std::string &composite, int status,
                           const std::string &json) {
+  // q<digits>: a dialog the BACKEND opened (#36, a page printToPDF's save
+  // panel) — the answer goes back to it as a read-back, not into a page.
+  if (composite.size() > 1 && composite[0] == 'q' &&
+      composite.find_first_not_of("0123456789", 1) == std::string::npos) {
+    sock_write_line("GOT " + composite.substr(1) + " " + json);
+    return;
+  }
   size_t c = composite.find(':');
   if (c == std::string::npos)
     return;

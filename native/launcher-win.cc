@@ -1695,7 +1695,8 @@ static std::string run_prompt(const std::string &message,
 }
 
 static std::string run_file_dialog(const std::string &op,
-                                   const std::string &types) {
+                                   const std::string &types,
+                                   const std::string &name = "") {
   std::string json = "null";
   bool save = op == "save";
   IFileDialog *dlg = nullptr;
@@ -1742,6 +1743,8 @@ static std::string run_file_dialog(const std::string &op,
         dlg->SetDefaultExtension(first_ext.c_str());
     }
   }
+  if (save && !name.empty())
+    dlg->SetFileName(widen(name).c_str()); // suggested name (#36)
   hr = dlg->Show(g_hwnd);
   if (SUCCEEDED(hr)) {
     if (op == "openmulti") {
@@ -1804,8 +1807,9 @@ static void do_dialog(webview_t w, void *arg) {
   } else if (req->op == "prompt") {
     json = run_prompt(a(0).empty() ? g_app_name : a(0), a(1));
   } else {
-    // args (open/openmulti/save): typeFilter (comma-separated extensions)
-    json = run_file_dialog(req->op, a(0));
+    // args (open/openmulti/save): typeFilter (comma-separated extensions),
+    // then for save an optional suggested file name
+    json = run_file_dialog(req->op, a(0), a(1));
   }
   route_ret(w, req->id, 0, json);
   delete req;
@@ -4599,6 +4603,13 @@ static void secwin_eval(const std::string &id, const std::string &js) {
 // (evaluate __tinyResolve there). Dialog replies route here too.
 static void route_ret(webview_t w, const std::string &composite, int status,
                       const std::string &json) {
+  // q<digits>: a dialog the BACKEND opened (#36, a page printToPDF's save
+  // panel) — the answer goes back to it as a read-back, not into a page.
+  if (composite.size() > 1 && composite[0] == 'q' &&
+      composite.find_first_not_of("0123456789", 1) == std::string::npos) {
+    pipe_write_line("GOT " + composite.substr(1) + " " + json);
+    return;
+  }
   size_t c = composite.find(':');
   if (c == std::string::npos) {
     webview_return(w, composite.c_str(), status == 0 ? 0 : 1, json.c_str());

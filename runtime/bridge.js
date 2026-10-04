@@ -1410,6 +1410,46 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     });
   }
   const query = (what) => ask('GET', what);
+  // A save panel whose answer comes back HERE, not to a page (#36): the DLG
+  // id is q<qid>, which every launcher answers as GOT <qid> <path|null>.
+  // Page call ids can't take that shape (they carry ':' or are hex).
+  function askSavePath(name) {
+    return new Promise((resolve) => {
+      const qid = String(qidSeq++);
+      pendingGets.set(qid, resolve);
+      send(`DLG q${qid} save\tpdf\t${one(name)}`);
+    });
+  }
+
+  // Where a PAGE's tiny.win.printToPDF(path) may write (#36). The app's own
+  // pages (file://, the dev server) keep the path they asked for. Any other
+  // origin (a wrapped site, a page it navigated to) writes directly only
+  // inside Downloads, the app's data dir or the temp dir (a bare name lands
+  // in Downloads); for anything else the user picks the destination in a save
+  // panel pre-filled with the requested name. Otherwise a hostile page could
+  // drop PDF bytes over any file the user can write. Backend app.printToPDF
+  // is unrestricted.
+  const ownPageOrigins = new Set(['file://']);
+  if (htmlPath && isUrl(String(htmlPath)))
+    try { ownPageOrigins.add(new URL(String(htmlPath)).origin); } catch {}
+  async function pdfPathForPage(path, origin) {
+    const p = path == null ? '' : String(path);
+    if (origin !== undefined && ownPageOrigins.has(origin)) return p;
+    const fold = (x) => (IS_WIN ? x.toLowerCase() : x);
+    const home = IS_WIN ? (tjs.env.USERPROFILE || tjs.homeDir) : tjs.homeDir;
+    const downloads = home + '/Downloads';
+    const roots = [downloads, appDataDir(id), tjs.tmpDir];
+    if (!IS_WIN) roots.push('/tmp', '/private/tmp');
+    if (p && !p.includes('\0') && !(/^[A-Za-z][\w+.-]*:/.test(p) && !/^[A-Za-z]:[\\/]/.test(p))) {
+      const abs = normPath(isAbs(p) || /^[\\/]/.test(p) ? p : downloads + '/' + p);
+      const inside = roots.some((r) => r && fold(abs).startsWith(fold(normPath(r).replace(/\/$/, '')) + '/'));
+      if (inside) return IS_WIN ? abs.replace(/\//g, '\\') : abs;
+    }
+    const name = p.replace(/^.*[\\/]/, '') || 'page.pdf';
+    const picked = await askSavePath(name);
+    if (!picked) throw new Error('printToPDF: cancelled');
+    return picked;
+  }
   const shellOp = async (op, target) => {
     const r = await ask('SHELL', op + '\t' + esc(target));
     if (!r?.ok) throw new Error(r?.error ?? op + ' failed');
@@ -2651,7 +2691,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     'macos.otherWindows': async () => (macosOnly('otherWindows'), app.macos.otherWindows()),
     'macos.moveWindow': async ({ pid, ...rect }) => (macosOnly('moveWindow'), app.macos.moveWindow(pid, rect)),
     'tray.position': async () => app.tray.position(),
-    'win.printToPDF': async ({ path }, _a, m) => forWin(m).printToPDF(path),
+    'win.printToPDF': async ({ path }, _a, m) => forWin(m).printToPDF(await pdfPathForPage(path, m.origin)),
     'app.icon': async ({ path }) => app.icon(path),
     'system.battery': async () => app.system.battery(),
     'system.wifi': async () => app.system.wifi(),

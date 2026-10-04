@@ -2941,3 +2941,29 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   - kitchen-sink startup: 40 CALLs, 40 `RET … 0`, nothing dropped.
   - [x] Hand click-through of kitchen-sink menus and dialogs. *(2026-10-04:
     confirmed by the user.)*
+
+## #36 page printToPDF paths + #32 Windows blank first paint (`fix/36-pdf-path-32-paint`, 2026-10-04)
+
+- [x] **macOS, a page's `printToPDF` path (#36)** — from the app's own
+  pages (`file://`, the dev server) any path works, unchanged. From any
+  other origin, the PDF is written directly only inside Downloads (a bare
+  name lands there), the app's data dir or the temp dir. Anything else
+  opens a save panel pre-filled with the name: the launchers answer a
+  `DLG q<qid>` back to the backend as `GOT`, and the `save` op takes an
+  optional suggested name. Cancelling rejects with "printToPDF: cancelled".
+  *(2026-10-04: a wrapped `http` page with `win.*` granted, in `tinyjs dev`,
+  `TINYJS_TEST_AUTODLG=cancel`.)*
+  - `~/probe36-victim.txt` got a panel and was **not** written (still
+    `ORIGINAL`). The first panel of the session outlasted the test hook's
+    ~6 s and was answered by hand, so its PDF went to the picked folder:
+    the panel is the gate either way.
+  - `probe36.pdf` → `~/Downloads/probe36.pdf`; `/tmp/probe36.pdf` written.
+  - `~/Downloads/../probe36-walk.pdf` → panel → cancelled → rejected.
+  - An app `file://` page wrote to an arbitrary scratch path as before.
+- [ ] **Linux, same** — **not compiled on Linux** (`reply_to_call` routes
+  `q<digits>` back as GOT; `gtk_file_chooser_set_current_name`). Same
+  four cases plus the own-page one. The panel should show the suggested
+  name.
+- [ ] **Windows, same** — **not compiled on Windows** (`route_ret` routes
+  `q<digits>`; `IFileSaveDialog::SetFileName`). Same cases with Windows
+  paths (`%USERPROFILE%\Downloads`).

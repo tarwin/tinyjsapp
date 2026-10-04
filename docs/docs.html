@@ -1362,6 +1362,7 @@ const spot = await <b>tiny.tray.position</b>();     <i>// { x, y, width, height 
 
 <i>// render the page to a vector PDF (WKWebView) — invoices, reports</i>
 const { path } = await <b>tiny.win.printToPDF</b>('/tmp/report.pdf');
+<i>// from a wrapped site: Downloads / app data / temp directly, else a save panel</i>
 
 <i>// a live app icon (render a canvas → progress rings)</i>
 <b>tiny.app.icon</b>(canvasPngPath);      <i>// '' resets to the bundle icon</i>

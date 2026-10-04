@@ -104,7 +104,9 @@ el.addEventListener('mousedown', () => tiny.win.startDrag({ files: [path] }));
 
 tiny.win.print();                 // native print panel — the CALLING window
 await tiny.win.printToPDF(path);  // vector PDF of the calling window —
-                                  // macOS: ONE tall page; win/linux paginate
+                                  // macOS: ONE tall page; win/linux paginate.
+                                  // Other origins: Downloads/app data/temp,
+                                  // else the user picks in a save panel
 tiny.win.share({ text, url, paths, x, y });  // native share sheet, anchored at
                                   // the click's clientX/Y — macOS only
 

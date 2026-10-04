@@ -405,6 +405,13 @@ static void eval_all(const std::string& js) {
 
 // Resolve/reject a page call: callid is "<winid>:<seq>".
 static void reply_to_call(const std::string& callid, int status, const std::string& json) {
+  // q<digits>: a dialog the BACKEND opened (#36, a page printToPDF's save
+  // panel) — the answer goes back to it as a read-back, not into a page.
+  if (callid.size() > 1 && callid[0] == 'q' &&
+      callid.find_first_not_of("0123456789", 1) == std::string::npos) {
+    pipe_write_line("GOT " + callid.substr(1) + " " + json);
+    return;
+  }
   size_t colon = callid.find(':');
   if (colon == std::string::npos) return;
   std::string winid = callid.substr(0, colon);
@@ -1956,6 +1963,10 @@ static void do_dialog(const std::string& callid, const std::string& body) {
     }
     if (op == "save") {
       gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dlg), TRUE);
+      // Field 2 (save): suggested file name (optional).
+      std::string name = tab_field(f, 2);
+      if (!name.empty())
+        gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dlg), name.c_str());
     }
     // Field 1 (open/openmulti/save): comma-separated extensions from the
     // bridge, pre-normalized to lowercase. GTK patterns are case-sensitive,

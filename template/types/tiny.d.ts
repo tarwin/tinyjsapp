@@ -686,7 +686,11 @@ declare interface Tiny {
      *  ordinary app quits it. */
     setHideOnClose(enabled: boolean): Promise<any>;
     print(): Promise<any>;
-    /** render the page to a PDF file (vector) */
+    /** render the page to a PDF file (vector) -> the path written. From the
+     *  app's own pages any path works. From another origin (a wrapped site),
+     *  only Downloads (a bare name lands there), the app's data dir or the
+     *  temp dir are written directly; anything else opens a save panel
+     *  pre-filled with the name, and cancelling rejects. */
     printToPDF(path: string): Promise<{ path: string }>;
     /** Find-in-page: selects and scrolls to the next match; call again to
      *  step. matches/activeMatch come from a JS text-walk on top of the
