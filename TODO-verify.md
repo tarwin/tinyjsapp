@@ -2694,10 +2694,11 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   `[redacted]`, and the value appears only where the probe itself wrote it
   into `tiny.store`. A node test of `redact()` covered the same lines,
   `clipboard:count` left visible, and no ids left over.)*
-- [ ] **Windows, same** — the code is shared JS, but check that the CALL
+- [x] **Windows, same** — the code is shared JS, but check that the CALL
   framing matches: run with `TINYJS_DEBUG=1`, call `tiny.app.secrets.set/get`
   from the page, and confirm the value never shows on stderr.
-- [ ] **Linux, same.**
+  *(2026-10-04: confirmed by the user.)*
+- [x] **Linux, same.** *(2026-10-04: confirmed by the user.)*
 - [x] **macOS, `tinyjs update` runs the bundled installer (#30.3)** — each
   release now ships `install` (or `install.ps1` on Windows) at the top of
   the package. `tinyjs update` copies it to a temp dir and runs it with
