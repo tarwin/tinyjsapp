@@ -4,6 +4,20 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.47.1 — 2026-10-04
+
+Security fix. Thanks to [@slabbdev](https://github.com/slabbdev) for the
+report ([#30](https://github.com/tarwin/tinyjsapp/issues/30)).
+
+- **A page can no longer get around the `"api"` gate with malformed
+  messages.** The launchers passed part of each page message on to the
+  backend unchecked, so a page that `"api"` restricts, such as a wrapped
+  site or an iframe inside one, could send a message that ran with the
+  app's own permissions, or trigger the app's own event handlers. Each
+  launcher now drops malformed messages before they reach the backend.
+  All three platforms. **Apps that wrap a site or use `"api".origins`
+  should update.**
+
 ## 0.47.0 — 2026-10-04
 
 Security fixes from the rest of #30's audit. Thanks to

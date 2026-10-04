@@ -171,6 +171,14 @@
   <section>
 
     <div class="rel">
+      <h2>0.47.1 <span class="date">2026-10-04</span></h2>
+      <p>Security fix. Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the report (<a href="https://github.com/tarwin/tinyjsapp/issues/30">#30</a>).</p>
+      <ul>
+        <li><b>A page can no longer get around the <code>"api"</code> gate with malformed messages.</b> The launchers passed part of each page message on to the backend unchecked, so a page that <code>"api"</code> restricts, such as a wrapped site or an iframe inside one, could send a message that ran with the app's own permissions, or trigger the app's own event handlers. Each launcher now drops malformed messages before they reach the backend. All three platforms. <b>Apps that wrap a site or use <code>"api".origins</code> should update.</b></li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.47.0 <span class="date">2026-10-04</span></h2>
       <p>Security fixes from the rest of #30's audit. Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the report (<a href="https://github.com/tarwin/tinyjsapp/issues/30">#30</a>).</p>
       <ul>
