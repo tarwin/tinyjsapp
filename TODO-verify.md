@@ -2844,8 +2844,9 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   `fetch('file:///etc/hosts')` fails, the `file://` iframe never loads,
   and `location = 'file:///etc/hosts'` is ignored, so the page stays on
   its `http://` URL.)* Comments in both launchers record why this is safe.
-- [ ] **Linux, same** — run `test/file-access/` (README there). This is the
-  OS the issue named.
+- [x] **Linux, same** — run `test/file-access/` (README there). This is the
+  OS the issue named. *(2026-10-04: confirmed by the user. The wrapped
+  `http` site can't fetch, frame or navigate to `file://`.)*
 - [ ] **Windows, no handle growth from closed windows (#30.7)** — the
   `UncHandler` "registered without unregister" item. It's tied to its
   webview, and closing a window Close()s the controller and releases
