@@ -2710,13 +2710,22 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   downloaded and verified v0.46.0 and swapped the scratch dir: the marker
   file was gone, VERSION read v0.46.0, and no temp dir was left. HOME and
   PATH were scratch, so `/usr/local/bin/tinyjs` was untouched.)*
-- [ ] **Windows, same** — unzip the v0.46.0 Windows zip somewhere, copy in
+- [x] **Windows, same** — unzip the v0.46.0 Windows zip somewhere, copy in
   this branch's `cli.js` plus `docs\install.ps1` as `install.ps1`, set
   `VERSION` to `0.45.0`, then run `tinyjs.cmd update --dry-run` and
   `tinyjs.cmd update` from there. Check: the folder becomes v0.46.0, no
   `tinyjs-update-*` is left in `%TEMP%`, and the user PATH gets **one**
   backslash entry for that folder (the installer adds it, so remove it
   afterwards).
+  *(2026-10-04, Windows 11, scratch dir with a marker file. `--dry-run`
+  printed the local installer, a backslash TINYJS_HOME and v0.46.0. The
+  real run downloaded v0.46.0, passed the checksum and swapped the folder:
+  exit 0, VERSION v0.46.0, the marker was gone, no `tinyjs-update-*` or
+  `tinyjs-install-*` was left in `%TEMP%`, and the user PATH had exactly one
+  backslash entry (removed afterwards). Expected leftover: `<dir>.old` holding
+  only the `bin\tjs.exe` that was running the update. Windows won't delete a
+  running exe, so the installer's best-effort removal skips it, and the next
+  update's `Remove-Item $old` clears it.)*
 - [ ] **Linux, same** (the same `sh` installer as macOS; check
   `--dry-run` plus one real run with a scratch HOME).
 - [ ] **After the next release:** the published tarballs and zip actually
