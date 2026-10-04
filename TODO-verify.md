@@ -2739,8 +2739,11 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   `~/.local/bin`. No `/tmp/tinyjs-update-*` or `/tmp/tmp.*` was left. The
   real `~/.tinyjs` and `~/.local/bin/tinyjs` were untouched (VERSION and
   full-iso listings identical before and after).)*
-- [ ] **After the next release:** the published tarballs and zip actually
+- [x] **After the next release:** the published tarballs and zip actually
   contain `install` / `install.ps1` (`tar -tzf … | grep install`).
+  *(2026-10-04, v0.47.0: `tinyjs/install` is in all four tarballs
+  (macOS arm64/x86_64, Linux arm64/x86_64), and `install.ps1` is in the
+  Windows zip.)*
 - [x] **macOS, `tiny-media://` proxy gated (#30.1)** — the proxy answers
   with `Access-Control-Allow-Origin: *`, so any page that could fetch it
   could read any URL, CORS bypassed. Now the requester is the `Origin`
