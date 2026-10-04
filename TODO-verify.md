@@ -2901,6 +2901,22 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
 - [ ] **Linux, same** — **not compiled on Linux.** Run the probe page.
   Also click through an ordinary app (kitchen-sink) to confirm normal calls,
   menus and dialogs still work.
-- [ ] **Windows, same** — **not compiled on Windows.** Run the probe page
-  adapted to `chrome.webview.postMessage`, for a secondary window and the
-  main window. Then click through kitchen-sink.
+- [x] **Windows, same** — compiles clean (MinGW g++ 16.1). *(2026-10-04,
+  a probe app gated `"file://*": [ping, log, store.*, win.*]` with
+  `"https://trusted.example": "all"`. The probe forges a `CALL` for the
+  gated `sysinfo` under the trusted origin, with colons `:`-escaped so
+  it fits in a seq. Main window: a raw `chrome.webview.postMessage` JSON-RPC
+  with the forged line in `id`. Secondary window (`w2`): the forged line as
+  the seq. Each sent with LF and CRLF. Trace via `TINYJS_DEBUG=1`.)*
+  - **Before** (launcher built from 4340c98): all four forged lines came back
+    `RET … 0 {"pid":…}`, so the gate was bypassed on BOTH windows.
+    `not-hex-id` / `w2:abc` reached the backend too.
+  - **After:** none of the six messages reached the backend. `ping` still
+    worked and the page's own `sysinfo` was still denied in both windows,
+    and `win.open` still worked.
+  - With the id/seq checks stripped for one run, the writer guard alone
+    dropped all four forged lines (`dropped a wire line with a raw line
+    break`).
+  - kitchen-sink startup: 40 CALLs, 40 `RET … 0`, nothing dropped.
+  - [ ] Hand click-through of kitchen-sink menus and dialogs — not done
+    (headless session).
