@@ -2813,9 +2813,25 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   - Regression: a main-frame `https://example.com/` is asked with
     `isMainFrame: true`, default-allowed, and start/commit/finish NAV
     events still arrive.
-- [ ] **Windows, same (#30.2)** — **not compiled on Windows.** Uses
-  `ICoreWebView2_18::LaunchingExternalUriScheme`: cancel, ask, and
-  ShellExecute on `external`. Run `test/other-scheme/`. With no verdict,
-  WebView2's own "open this app?" prompt should **not** appear. Then try
-  a real one by hand: a `mailto:` link in a page, refused by default and
-  opening the mail client once `onNavigate` returns `'external'`.
+- [x] **Windows, same (#30.2)** — `ICoreWebView2_18::LaunchingExternalUriScheme`:
+  cancel, ask, and ShellExecute on `external`. *(2026-10-04: compiled
+  cleanly via `tinyjs dev`'s auto-rebuild; ran `test/other-scheme/`.)*
+  - WebView2 raises the event only for schemes with a registered OS
+    handler. The made-up schemes never reach `onNavigate` and fail quietly
+    inside the engine: no prompt, no launch, and the page stays put. That
+    matches the default deny, but nothing gets logged. With throwaway
+    `HKCU\Software\Classes\tinyjstest-{a,b}` handlers registered (they
+    append `%1` to a file):
+  - With no verdict, `deny` and `allow`: both URLs were logged with
+    `isMainFrame` `null`, the page stayed on its `file://` href, nothing
+    was launched, and no WebView2 "open this app?" prompt appeared
+    (screenshots).
+  - `external`: both launched through the shell (`tinyjstest-a://sub/`,
+    `tinyjstest-b://main/`), no prompt.
+  - A clicked `mailto:` link with no verdict was asked (`isMainFrame`
+    `null`) and refused: no mail client, no prompt.
+  - Regression: a main-frame `https://example.com/` is still asked with
+    `isMainFrame: true`, default-allowed, and start/commit/finish NAV
+    events still arrive.
+  - Not done: `mailto:` + `'external'` opening the real mail client. It
+    goes through the same ShellExecute path the custom scheme took.

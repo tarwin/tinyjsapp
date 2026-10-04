@@ -32,5 +32,24 @@ Expected:
   handler and fails silently) — to see the launch, register a throwaway
   `x-scheme-handler/tinyjstest-b` handler with `xdg-mime default`.
 
-Windows: before #30.2, WebView2 showed its own "open this app?" prompt for
-these. Now it shouldn't show one at all.
+Windows: WebView2 only raises `LaunchingExternalUriScheme` for schemes with
+a registered handler, so the made-up schemes never reach `onNavigate` there.
+They fail quietly in the engine, with no log, no prompt and no launch.
+Register throwaway per-user handlers first, and delete them afterwards:
+
+```powershell
+$log = "$env:TEMP\launched.txt"
+foreach ($sch in 'tinyjstest-a','tinyjstest-b') {   # not $s: PS vars are case-insensitive
+  $k = "HKCU:\Software\Classes\$sch"
+  New-Item "$k\shell\open\command" -Force | Out-Null
+  Set-ItemProperty $k '(default)' "URL:$sch"
+  Set-ItemProperty $k 'URL Protocol' ''
+  Set-ItemProperty "$k\shell\open\command" '(default)' "cmd.exe /c echo %1>> `"$log`""
+}
+# afterwards:
+Remove-Item -Recurse HKCU:\Software\Classes\tinyjstest-a, HKCU:\Software\Classes\tinyjstest-b
+```
+
+Then the log matches Linux, `external` appends both URLs to `launched.txt`,
+and WebView2's own "open this app?" prompt (shown before #30.2) never
+appears.
