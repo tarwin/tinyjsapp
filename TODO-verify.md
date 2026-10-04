@@ -2886,14 +2886,15 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   each window costs the launcher only about 4 handles.)*
 - [x] **macOS, page messages can't add wire lines (#30.6)** — the page
   picks the `seq` in its own call messages, and the launcher wrote it into
-  the `CALL` line unchecked, which let a gated page get around the `api`
-  gate. Fixed two ways in all three launchers: the page's seq (or, for
+  the `CALL` line unchecked. A newline in it split the line, so a gated
+  wrapped page could add its own lines: a `MENU` event, or a `CALL`
+  stamped with the app's own `file://` origin. Fixed two ways in all three launchers: the page's seq (or, for
   the Windows main window, the library's call id) must be digits (hex for
   that id) or the message is dropped, and the line writer drops any line
-  containing a raw CR/LF. *(2026-10-04, probe page in `tinyjs dev`. The
-  page stays out of the repo until after the release; it's in the
-  maintainer's hands.)*
-  - **Before:** the probe got past the gate.
+  containing a raw CR/LF. *(2026-10-04, `test/wire-lines/` in `tinyjs dev`,
+  added to the repo after v0.47.1 shipped.)*
+  - **Before:** the forged `MENU` fired the app's `onMenu`, and the forged
+    `file://` call wrote a store key the page's own origin is denied.
   - **After:** nothing from the probe reached the backend; normal calls
     still work, and the page's own gated call is still denied.
   - With the seq check disabled for one run, the writer guard alone dropped

@@ -1,0 +1,13 @@
+<!doctype html><body><script>
+// A wrapped page with NO api access forging wire lines through the page-chosen seq.
+setTimeout(() => {
+  const post = (s) => (window.webkit ? window.webkit.messageHandlers.tiny.postMessage(s) : null);
+  post('1 x\nMENU pwned\nZ:{}');
+  const inner = JSON.stringify({ method: 'store.set', params: { key: 'forged', value: 'yes' } })
+    .replace(/"/g, '\\"').replace(/:/g, '\\u003a');
+  post('2 x\nCALL q ["' + inner + '","file\\u003a//"]\nZ:{}');
+  let honest;
+  tiny.store.set('honest', 'yes').then(() => honest = 'ALLOWED', (e) => honest = 'denied: ' + e)
+    .finally(() => document.title = 'honest ' + honest);
+}, 2000);
+</script>
