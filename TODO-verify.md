@@ -2938,5 +2938,5 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
     dropped all four forged lines (`dropped a wire line with a raw line
     break`).
   - kitchen-sink startup: 40 CALLs, 40 `RET … 0`, nothing dropped.
-  - [ ] Hand click-through of kitchen-sink menus and dialogs — not done
-    (headless session).
+  - [x] Hand click-through of kitchen-sink menus and dialogs. *(2026-10-04:
+    confirmed by the user.)*
