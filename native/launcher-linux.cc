@@ -232,6 +232,14 @@ static std::string tab_field(const std::vector<std::string>& v, size_t i) {
 }
 
 static void pipe_write_line(const std::string& line) {
+  // One line per message, always (#30.6). Every field that can carry a line
+  // break is escaped before it gets here, so a raw CR/LF means a field
+  // slipped through unescaped — and splitting it would hand the backend
+  // lines nobody wrote. Drop the whole line instead.
+  if (line.find_first_of("\r\n") != std::string::npos) {
+    fprintf(stderr, "tinyjs: dropped a wire line with a raw line break\n");
+    return;
+  }
   std::lock_guard<std::mutex> lock(g_write_mutex);
   if (g_sock < 0) return;
   std::string data = line + "\n";
@@ -401,6 +409,7 @@ static void reply_to_call(const std::string& callid, int status, const std::stri
   if (colon == std::string::npos) return;
   std::string winid = callid.substr(0, colon);
   std::string seq = callid.substr(colon + 1);
+  if (seq.empty()) return;
   for (char c : seq) if (c < '0' || c > '9') return;
   std::string js = "window.__tinyResolve(" + seq + "," +
                    (status == 0 ? "true" : "false") + "," + json_escape(json) + ")";
@@ -500,6 +509,11 @@ static void on_script_message(WebKitUserContentManager* ucm, WebKitJavascriptRes
   if (colon == std::string::npos) return;
   std::string seq = msg.substr(bar + 1, colon - bar - 1);
   std::string payload = msg.substr(colon + 1);
+  // The seq is the page's own counter and round-trips in RET, which only
+  // accepts digits. Anything else isn't our client talking (#30.6).
+  if (seq.empty() || seq.size() > 15 ||
+      seq.find_first_not_of("0123456789") != std::string::npos)
+    return;
 
   std::string from = winid;  // the manager's owner, the untokened fallback
   bool have_origin = false;

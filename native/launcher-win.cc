@@ -239,6 +239,15 @@ static void pipe_write_raw(const std::string &msg) {
 }
 
 static void pipe_write_line(const std::string &line) {
+  // One line per message, always (#30.6). Every field that can carry a line
+  // break is escaped before it gets here, so a raw CR/LF means a field
+  // slipped through unescaped — and splitting it would hand the backend
+  // lines nobody wrote. Drop the whole line instead.
+  if (line.find_first_of("\r\n") != std::string::npos) {
+    if (GetEnvironmentVariableA("TINYJS_LAUNCHER_DEBUG", nullptr, 0))
+      std::fprintf(stderr, "launcher: dropped a wire line with a raw line break\n");
+    return;
+  }
   std::lock_guard<std::mutex> lock(g_write_mutex);
   if (g_pipe == INVALID_HANDLE_VALUE)
     return;
@@ -4674,6 +4683,14 @@ struct SecMsgHandler : public ICoreWebView2WebMessageReceivedEventHandler {
     size_t c = body.find(':');
     if (c == std::string::npos)
       return S_OK;
+    {
+      // The seq is the page's own counter and round-trips in RET, which only
+      // accepts digits. Anything else isn't our client talking (#30.6).
+      std::string seq = body.substr(0, c);
+      if (seq.empty() || seq.size() > 15 ||
+          seq.find_first_not_of("0123456789") != std::string::npos)
+        return S_OK;
+    }
     // Second array element: the calling document's origin, from the
     // WebView2-attested message Source (a hostile page can't spoof it).
     // The bridge's "api" gate keys origin sub-gates on it.
@@ -7631,6 +7648,17 @@ static void on_invoke(const char *id, const char *req, void *) {
   // The bridge's "api" gate keys origin sub-gates on it — and reads the LAST
   // element precisely because the page controls everything before it (this
   // binding's argument array is whatever the page passed to __invoke).
+  // The id round-trips in RET/DLG and is the webview library's own: 32 hex
+  // chars from its generateId(). The page can post its own message with any
+  // id, so refuse anything else rather than write it into the line (#30.6).
+  {
+    std::string sid = id ? id : "";
+    if (sid.empty() || sid.size() > 64 ||
+        sid.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) {
+      webview::detail::tinyjs_take_msg_source(sid); // don't strand its queue entry
+      return;
+    }
+  }
   std::string body = req ? req : "[]";
   std::string origin = "null";
   {

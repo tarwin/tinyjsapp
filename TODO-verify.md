@@ -2884,3 +2884,23 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   drifted down to 342↔346, and ended at 337. `win.windows()` was
   `['main']` after every close. WebView2 renderers are out of process, so
   each window costs the launcher only about 4 handles.)*
+- [x] **macOS, page messages can't add wire lines (#30.6)** — the page
+  picks the `seq` in its own call messages, and the launcher wrote it into
+  the `CALL` line unchecked, which let a gated page get around the `api`
+  gate. Fixed two ways in all three launchers: the page's seq (or, for
+  the Windows main window, the library's call id) must be digits (hex for
+  that id) or the message is dropped, and the line writer drops any line
+  containing a raw CR/LF. *(2026-10-04, probe page in `tinyjs dev`. The
+  page stays out of the repo until after the release; it's in the
+  maintainer's hands.)*
+  - **Before:** the probe got past the gate.
+  - **After:** nothing from the probe reached the backend; normal calls
+    still work, and the page's own gated call is still denied.
+  - With the seq check disabled for one run, the writer guard alone dropped
+    both lines ("dropped a wire line with a raw line break").
+- [ ] **Linux, same** — **not compiled on Linux.** Run the probe page.
+  Also click through an ordinary app (kitchen-sink) to confirm normal calls,
+  menus and dialogs still work.
+- [ ] **Windows, same** — **not compiled on Windows.** Run the probe page
+  adapted to `chrome.webview.postMessage`, for a secondary window and the
+  main window. Then click through kitchen-sink.

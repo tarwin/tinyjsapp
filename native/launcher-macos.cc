@@ -407,6 +407,14 @@ static void sock_write_raw(const std::string &msg) {
 }
 
 static void sock_write_line(const std::string &line) {
+  // One line per message, always (#30.6). Every field that can carry a line
+  // break is escaped before it gets here, so a raw CR/LF means a field
+  // slipped through unescaped — and splitting it would hand the backend
+  // lines nobody wrote. Drop the whole line instead.
+  if (line.find_first_of("\r\n") != std::string::npos) {
+    fprintf(stderr, "tinyjs: dropped a wire line with a raw line break\n");
+    return;
+  }
   std::lock_guard<std::mutex> lock(g_write_mutex);
   if (g_sock < 0) {
     if (g_pending_out.size() < 512)
@@ -6316,6 +6324,11 @@ static NSString *tiny_shim_js(const std::string &winid) {
     return;
   std::string seq = body.substr(0, c);
   std::string payload = body.substr(c + 1);
+  // The seq is the page's own counter and round-trips in RET, which only
+  // accepts digits. Anything else isn't our client talking (#30.6).
+  if (seq.empty() || seq.size() > 15 ||
+      seq.find_first_not_of("0123456789") != std::string::npos)
+    return;
   // The calling frame's origin rides as a SECOND array element — WebKit's
   // own attestation (frameInfo.securityOrigin), not anything the page said,
   // so the bridge's per-origin capability gate can trust it. Launchers that
