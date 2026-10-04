@@ -2967,3 +2967,18 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
 - [ ] **Windows, same** — **not compiled on Windows** (`route_ret` routes
   `q<digits>`; `IFileSaveDialog::SetFileName`). Same cases with Windows
   paths (`%USERPROFILE%\Downloads`).
+- [ ] **Windows, blank first window with a dev server (#32)** — **not
+  compiled on Windows.** On each window's first successful navigation, the
+  launcher shrinks the WebView2 controller's bounds by 1px and restores them
+  50 ms later: the same real size change that attaching a menu caused.
+  It covers main (`g_ctrl` in the library's widget window) and secondary
+  windows. PR #39's version re-applied the SAME bounds, and only for
+  secondary windows (`win_for_id("main")` is null), so it couldn't reach
+  this case.
+  1. **Reproduce first, on the current release:** `tinyjs new r --template
+     react-ts`, `npm install`, `tinyjs dev`, with no `setMenu` call. Is the
+     window blank?
+  2. **Then on this branch:** the same project paints the React page. No
+     visible 1px jump on a file:// app, and resizing still tracks.
+- [ ] **Windows, `tiny.win.open` window** still paints and sizes correctly
+  (secondary path).

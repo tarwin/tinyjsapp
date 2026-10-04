@@ -90,6 +90,9 @@
 // globals
 
 static webview_t g_w = nullptr;
+// First-paint nudge bookkeeping (#32; see first_paint_nudge).
+static std::map<std::string, bool> g_first_paint_done;
+static std::map<UINT_PTR, std::string> g_first_paint_timer;
 static HANDLE g_pipe = INVALID_HANDLE_VALUE;
 static std::mutex g_write_mutex;
 static HWND g_hwnd = nullptr;
@@ -4972,6 +4975,7 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
       tw->menu.bar = nullptr;
       g_windows.erase(id);
       g_last_winstate.erase(id);
+      g_first_paint_done.erase(id); // a reopened id gets its own first paint
       pipe_write_line("WINCLOSED " + id);
       if (tw->ctrl) {
         tw->ctrl->Close();
@@ -5459,6 +5463,58 @@ struct ContentLoadingHandler : public ICoreWebView2ContentLoadingEventHandler {
   }
 };
 
+// First paint (#32). A navigation that completes after the window's first
+// composition (an http dev server mid-handshake; file:// pages are already
+// there) can land on a surface that never invalidated: content loaded,
+// window blank until the client rect changes. Attaching a menu bar did that
+// (WM_SIZE -> new bounds), which is why an app.setMenu() call "fixed" it.
+// So on each window's first successful navigation, do the same thing on
+// purpose: shrink the controller's bounds by 1px, and restore them from the
+// host's client rect a frame or two later (two puts back-to-back can
+// coalesce into none). Main's controller sits in the webview library's
+// widget window; a secondary's in its own HWND.
+static bool first_paint_target(const std::string &winid,
+                               ICoreWebView2Controller **ctrl, HWND *host) {
+  if (winid.empty() || winid == "main") {
+    *ctrl = g_ctrl;
+    *host = (HWND)webview_get_native_handle(
+        g_w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WIDGET);
+  } else {
+    TinyWin *tw = win_for_id(winid);
+    *ctrl = tw ? tw->ctrl : nullptr;
+    *host = tw ? tw->hwnd : nullptr;
+  }
+  return *ctrl && *host;
+}
+static void CALLBACK first_paint_restore(HWND, UINT, UINT_PTR id, DWORD) {
+  KillTimer(nullptr, id);
+  auto it = g_first_paint_timer.find(id);
+  if (it == g_first_paint_timer.end())
+    return;
+  std::string winid = it->second;
+  g_first_paint_timer.erase(it);
+  ICoreWebView2Controller *ctrl;
+  HWND host;
+  RECT rc;
+  if (first_paint_target(winid, &ctrl, &host) && GetClientRect(host, &rc))
+    ctrl->put_Bounds(rc);
+}
+static void first_paint_nudge(const std::string &winid) {
+  if (g_first_paint_done[winid])
+    return;
+  g_first_paint_done[winid] = true;
+  ICoreWebView2Controller *ctrl;
+  HWND host;
+  RECT rc;
+  if (!first_paint_target(winid, &ctrl, &host) || !GetClientRect(host, &rc) ||
+      rc.bottom - rc.top < 2)
+    return;
+  RECT shrunk = rc;
+  shrunk.bottom -= 1;
+  ctrl->put_Bounds(shrunk);
+  g_first_paint_timer[SetTimer(nullptr, 0, 50, first_paint_restore)] = winid;
+}
+
 struct NavDoneHandler : public ICoreWebView2NavigationCompletedEventHandler {
   TINY_COM_BOILERPLATE(ICoreWebView2NavigationCompletedEventHandler)
   std::string winid;
@@ -5475,6 +5531,7 @@ struct NavDoneHandler : public ICoreWebView2NavigationCompletedEventHandler {
         CoTaskMemFree(s);
       }
       nav_event(winid, "finish", url);
+      first_paint_nudge(winid);
       return S_OK;
     }
     COREWEBVIEW2_WEB_ERROR_STATUS st = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
