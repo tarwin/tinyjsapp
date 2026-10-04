@@ -2751,20 +2751,37 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   `tiny.proxyURL` with an EQ or analyser still sounds and moves the meter.
   *(2026-10-02: amp's internet radio confirmed working by the user on this
   branch's macOS launcher.)*
-- [ ] **Linux, `tiny-media://` proxy gated (#30.1)** — same rule as macOS
-  in `media_scheme_cb`. **Built on macOS only, never compiled on Linux**,
-  so build it first. Run `test/proxy-gate/` (README there): `app` should
-  read the secret, `iframe-cors` should fail, and `nav` should be absent.
-  Then the wrapped-site trio. Also
-  check: does WebKitGTK give the scheme handler an `Origin` header? If the
-  refusal line for the iframe names `file://` instead of
-  `http://127.0.0.1:8765`, it doesn't, and only the main-frame fallback is
-  working. Note which, since that decides whether iframes inside an app
-  page are covered on Linux.
-- [x] **Linux, by ear** — internet radio through the gated proxy still
-  plays. *(2026-10-04: confirmed by the user on Linux. The launcher
-  compiles and the app's own page passes the gate. The adversarial probes
-  above are still open.)*
+- [x] **Linux, `tiny-media://` proxy gated (#30.1)** — same rule as macOS
+  in `media_scheme_cb`. Ran `test/proxy-gate/` (README there).
+  *(2026-10-03, arm64 VM, WebKitGTK 2.52.6, `tinyjs dev`. It compiled
+  cleanly on the first Linux build.)*
+  - `app` reads `SECRET-PAYLOAD`, `iframe-cors-err` is "Load failed",
+    `iframe-nocors` is `opaque`, and `nav` is absent.
+  - stderr shows `refused for http://127.0.0.1:8765` and `refused for
+    file:// (document load)`. **WebKitGTK does pass the `Origin` header**,
+    so iframes inside an app page are covered on Linux, not just the
+    main-frame fallback.
+  - **Wrapped site:** refused with no `"api"`, `SECRET-PAYLOAD` with
+    `["media.proxy", "store.*"]`, and refused again with `["store.*"]`.
+- [ ] **Linux, `<audio>` through `tiny-media://` doesn't load at all
+  (pre-existing, not #30.1)** — found while trying the internet-radio check
+  above. A gated-in `file://` page's `<audio src=tiny.proxyURL(…)>`
+  rejects `play()` with `NotSupportedError`, for both WAV and MP3, with
+  and without `crossOrigin`, even though upstream receives the GET. The
+  same probe fails identically on the pre-#30.1 launcher (`14e17d6`) and
+  on a build without the CSP header, so neither the gate nor the CSP
+  header causes it. The direct `http://` URL plays, and its analyser reads
+  real samples (peak 0.37) even without CORS. So WebKitGTK may not taint
+  cross-origin media at all, and amp's radio may not need the proxy on
+  Linux. amp's radio does play on Linux (user, 2026-10-04), which fits
+  that reading. Still to do: find why the WebKitGTK media loader rejects
+  the scheme. It may need
+  `webkit_security_manager_register_uri_scheme_as_cors_enabled`, or range
+  support.
+- [x] **Linux, by ear** — amp's internet radio plays. *(2026-10-04:
+  confirmed by the user. Given the entry above, that's probably not
+  through the proxy, so it rules out a regression but doesn't exercise
+  the proxy's media path.)*
 - [x] **Windows, regression** — no proxy on Windows (`proxyURL` is
   mac + Linux), but internet radio was re-checked on this branch.
   *(2026-10-04: confirmed working by the user.)*
