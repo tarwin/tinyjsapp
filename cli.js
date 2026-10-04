@@ -1317,6 +1317,8 @@ async function cmdDev() {
     // from every other dev run you have open.
     const iconSrc = cfg.icon || 'icon.png';
     if (await exists(iconSrc)) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
+    // About-panel credit line (see the TinyjsAttribution plist key).
+    if (cfg.attribution) devEnv.TINYJS_ATTRIBUTION = String(cfg.attribution);
     // Linux: the app id names the WM class (window ↔ .desktop matching).
     if (IS_LINUX) devEnv.TINYJS_APP_ID = cfg.id;
     // Dev always has devtools (F12), whatever the manifest says — the
@@ -1608,6 +1610,14 @@ async function cmdBuild() {
     const ua = escXml(cfg.userAgent);
     extraKeys += `
   <key>TinyjsUserAgent</key>     <string>${ua}</string>`;
+  }
+  if (cfg.attribution) {
+    // About-panel credit line (#8): a bundled Credits.html wins over it, and
+    // the tinyjs default stays when neither is set. Dev carries it in env
+    // (cmdDev); LaunchServices starts the packaged launcher, so the plist
+    // carries it there.
+    extraKeys += `
+  <key>TinyjsAttribution</key>   <string>${escXml(cfg.attribution)}</string>`;
   }
   if (cfg.url) {
     // "url": the main window starts at this remote page (site wrappers) —

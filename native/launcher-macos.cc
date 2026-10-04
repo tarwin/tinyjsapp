@@ -851,15 +851,28 @@ static const NSInteger kTinyItemDisabled = 1;  // NSMenuItem.tag: app said disab
     return;
   }
   // AppKit shows Resources/Credits.html only when no Credits key is passed
-  // (#8) — defer to a bundled one instead of the tinyjs credit line.
+  // (#8) — defer to a bundled one. Otherwise the manifest "attribution"
+  // string (dev via TINYJS_ATTRIBUTION env, packaged via the
+  // TinyjsAttribution plist key, like TinyjsUserAgent) replaces the tinyjs
+  // credit line for white-labeled apps.
+  NSString *attribution = nil;
+  const char *attr = getenv("TINYJS_ATTRIBUTION");
+  if (attr && *attr) attribution = [NSString stringWithUTF8String:attr];
+  if (!attribution)
+    attribution = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"TinyjsAttribution"];
   NSMutableDictionary *about = [NSMutableDictionary dictionaryWithDictionary:@{
     @"ApplicationName" : ns(g_app_name),
     @"ApplicationVersion" : ns("Version " + g_app_version),
     @"Version" : @"",
   }];
-  if (![[NSBundle mainBundle] pathForResource:@"Credits" ofType:@"html"])
+  if ([[NSBundle mainBundle] pathForResource:@"Credits" ofType:@"html"]) {
+    // no Credits key → AppKit shows the bundled Credits.html
+  } else if (attribution.length) {
+    about[@"Credits"] = [[NSAttributedString alloc] initWithString:attribution];
+  } else {
     about[@"Credits"] = [[NSAttributedString alloc]
         initWithString:@"Made with tinyjs — https://tinyjs.app"];
+  }
   [NSApp orderFrontStandardAboutPanelWithOptions:about];
 }
 - (void)doQuit:(id)sender {
