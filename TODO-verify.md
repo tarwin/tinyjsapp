@@ -2845,3 +2845,11 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   its `http://` URL.)* Comments in both launchers record why this is safe.
 - [ ] **Linux, same** — run `test/file-access/` (README there). This is the
   OS the issue named.
+- [ ] **Windows, no handle growth from closed windows (#30.7)** — the
+  `UncHandler` "registered without unregister" item. It's tied to its
+  webview, and closing a window Close()s the controller and releases
+  ctrl + wv (code read; comment at `install_unc_for`), so no code change.
+  To confirm: in kitchen-sink, open and close a `tiny.win.open` window
+  about 30 times and watch the launcher's Handles column in Task Manager
+  (Details tab, add the column). It should level off rather than climb
+  with each window.

@@ -3659,6 +3659,10 @@ struct UncHandler : public ICoreWebView2WebResourceRequestedEventHandler {
 
 // Register the UNC interceptor on ANY webview (main + every secondary —
 // a satellite window playing a network-share track needs it just as much).
+// Never unregistered, like every handler here: it lives exactly as long as
+// its webview. A secondary window's WM_DESTROY Close()s the controller,
+// which drops its handlers (this one releasing its env ref with it), then
+// releases ctrl + wv; main's lives as long as the app (#30.7 asked).
 static void install_unc_for(ICoreWebView2 *wv) {
   if (!wv)
     return;
