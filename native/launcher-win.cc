@@ -5398,6 +5398,18 @@ struct NavDoneHandler : public ICoreWebView2NavigationCompletedEventHandler {
         CoTaskMemFree(s);
       }
       nav_event(winid, "finish", url);
+      // A navigation that completes after the window's first composition
+      // (a dev server mid-handshake, a slow first page) otherwise arrives on
+      // a surface that never invalidated — content loaded, window blank,
+      // until something else changes the client rect (#32: attaching a menu
+      // was the one workaround). Re-applying the current bounds is visually
+      // a no-op for windows that already paint and forces the present when
+      // one doesn't.
+      if (TinyWin *tw = win_for_id(winid); tw && tw->ctrl) {
+        RECT rc;
+        GetClientRect(tw->hwnd, &rc);
+        tw->ctrl->put_Bounds(rc);
+      }
       return S_OK;
     }
     COREWEBVIEW2_WEB_ERROR_STATUS st = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
