@@ -2755,9 +2755,16 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   in `media_scheme_cb`. **Built on macOS only, never compiled on Linux**,
   so build it first. Run `test/proxy-gate/` (README there): `app` should
   read the secret, `iframe-cors` should fail, and `nav` should be absent.
-  Then the wrapped-site trio, and one internet-radio app by ear. Also
+  Then the wrapped-site trio. Also
   check: does WebKitGTK give the scheme handler an `Origin` header? If the
   refusal line for the iframe names `file://` instead of
   `http://127.0.0.1:8765`, it doesn't, and only the main-frame fallback is
   working. Note which, since that decides whether iframes inside an app
   page are covered on Linux.
+- [x] **Linux, by ear** — internet radio through the gated proxy still
+  plays. *(2026-10-04: confirmed by the user on Linux. The launcher
+  compiles and the app's own page passes the gate. The adversarial probes
+  above are still open.)*
+- [x] **Windows, regression** — no proxy on Windows (`proxyURL` is
+  mac + Linux), but internet radio was re-checked on this branch.
+  *(2026-10-04: confirmed working by the user.)*
