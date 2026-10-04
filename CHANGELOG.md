@@ -4,6 +4,42 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.47.0 — 2026-10-04
+
+Security fixes from the rest of #30's audit. Thanks to
+[@slabbdev](https://github.com/slabbdev) for the report
+([#30](https://github.com/tarwin/tinyjsapp/issues/30)).
+
+- **`tiny.proxyURL` serves only the app's own pages.** The `tiny-media://`
+  proxy fetches any http(s) URL and answers with CORS open, so any page
+  that could reach it could read any site or local-network URL the machine
+  can, including a wrapped site or a third-party iframe. The proxy now
+  serves only the app's own pages and the dev server. **Wrapped sites that
+  use `tiny.proxyURL` need `"media.proxy"` in their `"api".origins` key.**
+  It also refuses to serve pages, which closes a trick where a frame loaded
+  its own page through the proxy and then read anything same-origin. macOS
+  and Linux (Windows has no proxy).
+- **Other URL schemes go to `onNavigate`, blocked by default.** Links and
+  navigations to `mailto:`, `ms-settings:`, `someapp://` and the like, in
+  any frame, never reached `onNavigate`. On Windows, WebView2 offered to
+  open them with its own prompt. They now get a `kind: 'policy'` call on
+  all three platforms. Return `'external'` to hand the URL to the OS;
+  anything else, or no answer, blocks it. **A `mailto:` link in a wrapped
+  site now does nothing unless `onNavigate` returns `'external'`.**
+  `isMainFrame` is `null` where the engine can't tell (Linux and Windows).
+- **`tinyjs update` runs the installer that came with your install**
+  instead of downloading it from tinyjs.app each time, so the website no
+  longer runs code on your machine at every update. It downloads from
+  GitHub and checks the release checksums as before. An install in a custom
+  `TINYJS_HOME` now updates in place instead of moving to the default
+  location. `tinyjs update --dry-run` shows what it would run.
+- **`TINYJS_DEBUG` no longer prints clipboard contents or keychain
+  values.** The message trace shows `[redacted]` for those calls and their
+  replies.
+- **Docs:** what `*` matches in `"api".origins` keys (any characters,
+  dots included: never end a key with `*` after the host), and the
+  `onNavigate` example compares origins exactly.
+
 ## 0.46.0 — 2026-10-02
 
 Security fixes. Thanks to [@slabbdev](https://github.com/slabbdev)

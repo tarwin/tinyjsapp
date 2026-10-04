@@ -171,6 +171,18 @@
   <section>
 
     <div class="rel">
+      <h2>0.47.0 <span class="date">2026-10-04</span></h2>
+      <p>Security fixes from the rest of #30's audit. Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the report (<a href="https://github.com/tarwin/tinyjsapp/issues/30">#30</a>).</p>
+      <ul>
+        <li><b><code>tiny.proxyURL</code> serves only the app's own pages.</b> The <code>tiny-media://</code> proxy fetches any http(s) URL and answers with CORS open, so any page that could reach it could read any site or local-network URL the machine can, including a wrapped site or a third-party iframe. The proxy now serves only the app's own pages and the dev server. <b>Wrapped sites that use <code>tiny.proxyURL</code> need <code>"media.proxy"</code> in their <code>"api".origins</code> key.</b> It also refuses to serve pages, which closes a trick where a frame loaded its own page through the proxy and then read anything same-origin. macOS and Linux (Windows has no proxy).</li>
+        <li><b>Other URL schemes go to <code>onNavigate</code>, blocked by default.</b> Links and navigations to <code>mailto:</code>, <code>ms-settings:</code>, <code>someapp://</code> and the like, in any frame, never reached <code>onNavigate</code>. On Windows, WebView2 offered to open them with its own prompt. They now get a <code>kind: 'policy'</code> call on all three platforms. Return <code>'external'</code> to hand the URL to the OS; anything else, or no answer, blocks it. <b>A <code>mailto:</code> link in a wrapped site now does nothing unless <code>onNavigate</code> returns <code>'external'</code>.</b> <code>isMainFrame</code> is <code>null</code> where the engine can't tell (Linux and Windows).</li>
+        <li><b><code>tinyjs update</code> runs the installer that came with your install</b> instead of downloading it from tinyjs.app each time, so the website no longer runs code on your machine at every update. It downloads from GitHub and checks the release checksums as before. An install in a custom <code>TINYJS_HOME</code> now updates in place instead of moving to the default location. <code>tinyjs update --dry-run</code> shows what it would run.</li>
+        <li><b><code>TINYJS_DEBUG</code> no longer prints clipboard contents or keychain values.</b> The message trace shows <code>[redacted]</code> for those calls and their replies.</li>
+        <li><b>Docs:</b> what <code>*</code> matches in <code>"api".origins</code> keys (any characters, dots included: never end a key with <code>*</code> after the host), and the <code>onNavigate</code> example compares origins exactly.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.46.0 <span class="date">2026-10-02</span></h2>
       <p>Security fixes. Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the reports (<a href="https://github.com/tarwin/tinyjsapp/issues/18">#18</a>, <a href="https://github.com/tarwin/tinyjsapp/issues/29">#29</a>).</p>
       <ul>
