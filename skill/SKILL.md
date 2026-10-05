@@ -17,7 +17,7 @@ app's own pages and the origins `"api"` trusts: `tiny.proxyURL`'s
 `tiny-media://` proxy (cross-origin http(s) reads, macOS + Linux;
 `media.proxy`) and mic/camera (`media.microphone` / `media.camera`).
 
-Current release: 0.48.0. App floors: macOS 15+ — a default build opens only
+Current release: 0.49.0. App floors: macOS 15+ — a default build opens only
 on the build Mac's CPU (`build --arch arm64|x86_64` or `--universal` for the
 other); Windows 10/11 (WebView2); Linux glibc 2.35+ (Ubuntu 22.04 / Debian 12
 / Mint 21 and up).

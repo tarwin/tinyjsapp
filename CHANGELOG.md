@@ -4,6 +4,36 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.49.0 — 2026-10-05
+
+Thanks to [@slabbdev](https://github.com/slabbdev) for the About-panel
+change ([#37](https://github.com/tarwin/tinyjsapp/pull/37)) and to
+[@cfjedimaster](https://github.com/cfjedimaster) for the report
+([#41](https://github.com/tarwin/tinyjsapp/issues/41)).
+
+- **macOS: your own credits in the About panel.** A `Credits.html` in the
+  project root is bundled into the app by `tinyjs build`, and the standard
+  About panel shows it (links work) instead of "Made with tinyjs". Start it
+  with `<meta charset="utf-8">` and set a font, or AppKit reads it as
+  Latin-1 and sets it in Times. Without a `Credits.html`, `"attribution":
+  "…"` in tinyjs.json replaces the credit line with your own
+  ([#37](https://github.com/tarwin/tinyjsapp/pull/37)).
+- **`tinyjs build` / `tinyjs dev` say "run `npm install` first"** when a
+  bundler project (`--template …`) has no `node_modules`, instead of
+  failing inside the project's own tools. That was a TypeScript
+  `Cannot find type definition file for 'vite/client'` error with a global
+  `tsc` installed. A `node_modules` in a parent folder (workspaces) and
+  Yarn PnP both count
+  ([#41](https://github.com/tarwin/tinyjsapp/issues/41)).
+- **A backend entry at the project root builds.** With `"backend":
+  "main.js"` the build copied the whole project, including its own build
+  folder, into the app until it failed with `ENAMETOOLONG`. It now skips
+  `.build`, `node_modules`, `dist`, `.git` and the frontend folders.
+- **Docs:** the project folders are conventions, now documented:
+  `"backend"` picks the backend entry (its folder is the backend's root),
+  and `"frontend": { "dir": "…" }` picks the plain page folder (default
+  `src/frontend`).
+
 ## 0.48.0 — 2026-10-05
 
 Thanks to [@slabbdev](https://github.com/slabbdev) for the report, triage

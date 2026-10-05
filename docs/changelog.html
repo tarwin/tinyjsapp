@@ -171,6 +171,17 @@
   <section>
 
     <div class="rel">
+      <h2>0.49.0 <span class="date">2026-10-05</span></h2>
+      <p>Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the About-panel change (<a href="https://github.com/tarwin/tinyjsapp/pull/37">#37</a>) and to <a href="https://github.com/cfjedimaster">@cfjedimaster</a> for the report (<a href="https://github.com/tarwin/tinyjsapp/issues/41">#41</a>).</p>
+      <ul>
+        <li><b>macOS: your own credits in the About panel.</b> A <code>Credits.html</code> in the project root is bundled into the app by <code>tinyjs build</code>, and the standard About panel shows it (links work) instead of "Made with tinyjs". Start it with <code>&lt;meta charset="utf-8"&gt;</code> and set a font, or AppKit reads it as Latin-1 and sets it in Times. Without a <code>Credits.html</code>, <code>"attribution": "…"</code> in tinyjs.json replaces the credit line with your own (<a href="https://github.com/tarwin/tinyjsapp/pull/37">#37</a>).</li>
+        <li><b><code>tinyjs build</code> / <code>tinyjs dev</code> say "run <code>npm install</code> first"</b> when a bundler project (<code>--template …</code>) has no <code>node_modules</code>, instead of failing inside the project's own tools. That was a TypeScript <code>Cannot find type definition file for 'vite/client'</code> error with a global <code>tsc</code> installed. A <code>node_modules</code> in a parent folder (workspaces) and Yarn PnP both count (<a href="https://github.com/tarwin/tinyjsapp/issues/41">#41</a>).</li>
+        <li><b>A backend entry at the project root builds.</b> With <code>"backend": "main.js"</code> the build copied the whole project, including its own build folder, into the app until it failed with <code>ENAMETOOLONG</code>. It now skips <code>.build</code>, <code>node_modules</code>, <code>dist</code>, <code>.git</code> and the frontend folders.</li>
+        <li><b>Docs:</b> the project folders are conventions, now documented: <code>"backend"</code> picks the backend entry (its folder is the backend's root), and <code>"frontend": { "dir": "…" }</code> picks the plain page folder (default <code>src/frontend</code>).</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.48.0 <span class="date">2026-10-05</span></h2>
       <p>Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the report, triage and fix (<a href="https://github.com/tarwin/tinyjsapp/issues/36">#36</a>, <a href="https://github.com/tarwin/tinyjsapp/pull/38">#38</a>) and to <a href="https://github.com/zmila">@zmila</a> for tracking down the Windows blank window (<a href="https://github.com/tarwin/tinyjsapp/issues/32">#32</a>).</p>
       <ul>
