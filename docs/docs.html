@@ -452,6 +452,10 @@
   <i>// macOS About menu item fires onMenu('about') / the 'menu' event instead of</i>
   <i>// showing the standard panel ('about' becomes a reserved menu-item id)</i>
   "about": "menu",
+  <i>// the standard About panel's credit line, in place of "Made with tinyjs".</i>
+  <i>// A Credits.html in the project root wins over it: `tinyjs build` bundles</i>
+  <i>// it into Resources/ and the panel shows it (links work). macOS only</i>
+  "attribution": "© 2026 You — made with tinyjs",
   <i>// stale saved positions (an unplugged display) auto-rescue windows onto a</i>
   <i>// live screen; false if your app parks windows off-screen on purpose —</i>
   <i>// win.ensureOnScreen() stays available either way (default: true)</i>

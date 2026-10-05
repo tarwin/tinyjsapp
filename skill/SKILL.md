@@ -72,6 +72,8 @@ tinyjs.json          { name, title, size, id, version, icon?,
                        offscreenRescue?: false, windowPlacement?: true,
                        contextMenu?: false, audioTap?: "app" | "system",
                        audioTapReason?: "why", about?: "menu",
+                       attribution?: "…",  // About panel credit line (macOS);
+                                           // a project-root Credits.html wins
                        debug?: true | "open", browserAccelerators?: true,
                        permissions?: { microphone?: "why", camera?: "why",
                                        speechRecognition?: "why" },

@@ -165,7 +165,11 @@ tiny.menu.set([
     { id: 'more', label: 'More', submenu: [{ id: 'a', label: 'Sub' }] },
   ]}]);
 tiny.menu.on((id) => ...);   // "about": "menu" in tinyjs.json routes macOS's
-                             // About item here as id 'about' (own panel)
+                             // About item here as id 'about' (own panel).
+                             // To keep the standard panel but change its
+                             // credit: Credits.html in the project root
+                             // (bundled by `tinyjs build`, shown with its
+                             // links), else "attribution": "…" in tinyjs.json
 tiny.menu.update('mute', { checked: false, label: 'Unmuted' });
 await tiny.menu.get('mute');   // { exists, label, checked, enabled }
 ```
