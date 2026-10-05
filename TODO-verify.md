@@ -3080,3 +3080,12 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   with the message; after `npm install`, `tinyjs build` packages the app.)*
 - [ ] **Windows** — the parent-dir walk handles `C:\\…` paths: an
   uninstalled template stops with the message, and an installed one builds.
+- [x] **macOS, backend entry at the project root** (`"backend": "main.js"`)
+  — the build copies the entry's folder, which is the project root, so it
+  copied `.build` into itself until `ENAMETOOLONG`. Now `.build`,
+  `node_modules`, `dist`, `.git`, `frontend` and the configured
+  frontend dir/dist are skipped. *(2026-10-05: a scratch app crashed with
+  ENAMETOOLONG before; after the change it builds with a 1 MB `.build`. A
+  normal `src/` app still copies just `src/main.js`, with its frontend
+  separate.)* Known leftover: a root entry still carries `src/` (and a
+  `src/frontend` inside it) as extra files.

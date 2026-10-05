@@ -483,11 +483,23 @@ async function generateBuild(cfg, dev = false) {
                '--outfile=' + B + '/src/main.js']));
     entryName = 'main.js';
   } else {
-    // Copy the backend dir (minus a nested frontend/, for src/ layouts).
+    // Copy the backend dir: the folder the entry sits in is the backend's
+    // root ("backend": "server/index.js" → server/). Minus a nested
+    // frontend/ (src/ layouts) and anything that isn't backend source, which
+    // matters once the entry sits at the project root ("backend":
+    // "main.js"): .build is where this copy is GOING (copying it recursed
+    // until ENAMETOOLONG), and node_modules / dist / .git / the frontend
+    // folder would bloat the app. A plain-JS backend can't import from
+    // node_modules anyway; bundle (a .ts entry) to use npm packages.
     await tjs.makeDir(B + '/src');
+    const fe0 = cfg.frontend ?? {};
+    const skip = new Set(['frontend', '.build', 'node_modules', 'dist', '.git']);
+    if (entryDir === '.') {
+      for (const d of [fe0.dir, fe0.dist]) if (d) skip.add(String(d).replace(/^\.\//, '').split('/')[0]);
+    }
     const iter = await tjs.readDir(entryDir);
     for await (const e of iter) {
-      if (e.name === 'frontend') continue;
+      if (skip.has(e.name)) continue;
       const s = entryDir + '/' + e.name;
       const d = B + '/src/' + e.name;
       if (e.isDirectory) await copyTree(s, d);
