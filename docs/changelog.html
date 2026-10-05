@@ -171,6 +171,17 @@
   <section>
 
     <div class="rel">
+      <h2>0.48.0 <span class="date">2026-10-05</span></h2>
+      <p>Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the report, triage and fix (<a href="https://github.com/tarwin/tinyjsapp/issues/36">#36</a>, <a href="https://github.com/tarwin/tinyjsapp/pull/38">#38</a>) and to <a href="https://github.com/zmila">@zmila</a> for tracking down the Windows blank window (<a href="https://github.com/tarwin/tinyjsapp/issues/32">#32</a>).</p>
+      <ul>
+        <li><b>A page's <code>tiny.win.printToPDF(path)</code> can't write just anywhere.</b> <code>win.*</code> is part of the <code>"wrapper"</code> preset, so a wrapped site could write PDF bytes over any file the user can write. From the app's own pages nothing changes. <b>From any other origin, the PDF is written directly only into Downloads (a bare file name lands there), the app's data folder or the temp folder; any other path opens a save panel pre-filled with the name, and cancelling rejects.</b> Backend <code>app.printToPDF</code> is unchanged. All platforms (<a href="https://github.com/tarwin/tinyjsapp/issues/36">#36</a>).</li>
+        <li><b>Windows: an app whose first page is <code>http</code> no longer opens blank.</b> The launcher cancels a page's first load to ask <code>onNavigate</code>, then retries it. On a cold start WebView2 takes ~800ms to finish the cancel, and the retry, sent before that, was silently dropped. That hit every dev-server app (<code>--template react-ts</code>, <code>svelte-ts</code>) and wrapped sites; adding a menu only hid it by changing the timing. The retry now waits for the cancel to finish (<a href="https://github.com/tarwin/tinyjsapp/issues/32">#32</a>).</li>
+        <li><b><code>tinyjs dev</code> no longer reports its own entry file as an opened document.</b> Every dev launch sent an <code>open-files</code> event naming <code>.build/app/entry.js</code>; parsing the command line for documents now only happens in built apps (<a href="https://github.com/tarwin/tinyjsapp/pull/38">#38</a>).</li>
+        <li><b>Linux: <code>app.paths</code> Downloads, Desktop and Documents follow the user's real folders</b> (<code>user-dirs.dirs</code>, so a translated <code>~/Téléchargements</code> works), the same ones the launcher already used.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.47.1 <span class="date">2026-10-04</span></h2>
       <p>Security fix. Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the report (<a href="https://github.com/tarwin/tinyjsapp/issues/30">#30</a>).</p>
       <ul>

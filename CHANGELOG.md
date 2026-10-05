@@ -4,6 +4,39 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.48.0 — 2026-10-05
+
+Thanks to [@slabbdev](https://github.com/slabbdev) for the report, triage
+and fix ([#36](https://github.com/tarwin/tinyjsapp/issues/36),
+[#38](https://github.com/tarwin/tinyjsapp/pull/38)) and to
+[@zmila](https://github.com/zmila) for tracking down the Windows blank
+window ([#32](https://github.com/tarwin/tinyjsapp/issues/32)).
+
+- **A page's `tiny.win.printToPDF(path)` can't write just anywhere.**
+  `win.*` is part of the `"wrapper"` preset, so a wrapped site could write
+  PDF bytes over any file the user can write. From the app's own pages
+  nothing changes. **From any other origin, the PDF is written directly
+  only into Downloads (a bare file name lands there), the app's data folder
+  or the temp folder; any other path opens a save panel pre-filled with the
+  name, and cancelling rejects.** Backend `app.printToPDF` is unchanged.
+  All platforms ([#36](https://github.com/tarwin/tinyjsapp/issues/36)).
+- **Windows: an app whose first page is `http` no longer opens blank.**
+  The launcher cancels a page's first load to ask `onNavigate`, then
+  retries it. On a cold start WebView2 takes ~800ms to finish the cancel,
+  and the retry, sent before that, was silently dropped. That hit every
+  dev-server app (`--template react-ts`, `svelte-ts`) and wrapped sites;
+  adding a menu only hid it by changing the timing. The retry now waits
+  for the cancel to finish
+  ([#32](https://github.com/tarwin/tinyjsapp/issues/32)).
+- **`tinyjs dev` no longer reports its own entry file as an opened
+  document.** Every dev launch sent an `open-files` event naming
+  `.build/app/entry.js`; parsing the command line for documents now only
+  happens in built apps
+  ([#38](https://github.com/tarwin/tinyjsapp/pull/38)).
+- **Linux: `app.paths` Downloads, Desktop and Documents follow the user's
+  real folders** (`user-dirs.dirs`, so a translated `~/Téléchargements`
+  works), the same ones the launcher already used.
+
 ## 0.47.1 — 2026-10-04
 
 Security fix. Thanks to [@slabbdev](https://github.com/slabbdev) for the
