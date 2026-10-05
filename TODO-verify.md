@@ -3053,3 +3053,17 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   `tiny.win.open('w2', { page: 'http://…/sec.html', size: '420x300' })`.
   It got `NAVQ n4 w2` → `allow` → `start`/`finish`, painted, and reported
   `innerWidth`×`innerHeight` = 420×300.)*
+
+## PR #37 — Credits.html / "attribution" in the macOS About panel (2026-10-05)
+
+- [x] **macOS, `Credits.html`** — `tinyjs build` copies a project-root
+  `Credits.html` into `Contents/Resources/`, and the launcher then omits
+  its own `Credits` key so AppKit shows the file. *(2026-10-05: scratch
+  app built with this branch's rebuilt launcher; the file was in
+  Resources/, `codesign --verify --strict` passed, and the About panel
+  showed the Credits.html content and link in place of "Made with
+  tinyjs" (seen by the user).)*
+- [ ] **macOS, `"attribution"`** — with no Credits.html, an `"attribution"`
+  string in tinyjs.json replaces the credit line, in `tinyjs dev`
+  (TINYJS_ATTRIBUTION env) and a built app (TinyjsAttribution plist key).
+  An app with neither still shows "Made with tinyjs".
