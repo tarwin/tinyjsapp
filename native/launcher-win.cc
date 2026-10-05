@@ -90,9 +90,6 @@
 // globals
 
 static webview_t g_w = nullptr;
-// First-paint nudge bookkeeping (#32; see first_paint_nudge).
-static std::map<std::string, bool> g_first_paint_done;
-static std::map<UINT_PTR, std::string> g_first_paint_timer;
 static HANDLE g_pipe = INVALID_HANDLE_VALUE;
 static std::mutex g_write_mutex;
 static HWND g_hwnd = nullptr;
@@ -184,6 +181,8 @@ static void emit_winstate(HWND hwnd, int focused = -1);
 static void route_ret(webview_t w, const std::string &composite, int status,
                       const std::string &json);
 static void secwin_eval(const std::string &id, const std::string &js);
+// A closed window's pending NAV re-issue state (#32), defined with NAVQ/NAVR.
+static void nav_forget_window(const std::string &id);
 // '' / "main" = the main webview; otherwise that secondary window's, so
 // print and printToPDF capture the page that asked for them.
 static ICoreWebView2 *wv2_for_id(const std::string &id);
@@ -4975,7 +4974,7 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
       tw->menu.bar = nullptr;
       g_windows.erase(id);
       g_last_winstate.erase(id);
-      g_first_paint_done.erase(id); // a reopened id gets its own first paint
+      nav_forget_window(id);
       pipe_write_line("WINCLOSED " + id);
       if (tw->ctrl) {
         tw->ctrl->Close();
@@ -5253,9 +5252,27 @@ struct NavPending {
   UINT_PTR timer = 0;
   bool reload = false; // re-issue with Reload(), not Navigate()
   bool other = false;  // other URL scheme (#30): only 'external' launches it
+  UINT64 nav_id = 0;   // the navigation we cancelled for this ask
 };
 static std::map<std::string, NavPending> g_nav_pending; // qid -> ask
 static std::map<UINT_PTR, std::string> g_nav_timer_qid; // timer -> qid
+// The re-issue has to wait for WebView2 to finish the navigation we cancelled
+// (#32). A Navigate() issued before that cancel's NavigationCompleted returns
+// S_OK and is silently dropped: no NavigationStarting, no completion, the
+// window stays on about:blank. At startup the browser process is cold and the
+// cancel takes ~800ms to complete while the backend answers in the same tick,
+// so the app's FIRST http load (a dev server, a wrapped site) was always lost.
+// Later navigations got away with it because their cancel finished first.
+// win -> id of a cancelled navigation whose completion hasn't arrived yet:
+static std::map<std::string, UINT64> g_nav_cancel_open;
+// win -> an allowed re-issue held until that completion (or the fallback):
+struct NavReissue {
+  NavPending p;
+  UINT_PTR timer = 0;
+};
+static std::map<std::string, NavReissue> g_nav_reissue;
+static std::map<UINT_PTR, std::string> g_nav_reissue_timer; // timer -> win
+static const UINT kNavReissueFallbackMs = 2000;
 // win -> the navigation we cancelled for a policy ask and then re-issued, so
 // its second NavigationStarting passes without asking again. Stamped, because
 // an entry that is never matched used to sit here for the life of the process
@@ -5268,6 +5285,76 @@ struct NavAllowOnce {
 };
 static std::map<std::string, NavAllowOnce> g_nav_allow_once;
 static const ULONGLONG kNavAllowOnceMs = 10000;
+
+// allow: re-issue the navigation we cancelled, marked so the second
+// NavigationStarting passes without another ask. A reload has to go back
+// through Reload() — Navigate()ing the same url instead would drop the
+// page's history entry and turn app.reload() into a fresh load.
+static void nav_reissue(const NavPending &p) {
+  ICoreWebView2 *wv = wv2_for_id(p.win);
+  if (!wv)
+    return;
+  g_nav_allow_once[p.win] = {p.url, GetTickCount64()};
+  if (p.reload)
+    wv->Reload();
+  else
+    wv->Navigate(widen(p.url).c_str());
+}
+
+// Drop a held re-issue without running it: the window navigated somewhere
+// else meanwhile (the newer navigation wins, as in a browser) or closed.
+static void nav_reissue_drop(const std::string &win) {
+  auto it = g_nav_reissue.find(win);
+  if (it == g_nav_reissue.end())
+    return;
+  if (it->second.timer) {
+    KillTimer(nullptr, it->second.timer);
+    g_nav_reissue_timer.erase(it->second.timer);
+  }
+  g_nav_reissue.erase(it);
+}
+
+static void nav_forget_window(const std::string &id) {
+  nav_reissue_drop(id);
+  g_nav_cancel_open.erase(id);
+}
+
+static void nav_reissue_release(const std::string &win) {
+  auto it = g_nav_reissue.find(win);
+  if (it == g_nav_reissue.end())
+    return;
+  NavPending p = it->second.p;
+  nav_reissue_drop(win);
+  nav_reissue(p);
+}
+
+// Fallback: the cancelled navigation's completion never came. Re-issue
+// anyway; that is what happened before, just late enough to usually stick.
+static void CALLBACK nav_reissue_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
+  KillTimer(nullptr, id);
+  auto it = g_nav_reissue_timer.find(id);
+  if (it == g_nav_reissue_timer.end())
+    return;
+  std::string win = it->second;
+  g_nav_reissue_timer.erase(it);
+  auto r = g_nav_reissue.find(win);
+  if (r != g_nav_reissue.end())
+    r->second.timer = 0; // already killed
+  g_nav_cancel_open.erase(win);
+  nav_reissue_release(win);
+}
+
+// NavigationCompleted for `nav_id` in `win`: if it is the cancel a re-issue
+// is waiting on, the re-issue can go now.
+static void nav_cancel_completed(const std::string &win, UINT64 nav_id) {
+  auto c = g_nav_cancel_open.find(win);
+  if (c == g_nav_cancel_open.end() || c->second != nav_id)
+    return;
+  g_nav_cancel_open.erase(c);
+  auto r = g_nav_reissue.find(win);
+  if (r != g_nav_reissue.end() && r->second.p.nav_id == nav_id)
+    nav_reissue_release(win);
+}
 
 static void nav_apply_verdict(const std::string &qid, int verdict) {
   auto it = g_nav_pending.find(qid);
@@ -5292,18 +5379,17 @@ static void nav_apply_verdict(const std::string &qid, int verdict) {
                   SW_SHOWNORMAL);
     return;
   }
-  // allow: re-issue the navigation we cancelled, marked so the second
-  // NavigationStarting passes without another ask. A reload has to go back
-  // through Reload() — Navigate()ing the same url instead would drop the
-  // page's history entry and turn app.reload() into a fresh load.
-  ICoreWebView2 *wv = wv2_for_id(p.win);
-  if (!wv)
+  // allow — but not before WebView2 has finished the cancel (#32, above).
+  auto c = g_nav_cancel_open.find(p.win);
+  if (c != g_nav_cancel_open.end() && c->second == p.nav_id) {
+    nav_reissue_drop(p.win);
+    UINT_PTR t =
+        SetTimer(nullptr, 0, kNavReissueFallbackMs, nav_reissue_timer_proc);
+    g_nav_reissue[p.win] = {p, t};
+    g_nav_reissue_timer[t] = p.win;
     return;
-  g_nav_allow_once[p.win] = {p.url, GetTickCount64()};
-  if (p.reload)
-    wv->Reload();
-  else
-    wv->Navigate(widen(p.url).c_str());
+  }
+  nav_reissue(p);
 }
 
 static void CALLBACK nav_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
@@ -5374,6 +5460,8 @@ struct NavStartHandler : public ICoreWebView2NavigationStartingEventHandler {
         return S_OK;
       }
     }
+    // Any other navigation supersedes a re-issue still waiting on its cancel.
+    nav_reissue_drop(winid);
     bool http = url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
     // What kind of navigation this is decides whether it can survive the ask
     // at all: the ask is implemented as cancel + re-issue (NavigationStarting
@@ -5401,10 +5489,14 @@ struct NavStartHandler : public ICoreWebView2NavigationStartingEventHandler {
     // 'allow'; the cancelled attempt emits no start (the re-issue does), and
     // its OPERATION_CANCELED completion is suppressed as noise below.
     args->put_Cancel(TRUE);
+    UINT64 nav_id = 0;
+    args->get_NavigationId(&nav_id);
+    g_nav_cancel_open[winid] = nav_id; // re-issue waits for its completion
     std::string qid = "n" + std::to_string(++g_nav_seq);
     UINT_PTR t = SetTimer(nullptr, 0, 400, nav_timer_proc);
     g_nav_pending[qid] = {winid, url, t,
-                          kind == COREWEBVIEW2_NAVIGATION_KIND_RELOAD};
+                          kind == COREWEBVIEW2_NAVIGATION_KIND_RELOAD, false,
+                          nav_id};
     g_nav_timer_qid[t] = qid;
     pipe_write_line("NAVQ " + qid + " " + winid + "\t" + url + "\tmain");
     return S_OK;
@@ -5463,64 +5555,15 @@ struct ContentLoadingHandler : public ICoreWebView2ContentLoadingEventHandler {
   }
 };
 
-// First paint (#32). A navigation that completes after the window's first
-// composition (an http dev server mid-handshake; file:// pages are already
-// there) can land on a surface that never invalidated: content loaded,
-// window blank until the client rect changes. Attaching a menu bar did that
-// (WM_SIZE -> new bounds), which is why an app.setMenu() call "fixed" it.
-// So on each window's first successful navigation, do the same thing on
-// purpose: shrink the controller's bounds by 1px, and restore them from the
-// host's client rect a frame or two later (two puts back-to-back can
-// coalesce into none). Main's controller sits in the webview library's
-// widget window; a secondary's in its own HWND.
-static bool first_paint_target(const std::string &winid,
-                               ICoreWebView2Controller **ctrl, HWND *host) {
-  if (winid.empty() || winid == "main") {
-    *ctrl = g_ctrl;
-    *host = (HWND)webview_get_native_handle(
-        g_w, WEBVIEW_NATIVE_HANDLE_KIND_UI_WIDGET);
-  } else {
-    TinyWin *tw = win_for_id(winid);
-    *ctrl = tw ? tw->ctrl : nullptr;
-    *host = tw ? tw->hwnd : nullptr;
-  }
-  return *ctrl && *host;
-}
-static void CALLBACK first_paint_restore(HWND, UINT, UINT_PTR id, DWORD) {
-  KillTimer(nullptr, id);
-  auto it = g_first_paint_timer.find(id);
-  if (it == g_first_paint_timer.end())
-    return;
-  std::string winid = it->second;
-  g_first_paint_timer.erase(it);
-  ICoreWebView2Controller *ctrl;
-  HWND host;
-  RECT rc;
-  if (first_paint_target(winid, &ctrl, &host) && GetClientRect(host, &rc))
-    ctrl->put_Bounds(rc);
-}
-static void first_paint_nudge(const std::string &winid) {
-  if (g_first_paint_done[winid])
-    return;
-  g_first_paint_done[winid] = true;
-  ICoreWebView2Controller *ctrl;
-  HWND host;
-  RECT rc;
-  if (!first_paint_target(winid, &ctrl, &host) || !GetClientRect(host, &rc) ||
-      rc.bottom - rc.top < 2)
-    return;
-  RECT shrunk = rc;
-  shrunk.bottom -= 1;
-  ctrl->put_Bounds(shrunk);
-  g_first_paint_timer[SetTimer(nullptr, 0, 50, first_paint_restore)] = winid;
-}
-
 struct NavDoneHandler : public ICoreWebView2NavigationCompletedEventHandler {
   TINY_COM_BOILERPLATE(ICoreWebView2NavigationCompletedEventHandler)
   std::string winid;
   HRESULT STDMETHODCALLTYPE
   Invoke(ICoreWebView2 *sender,
          ICoreWebView2NavigationCompletedEventArgs *args) override {
+    UINT64 nav_id = 0;
+    args->get_NavigationId(&nav_id);
+    nav_cancel_completed(winid, nav_id); // may release a held re-issue (#32)
     BOOL ok = FALSE;
     args->get_IsSuccess(&ok);
     if (ok) {
@@ -5531,7 +5574,6 @@ struct NavDoneHandler : public ICoreWebView2NavigationCompletedEventHandler {
         CoTaskMemFree(s);
       }
       nav_event(winid, "finish", url);
-      first_paint_nudge(winid);
       return S_OK;
     }
     COREWEBVIEW2_WEB_ERROR_STATUS st = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;

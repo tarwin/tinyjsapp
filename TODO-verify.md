@@ -2964,21 +2964,64 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   `q<digits>` back as GOT; `gtk_file_chooser_set_current_name`). Same
   four cases plus the own-page one. The panel should show the suggested
   name.
-- [ ] **Windows, same** — **not compiled on Windows** (`route_ret` routes
-  `q<digits>`; `IFileSaveDialog::SetFileName`). Same cases with Windows
-  paths (`%USERPROFILE%\Downloads`).
-- [ ] **Windows, blank first window with a dev server (#32)** — **not
-  compiled on Windows.** On each window's first successful navigation, the
-  launcher shrinks the WebView2 controller's bounds by 1px and restores them
-  50 ms later: the same real size change that attaching a menu caused.
-  It covers main (`g_ctrl` in the library's widget window) and secondary
-  windows. PR #39's version re-applied the SAME bounds, and only for
-  secondary windows (`win_for_id("main")` is null), so it couldn't reach
-  this case.
-  1. **Reproduce first, on the current release:** `tinyjs new r --template
-     react-ts`, `npm install`, `tinyjs dev`, with no `setMenu` call. Is the
-     window blank?
-  2. **Then on this branch:** the same project paints the React page. No
-     visible 1px jump on a file:// app, and resizing still tracks.
-- [ ] **Windows, `tiny.win.open` window** still paints and sizes correctly
-  (secondary path).
+- [x] **Windows, same** — compiles clean (MinGW g++ 16.1) (`route_ret` routes
+  `q<digits>`; `IFileSaveDialog::SetFileName`). *(2026-10-04, a wrapped
+  `http://127.0.0.1:8766` page with `win.*` + `store.*` granted, in
+  `tinyjs dev`, `TINYJS_TEST_AUTODLG=cancel`. The page was loaded by a CDP
+  re-navigation, because the wrapped URL's FIRST load never arrives (the
+  #32 entry below).)*
+  - `%USERPROFILE%\probe36-victim.txt` got a panel and was **not** written
+    (still `ORIGINAL`). Unanswered, the panel opens in Downloads with
+    `probe36-victim.txt` filled in and `*.pdf` as the type.
+  - Written directly: `probe36.pdf` → `%USERPROFILE%\Downloads\probe36.pdf`;
+    `%TEMP%\probe36.pdf`, also with forward slashes; the app's
+    `%APPDATA%\<id>\`; `c:\USERS\TARWIN\downloads\…` (case-folded).
+  - Panel → cancelled → rejected: `Downloads\..\x`, `Downloads/..\x`,
+    `Downloads.\x` (Win32 would trim it to `Downloads`; refused anyway),
+    `\\localhost\c$\…`, `\\?\C:\…`, `C:x.pdf` (drive-relative),
+    `\Users\…` (rooted, no drive), `file:///C:/…`, `sub\..\..\x`, and a
+    name with a tab in it.
+  - `Downloads\.. \x` was judged inside, and WebView2 failed it with
+    `pdf failed`. Nothing landed in the home dir. `Downloads\...\x`, with a
+    real `...` dir present, wrote inside that dir.
+  - An app `file://` page (`TINYJS_HTML`) wrote `%USERPROFILE%\probe36-own.pdf`
+    directly, as before.
+  - **Finding (not a hole):** the bridge's Downloads root is hard-coded as
+    `%USERPROFILE%\Downloads`. On this machine the Downloads known folder is
+    redirected (`\\Mac\Home\Downloads`, which is what the panel shows), so a
+    bare name lands in a folder the user doesn't think of as Downloads. Where
+    that folder doesn't exist, it fails. `FOLDERID_Downloads` /
+    `User Shell Folders` would be the real root.
+- [x] **Windows, blank first window with a dev server (#32)** — the fix is
+  the NAV-ask re-issue, not a repaint. The startup `Navigate(url)` hits our
+  `NavigationStarting`, which cancels it for the policy ask (`NAVQ n1`).
+  The backend answers `allow` in the same tick, and the re-issued
+  `Navigate(url)` went out before WebView2 had finished the navigation we
+  cancelled. It returns `S_OK`, and then nothing happens: no
+  `NavigationStarting`, no completion, `location.href` stays `about:blank`.
+  The only completion is the cancelled one (`OPERATION_CANCELED`), ~830 ms
+  later, while the browser process is still cold. Every http first load
+  was lost this way, a wrapped-site `"url"` included. Later navigations got
+  away with it because their cancel finished first. Now the re-issue waits
+  for that cancel's `NavigationCompleted` (matched by navigation id), with
+  a 2 s timer fallback, and a newer navigation in the window drops it. The
+  1px bounds nudge from 5d4b418 (a guess at a paint bug) is removed.
+  *(2026-10-04/05, Windows, MinGW g++ 16.1, compiles clean.)*
+  - Reproduced first: the react-ts template under `tinyjs dev`, no
+    `setMenu`, is blank on the pre-branch launcher AND on the nudge build.
+    CDP (`--remote-debugging-port`) reads `about:blank`.
+  - Fixed build: the same project paints the React page on the first try,
+    with `start`/`commit`/`finish` in the trace. That held twice in one
+    session, because the dev watcher restarted the app partway through.
+  - A wrapped-site `"url"` app: the first load, then a `location.reload()`
+    (the `Reload()` re-issue path), then a link to a second page. Every
+    step ran with its own `NAVQ`/`allow`/`start`/`finish`.
+  - A `file://` app (no ask) loads as before.
+  - Launching through `Start-Process -WindowStyle Hidden` leaves the main
+    window unpainted, frame and title included. That's the launch flag,
+    not this bug; a normal launch paints.
+- [x] **Windows, `tiny.win.open` window** paints and sizes correctly
+  (secondary path). *(2026-10-05: from the wrapped page above,
+  `tiny.win.open('w2', { page: 'http://…/sec.html', size: '420x300' })`.
+  It got `NAVQ n4 w2` → `allow` → `start`/`finish`, painted, and reported
+  `innerWidth`×`innerHeight` = 420×300.)*
