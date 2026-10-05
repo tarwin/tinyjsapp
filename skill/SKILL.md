@@ -37,9 +37,12 @@ other); Windows 10/11 (WebView2); Linux glibc 2.35+ (Ubuntu 22.04 / Debian 12
 
 ```sh
 tinyjs new <dir>    # scaffold (zero dependencies)
-tinyjs new <dir> --template react-ts|vue-ts|svelte-ts|solid-ts|vanilla-ts|…
+tinyjs new <dir> --template react-ts|vue-ts|svelte-ts|solid-ts|preact-ts|lit-ts|alpine-ts|vanilla-ts|…
                     #   create-vite + tinyjs overlay: HMR dev server in the
-                    #   native window, esbuild-bundled TS backend (npm pkgs ok)
+                    #   native window, esbuild-bundled TS backend (npm pkgs ok).
+                    #   No name = asks framework + language. --pm npm|pnpm|
+                    #   yarn|bun|vp[:pnpm] (else asks; npm off a terminal),
+                    #   --no-install. Agents: pass both flags — no prompts.
 tinyjs wrap <url>   # site wrapper: the site IS the app, origin-gated API
                     #   (--origins subdomains, --menubar [--panel], --top,
                     #   --external a.com, --ua, --force re-wraps in place)

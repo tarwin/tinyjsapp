@@ -642,16 +642,109 @@ tjs.exit(0);
   return B;
 }
 
+// Interactive prompts for `tinyjs new`. Reads can return several typed-ahead
+// lines at once, so whatever follows the first newline waits for the next call.
+// tjs.stdin is a ReadableStream whose isTerminal is a plain boolean.
+const stdinIsTTY = () => {
+  try {
+    const t = tjs.stdin.isTerminal;
+    return !!(typeof t === 'function' ? t.call(tjs.stdin) : t);
+  } catch { return false; }
+};
+// Prompt text with no newline (console.log would add one). The writer lock
+// is released each time so console output in between still works.
+async function writeOut(text) {
+  const w = tjs.stdout.getWriter();
+  try { await w.write(enc.encode(text)); } finally { w.releaseLock(); }
+}
+let stdinRest = '';
+let stdinReader = null;
+async function readLine() {
+  stdinReader ??= tjs.stdin.getReader();
+  while (!stdinRest.includes('\n')) {
+    const { value, done } = await stdinReader.read();
+    if (done) break; // EOF: take what there is
+    stdinRest += dec.decode(value, { stream: true });
+  }
+  const i = stdinRest.indexOf('\n');
+  const line = i === -1 ? stdinRest : stdinRest.slice(0, i);
+  stdinRest = i === -1 ? '' : stdinRest.slice(i + 1);
+  return line.replace(/\r$/, '').trim();
+}
+
+// Numbered menu → the chosen index. Enter takes the default; the number or
+// the item's first word both work; anything else asks again.
+async function chooseTty(title, items, def = 0) {
+  console.log('\n' + title);
+  items.forEach((it, i) => console.log(`  [${i + 1}] ${it}`));
+  for (;;) {
+    await writeOut(`choose [1-${items.length}, enter = ${def + 1}]: `);
+    const a = (await readLine()).toLowerCase();
+    if (a === '') return def;
+    const n = Number(a);
+    if (Number.isInteger(n) && n >= 1 && n <= items.length) return n - 1;
+    const k = items.findIndex((it) => it.split(/\s/)[0].toLowerCase() === a);
+    if (k !== -1) return k;
+  }
+}
+
+// What each package manager runs. vp (Vite+) is a toolchain over one of the
+// others: it scaffolds (and installs) itself, then the project's scripts call
+// vp, so dev/build/install go through the package manager underneath it.
+const PACKAGE_MANAGERS = {
+  // npm's --yes only answers npm's own prompts; create-vite 9's "Install and
+  // start now?" would run `npm run dev` and block here forever (issue #5) —
+  // hence --no-interactive --no-immediate for every flavour.
+  npm: { create: (dir, t) => ['npm', 'create', 'vite@latest', dir, '--yes', '--',
+                              '--template', t, '--no-interactive', '--no-immediate'] },
+  pnpm: { create: (dir, t) => ['pnpm', 'create', 'vite', dir,
+                               '--template', t, '--no-interactive', '--no-immediate'] },
+  yarn: { create: (dir, t) => ['yarn', 'create', 'vite', dir,
+                               '--template', t, '--no-interactive', '--no-immediate'] },
+  bun: { create: (dir, t) => ['bun', 'create', 'vite', dir,
+                              '--template', t, '--no-interactive', '--no-immediate'] },
+};
+const VP_CREATE = (dir, t, under) => ['vp', 'create', 'vite', '--no-interactive', '--no-hooks',
+  '--package-manager', under, '--', dir, '--template', t, '--no-interactive', '--no-immediate'];
+
+// `<pm> --version` → the version, or null when it is missing or broken. On
+// PATH is not enough (a stale shim fails here), and a hung one is killed.
+async function pmVersion(pm) {
+  let p;
+  try { p = tjs.spawn(nodeToolArgv([pm, '--version']), { stdout: 'pipe', stderr: 'ignore' }); }
+  catch { return null; }
+  const timer = setTimeout(() => { try { p.kill(); } catch {} }, 8000);
+  try {
+    const reader = p.stdout.getReader();
+    let out = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      out += dec.decode(value, { stream: true });
+    }
+    const st = await p.wait();
+    if (st.exit_status !== 0 || st.term_signal) return null;
+    return out.match(/\d+\.\d+\.\d+\S*/)?.[0] ?? null;
+  } catch { return null; } finally { clearTimeout(timer); }
+}
+
+const VITE_FRAMEWORKS = ['vanilla', 'react', 'vue', 'svelte', 'solid', 'preact', 'lit', 'alpine'];
+
 // Overlay tinyjs onto a fresh create-vite scaffold: config wired for the dev
 // server + build hook, a backend dir, ambient types, and the agent skill.
-// Vite's own templates stay current upstream — we never fork them.
-async function scaffoldViteTemplate(dir, name, template) {
-  console.log('==> npm create vite (' + template + ')');
-  // npm's --yes only answers npm's own prompts; create-vite 9's "Install and
-  // start now?" would run `npm run dev` and block here forever (issue #5).
-  await run(nodeToolArgv(['npm', 'create', 'vite@latest', dir, '--yes', '--',
-    '--template', template, '--no-interactive', '--no-immediate']));
+// Vite's own templates stay current upstream — we never fork them. Alpine has
+// no create-vite template: it is the vanilla one with Alpine's demo page.
+// opts: { pm: npm|pnpm|yarn|bun|vp, under: vp's package manager, install }
+async function scaffoldViteTemplate(dir, name, template, opts) {
+  const { pm, under, install } = opts;
+  const runner = pm === 'vp' ? under : pm;
   const ts = template.endsWith('-ts');
+  const alpine = template.replace(/-ts$/, '') === 'alpine';
+  const viteTemplate = alpine ? (ts ? 'vanilla-ts' : 'vanilla') : template;
+  console.log(`==> ${pm === 'vp' ? 'vp' : pm} create vite (${viteTemplate})`);
+  await run(nodeToolArgv(pm === 'vp' ? VP_CREATE(dir, viteTemplate, under)
+                                     : PACKAGE_MANAGERS[pm].create(dir, viteTemplate)));
+  if (!(await exists(dir + '/package.json'))) fail(`${pm} create vite did not produce ${dir}/package.json`);
   const backendEntry = 'backend/main.' + (ts ? 'ts' : 'js');
 
   await tjs.writeFile(dir + '/tinyjs.json', enc.encode(JSON.stringify({
@@ -662,9 +755,9 @@ async function scaffoldViteTemplate(dir, name, template) {
     version: '0.1.0',
     backend: backendEntry,
     frontend: {
-      build: 'npm run build',
+      build: runner + ' run build',
       dist: 'dist',
-      dev: 'npm run dev',
+      dev: runner + ' run dev',
       devUrl: 'http://127.0.0.1:5173',
     },
   }, null, 2) + '\n'));
@@ -710,33 +803,153 @@ export function init(app${ts ? ': TinyApp' : ''}) {
   const pkg = JSON.parse(dec.decode(await tjs.readFile(pkgPath)));
   pkg.scripts = pkg.scripts ?? {};
   // --host 127.0.0.1: modern node binds ::1 for 'localhost', which txiki's
-  // IPv4 fetch (our readiness probe) can't reach.
-  pkg.scripts.dev = 'vite --host 127.0.0.1 --port 5173 --strictPort';
+  // IPv4 fetch (our readiness probe) can't reach. Vite+ projects keep their
+  // vp front end (same flags; vp dev/build pass them to Vite).
+  const viteBin = /^vp\b/.test(String(pkg.scripts.dev ?? '')) ? 'vp dev' : 'vite';
+  pkg.scripts.dev = viteBin + ' --host 127.0.0.1 --port 5173 --strictPort';
   pkg.scripts.build = String(pkg.scripts.build ?? 'vite build')
-    .replace('vite build', 'vite build --base=./');
+    .replace(/\b(vite|vp) build\b/, '$1 build --base=./');
+  if (alpine) {
+    pkg.dependencies = { ...pkg.dependencies, alpinejs: '^3' };
+    if (ts) pkg.devDependencies = { ...pkg.devDependencies, '@types/alpinejs': '^3' };
+  }
   await tjs.writeFile(pkgPath, enc.encode(JSON.stringify(pkg, null, 2) + '\n'));
+  if (alpine) await overlayAlpine(dir, name, ts);
 
   await tjs.writeFile(dir + '/icon.png', await tjs.readFile(TOOL_DIR + 'template/icon.png'));
   await writeAgentSkill(dir);
 
-  console.log(`created ${dir}/ (${template} + tinyjs)
-  cd ${dir}
-  npm install
+  // vp create installs on its own; only Alpine's added deps need a re-run.
+  const needInstall = install && (pm !== 'vp' || alpine);
+  if (needInstall) {
+    console.log(`==> ${runner} install`);
+    await run(nodeToolArgv([runner, 'install']), { cwd: dir });
+  }
+  const installed = install || pm === 'vp';
+
+  console.log(`created ${dir}/ (${template} + tinyjs, ${pm === 'vp' ? 'vp + ' + under : pm})
+  cd ${dir}${installed ? '' : '\n  ' + runner + ' install'}
   tinyjs dev      # vite dev server + native window, HMR included
   tinyjs build    # vite build + package .app`);
 }
 
+// Alpine on top of the vanilla template: one component that calls the
+// backend, styled by the template's own stylesheet.
+async function overlayAlpine(dir, name, ts) {
+  const ext = ts ? 'ts' : 'js';
+  await tjs.remove(dir + '/src/counter.' + ext).catch(() => {});
+  await tjs.writeFile(dir + '/index.html', enc.encode(
+`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>${name}</title>
+  </head>
+  <body>
+    <section id="center" x-data="hello">
+      <h1>tinyjs + Alpine</h1>
+      <p>Edit <code>index.html</code> or <code>src/main.${ext}</code> and save to test <code>HMR</code></p>
+      <input x-model="name" placeholder="your name" />
+      <button type="button" class="counter" @click="ask">Ask the backend</button>
+      <p x-show="reply" x-text="reply"></p>
+    </section>
+    <script type="module" src="/src/main.${ext}"></script>
+  </body>
+</html>
+`));
+  await tjs.writeFile(dir + '/src/main.' + ext, enc.encode(
+`import './style.css'
+import Alpine from 'alpinejs'
+
+// x-data="hello" in index.html picks this component up.
+Alpine.data('hello', () => ({
+  name: 'world',
+  reply: '',
+  async ask() {
+    // Every function in the backend's api object is callable from the page.
+    this.reply = await tiny.api.call('hello', { name: this.name })
+  },
+}))
+
+Alpine.start()
+`));
+}
+
+// `tinyjs new <dir> --template [name] [--pm npm|pnpm|yarn|bun|vp[:pm]]
+// [--no-install]`: every flag answers its question; on a terminal the rest
+// are asked, off one they take defaults (npm, install) or fail (no template).
+async function newFromTemplate(dir, name) {
+  const flagVal = (flag) => {
+    const eq = args.find((a) => a.startsWith(flag + '='));
+    if (eq !== undefined) return eq.slice(flag.length + 1);
+    const i = args.indexOf(flag);
+    if (i === -1) return null;
+    const v = args[i + 1];
+    return v === undefined || v.startsWith('--') ? '' : v;
+  };
+  const tty = stdinIsTTY();
+  const choices = VITE_FRAMEWORKS.map((f) => f + '-ts').concat(VITE_FRAMEWORKS).join('|');
+
+  let template = flagVal('--template') ?? '';
+  if (!template) {
+    if (!tty) fail('--template needs a value here (no terminal to ask on): ' + choices);
+    const fw = VITE_FRAMEWORKS[await chooseTty('Framework:', VITE_FRAMEWORKS)];
+    const lang = await chooseTty('Language:', ['TypeScript', 'JavaScript']);
+    template = fw + (lang === 0 ? '-ts' : '');
+  }
+
+  // Probe everything at once: a handful of `--version`s in parallel.
+  const names = [...Object.keys(PACKAGE_MANAGERS), 'vp'];
+  const versions = Object.fromEntries(
+    (await Promise.all(names.map(pmVersion))).map((v, i) => [names[i], v]));
+  const found = names.filter((n) => versions[n]);
+  const foundPms = found.filter((n) => n !== 'vp');
+  if (!foundPms.length) fail('no working package manager found (npm, pnpm, yarn, bun) — install Node.js first');
+  const label = (n) => `${n} ${versions[n]}` + (n === 'vp' ? '  (Vite+, over a package manager)' : '');
+
+  let pm = flagVal('--pm') ?? flagVal('--package-manager') ?? '';
+  let under = '';
+  if (pm.includes(':')) [pm, under] = pm.split(':');
+  if (pm) {
+    if (!names.includes(pm)) fail(`unknown package manager '${pm}' (npm, pnpm, yarn, bun, vp)`);
+    if (!versions[pm]) fail(`'${pm}' was asked for but \`${pm} --version\` didn't run here`);
+  } else if (tty && found.length > 1) {
+    pm = found[await chooseTty('Package manager (working on this machine):', found.map(label))];
+  } else {
+    pm = foundPms[0];
+  }
+  if (pm === 'vp') {
+    if (under) {
+      if (!foundPms.includes(under)) fail(`vp:${under} — '${under}' isn't a working package manager here`);
+    } else if (tty && foundPms.length > 1) {
+      under = foundPms[await chooseTty('Package manager for vp to use:', foundPms.map(label),
+                                       Math.max(0, foundPms.indexOf('pnpm')))];
+    } else {
+      under = foundPms.includes('pnpm') ? 'pnpm' : foundPms[0];
+    }
+  }
+
+  let install = !args.includes('--no-install');
+  if (install && tty && pm !== 'vp' && !args.includes('--install')) {
+    await writeOut('\nInstall dependencies now? [Y/n]: ');
+    install = !/^n/i.test(await readLine());
+  }
+
+  await scaffoldViteTemplate(dir, name, template, { pm, under, install });
+}
+
 async function cmdNew() {
   const dir = args[0];
-  if (!dir) fail('usage: tinyjs new <dir> [--template vanilla|vanilla-ts|react|react-ts|vue|vue-ts|svelte|svelte-ts|solid|solid-ts]');
+  if (!dir || dir.startsWith('--')) {
+    fail('usage: tinyjs new <dir> [--template [react-ts|vue-ts|svelte-ts|solid-ts|preact-ts|lit-ts|alpine-ts|vanilla-ts|…]] [--pm npm|pnpm|yarn|bun|vp[:pnpm]] [--no-install]');
+  }
   if (await exists(dir)) fail(`'${dir}' already exists`);
   const name = dir.replace(/\/+$/, '').split('/').pop();
 
-  const ti = args.indexOf('--template');
-  if (ti !== -1) {
-    const template = (args[ti + 1] ?? '').replace(/^=/, '');
-    if (!template) fail('--template needs a value (e.g. react-ts)');
-    await scaffoldViteTemplate(dir, name, template);
+  if (args.some((a) => a === '--template' || a.startsWith('--template='))) {
+    await newFromTemplate(dir, name);
     return;
   }
 
@@ -1101,7 +1314,7 @@ async function cmdWrap() {
   // cache → exact only, the fail-closed side.
   const labels = host.replace(/^www\./, '').split('.').filter((s) => /^[a-zA-Z0-9-]+$/.test(s));
   const isIP = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(host) || host.includes(':');
-  const isTTY = (() => { try { return !!(tjs.stdin.isTerminal?.() ?? tjs.stdin.isTTY); } catch { return false; } })();
+  const isTTY = stdinIsTTY();
   const yes = args.includes('--yes');
   const originsFlag = argVal('--origins');
   const psl = isIP || base.protocol !== 'https:' ? null : await loadPsl();
@@ -1144,10 +1357,8 @@ async function cmdWrap() {
     console.log('\nAPI access for this app:');
     console.log(`  [1] ${base.origin} only (recommended)`);
     console.log(`  [2] + subdomains:  ${wildcardOrigin}`);
-    await tjs.stdout.write(enc.encode('choose [1/2, enter = 1]: '));
-    const buf = new Uint8Array(32);
-    const n = await tjs.stdin.read(buf);
-    if (dec.decode(buf.subarray(0, n)).trim() === '2') addWildcard();
+    await writeOut('choose [1/2, enter = 1]: ');
+    if ((await readLine()) === '2') addWildcard();
   } else if (!yes && !isTTY && originsFlag === null && wildcardOrigin) {
     console.log(`==> note: non-interactive — exact origin only (pass --origins subdomains for ${wildcardOrigin})`);
   }
@@ -2258,8 +2469,11 @@ switch (cmd) {
 
 usage:
   tinyjs new <dir>    scaffold a new app (zero dependencies)
-                        --template react-ts|vue-ts|solid-ts|svelte-ts|vanilla-ts|…
-                        scaffolds create-vite + tinyjs overlay instead
+                        --template [name]: create-vite + tinyjs overlay instead
+                        (react|vue|svelte|solid|preact|lit|alpine|vanilla,
+                        -ts for TypeScript; no name = ask), --pm npm|pnpm|
+                        yarn|bun|vp[:pm] (default: ask, else npm),
+                        --no-install
   tinyjs wrap <url>   wrap a website into a desktop app (site wrapper:
                       gated API, downloads, popup policy) — [dir],
                       --name <name>, --ua <userAgent>, --menubar,

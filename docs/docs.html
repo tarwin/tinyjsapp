@@ -362,9 +362,14 @@
     <pre><b>tinyjs new</b> &lt;dir&gt;
   <i># scaffold an app (zero dependencies)</i>
 
-<b>tinyjs new</b> &lt;dir&gt; --template react-ts|vue-ts|svelte-ts|…
+<b>tinyjs new</b> &lt;dir&gt; --template react-ts|vue-ts|svelte-ts|alpine-ts|…
   <i># Vite + tinyjs: HMR dev server in the native window, with the</i>
-  <i># TypeScript backend bundled by esbuild (npm packages ok)</i>
+  <i># TypeScript backend bundled by esbuild (npm packages ok).</i>
+  <i># --template alone asks for the framework and language; frameworks:</i>
+  <i># vanilla react vue svelte solid preact lit alpine (-ts = TypeScript).</i>
+  <i># --pm npm|pnpm|yarn|bun|vp picks the package manager (vp:pnpm sets</i>
+  <i># the one under Vite+); without it you choose from the ones that run</i>
+  <i># on this machine. Dependencies install unless --no-install.</i>
 
 <b>tinyjs dev</b>
   <i># run with hot reload — the frontend swaps in place, the backend</i>

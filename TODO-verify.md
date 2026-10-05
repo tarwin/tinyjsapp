@@ -3099,3 +3099,39 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   normal `src/` app still copies just `src/main.js`, with its frontend
   separate.)* Known leftover: a root entry still carries `src/` (and a
   `src/frontend` inside it) as extra files.
+
+## `tinyjs new --template` prompts + package managers + Alpine (`feat/new-template-prompts`, 2026-10-05)
+
+`--template` with no name asks framework (vanilla react vue svelte solid
+preact lit alpine) and language; `--pm npm|pnpm|yarn|bun|vp[:pm]` picks the
+package manager, else it asks from the ones whose `--version` runs (npm off a
+terminal); dependencies install unless `--no-install`. tinyjs.json's
+dev/build become `<pm> run dev|build`. Alpine = the vanilla template +
+`alpinejs` + a demo component that calls the backend. Also fixed on the way:
+`tjs.stdin.isTerminal` is a boolean (not a function) and stdin is a
+ReadableStream, so no prompt in the CLI ever showed — `tinyjs wrap`'s
+origins prompt included.
+
+- [x] **macOS** — *(2026-10-05, scratch dir: interactive run in a pty
+  (`script`) listed npm/pnpm/bun/vp — yarn not installed, correctly absent —
+  and built `alpine` JS with bun + install. `alpine-ts --pm pnpm` scaffolded,
+  type-checked and `tinyjs build` packaged it; the built Alpine app clicked
+  its own button and stored "hi world — from the backend". `react-ts` with
+  no terminal defaulted to npm + install and built. `--template=svelte
+  --pm=pnpm --no-install` skipped install and printed `pnpm install` as a
+  next step. No-terminal bare `--template`, `--pm nope` and an absent `--pm
+  yarn` each fail with a message. `tinyjs wrap` in a pty now shows the
+  origins prompt and "2" adds the subdomain wildcard.)*
+- [ ] **macOS, vp end to end** — `--pm vp` scaffolds (vp create installs
+  itself) with `vp dev --host … --strictPort` / `vp build --base=./`
+  scripts and `pnpm run dev|build` in tinyjs.json, but EVERY vp-created
+  project fails `vp build` / `vp dev` today: vite-plus 1.0.0's package.json
+  doesn't export the `./binding` its own code imports ("Cannot find native
+  binding"), with npm or pnpm underneath. Upstream; recheck `tinyjs dev`
+  and `build` once vite-plus ships a fix.
+- [ ] **Windows** — the prompts (stdin/TTY detection under conhost /
+  Windows Terminal), `--version` probes through `cmd /c` (a missing pm must
+  be left out, not hang), and an `alpine-ts` scaffold with npm and with
+  pnpm that builds. Also `tinyjs wrap`'s origins prompt.
+- [ ] **Linux** — the same: prompts, probes, `alpine-ts` with npm and one
+  other pm builds and its button reaches the backend.

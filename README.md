@@ -158,9 +158,12 @@ survives); edit backend sources and the process restarts automatically.
 `TINYJS_DEBUG=1 tinyjs dev` traces every message crossing the bridge.
 
 **Frameworks welcome:** `tinyjs new myapp --template react-ts` (or vue-ts,
-svelte-ts, solid-ts, vanilla-ts, …) scaffolds a Vite app wired to tinyjs —
-`tinyjs dev` runs Vite's dev server with HMR inside the native window, and
-`tinyjs build` ships the built assets as usual. TypeScript backends are
+svelte-ts, solid-ts, preact-ts, lit-ts, alpine-ts, vanilla-ts, …) scaffolds a
+Vite app wired to tinyjs — `tinyjs dev` runs Vite's dev server with HMR inside
+the native window, and `tinyjs build` ships the built assets as usual. Plain
+`--template` asks which framework and language; `--pm npm|pnpm|yarn|bun|vp`
+picks the package manager (otherwise you choose from the ones that work on
+your machine), and dependencies install straight away unless `--no-install`. TypeScript backends are
 bundled with esbuild automatically (which also makes npm packages usable in
 the backend). The zero-dependency default scaffold is unchanged.
 
