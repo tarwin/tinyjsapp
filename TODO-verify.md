@@ -3078,8 +3078,14 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   global tsc from nvm on PATH, reproduced #41's exact `TS2688 …
   'vite/client'`. After the change, `tinyjs build` and `tinyjs dev` both stop
   with the message; after `npm install`, `tinyjs build` packages the app.)*
-- [ ] **Windows** — the parent-dir walk handles `C:\\…` paths: an
+- [x] **Windows** — the parent-dir walk handles `C:\\…` paths: an
   uninstalled template stops with the message, and an installed one builds.
+  *(2026-10-05: a fresh `vanilla-ts` scaffold under `%TEMP%` with this
+  branch's `tinyjs.cmd`: `tinyjs build` and `tinyjs dev` both stopped with
+  the message, exit 1. After `npm install`, `tinyjs build` produced
+  `dist\v41.exe`. With `node_modules` moved up one directory (workspace
+  shape) it still built, and with that removed too the walk climbed to
+  `C:` and stopped with the message rather than looping.)*
 - [x] **macOS, backend entry at the project root** (`"backend": "main.js"`)
   — the build copies the entry's folder, which is the project root, so it
   copied `.build` into itself until `ENAMETOOLONG`. Now `.build`,
