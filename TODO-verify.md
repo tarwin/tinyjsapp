@@ -3063,10 +3063,14 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   Resources/, `codesign --verify --strict` passed, and the About panel
   showed the Credits.html content and link in place of "Made with
   tinyjs" (seen by the user).)*
-- [ ] **macOS, `"attribution"`** — with no Credits.html, an `"attribution"`
+- [x] **macOS, `"attribution"`** — with no Credits.html, an `"attribution"`
   string in tinyjs.json replaces the credit line, in `tinyjs dev`
   (TINYJS_ATTRIBUTION env) and a built app (TinyjsAttribution plist key).
-  An app with neither still shows "Made with tinyjs".
+  An app with neither still shows "Made with tinyjs". *(2026-10-05: a built
+  app with "attribution": "Attribution test — © 2026 Someone" and no
+  Credits.html had the TinyjsAttribution plist key, and its About panel
+  showed that line with — and © intact (seen by the user). The dev env
+  path wasn't run separately.)*
 
 ## #41 TS/Vite build without node_modules (`fix/41-npm-install`, 2026-10-05)
 
