@@ -953,7 +953,9 @@ reserved id `'about'`, in `tiny.menu.on` / the backend's `onMenu`. Apps that
 don't opt in keep the free panel; Windows and Linux have no default About
 item, so there the flag changes nothing. Two ways to shape that free panel:
 a `Credits.html` in the project root is bundled to `Resources/` and shown in
-place of the tinyjs credit line (the macOS convention), and
+place of the tinyjs credit line (the macOS convention; start it with
+`<meta charset="utf-8">` and give it a font, or AppKit reads it as Latin-1
+and sets it in Times), and
 `"attribution": "…"` changes the one-liner itself — precedence:
 `Credits.html` → `attribution` → the tinyjs default.
 

@@ -169,7 +169,9 @@ tiny.menu.on((id) => ...);   // "about": "menu" in tinyjs.json routes macOS's
                              // To keep the standard panel but change its
                              // credit: Credits.html in the project root
                              // (bundled by `tinyjs build`, shown with its
-                             // links), else "attribution": "…" in tinyjs.json
+                             // links; needs <meta charset="utf-8"> and a
+                             // font, or it's Latin-1 in Times), else
+                             // "attribution": "…" in tinyjs.json
 tiny.menu.update('mute', { checked: false, label: 'Unmuted' });
 await tiny.menu.get('mute');   // { exists, label, checked, enabled }
 ```
