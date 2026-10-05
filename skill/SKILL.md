@@ -81,8 +81,11 @@ tinyjs.json          { name, title, size, id, version, icon?,
                                   transparent, vibrancy, squareCorners,
                                   acceptsFirstMouse, menu },
                        signIdentity?, notarize?: { profile },
-                       backend?: "backend/main.ts",   // .ts → esbuild bundle
-                       frontend?: { build, dist, dev, devUrl },
+                       backend?: "backend/main.ts",   // .ts → esbuild bundle;
+                                      // default src/main.{js,ts} or backend/main.{js,ts}
+                       frontend?: { dir?, build, dist, dev, devUrl },
+                                      // dir: plain page folder (default src/frontend);
+                                      // build/dev need `npm install` first
                        // wrapping a hosted site (recipes.md) — "url" replaces
                        // the local frontend, "api" gates what that origin may
                        // call. NEVER wrap a site you don't control without it.

@@ -187,6 +187,13 @@ myapp/
   src/frontend/           # index.html + any local js/css/images
 ```
 
+Both folders are conventions, not requirements. `"backend": "path/main.js"`
+picks the backend entry (default: the first of `src/main.js`, `src/main.ts`,
+`backend/main.js`, `backend/main.ts`), and `"frontend": { "dir": "web" }`
+picks the plain page folder. A bundler project uses `"frontend": { "build",
+"dist", "dev", "devUrl" }` instead, as the `--template` scaffolds do; run
+`npm install` before `tinyjs dev` or `build` there.
+
 Keys that genuinely differ per platform go in a `macos` / `windows` / `linux`
 block, merged on top of the root ones for that OS — the block names are the
 strings `tiny.system.os()` returns:

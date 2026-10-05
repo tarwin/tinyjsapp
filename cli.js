@@ -435,6 +435,25 @@ async function resolveBackendEntry(cfg) {
   fail('no backend entry found (src/main.js|ts, backend/main.js|ts, or "backend" in tinyjs.json)');
 }
 
+// A frontend with its own build tooling needs its packages installed first.
+// Without node_modules the script's tools come from wherever else they are
+// (a global tsc, say) and fail with errors that never say "install" (#41:
+// "Cannot find type definition file for 'vite/client'"). Node resolves
+// packages in every parent dir (workspaces hoist them), and Yarn PnP keeps
+// none at all, so either of those counts as installed.
+async function ensurePackagesInstalled(cmd) {
+  if (!(await exists('package.json'))) return;
+  let d = tjs.cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+  for (;;) {
+    if ((await exists(d + '/node_modules')) || (await exists(d + '/.pnp.cjs'))) return;
+    const up = d.replace(/\/[^/]*$/, '');
+    if (!up || up === d) break;
+    d = up;
+  }
+  fail(`no node_modules for this project, so \`${cmd}\` can't find its tools — ` +
+       'run `npm install` (or your package manager\'s install) first');
+}
+
 // Generate .build/app/: bridge + copied backend sources + an entry module,
 // in the layout `tjs app compile` expects (app dir with an app.json manifest
 // — it bundles the whole module graph into one executable). The frontend
@@ -502,6 +521,7 @@ async function generateBuild(cfg, dev = false) {
   const devUrl = dev ? fe.devUrl : null;
   let frontendSrc = fe.dir ?? 'src/frontend';
   if (!dev && fe.build) {
+    await ensurePackagesInstalled(fe.build);
     console.log('==> frontend build: ' + fe.build);
     await run(shellArgv(fe.build));
     frontendSrc = fe.dist ?? 'dist';
@@ -1301,6 +1321,7 @@ async function cmdDev() {
   const fe = cfg.frontend ?? {};
   if (fe.devUrl) {
     if (fe.dev) {
+      await ensurePackagesInstalled(fe.dev);
       console.log('==> starting frontend dev server: ' + fe.dev);
       devServer = tjs.spawn(shellArgv(fe.dev), { stdout: 'inherit', stderr: 'inherit' });
     }

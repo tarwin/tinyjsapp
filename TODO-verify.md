@@ -3067,3 +3067,16 @@ there, 2 not ours → single instance off), and `--open` uses the same check.
   string in tinyjs.json replaces the credit line, in `tinyjs dev`
   (TINYJS_ATTRIBUTION env) and a built app (TinyjsAttribution plist key).
   An app with neither still shows "Made with tinyjs".
+
+## #41 TS/Vite build without node_modules (`fix/41-npm-install`, 2026-10-05)
+
+- [x] **macOS** — a `--template` project (any `package.json`) now checks for
+  `node_modules` (here or in a parent dir, for workspaces) or Yarn PnP's
+  `.pnp.cjs` before running `frontend.build` / `frontend.dev`, and stops
+  with "run `npm install` first" instead of the tool's own error.
+  *(2026-10-05: a fresh `vanilla-ts` scaffold without `npm install`, with a
+  global tsc from nvm on PATH, reproduced #41's exact `TS2688 …
+  'vite/client'`. After the change, `tinyjs build` and `tinyjs dev` both stop
+  with the message; after `npm install`, `tinyjs build` packages the app.)*
+- [ ] **Windows** — the parent-dir walk handles `C:\\…` paths: an
+  uninstalled template stops with the message, and an installed one builds.
