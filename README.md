@@ -951,7 +951,11 @@ a tinyjs credit) for free. To draw your own instead, set `"about": "menu"` in
 tinyjs.json — the click then arrives like any other menu item, with the
 reserved id `'about'`, in `tiny.menu.on` / the backend's `onMenu`. Apps that
 don't opt in keep the free panel; Windows and Linux have no default About
-item, so there the flag changes nothing.
+item, so there the flag changes nothing. Two ways to shape that free panel:
+a `Credits.html` in the project root is bundled to `Resources/` and shown in
+place of the tinyjs credit line (the macOS convention), and
+`"attribution": "…"` changes the one-liner itself — precedence:
+`Credits.html` → `attribution` → the tinyjs default.
 
 The dialogs and menus are native: the backend hands the work to the launcher,
 which runs panels/menus on the UI thread and answers the page's promise

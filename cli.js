@@ -1355,6 +1355,8 @@ async function cmdDev() {
     // from every other dev run you have open.
     const iconSrc = cfg.icon || 'icon.png';
     if (await exists(iconSrc)) devEnv.TINYJS_ICON = tjs.cwd + '/' + iconSrc;
+    // About-panel credit line (see the TinyjsAttribution plist key).
+    if (cfg.attribution) devEnv.TINYJS_ATTRIBUTION = String(cfg.attribution);
     // Linux: the app id names the WM class (window ↔ .desktop matching).
     if (IS_LINUX) devEnv.TINYJS_APP_ID = cfg.id;
     // Dev always has devtools (F12), whatever the manifest says — the
@@ -1606,6 +1608,11 @@ async function cmdBuild() {
   await run(['cp', await macLauncher(), APP + '/Contents/MacOS/' + cfg.name]);
   await run(['cp', await macTjs(), APP + '/Contents/MacOS/tjs']);
   await run(['cp', '-R', '.build/app', APP + '/Contents/Resources/app']);
+  // macOS convention: Resources/Credits.html feeds the standard About panel —
+  // the launcher defers to it when present instead of the tinyjs credit (#8).
+  if (await exists('Credits.html')) {
+    await run(['cp', 'Credits.html', APP + '/Contents/Resources/Credits.html']);
+  }
   // App icon: icon.png in the project root (1024×1024; the template ships a
   // default) becomes AppIcon.icns via sips + iconutil.
   let iconKey = '';
@@ -1641,6 +1648,14 @@ async function cmdBuild() {
     const ua = escXml(cfg.userAgent);
     extraKeys += `
   <key>TinyjsUserAgent</key>     <string>${ua}</string>`;
+  }
+  if (cfg.attribution) {
+    // About-panel credit line (#8): a bundled Credits.html wins over it, and
+    // the tinyjs default stays when neither is set. Dev carries it in env
+    // (cmdDev); LaunchServices starts the packaged launcher, so the plist
+    // carries it there.
+    extraKeys += `
+  <key>TinyjsAttribution</key>   <string>${escXml(cfg.attribution)}</string>`;
   }
   if (cfg.url) {
     // "url": the main window starts at this remote page (site wrappers) —
