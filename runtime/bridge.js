@@ -3266,7 +3266,12 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     }
     return out;
   }
-  const cliPaths = await argvPaths();
+  // Documents named on the command line are a packaged-app feature (a CLI
+  // shim `exec <exe> "$@"`, LaunchServices, file associations). In dev the
+  // backend is spawned as `tjs run entry.js`, so parsing tjs.args there hands
+  // the page an open-files event whose "document" is the entry module itself
+  // — every dev launch, on every platform (#32).
+  const cliPaths = (await bundlePath()) ? await argvPaths() : [];
 
   // --- Windows/Linux: single instance + deep links / file associations -----
   // Built apps only (macOS gets all of this from LaunchServices + the plist).
