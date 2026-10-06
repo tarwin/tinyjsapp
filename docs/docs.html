@@ -369,7 +369,10 @@
   <i># vanilla react vue svelte solid preact lit alpine (-ts = TypeScript).</i>
   <i># --pm npm|pnpm|yarn|bun|vp picks the package manager (vp:pnpm sets</i>
   <i># the one under Vite+); without it you choose from the ones that run</i>
-  <i># on this machine. Dependencies install unless --no-install.</i>
+  <i># on this machine (npm when there's no terminal). Dependencies install</i>
+  <i># unless --no-install, and tinyjs.json runs dev/build through it.</i>
+  <i># vp needs Vite+ 1.0+ (older is refused: vp upgrade). alpine = the</i>
+  <i># vanilla template + Alpine.js and a component calling the backend.</i>
 
 <b>tinyjs dev</b>
   <i># run with hot reload — the frontend swaps in place, the backend</i>
@@ -493,8 +496,8 @@
   <i>// plain (unbundled) frontend folder, served as-is. Default: src/frontend</i>
   "frontend": { "dir": "web" },
   <i>// …or bundler hooks (Vite etc.): build runs, dist ships; dev/devUrl are</i>
-  <i>// used by `tinyjs dev`. Run `npm install` first: both commands need</i>
-  <i>// the project's packages</i>
+  <i>// used by `tinyjs dev`. Both need the project's packages installed</i>
+  <i>// (--template scaffolds install them; else the build says so)</i>
   "frontend": {
     "build": "npm run build", "dist": "dist",
     "dev": "npm run dev", "devUrl": "http://127.0.0.1:5173"

@@ -43,6 +43,7 @@ tinyjs new <dir> --template react-ts|vue-ts|svelte-ts|solid-ts|preact-ts|lit-ts|
                     #   No name = asks framework + language. --pm npm|pnpm|
                     #   yarn|bun|vp[:pnpm] (else asks; npm off a terminal),
                     #   --no-install. Agents: pass both flags — no prompts.
+                    #   vp needs Vite+ ≥ 1.0. alpine = vanilla + Alpine.js.
 tinyjs wrap <url>   # site wrapper: the site IS the app, origin-gated API
                     #   (--origins subdomains, --menubar [--panel], --top,
                     #   --external a.com, --ua, --force re-wraps in place)
@@ -88,7 +89,7 @@ tinyjs.json          { name, title, size, id, version, icon?,
                                       // default src/main.{js,ts} or backend/main.{js,ts}
                        frontend?: { dir?, build, dist, dev, devUrl },
                                       // dir: plain page folder (default src/frontend);
-                                      // build/dev need `npm install` first
+                                      // build/dev need the packages installed first
                        // wrapping a hosted site (recipes.md) — "url" replaces
                        // the local frontend, "api" gates what that origin may
                        // call. NEVER wrap a site you don't control without it.

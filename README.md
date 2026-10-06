@@ -163,9 +163,17 @@ Vite app wired to tinyjs — `tinyjs dev` runs Vite's dev server with HMR inside
 the native window, and `tinyjs build` ships the built assets as usual. Plain
 `--template` asks which framework and language; `--pm npm|pnpm|yarn|bun|vp`
 picks the package manager (otherwise you choose from the ones that work on
-your machine), and dependencies install straight away unless `--no-install`. TypeScript backends are
-bundled with esbuild automatically (which also makes npm packages usable in
-the backend). The zero-dependency default scaffold is unchanged.
+your machine, or get npm when there's no terminal to ask on), and
+dependencies install straight away unless `--no-install`. The chosen manager
+runs the project's dev and build scripts (`"dev": "pnpm run dev"` in
+tinyjs.json). `--pm vp` uses [Vite+](https://viteplus.dev) 1.0 or newer
+over another manager (`vp:pnpm`, `vp:bun`, …; asked if left out); an older
+`vp` is refused, since its projects can't build against current Vite+
+packages (`vp upgrade`). `alpine` is Vite's vanilla template with
+[Alpine.js](https://alpinejs.dev) and a small component that calls the
+backend. TypeScript backends are bundled with esbuild automatically (which
+also makes npm packages usable in the backend). The zero-dependency default
+scaffold is unchanged.
 
 The `tiny` global is injected into every page by the launcher — no script
 tag needed — and ships with full TypeScript definitions (`types/tiny.d.ts`).
@@ -196,8 +204,9 @@ picks the backend entry (default: the first of `src/main.js`, `src/main.ts`,
 backend's root: a plain-JS backend ships that whole folder, and a `.ts`
 entry is bundled from it. Separately, `"frontend": { "dir": "web" }`
 picks the plain page folder. A bundler project uses `"frontend": { "build",
-"dist", "dev", "devUrl" }` instead, as the `--template` scaffolds do; run
-`npm install` before `tinyjs dev` or `build` there.
+"dist", "dev", "devUrl" }` instead, as the `--template` scaffolds do. Its
+packages must be installed before `tinyjs dev` or `build` (the scaffolds do
+that unless `--no-install`; otherwise the build stops and says so).
 
 Keys that genuinely differ per platform go in a `macos` / `windows` / `linux`
 block, merged on top of the root ones for that OS — the block names are the
