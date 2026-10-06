@@ -454,6 +454,31 @@ async function ensurePackagesInstalled(cmd) {
        'run `npm install` (or your package manager\'s install) first');
 }
 
+// Run esbuild on project files. The project's own copy wins (that is what
+// `npx esbuild` from the project used to pick); otherwise npx fetches it —
+// run from a temp dir, because npm 11 refuses npx inside a project whose
+// package.json pins another package manager (devEngines.packageManager:
+// pnpm — Vite+ 1.0 scaffolds write one) with EBADDEVENGINES. Paths go in
+// absolute so the cwd doesn't matter to esbuild.
+async function runEsbuild(entry, flags, outfile) {
+  const cwd = tjs.cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+  const abs = (p) => /^([A-Za-z]:)?\//.test(p) ? p : cwd + '/' + p;
+  const argv = [abs(entry), ...flags, '--outfile=' + abs(outfile)];
+  for (let d = cwd; ;) {
+    const bin = d + '/node_modules/.bin/esbuild' + (IS_WIN ? '.cmd' : '');
+    if (await exists(bin)) return run(nodeToolArgv([bin, ...argv]));
+    const up = d.replace(/\/[^/]*$/, '');
+    if (!up || up === d) break;
+    d = up;
+  }
+  const tmp = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-esbuild-XXXXXX');
+  try {
+    await run(nodeToolArgv(['npx', '--yes', 'esbuild', ...argv]), { cwd: tmp });
+  } finally {
+    await tjs.remove(tmp, { recursive: true }).catch(() => {});
+  }
+}
+
 // Generate .build/app/: bridge + copied backend sources + an entry module,
 // in the layout `tjs app compile` expects (app dir with an app.json manifest
 // — it bundles the whole module graph into one executable). The frontend
@@ -477,10 +502,9 @@ async function generateBuild(cfg, dev = false) {
   let entryName = backendEntry.split('/').pop();
   if (backendEntry.endsWith('.ts')) {
     console.log('==> bundling backend (esbuild)');
-    await run(nodeToolArgv(['npx', '--yes', 'esbuild', backendEntry, '--bundle', '--format=esm',
-               '--platform=neutral', '--main-fields=module,main',
-               '--external:tjs:*', '--log-level=warning',
-               '--outfile=' + B + '/src/main.js']));
+    await runEsbuild(backendEntry, ['--bundle', '--format=esm',
+                     '--platform=neutral', '--main-fields=module,main',
+                     '--external:tjs:*', '--log-level=warning'], B + '/src/main.js');
     entryName = 'main.js';
   } else {
     // Copy the backend dir: the folder the entry sits in is the backend's
@@ -516,9 +540,8 @@ async function generateBuild(cfg, dev = false) {
     if (!(await exists(cfg.inject))) fail('tinyjs.json "inject": ' + cfg.inject + ' not found');
     if (String(cfg.inject).endsWith('.ts')) {
       console.log('==> bundling inject (esbuild)');
-      await run(nodeToolArgv(['npx', '--yes', 'esbuild', cfg.inject, '--bundle',
-                 '--format=iife', '--log-level=warning',
-                 '--outfile=' + B + '/inject.js']));
+      await runEsbuild(cfg.inject, ['--bundle', '--format=iife', '--log-level=warning'],
+                       B + '/inject.js');
       injectSrc = dec.decode(await tjs.readFile(B + '/inject.js'));
     } else {
       injectSrc = dec.decode(await tjs.readFile(cfg.inject));

@@ -3134,11 +3134,20 @@ origins prompt included.
   reproduced with the global vp 0.1.18 over npm and pnpm. Removing just the
   `vitest` override and reinstalling resolved everything to 1.0.0 + vitest
   5.0.1 and `npm run build` passed. vite-plus 1.0.0 itself is fine.)*
-- [ ] **macOS, vp ≥ 1.0 end to end** — after `vp upgrade`: `tinyjs new x
-  --template react-ts --pm vp:pnpm`, then `tinyjs dev` (HMR in the window)
-  and `tinyjs build`. Its scripts are rewritten to `vp dev --host 127.0.0.1
-  --port 5173 --strictPort` / `vp build --base=./`, run through
-  `pnpm run dev|build` from tinyjs.json.
+- [x] **macOS, vp ≥ 1.0 end to end** — *(2026-10-05, after `vp upgrade`
+  to 1.0.0: `--template react-ts --pm vp:pnpm` wrote 1.0 pins (catalog
+  vite-plus 1.0.0, no vitest override). `tinyjs dev` started `pnpm run dev`
+  → `vp dev` on 127.0.0.1:5173 (VITE+ v1.0.0) and the app came up;
+  `tinyjs build` packaged it.)* Getting there needed one more fix: vp 1.0
+  also writes `devEngines.packageManager: pnpm`, and npm 11 then refuses
+  `npx` in that project (EBADDEVENGINES), which is how the TS backend was
+  bundled. esbuild now runs from the project's own node_modules/.bin when
+  present (walking up for workspaces), else `npx` from a temp dir with
+  absolute paths. Checked: the vp project and a plain npm `react-ts` both
+  build, and with `esbuild` added as a devDependency the local copy is used.
+- [ ] **Windows, esbuild from a temp dir** — a `react-ts` scaffold (TS
+  backend) builds, i.e. `npx` from `%TEMP%` with `C:/…` absolute paths and
+  `node_modules\.bin\esbuild.cmd` when installed locally.
 - [ ] **Windows** — the prompts (stdin/TTY detection under conhost /
   Windows Terminal), `--version` probes through `cmd /c` (a missing pm must
   be left out, not hang), and an `alpine-ts` scaffold with npm and with
