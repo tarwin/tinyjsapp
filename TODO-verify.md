@@ -3145,12 +3145,15 @@ origins prompt included.
   present (walking up for workspaces), else `npx` from a temp dir with
   absolute paths. Checked: the vp project and a plain npm `react-ts` both
   build, and with `esbuild` added as a devDependency the local copy is used.
-- [ ] **Windows, esbuild from a temp dir** — a `react-ts` scaffold (TS
+- [x] **Windows, esbuild from a temp dir** — a `react-ts` scaffold (TS
   backend) builds, i.e. `npx` from `%TEMP%` with `C:/…` absolute paths and
   `node_modules\.bin\esbuild.cmd` when installed locally.
-- [ ] **Windows** — the prompts (stdin/TTY detection under conhost /
+- [x] **Windows** — the prompts (stdin/TTY detection under conhost /
   Windows Terminal), `--version` probes through `cmd /c` (a missing pm must
   be left out, not hang), and an `alpine-ts` scaffold with npm and with
   pnpm that builds. Also `tinyjs wrap`'s origins prompt.
-- [ ] **Linux** — the same: prompts, probes, `alpine-ts` with npm and one
+- [x] **Linux** — the same: prompts, probes, `alpine-ts` with npm and one
   other pm builds and its button reaches the backend.
+  *(2026-10-05: Windows and Linux both confirmed by the user — prompts,
+  package-manager probes, Alpine scaffold + backend button, `react-ts`
+  build through the esbuild change, and wrap's origins prompt.)*
