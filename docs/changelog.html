@@ -171,6 +171,17 @@
   <section>
 
     <div class="rel">
+      <h2>0.50.0 <span class="date">2026-10-05</span></h2>
+      <ul>
+        <li><b><code>tinyjs new --template</code> asks, and works with your package manager.</b> <code>--template</code> on its own asks for the framework (vanilla, react, vue, svelte, solid, preact, lit, alpine) and the language, then which package manager to use. Only the ones that actually run on this machine are offered: npm, pnpm, yarn, bun, or Vite+ (<code>vp</code>) over one of them. It then installs the dependencies. Flags answer each question without a prompt: <code>--template react-ts</code>, <code>--pm pnpm</code> (or <code>--pm vp:pnpm</code>), <code>--no-install</code>. With no terminal it uses npm, and a bare <code>--template</code> stops with the list. tinyjs.json runs the project's dev and build scripts through the chosen manager (<code>pnpm run dev</code>).</li>
+        <li><b>Alpine.js starter:</b> <code>--template alpine</code> / <code>alpine-ts</code> is Vite's vanilla template plus <a href="https://alpinejs.dev">Alpine.js</a>, with a small component that calls the backend.</li>
+        <li><b>Vite+ (<code>--pm vp</code>) needs vp 1.0 or newer.</b> A 0.1.x <code>vp</code> scaffolds projects that mix 0.1 and 1.0 Vite+ packages and fail every build with a misleading "Cannot find native binding", so tinyjs refuses it and says to run <code>vp upgrade</code>.</li>
+        <li><b>TypeScript backends build in projects that pin another package manager.</b> npm 11 refuses <code>npx</code> in a project whose package.json sets <code>devEngines.packageManager</code> to something else (Vite+ 1.0 writes pnpm's), so the esbuild step failed with <code>EBADDEVENGINES</code>. esbuild now runs from the project's own <code>node_modules</code> when installed, otherwise through <code>npx</code> from a temp folder.</li>
+        <li><b>CLI prompts show up.</b> The terminal check always failed, so no prompt ever appeared: <code>tinyjs wrap</code> silently took the exact origin instead of asking whether to include subdomains. It asks now.</li>
+      </ul>
+    </div>
+
+    <div class="rel">
       <h2>0.49.0 <span class="date">2026-10-05</span></h2>
       <p>Thanks to <a href="https://github.com/slabbdev">@slabbdev</a> for the About-panel change (<a href="https://github.com/tarwin/tinyjsapp/pull/37">#37</a>) and to <a href="https://github.com/cfjedimaster">@cfjedimaster</a> for the report (<a href="https://github.com/tarwin/tinyjsapp/issues/41">#41</a>).</p>
       <ul>

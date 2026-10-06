@@ -4,6 +4,35 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.50.0 — 2026-10-05
+
+- **`tinyjs new --template` asks, and works with your package manager.**
+  `--template` on its own asks for the framework (vanilla, react, vue,
+  svelte, solid, preact, lit, alpine) and the language, then which package
+  manager to use. Only the ones that actually run on this machine are
+  offered: npm, pnpm, yarn, bun, or Vite+ (`vp`) over one of them. It then
+  installs the dependencies. Flags answer each question without a prompt:
+  `--template react-ts`, `--pm pnpm` (or `--pm vp:pnpm`), `--no-install`.
+  With no terminal it uses npm, and a bare `--template` stops with the list.
+  tinyjs.json runs the project's dev and build scripts through the chosen
+  manager (`pnpm run dev`).
+- **Alpine.js starter:** `--template alpine` / `alpine-ts` is Vite's vanilla
+  template plus [Alpine.js](https://alpinejs.dev), with a small component
+  that calls the backend.
+- **Vite+ (`--pm vp`) needs vp 1.0 or newer.** A 0.1.x `vp` scaffolds
+  projects that mix 0.1 and 1.0 Vite+ packages and fail every build with a
+  misleading "Cannot find native binding", so tinyjs refuses it and says to
+  run `vp upgrade`.
+- **TypeScript backends build in projects that pin another package
+  manager.** npm 11 refuses `npx` in a project whose package.json sets
+  `devEngines.packageManager` to something else (Vite+ 1.0 writes pnpm's),
+  so the esbuild step failed with `EBADDEVENGINES`. esbuild now runs from
+  the project's own `node_modules` when installed, otherwise through `npx`
+  from a temp folder.
+- **CLI prompts show up.** The terminal check always failed, so no prompt
+  ever appeared: `tinyjs wrap` silently took the exact origin instead of
+  asking whether to include subdomains. It asks now.
+
 ## 0.49.0 — 2026-10-05
 
 Thanks to [@slabbdev](https://github.com/slabbdev) for the About-panel
