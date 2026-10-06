@@ -3122,13 +3122,23 @@ origins prompt included.
   next step. No-terminal bare `--template`, `--pm nope` and an absent `--pm
   yarn` each fail with a message. `tinyjs wrap` in a pty now shows the
   origins prompt and "2" adds the subdomain wildcard.)*
-- [ ] **macOS, vp end to end** — `--pm vp` scaffolds (vp create installs
-  itself) with `vp dev --host … --strictPort` / `vp build --base=./`
-  scripts and `pnpm run dev|build` in tinyjs.json, but EVERY vp-created
-  project fails `vp build` / `vp dev` today: vite-plus 1.0.0's package.json
-  doesn't export the `./binding` its own code imports ("Cannot find native
-  binding"), with npm or pnpm underneath. Upstream; recheck `tinyjs dev`
-  and `build` once vite-plus ships a fix.
+- [x] **macOS, pre-1.0 vp refused** — `--pm vp` with a vp older than 1.0
+  now stops with "run `vp upgrade` first", and the menu marks it. Why: vp
+  0.1.x writes overrides for the 0.1 era (`vitest` →
+  `npm:@voidzero-dev/vite-plus-test@latest`). That package stopped at 0.1.24
+  when vite-plus 1.0 moved to real `vitest@5`, so the project gets
+  vite-plus 1.0.0 plus a second `vite-plus-core@0.1.24`. The old core's
+  native loader requires `vite-plus/binding`, which 1.0 no longer exports,
+  and every `vp build` / `vp dev` dies with a misleading "Cannot find native
+  binding … npm has a bug related to optional dependencies". *(2026-10-05:
+  reproduced with the global vp 0.1.18 over npm and pnpm. Removing just the
+  `vitest` override and reinstalling resolved everything to 1.0.0 + vitest
+  5.0.1 and `npm run build` passed. vite-plus 1.0.0 itself is fine.)*
+- [ ] **macOS, vp ≥ 1.0 end to end** — after `vp upgrade`: `tinyjs new x
+  --template react-ts --pm vp:pnpm`, then `tinyjs dev` (HMR in the window)
+  and `tinyjs build`. Its scripts are rewritten to `vp dev --host 127.0.0.1
+  --port 5173 --strictPort` / `vp build --base=./`, run through
+  `pnpm run dev|build` from tinyjs.json.
 - [ ] **Windows** — the prompts (stdin/TTY detection under conhost /
   Windows Terminal), `--version` probes through `cmd /c` (a missing pm must
   be left out, not hang), and an `alpine-ts` scaffold with npm and with

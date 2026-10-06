@@ -907,7 +907,9 @@ async function newFromTemplate(dir, name) {
   const found = names.filter((n) => versions[n]);
   const foundPms = found.filter((n) => n !== 'vp');
   if (!foundPms.length) fail('no working package manager found (npm, pnpm, yarn, bun) — install Node.js first');
-  const label = (n) => `${n} ${versions[n]}` + (n === 'vp' ? '  (Vite+, over a package manager)' : '');
+  const label = (n) => `${n} ${versions[n]}` + (n !== 'vp' ? ''
+    : Number(versions.vp.split('.')[0]) < 1 ? '  (Vite+ — older than 1.0, needs `vp upgrade`)'
+    : '  (Vite+, over a package manager)');
 
   let pm = flagVal('--pm') ?? flagVal('--package-manager') ?? '';
   let under = '';
@@ -921,6 +923,15 @@ async function newFromTemplate(dir, name) {
     pm = foundPms[0];
   }
   if (pm === 'vp') {
+    // A pre-1.0 vp writes 0.1-era overrides (vitest → vite-plus-test@latest,
+    // which stayed at 0.1.24 when 1.0 moved to real vitest). That drags in a
+    // second, 0.1.24 vite-plus-core whose native loader requires
+    // `vite-plus/binding` — gone in 1.0 — so every build dies with a
+    // misleading "Cannot find native binding".
+    if (Number(versions.vp.split('.')[0]) < 1) {
+      fail(`vp ${versions.vp} is older than 1.0 and scaffolds projects that can't build ` +
+           'with current Vite+ packages — run `vp upgrade` first');
+    }
     if (under) {
       if (!foundPms.includes(under)) fail(`vp:${under} — '${under}' isn't a working package manager here`);
     } else if (tty && foundPms.length > 1) {
