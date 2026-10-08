@@ -982,6 +982,32 @@ function compileNameGate(spec) {
 // engine-attested but frame-blind, see TODO-site-wrapper.md). A call with
 // no stamp (an older launcher) skips origin scoping and uses the top-level
 // lists.
+// Subframes (an iframe inside an app page or a wrapped site) never get the
+// shim or tiny.js, so a call from one is always hand-built — a CodePen embed
+// or an ad poking window.webkit.messageHandlers.tiny. Only macOS can deliver
+// one (it marks it SUBFRAME_MARK); Linux drops them at the launcher (#18)
+// and WebView2 only hands over top-level documents' messages. Such a call
+// runs only when an "api".origins key EXPLICITLY names its origin, and then
+// under that key's lists. No "api", top-level lists, presets and unmatched
+// origins all count for nothing here: an app that never wrote an "api"
+// block must not be callable from someone else's iframe.
+const SUBFRAME_MARK = 'tiny:subframe';
+export function compileSubframeGate(spec) {
+  const origins = spec && typeof spec === 'object' && !Array.isArray(spec) &&
+    spec.origins && typeof spec.origins === 'object'
+    ? Object.entries(spec.origins).map(([pat, sub]) => ({
+        re: new RegExp('^' + pat.split('*').map((s) =>
+          s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$'),
+        gate: compileNameGate(sub),
+      }))
+    : [];
+  return (m, origin) => {
+    if (typeof origin !== 'string') return false;
+    const hit = origins.find((o) => o.re.test(origin));
+    return !!hit && (!hit.gate || hit.gate(m));
+  };
+}
+
 function compileApiGate(spec) {
   if (!spec) return null;
   const base = compileNameGate(typeof spec === 'string' || Array.isArray(spec)
@@ -2891,6 +2917,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   const forWin = (m) => app.window(m?.window || 'main');
   const methods = { ...api, ...builtins };
   const apiGate = compileApiGate(apiAccess);
+  const subframeGate = compileSubframeGate(apiAccess);
   // capabilities() reports what the gate denies THE CALLING ORIGIN, so a
   // page can hide UI for features it would only watch fail.
   const gateInfo = (origin) => {
@@ -2931,11 +2958,20 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
       const callArgs = JSON.parse(line.slice(sp + 1));
       const payload = callArgs[0];
       const origin = callArgs.length > 1 ? callArgs[callArgs.length - 1] : undefined;
+      // A subframe marker can only sit between payload and origin. On
+      // Windows' main window the page controls that middle, but a marker
+      // there only makes its own call stricter.
+      const subframe = callArgs.length > 2 &&
+        callArgs.slice(1, -1).includes(SUBFRAME_MARK);
       const { method, params } = JSON.parse(payload);
 
       // Capability gate FIRST — the dialog and find paths below short-circuit
       // to the launcher before `methods` is consulted, and they must not slip
       // past it.
+      if (subframe && !subframeGate(method, origin)) {
+        if (tjs.env.TINYJS_DEBUG) console.log(`tinyjs: denied "${method}" for subframe ${origin ?? 'unknown origin'} (tinyjs.json "api".origins)`);
+        throw new Error(`"${method}" from a subframe (${origin}) needs a tinyjs.json "api".origins key that allows it`);
+      }
       if (apiGate && !apiGate(method, origin)) {
         if (tjs.env.TINYJS_DEBUG) console.log(`tinyjs: denied "${method}" for ${origin ?? 'unknown origin'} (tinyjs.json "api")`);
         throw new Error(`"${method}" is disabled by tinyjs.json "api"`);

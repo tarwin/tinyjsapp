@@ -6350,11 +6350,9 @@ static NSString *tiny_shim_js(const std::string &winid) {
   if (seq.empty() || seq.size() > 15 ||
       seq.find_first_not_of("0123456789") != std::string::npos)
     return;
-  // The calling frame's origin rides as a SECOND array element — WebKit's
+  // The calling frame's origin rides as the LAST array element — WebKit's
   // own attestation (frameInfo.securityOrigin), not anything the page said,
-  // so the bridge's per-origin capability gate can trust it. Launchers that
-  // don't send it (Windows/Linux today) leave the bridge's `origin`
-  // undefined, which the gate treats as "no origin scoping".
+  // so the bridge's per-origin capability gate can trust it.
   std::string origin = "null";
   WKSecurityOrigin *so = msg.frameInfo.securityOrigin;
   if (so && so.protocol.length) {
@@ -6367,8 +6365,25 @@ static NSString *tiny_shim_js(const std::string &winid) {
           (port == 443 && [so.protocol isEqualToString:@"https"])))
       origin += ":" + std::to_string((long)port);
   }
-  sock_write_line("CALL " + std::string([self.winId UTF8String]) + ":" + seq +
-                  " [" + json_escape(payload) + "," + json_escape(origin) + "]");
+  // The "tiny" handler answers EVERY frame — WebKit gives a page-world
+  // handler to subframes too, though the shim and tiny.js are main-frame
+  // only — so a cross-origin iframe (a CodePen embed, an ad) can post here.
+  // Mark it and let the bridge decide: a subframe call runs only when an
+  // "api".origins key names its origin; with no "api" at all, nothing a
+  // subframe sends runs. Linux gives subframes no bridge at all (#18) and
+  // WebView2 only delivers top-level documents' messages, so this is
+  // macOS's half of the same rule. The marker sits BEFORE the origin (the
+  // bridge reads the origin as the last element) and only we write it: the
+  // payload is one JSON string, so a page can't add array elements here.
+  // The seq gets an 's' prefix so its RET never reaches __tinyResolve —
+  // reply_to_call only accepts digits. Without it, the subframe's reply
+  // (or denial) resolved or rejected the MAIN frame's pending call with the
+  // same number.
+  bool subframe = msg.frameInfo && !msg.frameInfo.isMainFrame;
+  sock_write_line("CALL " + std::string([self.winId UTF8String]) + ":" +
+                  (subframe ? "s" : "") + seq + " [" + json_escape(payload) +
+                  (subframe ? ",\"tiny:subframe\"" : "") + "," +
+                  json_escape(origin) + "]");
 }
 @end
 

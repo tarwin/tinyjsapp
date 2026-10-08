@@ -1,0 +1,15 @@
+<!doctype html><body><script>
+// A third-party iframe (a CodePen embed, an ad). No shim, no tiny.js: it
+// posts the raw `<seq>:<payload>` shape the launcher accepts.
+const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tiny;
+document.title = h ? 'handler visible' : 'no handler';
+if (h) {
+  h.postMessage('900:' + JSON.stringify({ method: 'store.set', params: { key: 'pwned', value: 'yes' } }));
+  // Cycle seq 1..100 for 8 s, overlapping the main frame's own calls.
+  let s = 0;
+  const spam = setInterval(() => {
+    for (let i = 0; i < 20; i++) { s = s % 100 + 1; h.postMessage(String(s) + ':' + JSON.stringify({ method: 'nosuch.method' })); }
+  }, 20);
+  setTimeout(() => clearInterval(spam), 8000);
+}
+</script>

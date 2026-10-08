@@ -3157,3 +3157,28 @@ origins prompt included.
   *(2026-10-05: Windows and Linux both confirmed by the user — prompts,
   package-manager probes, Alpine scaffold + backend button, `react-ts`
   build through the esbuild change, and wrap's origins prompt.)*
+
+## macOS subframe calls gated (2026-10-07, shipped v0.50.1)
+
+WebKit hands the `tiny` message handler to every frame, so a cross-origin
+iframe could post hand-built calls (all allowed with no `"api"`) and its
+replies settled the main frame's pending calls with the same seq. The macOS
+launcher now marks subframe calls (`"tiny:subframe"` between payload and
+origin, seq prefixed `s` so no RET reaches `__tinyResolve`); the bridge runs
+one only when an `"api".origins` key names its origin. Probe:
+`test/subframe-gate/` (README has the table).
+
+- [x] **macOS** — *(2026-10-07: pre-fix build, no `"api"`: `pwned` stored,
+  0 denials, 3381 replies delivered to the main frame. Fixed build: no
+  `"api"` and `"wrapper"` both deny the iframe's `store.set` and every spam
+  call, main frame sees only its own 41 replies, its calls all succeed;
+  with `"origins": {"file://*": "all", "http://127.0.0.1:8765": ["store.*"]}`
+  the iframe's `store.set` runs, replies still 41. Regressions: smoke.html
+  passes on a top-level page; proxy-gate's wrapped-site trio (no `"api"` /
+  `media.proxy`+`store.*` / `store.*`) refused / SECRET-PAYLOAD / refused.)*
+- [ ] **Linux** — bridge change is shared: confirm `test/subframe-gate/`
+  still stores no `pwned` (subframes dropped at the launcher, #18) and the
+  app's own calls work.
+- [ ] **Windows** — same probe: the iframe's calls never arrive (WebView2
+  top-level only), own calls work, and a main-window page that stuffs
+  `"tiny:subframe"` into its own call only gets itself denied.

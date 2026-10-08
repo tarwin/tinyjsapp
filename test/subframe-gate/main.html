@@ -1,0 +1,26 @@
+<!doctype html><body><iframe src="http://127.0.0.1:8765/evil.html"></iframe><script>
+// The app's own page. The cross-origin iframe below it hand-posts calls to
+// the "tiny" message handler, which WebKit exposes in every frame.
+// Count every reply the launcher delivers to this frame. The page's own calls
+// account for a few dozen; the iframe's thousands must never show up here.
+let resolves = 0;
+const wrap = () => {
+  const orig = window.__tinyResolve;
+  window.__tinyResolve = (...a) => { resolves++; return orig(...a); };
+};
+setTimeout(async () => {
+  wrap();
+  const out = {};
+  try { await tiny.store.set('own', 'yes'); out.own = 'ALLOWED'; } catch (e) { out.own = 'denied: ' + e; }
+  // Collision probe: the iframe keeps posting seq 1..100 as unknown methods.
+  // If its denials reached this frame they would reject these calls.
+  let rejected = 0;
+  for (let i = 0; i < 40; i++) {
+    try { await tiny.store.get('own'); } catch (e) { rejected++; }
+  }
+  out.crosswired = rejected;
+  await new Promise((r) => setTimeout(r, 5000)); // let the iframe's spam run out
+  out.resolves = resolves;
+  await tiny.store.set('sg', out);
+}, 3000);
+</script>

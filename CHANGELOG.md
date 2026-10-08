@@ -4,6 +4,26 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.50.1 — 2026-10-07
+
+Security fix.
+
+- **macOS: an iframe can no longer call your app.** WebKit gives the page's
+  message handler to every frame, not only the top one, so any iframe in
+  an app's page (a CodePen embed, an ad, a wrapped site's widgets) could
+  post a hand-built call. Without an `"api"` block every call was allowed,
+  so that iframe could call the app's own backend methods and every
+  built-in one, AppleScript, keychain secrets and the clipboard included.
+  Its replies, including errors, also went to the top frame and settled the top frame's own pending calls with the same
+  number. The launcher now marks calls from subframes, and the backend
+  runs one only when an `"api".origins` key names the iframe's origin, under
+  that key's lists. No `"api"`, a preset, or top-level lists alone give
+  subframes nothing. A subframe's replies no longer reach the top frame.
+  Top-level pages, satellite windows and wrapped sites are unchanged. Linux
+  already dropped subframe calls (0.46.0), and WebView2 on Windows only
+  delivers messages from the top-level document. **macOS apps that show
+  third-party iframes should update.**
+
 ## 0.50.0 — 2026-10-05
 
 - **`tinyjs new --template` asks, and works with your package manager.**
