@@ -3176,9 +3176,3 @@ one only when an `"api".origins` key names its origin. Probe:
   the iframe's `store.set` runs, replies still 41. Regressions: smoke.html
   passes on a top-level page; proxy-gate's wrapped-site trio (no `"api"` /
   `media.proxy`+`store.*` / `store.*`) refused / SECRET-PAYLOAD / refused.)*
-- [ ] **Linux** — bridge change is shared: confirm `test/subframe-gate/`
-  still stores no `pwned` (subframes dropped at the launcher, #18) and the
-  app's own calls work.
-- [ ] **Windows** — same probe: the iframe's calls never arrive (WebView2
-  top-level only), own calls work, and a main-window page that stuffs
-  `"tiny:subframe"` into its own call only gets itself denied.
