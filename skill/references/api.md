@@ -387,7 +387,8 @@ await tiny.app.thumbnail(path, size?);  // png for ANY path (macOS/Windows:
 ```js
 await tiny.store.set('key', anyJsonValue); await tiny.store.get('key');
 await tiny.store.delete('key'); await tiny.store.all();
-// per-app data dir; fine for settings. Query-shaped data -> sqlite (backend):
+// per-app data dir; fine for settings. Query-shaped data -> sqlite (BACKEND
+// ONLY: the page has no tjs global / tjs:* imports; expose api functions):
 //   import { Database } from 'tjs:sqlite';
 //   await tjs.makeDir(dir, { recursive: true });  // fs is async; db is NOT
 //   new Database(path).prepare(sql).run(...)/.all()

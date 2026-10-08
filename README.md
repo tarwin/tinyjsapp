@@ -278,7 +278,10 @@ export function onSystem(kind, value, app) {}  // optional: 'theme'|'sleep'|'wak
 ```
 
 The backend runtime ships SQLite built in, handy for anything `tiny.store`
-is too small for:
+is too small for. Backend only: the page runs in the system webview, which
+has no `tjs` global and can't import `tjs:*` modules (doing so throws
+`ReferenceError: tjs is not defined`). Query in the backend and hand the
+page results through an `api` function (example below).
 
 ```js
 import { Database } from 'tjs:sqlite';
@@ -300,6 +303,22 @@ nothing. For the last insert id, ask SQLite:
 db.prepare('INSERT INTO notes (text) VALUES (?) RETURNING id').all('hi')[0].id;
 // or: db.prepare('SELECT last_insert_rowid() AS id').all()[0].id
 ```
+
+To reach the database from the page, expose what it needs from the backend:
+
+```js
+// backend
+export const api = {
+  notes: () => db.prepare('SELECT * FROM notes').all(),
+  addNote: ({ text }) => { db.prepare('INSERT INTO notes (text) VALUES (?)').run(text); },
+};
+// frontend
+const notes = await tiny.api.call('notes');
+await tiny.api.call('addNote', { text: 'hi' });
+```
+
+Expose named operations rather than a generic `query(sql)` function, so the
+page can't run arbitrary SQL.
 
 Frontend — the `tiny` global is injected into every page automatically:
 

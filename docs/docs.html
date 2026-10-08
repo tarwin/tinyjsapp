@@ -638,7 +638,11 @@
     flashes a console window on Windows (console tools spawned from a built
     app otherwise each pop a terminal; identical to <code>tjs.spawn</code> on
     macOS and Linux, where there's no console to flash).</p>
-    <p>SQLite ships in the runtime:</p>
+    <p>SQLite ships in the runtime, <b>backend only</b>. The page runs in the
+    system webview, with no <code>tjs</code> global and no <code>tjs:*</code>
+    modules (importing one there throws <code>ReferenceError: tjs is not
+    defined</code>), so query in the backend and return results through an
+    <code>api</code> function:</p>
     <pre><b>import</b> { Database } <b>from</b> 'tjs:sqlite';
 <b>await</b> tjs.makeDir(dir, { recursive: true });  <i>// tjs.* fs is ASYNC — skip the</i>
 <i>// await and new Database() below races the mkdir ("database not initialized")</i>
@@ -653,6 +657,15 @@ db.prepare('SELECT * FROM notes').all();  <i>// [{ id: 1, text: 'hello' }]</i></
     returns nothing. For the last insert id, ask SQLite:
     <code>db.prepare('INSERT … RETURNING id').all(…)[0].id</code> or
     <code>SELECT last_insert_rowid()</code>.</p>
+    <p>Page side, call what the backend exposes:</p>
+    <pre><i>// backend</i>
+<b>export const</b> api = {
+  notes: () =&gt; db.prepare('SELECT * FROM notes').all(),
+};
+<i>// frontend</i>
+const notes = <b>await</b> tiny.api.call('notes');</pre>
+    <p class="note">Expose named operations rather than a generic
+    <code>query(sql)</code>, so the page can't run arbitrary SQL.</p>
   </section>
 
   <section id="frontend">
