@@ -8,6 +8,8 @@
 //
 // Runs on txiki.js itself (via the `tinyjs` wrapper script).
 
+import { signManifest, verifyManifest } from './runtime/update-signing.js';
+
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
@@ -1015,6 +1017,7 @@ async function generateBuild(cfg, dev = false) {
     enc.encode(JSON.stringify({ version: 0, build: {}, main: 'entry.js' })));
   await tjs.writeFile(B + '/bridge.js', await tjs.readFile(TOOL_DIR + 'runtime/bridge.js'));
   await tjs.writeFile(B + '/update.js', await tjs.readFile(TOOL_DIR + 'runtime/update.js'));
+  await tjs.writeFile(B + '/update-signing.js', await tjs.readFile(TOOL_DIR + 'runtime/update-signing.js'));
 
   // Backend: TypeScript (or any entry, with npm packages) bundles via esbuild;
   // plain JS copies sources as before.
@@ -3052,6 +3055,37 @@ async function sha256File(path) {
 
 async function cmdPublish() {
   const cfg = await loadConfig();
+  // Opt in only with an explicit baked publicKey; private material is never
+  // read from config or copied into generated app sources.
+  const publicKey = cfg.update?.publicKey;
+  const keyFile = tjs.env.TINYJS_UPDATE_PRIVATE_KEY_FILE;
+  let signingKey = null;
+  if (publicKey !== undefined) {
+    if (!keyFile) fail('signed updates require TINYJS_UPDATE_PRIVATE_KEY_FILE (external PKCS8 DER file)');
+    try {
+      signingKey = await crypto.subtle.importKey('pkcs8', await tjs.readFile(keyFile), 'Ed25519', false, ['sign']);
+      await signManifest({ version: cfg.version ?? '0.0.0' }, signingKey, publicKey);
+    } catch (e) {
+      fail('cannot sign updates: ' + (e?.message ?? e));
+    }
+  } else if (keyFile) {
+    fail('set update.publicKey before using TINYJS_UPDATE_PRIVATE_KEY_FILE');
+  }
+  const si = args.indexOf('--sign-manifest');
+  if (si >= 0) {
+    if (!signingKey || !args[si + 1]) fail('--sign-manifest FILE requires update.publicKey and a private key');
+    const path = args[si + 1];
+    try {
+      const manifest = JSON.parse(dec.decode(await tjs.readFile(path)));
+      if (manifest?.format === 'tinyjs-update-v1') fail('--sign-manifest expects the final plain merged manifest');
+      const signed = await signManifest(manifest, signingKey, publicKey);
+      await tjs.writeFile(path, enc.encode(JSON.stringify(signed, null, 2) + '\n'));
+    } catch (e) {
+      fail('cannot sign manifest: ' + (e?.message ?? e));
+    }
+    console.log('==> signed ' + path);
+    return;
+  }
   const version = cfg.version;
   if (!version) fail('tinyjs.json needs a "version" to publish (e.g. "1.0.0")');
   const PUB = 'dist/publish';
@@ -3067,7 +3101,10 @@ async function cmdPublish() {
   await cmdBuild();
   let prev = null;
   if (MAC_SUFFIX && (await exists(KEEP))) {
-    try { prev = JSON.parse(dec.decode(await tjs.readFile(KEEP + '/manifest.json'))); } catch {}
+    try {
+      prev = JSON.parse(dec.decode(await tjs.readFile(KEEP + '/manifest.json')));
+      if (publicKey !== undefined) prev = await verifyManifest(prev, publicKey);
+    } catch { prev = null; }
     // Another version's leftovers don't belong in this release.
     if (prev?.version === version) await tjs.rename(KEEP, PUB);
     else prev = null;
@@ -3139,7 +3176,8 @@ async function cmdPublish() {
       ? dec.decode(await tjs.readFile(args[ni + 1])).trim()
       : args[ni + 1];
   }
-  await tjs.writeFile(PUB + '/manifest.json', enc.encode(JSON.stringify(manifest, null, 2) + '\n'));
+  const output = signingKey ? await signManifest(manifest, signingKey, publicKey) : manifest;
+  await tjs.writeFile(PUB + '/manifest.json', enc.encode(JSON.stringify(output, null, 2) + '\n'));
 
   console.log('==> dist/publish/ ready:');
   for (const z of Object.values(manifest.mac ?? {}).map((m) => m.url.replace(/.*\//, '')).filter((z) => z !== zipName))
@@ -3439,6 +3477,8 @@ usage:
   tinyjs publish      build + zip the .app + auto-update manifest (takes --arch /
                       --universal; run once per --arch, the manifest merges both)
                       (--notes "text" | --notes-file FILE → manifest notes)
+                      (--sign-manifest FILE: sign a final merged manifest without building;
+                      requires update.publicKey + TINYJS_UPDATE_PRIVATE_KEY_FILE)
   tinyjs notarize     submit dist/<Name>.app to Apple notarization + staple
                       (--dmg: also rebuild dist/<name>-<version>.dmg from the
                       stapled .app; auto-rebuilt if a dmg already exists;

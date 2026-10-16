@@ -2584,9 +2584,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     // onUpdateAvailable export with { current, latest, notes } — wire your
     // own prompt, then update.install().
     update: {
-      check: () => checkForUpdate({ url: update?.url, version }),
+      check: () => checkForUpdate({ url: update?.url, version, publicKey: update?.publicKey }),
       async install() {
-        const bundle = await installUpdate({ url: update?.url, version });
+        const bundle = await installUpdate({ url: update?.url, version, publicKey: update?.publicKey });
         relaunch(bundle);
         setTimeout(() => app.quit(), 250);
         return true;

@@ -21,6 +21,10 @@
 // identity, the update's Team ID must match (ad-hoc builds have no identity
 // to pin, so the https+sha256 manifest is their only anchor — use a real
 // Developer ID for anything security-sensitive).
+// With update.publicKey, an Ed25519 envelope authenticates the complete
+// manifest before platform selection; TLS, sha256 and code checks still apply.
+
+import { verifyManifest } from './update-signing.js';
 
 const dec = new TextDecoder();
 const IS_WIN = tjs.env.OS === 'Windows_NT';
@@ -138,14 +142,16 @@ async function portableBundleInit() {
   }
 }
 
-export async function checkForUpdate({ url, version }) {
+export async function checkForUpdate({ url, version, publicKey }) {
   if (!url) throw new Error('no update url configured (tinyjs.json "update": { "url": … })');
   assertSafeUrl(url, 'update url');
   const res = await fetch(url, { headers: { 'cache-control': 'no-cache' } });
   if (!res.ok) throw new Error('update check failed: HTTP ' + res.status);
   // A redirect must not downgrade the transport.
   if (res.url) assertSafeUrl(res.url, 'update url (after redirect)');
-  const manifest = await res.json();
+  const response = await res.json();
+  const manifest = publicKey !== undefined
+    ? await verifyManifest(response, publicKey) : response;
   let latest = manifest?.version ?? null;
   // Per-platform downloads: `url`/`sha256` are the macOS zip (the original,
   // pre-Windows fields); a `win: { url, sha256, version? }` block carries
@@ -206,7 +212,15 @@ export async function checkForUpdate({ url, version }) {
 // Downloads, verifies, swaps the bundle. Returns the bundle path on success;
 // the caller is expected to relaunch() + quit. Throws with a human-readable
 // reason on any failure (the running app is untouched or rolled back).
-export async function installUpdate({ url, version, manifest }) {
+export async function installUpdate({ url, version, manifest, publicKey }) {
+  // A check result is mutable/untrusted. Fetch and authenticate again for
+  // signed installs, even when the caller supplies a manifest. Parameters
+  // (especially the baked key) are captured by value before any await.
+  if (publicKey !== undefined) {
+    const checked = await checkForUpdate({ url, version, publicKey });
+    if (!checked.available) throw new Error('no newer signed update available for this platform');
+    manifest = checked.manifest;
+  }
   const bundle = await bundlePath();
   if (!bundle) {
     throw new Error('auto-update only works from the packaged .app build');
