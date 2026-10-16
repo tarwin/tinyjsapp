@@ -1,0 +1,114 @@
+name: check
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TJS_VERSION: v26.6.0
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, windows-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check the smoke harness failure paths
+        timeout-minutes: 2
+        run: python -u test/ci/check.py --self-test
+
+      - name: Install Windows build dependencies
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        run: choco install mingw -y --no-progress
+
+      - name: Install Linux build and desktop dependencies
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential g++-12 cmake ninja-build pkg-config \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+            libx11-dev libxtst-dev libpipewire-0.3-dev libffi-dev xvfb dbus-x11
+
+      # Use the release toolchain and Ubuntu 22.04 ABI floor. Do not restore a
+      # binary cache written by untrusted PR code into a later release build.
+      - name: Bootstrap Linux from source
+        if: runner.os == 'Linux'
+        timeout-minutes: 25
+        run: TJS_BUILD=1 CC=gcc-12 CXX=g++-12 ./setup.sh
+
+      - name: Verify Linux ABI, architecture and optional native features
+        if: runner.os == 'Linux'
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          for binary in bin/tjs native/launcher-linux; do
+            readelf -h "$binary" | grep -q 'Machine:.*X86-64'
+            for pair in 'GLIBC 2.35' 'GLIBCXX 3.4.30' 'CXXABI 1.3.13'; do
+              read -r prefix ceiling <<< "$pair"
+              versions=$(objdump -T "$binary" | grep -oE "${prefix}_[0-9]+(\.[0-9]+)*" | sed "s/^${prefix}_//" | sort -uV || true)
+              highest=$(printf '%s\n' "$versions" "$ceiling" | sort -uV | tail -1)
+              if [ "$highest" != "$ceiling" ]; then
+                echo "::error::$binary needs ${prefix}_$highest; ceiling is $ceiling"
+                exit 1
+              fi
+            done
+          done
+          objdump -p native/launcher-linux > "$RUNNER_TEMP/launcher-libraries.txt"
+          for library in libXtst appindicator libpipewire; do
+            grep -q "$library" "$RUNNER_TEMP/launcher-libraries.txt"
+          done
+
+      - name: Bootstrap macOS (universal launcher, macOS 14 floor)
+        if: runner.os == 'macOS'
+        timeout-minutes: 15
+        run: TINYJS_UNIVERSAL=1 ./setup.sh
+
+      - name: Verify macOS launcher
+        if: runner.os == 'macOS'
+        timeout-minutes: 2
+        run: |
+          codesign --verify --strict native/launcher-macos
+          for arch in arm64 x86_64; do
+            vtool -arch "$arch" -show-build native/launcher-macos | grep -q 'minos 14.0'
+            otool -arch "$arch" -L native/launcher-macos > "$RUNNER_TEMP/launcher-frameworks.txt"
+            grep FoundationModels "$RUNNER_TEMP/launcher-frameworks.txt" | grep -q weak
+            nm -arch "$arch" native/launcher-macos > "$RUNNER_TEMP/launcher-symbols.txt"
+            grep -q tiny_ai_generate "$RUNNER_TEMP/launcher-symbols.txt"
+          done
+
+      - name: Bootstrap Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        run: |
+          & powershell -ExecutionPolicy Bypass -File setup.ps1 -SkipPath
+          if ($LASTEXITCODE -ne 0) { throw 'setup.ps1 failed' }
+
+      - name: Build and GUI smoke (Linux desktop session)
+        if: runner.os == 'Linux'
+        timeout-minutes: 10
+        run: dbus-run-session -- xvfb-run -a python -u test/ci/check.py --smoke
+
+      - name: Build and GUI smoke (macOS / Windows)
+        if: runner.os != 'Linux'
+        timeout-minutes: 10
+        run: python -u test/ci/check.py --smoke
