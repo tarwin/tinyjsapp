@@ -23,6 +23,8 @@ Questions, help, or something you built: come say hi on
 
 ## Install
 
+For a macOS Homebrew custom tap, see the [formula and tap instructions](docs/homebrew.md).
+
 ```sh
 curl -fsSL https://tinyjs.app/install | sh
 ```
