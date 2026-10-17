@@ -1,0 +1,8 @@
+{
+  "$schema": "https://tinyjs.app/schema/tinyjs.schema.json",
+  "name": "dock-reopen-test",
+  "title": "Dock Reopen Test",
+  "id": "com.tinyjs.dock-reopen-test",
+  "version": "0.1.0",
+  "size": "480x320"
+}

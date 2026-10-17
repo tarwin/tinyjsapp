@@ -1,0 +1,8 @@
+{
+  "$schema": "https://tinyjs.app/schema/tinyjs.schema.json",
+  "name": "dock-windowless-test",
+  "title": "Dock Windowless Test",
+  "id": "com.tinyjs.dock-windowless-test",
+  "mainWindow": false,
+  "activation": "regular"
+}

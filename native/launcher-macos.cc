@@ -9001,6 +9001,16 @@ static void tiny_openFiles(id, SEL, id app, NSArray *files) {
   [(NSApplication *)app replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
 }
 
+static BOOL tiny_reopen(id, SEL, NSApplication *, BOOL hasVisibleWindows) {
+  // A close-hidden window is still alive, but AppKit's default reopen path
+  // does not order it back in. Use the same show operation as the page API.
+  if (hasVisibleWindows || !g_hide_on_close || !g_w ||
+      !window_for_id(g_w, "main"))
+    return YES;
+  do_winop(g_w, new WinopReq{"main", "show"});
+  return NO;
+}
+
 // Launch Apple Events can be dispatched while webview_create pumps the event
 // loop — before the app delegate exists. Register plain NSAppleEventManager
 // handlers FIRST (no delegate needed) so cold-start URLs/files are caught;
@@ -9049,6 +9059,9 @@ static void install_open_handlers() {
                   (IMP)tiny_openURLs, "v@:@@");
   class_addMethod(object_getClass(delegate), @selector(application:openFiles:),
                   (IMP)tiny_openFiles, "v@:@@");
+  class_addMethod(object_getClass(delegate),
+                  @selector(applicationShouldHandleReopen:hasVisibleWindows:),
+                  (IMP)tiny_reopen, "c@:@c");
   // NSApplication caches delegate capabilities at setDelegate: time; re-set
   // it so AppKit notices the methods we just added.
   [NSApp setDelegate:nil];
