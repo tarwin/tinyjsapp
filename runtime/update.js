@@ -94,15 +94,41 @@ async function fetchEveryHopSafe(url, what, init = {}) {
 }
 
 function parseVer(v) {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(v));
-  return m ? [+m[1], +m[2], +m[3]] : null;
+  // Accept the historical leading v, but require a complete SemVer after it.
+  const m = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(String(v));
+  if (!m) return null;
+  const pre = m[4]?.split('.') ?? [];
+  if (pre.some((id) => /^0\d+$/.test(id))) return null;
+  return { core: m.slice(1, 4), pre };
+}
+
+// Compare decimal strings rather than Numbers: SemVer does not limit the
+// length of a numeric identifier, and Number loses precision above 2^53.
+function compareNumber(a, b) {
+  if (a.length !== b.length) return a.length < b.length ? -1 : 1;
+  return a === b ? 0 : a < b ? -1 : 1;
+}
+
+function comparePre(a, b) {
+  if (!a.length || !b.length) return a.length === b.length ? 0 : a.length ? -1 : 1;
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] === b[i]) continue;
+    const an = /^\d+$/.test(a[i]);
+    const bn = /^\d+$/.test(b[i]);
+    if (an && bn) return compareNumber(a[i], b[i]);
+    if (an !== bn) return an ? -1 : 1;
+    return a[i] < b[i] ? -1 : 1;
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
 }
 
 function isNewer(current, latest) {
   const a = parseVer(current), b = parseVer(latest);
   if (!a || !b) return false;
-  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
-  return false;
+  for (let i = 0; i < 3; i++) {
+    if (a.core[i] !== b.core[i]) return compareNumber(a.core[i], b.core[i]) < 0;
+  }
+  return comparePre(a.pre, b.pre) < 0;
 }
 
 async function runOk(argv) {
