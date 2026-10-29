@@ -188,6 +188,8 @@ It needs a **Developer ID Application** certificate and the paid [Apple Develope
    ```
 4. Name the profile in tinyjs.json: `"notarize": { "profile": "tinyjs-notary" }` (or `TINYJS_NOTARY_PROFILE`).
 
+If the credentials are stored in a file-based keychain, set `notarize.keychain` to its path (or export `TINYJS_NOTARY_KEYCHAIN`). Tinyjs passes it to `notarytool --keychain`; relative paths start at the project directory. Use the same `--keychain` path with `store-credentials`, and unlock the keychain before submitting. Without a path, `notarytool` uses the data protection keychain.
+
 Before submitting, notarize checks that the built app really carries a Developer ID signature and says what it found if not (ad-hoc, Apple Development…). Build again after changing `signIdentity`.
 
 ## tinyjs doctor {#doctor}
@@ -241,10 +243,11 @@ Prints the tinyjs version and the [txiki.js](https://txikijs.org) runtime it use
 | `TINYJS_ARCH`, `TINYJS_UNIVERSAL=1` | `build`, `publish`, `notarize`: same as `--arch` and `--universal`. |
 | `TINYJS_SIGN_IDENTITY` | overrides `signIdentity`. |
 | `TINYJS_NOTARY_PROFILE` | overrides `notarize.profile`. |
+| `TINYJS_NOTARY_KEYCHAIN` | overrides `notarize.keychain` (file-based keychain path). |
 | `TINYJS_UPDATE_PRIVATE_KEY_FILE` | `publish`: the key that signs the manifest — see [signed updates](./signed-updates). |
 | `TINYJS_HTML=/abs/page.html` | `dev`: load a different page, such as a self-driving test page. |
 | `TINYJS_LAUNCHER=/path` | run against a different launcher binary. |
 | `TINYJS_HOME` | where the installer puts tinyjs. |
 | `NO_COLOR` | `doctor`: plain output. |
 
-The two overrides print a line when they replace a value tinyjs.json really had. The [tinyjs.json](./config#per-os-overrides) per-OS blocks resolve first: root → OS block → environment.
+The signing and notarization overrides print a line when they replace a value tinyjs.json really had. The [tinyjs.json](./config#per-os-overrides) per-OS blocks resolve first: root → OS block → environment.

@@ -329,6 +329,8 @@ The codesigning certificate, by name: `"Developer ID Application: Your Name (TEA
 
 The `notarytool` keychain profile [`tinyjs notarize`](./cli#notarize) submits with. `TINYJS_NOTARY_PROFILE` overrides it.
 
+For credentials stored in a file-based keychain, add `"keychain": "ci.keychain-db"` beside `profile`. The path is absolute or relative to the project directory; `TINYJS_NOTARY_KEYCHAIN` overrides it. Tinyjs passes it as `notarytool --keychain`, so use the same keychain when storing credentials and unlock it before submitting. Omit `keychain` (or set it to `null` or `""`) to use the data protection keychain.
+
 ## updates {#updates}
 
 ### `update` {#update}
@@ -407,11 +409,12 @@ Objects merge, so the macOS block above ends up with `{ "frame": false, "vibranc
 
 ## environment variables {#environment-variables}
 
-Two keys can come from the environment instead, so a signing identity or notary profile can live in your shell or CI secrets rather than a committed file:
+Signing and notarization settings can come from the environment instead, so an identity, profile or keychain path can live in your shell or CI configuration rather than a committed file:
 
 | variable | sets |
 |---|---|
 | `TINYJS_SIGN_IDENTITY` | [`signIdentity`](#signIdentity) |
 | `TINYJS_NOTARY_PROFILE` | [`notarize.profile`](#notarize) |
+| `TINYJS_NOTARY_KEYCHAIN` | [`notarize.keychain`](#notarize) |
 
 They win over the file — root and OS block alike — and the build prints a line when one replaces a value the file set (`==> signIdentity from TINYJS_SIGN_IDENTITY (overriding tinyjs.json)`), so a variable left exported in a shell can't quietly change how a project signs. The order is **root → OS block → environment**. The other `TINYJS_*` variables are for running and debugging — see [cli](./cli#environment).

@@ -1197,6 +1197,7 @@ function mergeConfig(base, over) {
 const ENV_OVERRIDES = [
   ['signIdentity', 'TINYJS_SIGN_IDENTITY'],
   ['notarize.profile', 'TINYJS_NOTARY_PROFILE'],
+  ['notarize.keychain', 'TINYJS_NOTARY_KEYCHAIN'],
 ];
 
 function applyEnvOverrides(cfg) {
@@ -3424,7 +3425,9 @@ async function cmdNotarize() {
   console.log('==> zipping for submission');
   await run(['ditto', '-c', '-k', '--keepParent', APP, zip]);
   console.log('==> submitting to Apple (this waits for their verdict)');
-  await run(['xcrun', 'notarytool', 'submit', zip, '--keychain-profile', profile, '--wait']);
+  const keychain = cfg.notarize?.keychain;
+  await run(['xcrun', 'notarytool', 'submit', zip, '--keychain-profile', profile,
+             ...(keychain ? ['--keychain', keychain] : []), '--wait']);
   console.log('==> stapling ticket');
   await run(['xcrun', 'stapler', 'staple', APP]);
 

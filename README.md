@@ -289,9 +289,10 @@ strings `tiny.system.os()` returns:
 ```
 
 Plain objects merge (the macOS build above gets `{ frame: false, vibrancy:
-'hud' }`), scalars and arrays replace. `TINYJS_SIGN_IDENTITY` and
-`TINYJS_NOTARY_PROFILE` override the file — and say so when they displace a
-value that was really there. Resolution order: **root → OS block → env**.
+'hud' }`), scalars and arrays replace. `TINYJS_SIGN_IDENTITY`,
+`TINYJS_NOTARY_PROFILE` and `TINYJS_NOTARY_KEYCHAIN` override the file — and
+say so when they displace a value that was really there. Resolution order:
+**root → OS block → env**.
 
 ### Writing the app
 
@@ -1857,6 +1858,12 @@ valid on your own registered devices — not for distribution. One-time setup:
 
    and point `tinyjs.json` at the profile:
    `"notarize": { "profile": "tinyjs-notary" }`.
+
+   For a file-based keychain, add `--keychain /path/to/ci.keychain-db` to
+   `store-credentials` and set `notarize.keychain` to the same path (or export
+   `TINYJS_NOTARY_KEYCHAIN`). Relative paths start at the project directory.
+   Unlock the keychain before notarizing. Without a path, `notarytool` uses
+   the data protection keychain.
 5. **Ship**: `tinyjs build && tinyjs notarize` (for a dmg installer, use
    `tinyjs build --dmg && tinyjs notarize --dmg` so the image is rebuilt from
    the stapled .app). The stapled .app opens anywhere, no warnings.
