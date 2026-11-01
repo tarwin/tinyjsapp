@@ -3879,9 +3879,11 @@ static void rec_reset() {
   g_rec_path.clear();
 }
 
+// qid/path BY VALUE: the completion blocks below outlive the caller's
+// strings, and a block captures a C++ reference as a reference — reading
+// it later gave AVAssetWriter a nil URL and an uncaught exception (#105).
 API_AVAILABLE(macos(14.0))
-static void rec_start(const std::string &qid, long want,
-                      const std::string &path) {
+static void rec_start(std::string qid, long want, std::string path) {
   if (g_rec_stream) {
     capture_fail(qid, "already recording");
     return;
@@ -3995,7 +3997,7 @@ static void rec_start(const std::string &qid, long want,
 }
 
 API_AVAILABLE(macos(14.0))
-static void rec_stop(const std::string &qid) {
+static void rec_stop(std::string qid) { // by value: see rec_start
   if (!g_rec_stream) {
     capture_fail(qid, "not recording");
     return;
@@ -8026,9 +8028,10 @@ static void tiny_popup_ask(const std::string &pid, const std::string &opener,
   g_popup_pending[qid] = (void *)[resolver copy];
   sock_write_line("POPUPQ " + qid + " " + (pid.empty() ? "-" : pid) + "\t" +
                   opener + "\t" + u + "\t" + mode);
+  std::string m = mode; // a copy: the block outlives the caller's string
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(400 * NSEC_PER_MSEC)),
                  dispatch_get_main_queue(), ^{
-                   tiny_popup_resolve(qid, mode);
+                   tiny_popup_resolve(qid, m);
                  });
 }
 
