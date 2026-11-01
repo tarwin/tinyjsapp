@@ -45,7 +45,7 @@ A reverse-domain identifier, unique to your app (`com.yourcompany.myapp`). The O
 
 `string`, like `"1.2.0"`
 
-Shown in the About panel and returned by `tiny.app.info()`. [`tinyjs publish`](./cli#publish) requires it, and [auto-update](./auto-update) compares it (the first `major.minor.patch`) to decide whether a release is newer.
+Shown in the About panel and returned by `tiny.app.info()`. [`tinyjs publish`](./cli#publish) requires it, and [auto-update](./auto-update#versions) compares it using SemVer precedence (including pre-release identifiers) to decide whether a release is newer.
 
 ### `minTinyjsVersion` {#minTinyjsVersion}
 
