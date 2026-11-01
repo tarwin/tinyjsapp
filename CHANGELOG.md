@@ -4,6 +4,15 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **macOS: notifications respect "Allow notifications" being off.** When
+  the user had turned a signed app's notifications off in System Settings,
+  `notify()` still showed the banner through the unsigned-build fallback,
+  attributed to Script Editor (a click opened Script Editor). Notifications
+  from an app switched off now aren't shown; unsigned and ad-hoc builds
+  that macOS refuses outright still fall back as before.
+
 ## 0.69.0 — 2026-11-01
 
 - **Auto-update compares pre-release versions using SemVer precedence.**

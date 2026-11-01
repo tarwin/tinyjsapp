@@ -4744,7 +4744,8 @@ static void install_notif_delegate() {
 
 // Ad-hoc-signed apps are refused by Notification Center outright (error,
 // no prompt). Fall back to osascript so notify() still works in unsigned
-// builds; a real signing identity upgrades to native banners.
+// builds; a real signing identity upgrades to native banners. Never used
+// once the user has turned the app's notifications off (see do_notify).
 static void deliver_osascript(const NotifReq &req) {
   auto q = [](const std::string &v) {
     std::string out = "\"";
@@ -4763,6 +4764,20 @@ static void deliver_osascript(const NotifReq &req) {
   pid_t pid;
   posix_spawn(&pid, "/usr/bin/osascript", nullptr, nullptr,
               const_cast<char *const *>(sargv), environ);
+}
+
+static void deliver_notification(const NotifReq &req);
+
+// The authorization answer is in: record it and flush what queued meanwhile.
+static void settle_notif_auth(NotifAuth a) {
+  g_notif_auth = a;
+  for (const NotifReq &n : g_notif_queue) {
+    if (a == NotifAuth::Granted)
+      deliver_notification(n);
+    else if (a == NotifAuth::Fallback)
+      deliver_osascript(n);
+  }
+  g_notif_queue.clear();
 }
 
 // Action buttons / reply fields need a UNNotificationCategory registered
@@ -4876,21 +4891,38 @@ static void do_notify(webview_t, void *arg) {
                                          UNAuthorizationOptionSound |
                                          UNAuthorizationOptionBadge)
                       completionHandler:^(BOOL granted, NSError *err) {
-                        dispatch_async(dispatch_get_main_queue(), ^{
-                          // granted=NO WITH an error and no prompt means the
-                          // system refused (ad-hoc signature) — fall back.
-                          // granted=NO without an error is the user's choice.
-                          g_notif_auth = granted ? NotifAuth::Granted
-                                        : err    ? NotifAuth::Fallback
-                                                 : NotifAuth::Denied;
-                          for (const NotifReq &n : g_notif_queue) {
-                            if (g_notif_auth == NotifAuth::Granted)
-                              deliver_notification(n);
-                            else if (g_notif_auth == NotifAuth::Fallback)
-                              deliver_osascript(n);
-                          }
-                          g_notif_queue.clear();
-                        });
+                        if (granted || !err) {
+                          dispatch_async(dispatch_get_main_queue(), ^{
+                            settle_notif_auth(granted ? NotifAuth::Granted
+                                                      : NotifAuth::Denied);
+                          });
+                          return;
+                        }
+                        // An error is ambiguous: the SAME "Notifications are
+                        // not allowed" (UNErrorDomain 1) comes back both when
+                        // the system refuses the app (ad-hoc signature, a
+                        // bundle usernoted can't validate) and when the user
+                        // has turned "Allow notifications" off for it. Only
+                        // the former may fall back to osascript — doing it
+                        // for the latter showed the user's silenced app's
+                        // banners anyway, under Script Editor (a click opened
+                        // Script Editor). The stored setting tells them apart:
+                        // Denied only exists once the user has decided.
+                        [[UNUserNotificationCenter currentNotificationCenter]
+                            getNotificationSettingsWithCompletionHandler:^(
+                                UNNotificationSettings *s) {
+                              bool off = s.authorizationStatus ==
+                                         UNAuthorizationStatusDenied;
+                              if (getenv("TINYJS_NOTIF_DEBUG"))
+                                std::fprintf(stderr,
+                                             "DBG auth err=%s status=%ld\n",
+                                             [[err description] UTF8String],
+                                             (long)s.authorizationStatus);
+                              dispatch_async(dispatch_get_main_queue(), ^{
+                                settle_notif_auth(off ? NotifAuth::Denied
+                                                      : NotifAuth::Fallback);
+                              });
+                            }];
                       }];
     break;
   }
