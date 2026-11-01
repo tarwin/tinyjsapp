@@ -13,7 +13,7 @@ https://tinyjs.app/changelog.
   is accepted); otherwise the old `major.minor.patch`-only comparison is
   used, so apps versioned `2026.01.15` or `1.0.0.5` keep updating as before.
   `tinyjs publish` warns about a non-SemVer `version`. See
-  [auto-update](docs/docs/auto-update.md#versions). (#103 — thanks
+  [auto-update](https://tinyjs.app/docs/auto-update#versions). (#103 — thanks
   [@9wick](https://github.com/9wick).)
 
 ## 0.68.0 — 2026-10-29
