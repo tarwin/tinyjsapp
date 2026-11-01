@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.70.0 — 2026-11-01
 
 - **`win.open({ show: false })` opens a window hidden.** The window is
   created, placed and its page loaded, but it stays off screen until
