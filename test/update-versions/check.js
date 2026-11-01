@@ -1,5 +1,5 @@
 // SemVer update precedence, through the same manifest check on every OS.
-// Headless: tjs run test/update-versions/check.js
+// Headless, any OS: bin/tjs run test/update-versions/check.js
 const { checkForUpdate } = await import('../../runtime/update.js');
 
 let manifest;
