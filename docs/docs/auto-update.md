@@ -89,7 +89,9 @@ A check that finds a newer version sends `{ current, latest, notes }` to the `up
 
 ## which versions count as newer {#versions}
 
-Versions are compared as `major.minor.patch`. A leading `v` is allowed and anything after the third number is ignored, so `1.2.0-beta` counts as `1.2.0`, and `1.2.0-beta` → `1.2.0` is not an update. A version that doesn't start with three numbers (`1.2`) never counts as newer. `available` is `false` for the same or an older version.
+Versions are compared by [SemVer precedence](https://semver.org/#spec-item-11) when both the installed and the published version are valid SemVer (a leading `v` is allowed). A pre-release sorts below the corresponding release: `1.2.0-beta.2` → `1.2.0-beta.10` → `1.2.0` are each updates. Numeric pre-release identifiers compare as numbers; build metadata (`+…`) does not affect precedence.
+
+If either version isn't valid SemVer (`2026.01.15`, `1.0.0.5`, `1.2.0-beta_1`), only the first three numbers are compared and anything after them is ignored, so `1.0.0.5` → `1.0.1` is an update but `1.0.0.5` → `1.0.0.6` is not. A version that doesn't start with three numbers (`1.2`) never counts as newer. [`tinyjs publish`](./cli#publish) warns about a version that isn't SemVer. `available` is `false` for the same or an older version.
 
 ## the manifest {#manifest}
 

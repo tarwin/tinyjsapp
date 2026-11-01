@@ -4,6 +4,18 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **Auto-update compares pre-release versions using SemVer precedence.**
+  `1.2.0-beta.2` can now update to `1.2.0-beta.10` and then `1.2.0`;
+  build metadata does not affect ordering. This applies when both the
+  installed and published versions are valid SemVer (an optional leading `v`
+  is accepted); otherwise the old `major.minor.patch`-only comparison is
+  used, so apps versioned `2026.01.15` or `1.0.0.5` keep updating as before.
+  `tinyjs publish` warns about a non-SemVer `version`. See
+  [auto-update](docs/docs/auto-update.md#versions). (#103 — thanks
+  [@9wick](https://github.com/9wick).)
+
 ## 0.68.0 — 2026-10-29
 
 - **Menu item icons.** Menu bar, right-click and tray items take an

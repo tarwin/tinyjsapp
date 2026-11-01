@@ -903,6 +903,22 @@ function isNewer(current, latest) {
   return false;
 }
 
+// Auto-update (runtime/update.js) orders the app's "version" by full SemVer
+// precedence only when both sides are valid SemVer (optional leading v);
+// otherwise it compares major.minor.patch alone, so pre-releases don't order
+// and anything that doesn't start with three numbers never updates. publish
+// warns about it. (The checks above, for the tinyjs tool's own version, stay
+// prefix-only on purpose.)
+const SEMVER = /^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+function appVersionProblem(v) {
+  if (SEMVER.test(String(v))) return null;
+  return `tinyjs.json "version" ${JSON.stringify(v)} is not SemVer (like "1.2.0" or ` +
+    '"1.2.0-beta.3": exactly three numbers, no leading zeros). Auto-update will ' +
+    'compare only its leading major.minor.patch, so pre-release suffixes are ' +
+    'ignored' + (/^v?\d+\.\d+\.\d+/.test(String(v)) ? '' :
+      ' — and with no major.minor.patch, installs will never be offered an update');
+}
+
 function withTimeout(promise, ms) {
   return new Promise((resolve) => {
     const t = setTimeout(() => resolve(null), ms);
@@ -3524,6 +3540,7 @@ async function cmdPublish() {
   }
   const version = cfg.version;
   if (!version) fail('tinyjs.json needs a "version" to publish (e.g. "1.0.0")');
+  { const problem = appVersionProblem(version); if (problem) console.log('tinyjs: WARN: ' + problem); }
   const PUB = 'dist/publish';
   // Per-arch macOS publishes accumulate: `publish --arch arm64` then
   // `publish --arch x86_64` leaves both zips and ONE manifest carrying both.
