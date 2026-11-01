@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.69.0 — 2026-11-01
 
 - **Auto-update compares pre-release versions using SemVer precedence.**
   `1.2.0-beta.2` can now update to `1.2.0-beta.10` and then `1.2.0`;
