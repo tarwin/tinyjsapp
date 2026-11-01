@@ -1,0 +1,9 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>kid</title></head>
+<body style="font:14px system-ui;background:#f66;color:#fff"><h2>kid</h2>
+<p>Opened with show: false; this page showed itself once loaded.</p>
+<script>
+  setTimeout(async () => {
+    await tiny.api.call('ranWhileHidden');
+    setTimeout(() => tiny.win.show(), 2000);
+  }, 500);
+</script></body></html>

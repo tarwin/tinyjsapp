@@ -132,6 +132,9 @@ tiny.win.open('settings', { page: 'settings.html', title: 'Settings',
 // parent: stays above THAT window (not other apps, unlike setLevel), hides/
 // minimizes/closes with it; no taskbar entry on Windows; macOS also moves it
 // with the parent. Open-time only.
+// show: false — built, placed (rememberWindows too) and loaded but hidden
+// until tiny.win.show() / app.window(id).show(): fill it, then reveal it.
+// Don't fake this with size '1x1' — a remembered size overrides it.
 // page: an http(s) URL or a file INSIDE the frontend dir — from a page,
 // anything else (../ walks, other absolute paths, file:) is refused;
 // backend app.win.open takes any path.

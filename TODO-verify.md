@@ -8,6 +8,29 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #102 — `win.open({ show: false })` (`feat/win-open-hidden`, 2026-11-01)
+
+WINOPEN gained field 16: `"0"` = open hidden. Plan + gotchas:
+TODO-win-open-hidden.md. Self-checking app: `test/win-open-hidden/` (run `tinyjs dev`
+twice; PASS/FAIL lines in the console — README there). The bridge holds a remembered maximize/fullscreen
+until the window's first `show()` (applying it would show the window).
+
+- [x] **macOS** (27.0.1, dev run, states read back via getState):
+  hidden at an explicit x/y while its page ran JS + an RPC; `tiny.win.show()`
+  from the page brought it up at the same spot; `parent: true` attached on
+  that show (moving main carried it). With rememberWindows: opened hidden at
+  the remembered rect and appeared there, no jump (the #102 repro). Saved
+  maximized: hidden at the normal rect, maximized on show.
+- [ ] **Windows** — not compiled locally. Watch for: a blank page after the
+  first show (WebView2 controller created on a never-shown HWND; main's
+  deferred show does it on a cloaked one instead); `parent` (owner) still
+  keeps it above main after show; remembered maximize applied on show.
+- [ ] **Linux** — not compiled locally. Only the vbox gets shown at open;
+  WINOP show maps the window. Watch for: the page loading/running JS while
+  never mapped (if WebKitGTK stalls until realize, `gtk_widget_realize`
+  without mapping); X11 position honoured on the first map; menu bar
+  state (apply_menus runs while unmapped).
+
 ## Menu item icons — `icon` on `TinyMenuItem` (2026-10-29)
 
 `ITEM` gained a 5th field and `SUB` a 3rd: the icon, a png path (bridge.js

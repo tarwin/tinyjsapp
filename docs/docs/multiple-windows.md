@@ -27,6 +27,7 @@ await tiny.win.open('settings', { page: 'settings.html', title: 'Settings', size
 | `units` | `'pt'` or `'px'` for `x`, `y` with `screen` | `'pt'` |
 | `chrome` | the same fields as [`setChrome`](./window#chrome), applied before the first paint | |
 | `parent` | `true` (the main window) or a window id — see [child windows](#parent) | |
+| `show` | `false` opens the window hidden — see [opening hidden](#hidden) | `true` |
 
 `chrome` and the position apply before the window is drawn, so a frameless panel never flashes a title bar and a positioned window doesn't jump from the centre:
 
@@ -39,7 +40,24 @@ tiny.win.open('hud', {
 
 A page can only open files inside the app's frontend folder, or `http(s)` URLs; an absolute path or a `../` that leads out of the frontend rejects. The backend's `app.win.open()` also takes absolute paths.
 
-New windows show the app menu on Windows and Linux; give one its own with [`tiny.win.menu.set()`](./menus) or none with `chrome: { menu: false }`. With [`rememberWindows`](./config#rememberWindows), a window opened without `x` and `y` goes back to where it was last time.
+New windows show the app menu on Windows and Linux; give one its own with [`tiny.win.menu.set()`](./menus) or none with `chrome: { menu: false }`. With [`rememberWindows`](./config#rememberWindows), a window opened without `x` and `y` goes back to where it was last time, at the size it had then.
+
+### opening hidden {#hidden}
+
+`show: false` creates the window, places it and loads its page, but keeps it off screen. Show it when it's ready, from its own page with `tiny.win.show()` or from the backend with `app.window(id).show()`:
+
+```js
+// opener
+await tiny.win.open('report', { page: 'report.html', show: false });
+
+// report.html
+await fillTables();
+tiny.win.show();
+```
+
+The window appears once, already filled in and already where it belongs. A placement saved by `rememberWindows` applies while it's hidden, and a saved maximized or fullscreen state is put back when it first shows. A `parent` relation also takes effect then. Nothing shows the window for you, so a page that never calls `show()` leaves an invisible window, which still counts in `windows()`.
+
+Don't open at `size: '1x1'` and resize later to fake this: with `rememberWindows` the saved size replaces `1x1`, so the window shows straight away and then jumps.
 
 ## the window ids {#ids}
 

@@ -7108,9 +7108,17 @@ static void do_winopen(const std::string& rest) {
   }
 
   load_target_into(sec->wv, page);
-  gtk_widget_show_all(GTK_WIDGET(sec->win));
-  // a fresh map from a hotkey over another app is refused focus too
-  present_now(sec->win);
+  // Field 16 "0": show: false (#102). Show the contents but not the window,
+  // so the page loads and the later WINOP show (gtk_widget_show + present)
+  // maps everything in one go, at the position set above.
+  if (tab_field(f, 16) == "0") {
+    if (GtkWidget* child = gtk_bin_get_child(GTK_BIN(sec->win)))
+      gtk_widget_show_all(child);
+  } else {
+    gtk_widget_show_all(GTK_WIDGET(sec->win));
+    // a fresh map from a hotkey over another app is refused focus too
+    present_now(sec->win);
+  }
   // show_all just revealed the bar too. Fill it in from the app menu (or
   // hide it again if there is nothing to show / the window opted out).
   apply_menus(id);

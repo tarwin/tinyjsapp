@@ -4,6 +4,18 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **`win.open({ show: false })` opens a window hidden.** The window is
+  created, placed and its page loaded, but it stays off screen until
+  `tiny.win.show()` (from its page) or `app.window(id).show()`, so it
+  appears once, already filled in. A placement saved by `rememberWindows`
+  applies while hidden; a saved maximize/fullscreen, and a `parent`
+  relation, take effect on that first show. Replaces the `size: '1x1'`
+  workaround, which `rememberWindows` overrides. See
+  [opening hidden](https://tinyjs.app/docs/multiple-windows#hidden). (#102 —
+  thanks [@Blatman](https://github.com/Blatman).)
+
 ## 0.69.1 — 2026-11-01
 
 - **macOS: screen recording no longer crashes the app on start.**
