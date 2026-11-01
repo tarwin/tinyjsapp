@@ -122,13 +122,28 @@ function comparePre(a, b) {
   return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
 }
 
+// The pre-SemVer rule: the leading major.minor.patch only, as numbers, so
+// `2026.01.15` and `1.0.0.5` still compare (as 2026.1.15 and 1.0.0).
+function parseLegacyVer(v) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(v));
+  return m ? [+m[1], +m[2], +m[3]] : null;
+}
+
+// Full SemVer precedence when BOTH versions are valid SemVer; otherwise the
+// old prefix comparison. Never strict-only: an installed app whose version
+// isn't SemVer would then never be offered an update again, silently.
 function isNewer(current, latest) {
   const a = parseVer(current), b = parseVer(latest);
-  if (!a || !b) return false;
-  for (let i = 0; i < 3; i++) {
-    if (a.core[i] !== b.core[i]) return compareNumber(a.core[i], b.core[i]) < 0;
+  if (a && b) {
+    for (let i = 0; i < 3; i++) {
+      if (a.core[i] !== b.core[i]) return compareNumber(a.core[i], b.core[i]) < 0;
+    }
+    return comparePre(a.pre, b.pre) < 0;
   }
-  return comparePre(a.pre, b.pre) < 0;
+  const x = parseLegacyVer(current), y = parseLegacyVer(latest);
+  if (!x || !y) return false;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i];
+  return false;
 }
 
 async function runOk(argv) {

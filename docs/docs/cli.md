@@ -140,7 +140,7 @@ tinyjs publish --notes "Fixes the export bug"
 tinyjs publish --arch arm64 && tinyjs publish --arch x86_64    # both Macs, one manifest
 ```
 
-Runs a full [build](#build), then packs it for [auto-update](./auto-update) in `dist/publish/`: the archive plus `manifest.json`, which you upload to the address in `update.url`. Needs `version` in tinyjs.json.
+Runs a full [build](#build), then packs it for [auto-update](./auto-update) in `dist/publish/`: the archive plus `manifest.json`, which you upload to the address in `update.url`. Needs `version` in tinyjs.json, and warns if it isn't SemVer (`1.2.0`, `1.2.0-beta.3`): auto-update then [compares only its first three numbers](./auto-update#versions).
 
 - **macOS**: `<name>-<version>.zip` (or `-macos-<arch>.zip` with `--arch`).
 - **Windows**: `<name>-<version>-win.zip` (`-win-arm64.zip` on ARM).
