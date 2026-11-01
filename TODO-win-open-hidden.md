@@ -1,8 +1,9 @@
 # win.open({ show: false }) — open a window hidden (#102)
 
-Planned 2026-11-01. Status: implemented on `feat/win-open-hidden`; macOS + Windows verified,
-Linux written but not yet compiled or run (TODO-verify.md). Windows needed a
-fix: the WebView2 controller stayed IsVisible = FALSE after the first show.
+Planned 2026-11-01. Status: implemented on `feat/win-open-hidden`; macOS, Windows
+and Linux verified (TODO-verify.md). Windows needed a fix: the WebView2
+controller stayed IsVisible = FALSE after the first show. Linux needed one
+too: a remembered maximize sent right behind the first show was dropped.
 
 ## Why
 

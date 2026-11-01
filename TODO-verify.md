@@ -32,11 +32,25 @@ until the window's first `show()` (applying it would show the window).
   After the fix both runs PASS; kid paints (#f66 sampled), its owner is
   main; run 2 opened hidden at 300,200 and maximized on show. Not seen:
   backend `app.window(id).show()` (same WINOP, untested) and dragging.
-- [ ] **Linux** — not compiled locally. Only the vbox gets shown at open;
-  WINOP show maps the window. Watch for: the page loading/running JS while
-  never mapped (if WebKitGTK stalls until realize, `gtk_widget_realize`
-  without mapping); X11 position honoured on the first map; menu bar
-  state (apply_menus runs while unmapped).
+- [x] **Linux** — *(2026-11-01, Ubuntu 24.04 arm64, GNOME 46, WebKitGTK
+  2.52.6; test/win-open-hidden both runs, X11 via GDK_BACKEND=x11 and native
+  Wayland, kid's map state + geometry polled from outside with xwininfo
+  every 50 ms.)* X11: all checks PASS — hidden while its page ran JS + an
+  RPC (unmapped WebKitGTK loads fine, no realize needed), shown at the
+  placed spot, the page sees `visibilityState: 'visible'` after show (the
+  check the Windows fix added; re-run after rebasing onto it), run 2 hidden
+  AT the remembered 300,200, `parent` sets WM_TRANSIENT_FOR main. **Found broken first:** run 2's remembered maximize
+  never happened — the bridge sends `show` then `zoom` back to back, and
+  mutter drops a `_NET_WM_STATE` request for a window it hasn't taken on
+  yet (GDK already counts it mapped, so it isn't GDK's withdrawn path).
+  The launcher now holds a zoom/fullscreen that arrives between a show and
+  its map-event until that map-event; after, the poll saw kid go from
+  unmapped straight to viewable maximized, never at 400x300. Wayland: hidden,
+  JS while hidden, show and the remembered maximize PASS; the two position
+  checks FAIL as expected (no client positions on Wayland). Not checked:
+  old launcher + new bridge (item 7 in the plan). (Polling tip: GNOME 46
+  draws X11 frames from a separate mutter-x11-frames client that copies
+  WM_NAME, so `xwininfo -name` can hit the frame, not the client.)*
 
 ## Menu item icons — `icon` on `TinyMenuItem` (2026-10-29)
 

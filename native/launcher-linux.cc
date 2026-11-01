@@ -1504,6 +1504,12 @@ static void windowless_app_op(const std::string& op) {
 // the bridge once restored; this flag lets the 3s fallback show it anyway.
 static bool g_defer_show = false;
 
+static gboolean awaitmap_done(GtkWidget* w, GdkEvent*, gpointer) {
+  g_object_set_data(G_OBJECT(w), "tinyjs-awaitmap", nullptr);
+  g_signal_handlers_disconnect_by_func(w, (gpointer)awaitmap_done, nullptr);
+  return FALSE;
+}
+
 static void do_winop(const std::string& winid, const std::string& op) {
   if (op == "geom 1" || op == "geom 0") {   // app-wide, windowless too
     g_geom_events = op.back() == '1';
@@ -1516,6 +1522,15 @@ static void do_winop(const std::string& winid, const std::string& op) {
   if (!win) {
     if (main_win && g_windowless) windowless_app_op(op);
     return;
+  }
+
+  // A show of a window that isn't up: flag it until its map-event (see the
+  // zoom/fullscreen deferral below).
+  if ((op == "show" || op == "show 1" || op == "show 0") &&
+      !gtk_widget_get_visible(GTK_WIDGET(win)) &&
+      !g_object_get_data(G_OBJECT(win), "tinyjs-awaitmap")) {
+    g_object_set_data(G_OBJECT(win), "tinyjs-awaitmap", GINT_TO_POINTER(1));
+    g_signal_connect(win, "map-event", G_CALLBACK(awaitmap_done), nullptr);
   }
 
   // "hidewin" is hide({ app: false }) — window-scoped, which is all a hide has
@@ -1561,6 +1576,22 @@ static void do_winop(const std::string& winid, const std::string& op) {
     // WM has no reason to treat it as a steal.
     gtk_window_deiconify(win);
     present_now(win);
+  }
+  else if ((op == "zoom" || op.rfind("fullscreen", 0) == 0) &&
+           g_object_get_data(G_OBJECT(win), "tinyjs-awaitmap")) {
+    // Shown, but its map-event hasn't come back: the WM hasn't taken the
+    // window on yet and drops a _NET_WM_STATE request sent now (GNOME 46 X11;
+    // GDK already counts it as mapped). A show:false window's remembered
+    // maximize arrives right behind its first show (#102). Redo the op once
+    // the window is mapped.
+    struct Later { std::string winid, op; };
+    g_signal_connect_data(win, "map-event", G_CALLBACK(+[](GtkWidget* w, GdkEvent*, gpointer d) -> gboolean {
+      Later l = *static_cast<Later*>(d);
+      // one-shot: disconnecting frees d (the destroy notify below)
+      g_signal_handlers_disconnect_matched(w, G_SIGNAL_MATCH_DATA, 0, 0, nullptr, nullptr, d);
+      do_winop(l.winid, l.op);
+      return FALSE;
+    }), new Later{winid, op}, +[](gpointer d, GClosure*) { delete static_cast<Later*>(d); }, (GConnectFlags)0);
   }
   else if (op == "zoom") {
     GdkWindowState st = g_winstate.count(win) ? g_winstate[win] : (GdkWindowState)0;

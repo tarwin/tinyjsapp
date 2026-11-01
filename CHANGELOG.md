@@ -15,6 +15,10 @@ https://tinyjs.app/changelog.
   workaround, which `rememberWindows` overrides. See
   [opening hidden](https://tinyjs.app/docs/multiple-windows#hidden). (#102 —
   thanks [@Blatman](https://github.com/Blatman).)
+- **Linux: a maximize or fullscreen right after a window's first `show()`
+  is no longer dropped.** The window manager ignored it while it was still
+  taking the window on; the launcher now applies it once the window is
+  mapped.
 
 ## 0.69.1 — 2026-11-01
 
