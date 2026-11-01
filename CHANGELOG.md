@@ -4,8 +4,14 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.69.1 — 2026-11-01
 
+- **macOS: screen recording no longer crashes the app on start.**
+  `tiny.macos.recorder.start()` (and Tiny Deck's "Record Screen") could
+  abort the app with "outputURL != nil": the launcher read the output path
+  after its memory had been freed. Fixed, along with the same mistake in
+  the recorder's stop reply and the `window.open` popup fallback. (#105 —
+  thanks [@Blatman](https://github.com/Blatman).)
 - **macOS: notifications respect "Allow notifications" being off.** When
   the user had turned a signed app's notifications off in System Settings,
   `notify()` still showed the banner through the unsigned-build fallback,

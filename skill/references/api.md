@@ -1,4 +1,4 @@
-# The tiny.* / app API — full tour (current as of tinyjs 0.69.0)
+# The tiny.* / app API — full tour (current as of tinyjs 0.69.1)
 
 The `tiny` global is injected into every page automatically (no script tag);
 TypeScript definitions ship in types/tiny.d.ts. Backend handlers receive the
