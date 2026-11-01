@@ -5778,6 +5778,10 @@ struct SecCtrlHandler
     RECT rc;
     GetClientRect(tw->hwnd, &rc);
     ctrl->put_Bounds(rc);
+    // show() can beat controller creation on a show: false window; the
+    // WM_WINDOWPOSCHANGED catch-up in secwin_proc had no controller to wake.
+    if (IsWindowVisible(tw->hwnd))
+      ctrl->put_IsVisible(TRUE);
     {
       // The chrome 'transparent' flag: without this only the MAIN window
       // honored it and secondary pet/overlay windows painted white.
@@ -5929,6 +5933,16 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
     emit_winstate(hwnd); // maximize/minimize/restore land here
     geom_msg(hwnd, msg);
     break;
+  }
+  case WM_WINDOWPOSCHANGED: {
+    // A controller created on a never-shown HWND (win.open show: false, #102)
+    // stays IsVisible = FALSE through the window's first show: the frame came
+    // up black with document.visibilityState still 'hidden'. Any show route
+    // (WINOP show, the windowless app show, a maximize) passes through here.
+    TinyWin *tw = win_for_id(id_for_hwnd(hwnd));
+    if (tw && tw->ctrl && (((WINDOWPOS *)lp)->flags & SWP_SHOWWINDOW))
+      tw->ctrl->put_IsVisible(TRUE);
+    break; // DefWindowProc still turns it into WM_SIZE / WM_MOVE
   }
   case WM_MOVE:
   case WM_ENTERSIZEMOVE:

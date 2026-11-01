@@ -21,10 +21,17 @@ until the window's first `show()` (applying it would show the window).
   that show (moving main carried it). With rememberWindows: opened hidden at
   the remembered rect and appeared there, no jump (the #102 repro). Saved
   maximized: hidden at the normal rect, maximized on show.
-- [ ] **Windows** — not compiled locally. Watch for: a blank page after the
-  first show (WebView2 controller created on a never-shown HWND; main's
-  deferred show does it on a cloaked one instead); `parent` (owner) still
-  keeps it above main after show; remembered maximize applied on show.
+- [x] **Windows** (11 arm64 / Parallels, 200%, dev run, 2026-11-01): the
+  predicted blank page was REAL — the controller created on the never-shown
+  HWND stayed `IsVisible = FALSE`, so after show() the frame was black with
+  a white box and the page still said `visibilityState: 'hidden'` (seen via
+  CDP + a screen grab; getState's `visible` read true, so the old checks
+  passed). Fixed: secwin_proc's WM_WINDOWPOSCHANGED + SWP_SHOWWINDOW does
+  `put_IsVisible(TRUE)`, and controller creation does it if the HWND is
+  already up. The test now has the page report its own visibilityState.
+  After the fix both runs PASS; kid paints (#f66 sampled), its owner is
+  main; run 2 opened hidden at 300,200 and maximized on show. Not seen:
+  backend `app.window(id).show()` (same WINOP, untested) and dragging.
 - [ ] **Linux** — not compiled locally. Only the vbox gets shown at open;
   WINOP show maps the window. Watch for: the page loading/running JS while
   never mapped (if WebKitGTK stalls until realize, `gtk_widget_realize`

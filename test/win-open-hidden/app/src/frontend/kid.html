@@ -4,6 +4,11 @@
 <script>
   setTimeout(async () => {
     await tiny.api.call('ranWhileHidden');
-    setTimeout(() => tiny.win.show(), 2000);
+    setTimeout(() => {
+      tiny.win.show();
+      // the page itself must see the show: Windows once kept the webview
+      // hidden (black frame) while the HWND reported visible
+      setTimeout(() => tiny.api.call('afterShow', document.visibilityState), 700);
+    }, 2000);
   }, 500);
 </script></body></html>

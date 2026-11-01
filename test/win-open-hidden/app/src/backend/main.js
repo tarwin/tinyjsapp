@@ -6,11 +6,13 @@ const st = async (app, id) => {
   const s = await app.window(id).getState().catch(() => null);
   return s && { visible: s.visible, x: s.x, y: s.y, width: s.width, height: s.height };
 };
-let ranHidden = null, hiddenAt = null;
+let ranHidden = null, hiddenAt = null, pageVis = null;
 
 export const api = {
   // called by kid.html before it shows itself
   async ranWhileHidden(_, app) { ranHidden = await st(app, 'kid'); return true; },
+  // called by kid.html ~0.7s after its own show(): what the page itself sees
+  afterShow(vis) { pageVis = vis; return true; },
 };
 
 export function init(app) {
@@ -23,10 +25,13 @@ export function init(app) {
     out('INFO', 'kid while hidden: ' + JSON.stringify(hiddenAt));
     check(hiddenAt && hiddenAt.visible === false, 'kid stays hidden after open');
     check(ranHidden && ranHidden.visible === false, "kid's page ran JS + an RPC while hidden");
-    await wait(2000);                       // kid.html shows itself ~2.5s after load
+    // kid.html shows itself ~2.5s after load, then reports in (a fixed wait
+    // here raced the page on a slow Windows start)
+    for (let i = 0; i < 40 && pageVis === null; i++) await wait(250);
     const shown = await st(app, 'kid');
     out('INFO', 'kid after show(): ' + JSON.stringify(shown));
     check(shown && shown.visible === true, 'tiny.win.show() from the page shows it');
+    check(pageVis === 'visible', 'the page sees itself shown (visibilityState: ' + pageVis + ')');
     const prev = await app.store.get('phase');
     if (prev === 'saved') {
       // run 2: the remembered rect was 300,200 (normal), then maximized
