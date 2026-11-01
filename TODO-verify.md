@@ -8,6 +8,50 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #102 — `win.open({ show: false })` (`feat/win-open-hidden`, 2026-11-01)
+
+WINOPEN gained field 16: `"0"` = open hidden. Plan + gotchas:
+TODO-win-open-hidden.md. Self-checking app: `test/win-open-hidden/` (run `tinyjs dev`
+twice; PASS/FAIL lines in the console — README there). The bridge holds a remembered maximize/fullscreen
+until the window's first `show()` (applying it would show the window).
+
+- [x] **macOS** (27.0.1, dev run, states read back via getState):
+  hidden at an explicit x/y while its page ran JS + an RPC; `tiny.win.show()`
+  from the page brought it up at the same spot; `parent: true` attached on
+  that show (moving main carried it). With rememberWindows: opened hidden at
+  the remembered rect and appeared there, no jump (the #102 repro). Saved
+  maximized: hidden at the normal rect, maximized on show.
+- [x] **Windows** (11 arm64 / Parallels, 200%, dev run, 2026-11-01): the
+  predicted blank page was REAL — the controller created on the never-shown
+  HWND stayed `IsVisible = FALSE`, so after show() the frame was black with
+  a white box and the page still said `visibilityState: 'hidden'` (seen via
+  CDP + a screen grab; getState's `visible` read true, so the old checks
+  passed). Fixed: secwin_proc's WM_WINDOWPOSCHANGED + SWP_SHOWWINDOW does
+  `put_IsVisible(TRUE)`, and controller creation does it if the HWND is
+  already up. The test now has the page report its own visibilityState.
+  After the fix both runs PASS; kid paints (#f66 sampled), its owner is
+  main; run 2 opened hidden at 300,200 and maximized on show. Not seen:
+  backend `app.window(id).show()` (same WINOP, untested) and dragging.
+- [x] **Linux** — *(2026-11-01, Ubuntu 24.04 arm64, GNOME 46, WebKitGTK
+  2.52.6; test/win-open-hidden both runs, X11 via GDK_BACKEND=x11 and native
+  Wayland, kid's map state + geometry polled from outside with xwininfo
+  every 50 ms.)* X11: all checks PASS — hidden while its page ran JS + an
+  RPC (unmapped WebKitGTK loads fine, no realize needed), shown at the
+  placed spot, the page sees `visibilityState: 'visible'` after show (the
+  check the Windows fix added; re-run after rebasing onto it), run 2 hidden
+  AT the remembered 300,200, `parent` sets WM_TRANSIENT_FOR main. **Found broken first:** run 2's remembered maximize
+  never happened — the bridge sends `show` then `zoom` back to back, and
+  mutter drops a `_NET_WM_STATE` request for a window it hasn't taken on
+  yet (GDK already counts it mapped, so it isn't GDK's withdrawn path).
+  The launcher now holds a zoom/fullscreen that arrives between a show and
+  its map-event until that map-event; after, the poll saw kid go from
+  unmapped straight to viewable maximized, never at 400x300. Wayland: hidden,
+  JS while hidden, show and the remembered maximize PASS; the two position
+  checks FAIL as expected (no client positions on Wayland). Not checked:
+  old launcher + new bridge (item 7 in the plan). (Polling tip: GNOME 46
+  draws X11 frames from a separate mutter-x11-frames client that copies
+  WM_NAME, so `xwininfo -name` can hit the frame, not the client.)*
+
 ## Menu item icons — `icon` on `TinyMenuItem` (2026-10-29)
 
 `ITEM` gained a 5th field and `SUB` a 3rd: the icon, a png path (bridge.js

@@ -437,6 +437,12 @@ declare interface TinyOpenWindowOptions {
    *  Windows/Linux gets no taskbar entry. Open-time only — it can't be set
    *  later. macOS difference: the window also MOVES with its parent. */
   parent?: true | string;
+  /** false: create, place and load the window but keep it hidden until
+   *  tiny.win.show() (from its page) or app.window(id).show(). Fill it in
+   *  first, then reveal it. A remembered placement still applies; a
+   *  remembered maximize/fullscreen lands on that first show. Nothing shows
+   *  it for you. Default true. */
+  show?: boolean;
 }
 
 declare interface TinyClipboardData {

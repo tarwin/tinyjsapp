@@ -44,6 +44,8 @@ Linux paginate).
 Multi-screen (#70 — Windows mixed-DPI coordinates are inconsistent today,
 screen-relative placement, stable screen ids, remembered placement):
 TODO-screens.md, planned 2026-10-19.
+Opening a window hidden (`win.open({ show: false })`, #102):
+TODO-win-open-hidden.md, planned 2026-11-01.
 Site wrappers (a hosted third-party page as the app's main frame — JS
 dialogs, downloads, navigation policy, popups, find, and the tinyjs.json
 `"api"` capability gate): TODO-site-wrapper.md, shipped on all three

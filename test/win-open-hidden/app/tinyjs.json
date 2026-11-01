@@ -1,0 +1,8 @@
+{
+  "name": "winhidden",
+  "title": "win-open-hidden test",
+  "size": "500x400",
+  "id": "app.tinyjs.test.winopenhidden",
+  "version": "0.1.0",
+  "rememberWindows": true
+}

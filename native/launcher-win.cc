@@ -5778,6 +5778,10 @@ struct SecCtrlHandler
     RECT rc;
     GetClientRect(tw->hwnd, &rc);
     ctrl->put_Bounds(rc);
+    // show() can beat controller creation on a show: false window; the
+    // WM_WINDOWPOSCHANGED catch-up in secwin_proc had no controller to wake.
+    if (IsWindowVisible(tw->hwnd))
+      ctrl->put_IsVisible(TRUE);
     {
       // The chrome 'transparent' flag: without this only the MAIN window
       // honored it and secondary pet/overlay windows painted white.
@@ -5929,6 +5933,16 @@ static LRESULT CALLBACK secwin_proc(HWND hwnd, UINT msg, WPARAM wp,
     emit_winstate(hwnd); // maximize/minimize/restore land here
     geom_msg(hwnd, msg);
     break;
+  }
+  case WM_WINDOWPOSCHANGED: {
+    // A controller created on a never-shown HWND (win.open show: false, #102)
+    // stays IsVisible = FALSE through the window's first show: the frame came
+    // up black with document.visibilityState still 'hidden'. Any show route
+    // (WINOP show, the windowless app show, a maximize) passes through here.
+    TinyWin *tw = win_for_id(id_for_hwnd(hwnd));
+    if (tw && tw->ctrl && (((WINDOWPOS *)lp)->flags & SWP_SHOWWINDOW))
+      tw->ctrl->put_IsVisible(TRUE);
+    break; // DefWindowProc still turns it into WM_SIZE / WM_MOVE
   }
   case WM_MOVE:
   case WM_ENTERSIZEMOVE:
@@ -6166,6 +6180,7 @@ struct WinOpenReq {
   bool hasPos = false;
   int x = 0, y = 0;
   std::string parent; // '' | 'main' | a win id: owner window (stays above it)
+  bool hidden = false; // show: false — built + loaded, shown by WINOP show (#102)
 };
 
 static void ensure_secwin_class() {
@@ -6302,7 +6317,11 @@ static void do_winopen(webview_t, void *arg) {
   // of another scale the real frame differs and the page opened short
   // (600x400 asked on a 150% screen gave 596x389). Measure and correct.
   fit_client(hwnd, (int)lround(wr->width * sc), (int)lround(wr->height * sc));
-  ShowWindow(hwnd, SW_SHOW);
+  // show: false stays hidden (page still loads) until WINOP show. Owner
+  // windows are set at create time, which shows nothing, so `parent` needs
+  // no deferral here (unlike macOS's addChildWindow).
+  if (!wr->hidden)
+    ShowWindow(hwnd, SW_SHOW);
   SecCtrlHandler *ch = new SecCtrlHandler();
   ch->winid = wr->id;
   ch->transparent = tw->transparent;
@@ -8679,7 +8698,8 @@ static void pipe_read_loop() {
         tiny_dispatch(do_size, s);
       } else if (line.rfind("WINOPEN ", 0) == 0) {
         // <id>\t<page>\t<title>\t<WxH>[\t<frame>\t<traffic>\t<transp>\t<vib>
-        //   \t<square>\t<firstMouse>\t<x>\t<y>\t<menu>\t<wcPos>\t<parent>]
+        //   \t<square>\t<firstMouse>\t<x>\t<y>\t<menu>\t<wcPos>\t<parent>
+        //   \t<panel>\t<show: "0" = hidden>]
         std::vector<std::string> p = split_tabs(line.substr(8));
         WinOpenReq *wr = new WinOpenReq;
         wr->id = p.size() > 0 ? p[0] : "";
@@ -8699,8 +8719,10 @@ static void pipe_read_loop() {
           wr->y = std::atoi(p[11].c_str());
         }
         wr->menu = p.size() > 12 ? p[12] : "";
-        // p[13] is windowControlsPos (macOS-only), p[14] parent.
+        // p[13] is windowControlsPos (macOS-only), p[14] parent, p[15]
+        // chrome.panel (macOS-only), p[16] "0" = show: false.
         wr->parent = p.size() > 14 ? p[14] : "";
+        wr->hidden = p.size() > 16 && p[16] == "0";
         tiny_dispatch(do_winopen, wr);
       } else if (line.rfind("PIPELOCK ", 0) == 0) {
         lock_instance_pipe(line.substr(9)); // off the UI thread on purpose

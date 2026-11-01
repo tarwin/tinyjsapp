@@ -2180,6 +2180,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   const placeStore = rememberWindows ? makeStore(id, 'window-state.json') : null;
   let placeLayouts = null;                 // in memory once loaded (sync reads)
   const placeTimers = new Map();
+  const pendingShowState = new Map();      // win id -> deferred applyPlacementState (show:false)
   const MAX_LAYOUTS = 8;
   function placementDirty(wid) {
     clearTimeout(placeTimers.get(wid));
@@ -3110,11 +3111,15 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     // also minimizes/hides with the parent, closes when the parent closes, and
     // on Windows/Linux gets no taskbar entry of its own. Open-time only, like
     // `transparent` — ownership doesn't retrofit on Windows.
+    // show: false creates, places (remembered placement included) and loads
+    // the window but keeps it off screen until show() — the way to fill a
+    // window before anyone sees it. A remembered maximize/fullscreen waits
+    // for that first show too (applying it would show the window) (#102).
     // 'main' names the launcher's own window: open('main') shows + focuses
     // it like open() on any existing id (opts ignored), and throws under
     // mainWindow: false, where the launchers used to drop it silently
     // (macOS/Linux) or build a half-wired window (Windows).
-    openWindow(id, { page, title, size, minSize, chrome, x, y, parent, screen, units } = {}) {
+    openWindow(id, { page, title, size, minSize, chrome, x, y, parent, screen, units, show } = {}) {
       if (String(id ?? '') === 'main') {
         if (!mainWindow)
           throw new Error("win.open: there is no 'main' window under mainWindow: false — open yours under another id");
@@ -3164,13 +3169,18 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
                          bit(c.menu),
                          wcp ? `${wcp.x | 0},${wcp.y | 0}` : '',
                          one(parent === true ? 'main' : parent || ''),
-                         c.panel ? '1' : ''].join('\t'));
+                         c.panel ? '1' : '',
+                         show === false ? '0' : ''].join('\t'));
       // minSize: "WxH" — a floor under user resizes, so a layout with a
       // natural size can't be shrunk until content falls off the bottom.
       if (minSize) send('WINOP@' + one(id) + ' minsize ' + one(minSize));
       if (after) send('WINOP@' + one(id) + ' ' + after);
-      if (restored) applyPlacementState(String(id), restored, screensCache,
-        screensCache.find((o) => x != null && o.x <= x && x < o.x + o.width) ?? null);
+      if (restored) {
+        const onto = screensCache.find((o) => x != null && o.x <= x && x < o.x + o.width) ?? null;
+        const apply = () => applyPlacementState(String(id), restored, screensCache, onto);
+        if (show === false && (restored.maximized || restored.fullscreen)) pendingShowState.set(String(id), apply);
+        else apply();
+      }
       // a window BORN at a restored position is the classic stale-coordinates
       // case — same chase as a first setPosition (armed boots only)
       if (hasPos) rescueNote(id, 'pos');
@@ -3198,7 +3208,14 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
         // hide({ app: false }) orders this window out on its own; a bare
         // hide() on 'main' still hides the whole app (see app.hide above).
         hide: (opts) => t('WINOP', opts?.app === false ? 'hidewin' : 'hide'),
-        show: (opts) => { t('WINOP', 'show' + (opts?.activate === false ? ' 0' : '')); rescueNote(id, 'show'); },
+        show: (opts) => {
+          t('WINOP', 'show' + (opts?.activate === false ? ' 0' : ''));
+          rescueNote(id, 'show');
+          // a show:false window's remembered maximize/fullscreen, held back
+          // so applying it didn't show the window early
+          const pend = pendingShowState.get(String(id));
+          if (pend) { pendingShowState.delete(String(id)); pend(); }
+        },
         minimize: () => t('WINOP', 'minimize'),
         restore: () => t('WINOP', 'restore'),
         zoom: () => t('WINOP', 'zoom'),
@@ -4149,6 +4166,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
           if (audioTapOwner === id) stopAudioTap();
           clipWatch('win:' + id, 0);
           winOrigins.delete(id);
+          pendingShowState.delete(id);   // closed before its first show
           push('window-closed', { id });
           fire('onWindowClosed', onWindowClosed, id, app);
         } else if (line.startsWith('WINGEOM ')) {

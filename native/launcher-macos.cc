@@ -378,6 +378,9 @@ struct TinyWindow {
   NSObject *wdelegate = nil; // TinyWinDelegate
   NSVisualEffectView *effect = nil;
   bool transparent = false; // CHROME transparent (main: g_chrome_transparent)
+  // win.open({ show: false, parent }): addChildWindow orders the child IN,
+  // so the relation waits here until the window's first show (#102).
+  std::string pending_parent;
 };
 static std::map<std::string, TinyWindow> g_windows;
 #endif
@@ -1839,6 +1842,21 @@ static void panel_front(NSWindow *win) {
 }
 #endif
 
+#ifdef __APPLE__
+// First show of a win.open({ show: false, parent }) window: make the
+// child-window relation now that it's on screen (see TinyWindow).
+static void attach_pending_parent(webview_t w, const std::string &id) {
+  auto it = g_windows.find(id);
+  if (it == g_windows.end() || it->second.pending_parent.empty())
+    return;
+  std::string parent = it->second.pending_parent;
+  it->second.pending_parent.clear();
+  NSWindow *win = it->second.win, *pw = window_for_id(w, parent);
+  if (win && pw && pw != win)
+    [pw addChildWindow:win ordered:NSWindowAbove];
+}
+#endif
+
 static void do_winop(webview_t w, void *arg) {
   WinopReq *wr = static_cast<WinopReq *>(arg);
   std::string *op = &wr->opstr;
@@ -1893,12 +1911,14 @@ static void do_winop(webview_t w, void *arg) {
         g_defer_show = false;
       [NSApp unhideWithoutActivation];
       panel_front(win);
+      attach_pending_parent(w, wr->win);
     } else if (*op == "show" || *op == "show 1") {
       if (is_main)
         g_defer_show = false;
       [NSApp unhide:nil];
       [NSApp activateIgnoringOtherApps:YES];
       [win makeKeyAndOrderFront:nil];
+      attach_pending_parent(w, wr->win);
     } else if (*op == "show 0") {
       // Show without stealing focus (overlay/HUD panels): the window appears
       // but the active app keeps keyboard focus; clicking it activates
@@ -1908,6 +1928,7 @@ static void do_winop(webview_t w, void *arg) {
         g_defer_show = false;
       [NSApp unhideWithoutActivation];
       [win orderFrontRegardless];
+      attach_pending_parent(w, wr->win);
     } else if (*op == "presence 0") {
       if (is_main)
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
@@ -7165,6 +7186,7 @@ struct WinOpenReq {
   int x = 0, y = 0;
   std::string parent; // '' | 'main' | a win id: attach above it (child window)
   bool panel = false;  // chrome.panel: a TinyPanel, fixed at creation (#89)
+  bool hidden = false; // show: false — built + loaded, not ordered in (#102)
 };
 
 // The launcher's private WKPreferences, applied to every web view we build —
@@ -7272,7 +7294,10 @@ static void do_winopen(webview_t w, void *arg) {
       [win setFrameTopLeftPoint:NSMakePoint(req->x, screenTop - req->y)];
     }
 
-    if (is_panel(win))
+    // show: false leaves it ordered out; the first WINOP show brings it in.
+    if (req->hidden)
+      ;
+    else if (is_panel(win))
       panel_front(win);
     else
       [win makeKeyAndOrderFront:nil];
@@ -7282,7 +7307,11 @@ static void do_winopen(webview_t w, void *arg) {
     // front; a parent that doesn't exist just means an unattached window.
     // Note AppKit children also MOVE with the parent, unlike the Windows
     // owner / GTK transient twins — documented, not fought.
-    if (!req->parent.empty()) {
+    // A hidden window can't attach yet — addChildWindow would order it in —
+    // so it parks the parent id for attach_pending_parent at first show.
+    if (!req->parent.empty() && req->hidden) {
+      tw.pending_parent = req->parent;
+    } else if (!req->parent.empty()) {
       NSWindow *pw = window_for_id(w, req->parent);
       if (pw && pw != win)
         [pw addChildWindow:win ordered:NSWindowAbove];
@@ -9018,7 +9047,7 @@ static void sock_read_loop() {
       } else if (line.rfind("WINOPEN ", 0) == 0) {
         // <id>\t<page>\t<title>\t<WxH>[\t<frame>\t<traffic>\t<transp>\t<vib>
         //   \t<square>\t<firstMouse>\t<x>\t<y>\t<menu>\t<wcPos>\t<parent>
-        //   \t<panel>]
+        //   \t<panel>\t<show: "0" = hidden>]
         std::vector<std::string> p = split_tabs(line.substr(8));
         WinOpenReq *wr = new WinOpenReq;
         wr->id = p.size() > 0 ? p[0] : "";
@@ -9041,6 +9070,7 @@ static void sock_read_loop() {
         wr->traffic_pos = p.size() > 13 ? p[13] : "";
         wr->parent = p.size() > 14 ? p[14] : "";
         wr->panel = p.size() > 15 && p[15] == "1";
+        wr->hidden = p.size() > 16 && p[16] == "0"; // show: false
         launcher_dispatch(g_w, do_winopen, wr);
       } else if (line.rfind("WINCLOSE ", 0) == 0) {
         launcher_dispatch(g_w, do_winclose, new std::string(line.substr(9)));
