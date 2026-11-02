@@ -55,6 +55,10 @@ security code — the origin is always the LAST element of the CALL array
 (every launcher appends it; reading `[1]` trusted the page on Windows).
 Verify it the way a hostile page would, never only through our own client:
 adversarial probes in that file, per-OS ticks in TODO-verify.md.
+macOS 27.2 window-server bugs (#101 drag jitter, #104 minimize hides the
+parent) are worked around in launcher-macos.cc by detaching `parent:`
+children during a drag/minimize — grep `MACOS-27.2-WORKAROUND`. Remove it
+once Apple fixes them; re-run the plain-AppKit repros on #101/#104 first.
 Anything built on one OS but never watched run on another goes in
 TODO-verify.md — tick a box there only after seeing it work on that OS,
 since a fire-and-forget op a shell ignores looks just like an unimplemented

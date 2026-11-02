@@ -381,6 +381,10 @@ struct TinyWindow {
   // win.open({ show: false, parent }): addChildWindow orders the child IN,
   // so the relation waits here until the window's first show (#102).
   std::string pending_parent;
+  // MACOS-27.2-WORKAROUND: parent: relation dropped for the length of a
+  // minimize or a drag of THIS window (see detach_from_parent): the parent
+  // id to re-attach to afterwards.
+  std::string detached_parent;
 };
 static std::map<std::string, TinyWindow> g_windows;
 #endif
@@ -7058,6 +7062,40 @@ static NSString *tiny_shim_js(const std::string &winid) {
 }
 @end
 
+// MACOS-27.2-WORKAROUND (see TinyWinDelegate): drop window id's parent:
+// relation for now, remembering the parent. False when it has none (or is
+// already detached), so there's nothing to put back.
+static bool detach_from_parent(const std::string &id) {
+  auto it = g_windows.find(id);
+  if (it == g_windows.end() || !it->second.win ||
+      !it->second.detached_parent.empty())
+    return false;
+  NSWindow *win = it->second.win, *pw = win.parentWindow;
+  std::string pid = pw ? winid_for_nswindow(pw) : std::string();
+  if (pid.empty())
+    return false;
+  it->second.detached_parent = pid;
+  [pw removeChildWindow:win];
+  return true;
+}
+
+static void reattach_to_parent(const std::string &id) {
+  auto it = g_windows.find(id);
+  if (it == g_windows.end() || it->second.detached_parent.empty())
+    return;
+  std::string pid = it->second.detached_parent;
+  it->second.detached_parent.clear();
+  NSWindow *win = it->second.win, *pw = window_for_id(g_w, pid);
+  if (!win || !pw || pw == win)
+    return;
+  // addChildWindow orders in, so a parent hidden or minimized meanwhile
+  // would be brought back by its child: wait for the child's next show.
+  if (pw.visible)
+    [pw addChildWindow:win ordered:NSWindowAbove];
+  else
+    it->second.pending_parent = pid;
+}
+
 @interface TinyWinDelegate : NSObject <NSWindowDelegate>
 @property(nonatomic, copy) NSString *winId;
 @end
@@ -7081,6 +7119,18 @@ static NSString *tiny_shim_js(const std::string &winid) {
     [kids release];
   }
   std::string id = [self.winId UTF8String];
+  // A child that is minimized or being dragged right now is detached (see
+  // detach_from_parent), so childWindows above missed it. It still goes with
+  // its parent.
+  for (auto &kv : g_windows) {
+    if (kv.second.detached_parent != id || !kv.second.win)
+      continue;
+    kv.second.detached_parent.clear();
+    NSWindow *k = kv.second.win;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [k close];
+    });
+  }
   sock_write_line("WINCLOSED " + id);
   g_last_winstate.erase(id);
   g_traffic_pos.erase(id);
@@ -7101,6 +7151,40 @@ static NSString *tiny_shim_js(const std::string &winid) {
       [tw.win release];
     });
   }
+}
+// MACOS-27.2-WORKAROUND (#101, #104). Two window-server bugs that arrived
+// with macOS 27.2 hit attached children (win.open parent:, i.e.
+// addChildWindow). A plain AppKit program shows both, so they're the OS:
+//  - dragging an attached child jitters. Its position updates ~10-15 times
+//    a second instead of every frame, stepping backwards between updates.
+//  - minimizing an attached child also takes its PARENT off screen (AppKit
+//    still reports the parent visible) until the child is restored.
+// Both go away if the child is detached for the length of the drag or the
+// minimize, so it is, and is re-attached afterwards. Only the window being
+// dragged or minimized gets these notifications, so dragging or minimizing
+// the PARENT is untouched and children still follow it.
+// Remove all of this (grep MACOS-27.2-WORKAROUND) once Apple fixes the bugs:
+// re-test with the plain AppKit repros attached to #101 / #104 first.
+- (void)windowWillMiniaturize:(NSNotification *)n {
+  detach_from_parent([self.winId UTF8String]);
+}
+- (void)windowDidDeminiaturize:(NSNotification *)n {
+  reattach_to_parent([self.winId UTF8String]);
+}
+- (void)windowWillMove:(NSNotification *)n {
+  // A user drag starting (titlebar or a drag region). There's no matching
+  // "drag ended" notification, so poll for the button coming back up.
+  std::string id = [self.winId UTF8String];
+  if (!detach_from_parent(id))
+    return;
+  [NSTimer scheduledTimerWithTimeInterval:0.016
+                                  repeats:YES
+                                    block:^(NSTimer *t) {
+                                      if ([NSEvent pressedMouseButtons] & 1)
+                                        return;
+                                      [t invalidate];
+                                      reattach_to_parent(id);
+                                    }];
 }
 @end
 
