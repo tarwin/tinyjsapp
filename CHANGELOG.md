@@ -4,6 +4,26 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.70.1 — 2026-11-02
+
+- **macOS: a `parent:` window no longer jitters while you drag it.** On
+  macOS 27.2, a window opened with `parent` moved in jerky steps, jumping
+  back and forth, when dragged by its title bar or a drag region. The
+  window's link to its parent is now dropped for the length of the drag and
+  restored when the mouse button comes up, so it drags as smoothly as any
+  other window and still moves with its parent afterwards. (#101 — thanks
+  [@Blatman](https://github.com/Blatman).)
+- **macOS: minimizing a `parent:` window no longer hides its parent.** On
+  macOS 27.2, minimizing the child (yellow button or `tiny.win.minimize()`)
+  also took the parent off screen until the child was restored. The child
+  is now detached while it's minimized and re-attached when it's restored.
+  Minimizing the parent still minimizes its children. (#104 — thanks
+  [@Blatman](https://github.com/Blatman).)
+
+  Both are macOS 27.2 bugs that a plain AppKit program shows too, so these
+  are workarounds, and both bugs are being reported to Apple. They'll be
+  removed once macOS fixes them.
+
 ## 0.70.0 — 2026-11-01
 
 - **`win.open({ show: false })` opens a window hidden.** The window is
