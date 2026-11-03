@@ -1,4 +1,4 @@
-# The tiny.* / app API — full tour (current as of tinyjs 0.70.1)
+# The tiny.* / app API — full tour (current as of tinyjs 0.70.2)
 
 The `tiny` global is injected into every page automatically (no script tag);
 TypeScript definitions ship in types/tiny.d.ts. Backend handlers receive the
@@ -445,7 +445,8 @@ const r = await tiny.fetch(url, { method, headers, body });  // backend-proxied,
 audio.src = tiny.fileURL(path);  // file:// URL for a disk path — ALWAYS this,
    // never 'file://' + path (Windows drive letter becomes the URL host).
 // file:// media loads only under the frontend dir by default — widen with
-// "readAccess": true | "/path" in tinyjs.json.
+// "readAccess": true | "/path" in tinyjs.json. macOS: a path on ANOTHER disk
+// than the page (/Volumes/…) comes back as tiny-media://file/… (0.70.2+).
 await tiny.app.paths();   // { home, data, cache, logs, temp, downloads,
                           //   desktop, documents, resources, executables } — per-OS correct; backend
                           //   twin: await app.paths() (same shape). data/cache/logs

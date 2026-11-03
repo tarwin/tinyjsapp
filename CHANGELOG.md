@@ -4,6 +4,23 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.70.2 — 2026-11-03
+
+- **macOS: local files on another disk now load in the page.** WebKit only
+  lets a `file://` page load files from the disk it sits on, so even
+  `"readAccess": "/"` couldn't reach a second partition, a USB drive or a
+  network share under `/Volumes`, or the startup disk for an app run off a
+  mounted `.dmg`. The element just failed with error 4. For a path on a
+  different disk than the page, `tiny.fileURL(path)` now returns a
+  `tiny-media://file/…` URL that the app serves itself, seeking included.
+  It's limited to the `readAccess` folder, and only the app's own pages can
+  use it. Web Audio taps it like any `file://` track. Paths on the page's
+  own disk still get `file://`. See
+  [local files in the page](https://tinyjs.app/docs/api#fileURL).
+  ([tinyjsapp-examples#2](https://github.com/tarwin/tinyjsapp-examples/issues/2)
+  — thanks [@QinisoM](https://github.com/QinisoM) and
+  [@alpha-wave](https://github.com/alpha-wave).)
+
 ## 0.70.1 — 2026-11-02
 
 - **macOS: a `parent:` window no longer jitters while you drag it.** On
