@@ -1,4 +1,4 @@
-# The tiny.* / app API — full tour (current as of tinyjs 0.70.2)
+# The tiny.* / app API — full tour (current as of tinyjs 0.70.3)
 
 The `tiny` global is injected into every page automatically (no script tag);
 TypeScript definitions ship in types/tiny.d.ts. Backend handlers receive the
@@ -574,6 +574,8 @@ await tiny.app.matchScreen(saved);  // saved screen -> connected one, or null
 tiny.app.onScreensChanged(fn);      // backend: onSystem('screens')
 // "rememberWindows": true in tinyjs.json restores every window's place per
 // screen layout (main shown once restored) — don't hand-roll it.
+// Changing "size" (or a win.open size) wins over a saved size next launch
+// (0.70.3+); only the saved position is kept.
 await tiny.app.mousePosition();  // { x, y, window: { x, y, inside }, screen }
 // Linux: X11 only — pure Wayland hides the global pointer (capabilities()
 // says so; "windowPlacement": true forces XWayland, or use mouseTracking):

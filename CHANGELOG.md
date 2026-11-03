@@ -4,6 +4,20 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.70.3 — 2026-11-03
+
+- **`rememberWindows`: changing `size` takes effect.** A size saved by
+  `rememberWindows` used to win over the `size` in tinyjs.json for good, so
+  an app first run at the template's 960x640 kept opening at 960x640 after
+  `"size"` became 600x180. Each saved placement now records the size the
+  app declared when it was saved. If you change `size` (or the `size` you
+  pass to `win.open`), the window opens at the new size next launch and
+  only its saved position is kept. A size the user picked by resizing still
+  comes back until then. Placements saved by older versions reset their
+  size once, keeping the position.
+  ([#106](https://github.com/tarwin/tinyjsapp/issues/106) — thanks
+  [@Blatman](https://github.com/Blatman).)
+
 ## 0.70.2 — 2026-11-03
 
 - **macOS: local files on another disk now load in the page.** WebKit only
