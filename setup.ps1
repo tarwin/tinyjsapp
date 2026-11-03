@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-Location $PSScriptRoot
 
-$TJS_VERSION = if ($env:TJS_VERSION) { $env:TJS_VERSION } else { 'v26.6.0' }
+$TJS_VERSION = if ($env:TJS_VERSION) { $env:TJS_VERSION } else { 'v26.11.0' }
 $WEBVIEW2_VERSION = '1.0.2903.40'
 $REPO = 'tarwin/tinyjsapp'
 

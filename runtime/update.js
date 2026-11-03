@@ -210,11 +210,9 @@ export async function bundlePath() {
 
 // Windows/Linux bundle detection needs async stats. Probed on first ask, NOT
 // at import: a top-level await here makes this module async, which makes
-// bridge.js async, which lets an app's backend module body run BEFORE the
-// fetch repair shim is installed — its first fetch would get txiki's raw
-// broken one (measured: a top-level `fetch('https://rss.art19.com/')` failed
-// with "mbedtls connect -1 5 0" while the identical call one await later
-// succeeded).
+// bridge.js async, which lets an app's backend module body run BEFORE bridge.js
+// has wrapped fetch — its first fetch would get txiki's raw one, without the
+// redirect rules (a Location: file:// there kills the process).
 async function portableBundleInit() {
   if (!IS_WIN && !IS_LINUX) return;
   const dir = tjs.exePath.replace(/[\\/][^\\/]*$/, '');

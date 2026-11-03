@@ -105,14 +105,14 @@ Desktop notifications, `tiny.notify()`, have their own page: [notifications](./n
 
 ```js
 const { version, tinyjs, runtime } = await tiny.app.info();
-// { version: '1.2.0', tinyjs: '0.62.1', runtime: 'txiki.js 26.6.0' }
+// { version: '1.2.0', tinyjs: '0.62.1', runtime: 'txiki.js 26.11.0' }
 ```
 
 | field | |
 |---|---|
 | `version` | your app's [`version`](./config#version) from tinyjs.json, or `'0.0.0'` without one |
 | `tinyjs` | the tinyjs version that built the app; `'dev'` when tinyjs runs from a source checkout |
-| `runtime` | the backend runtime, e.g. `'txiki.js 26.6.0'` |
+| `runtime` | the backend runtime, e.g. `'txiki.js 26.11.0'` |
 
 In the backend it's `await app.info()`. Reading `app.info.version` without calling it still works but is deprecated.
 

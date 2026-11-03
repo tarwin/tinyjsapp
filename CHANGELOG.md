@@ -4,6 +4,31 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **Runtime: txiki.js 26.11.0.** The update brings HTTP/2 and HTTP/3 to
+  `fetch`, connection pooling, and `MessageChannel`, `BroadcastChannel` and
+  `EventSource` in the backend. It also carries three fixes contributed from
+  tinyjs: several writes to a child's stdin now arrive
+  ([txiki#1028](https://github.com/saghul/txiki.js/pull/1028)), `fetch`
+  rejects a CR, LF or NUL in a header value and sends array headers correctly
+  ([txiki#1165](https://github.com/saghul/txiki.js/pull/1165)), and Windows
+  command-line arguments outside the system code page arrive intact
+  ([txiki#1164](https://github.com/saghul/txiki.js/pull/1164)).
+- **`fetch` and `tiny.fetch` no longer use the system `curl`.** The runtime
+  now reaches root-path URLs and TLS 1.2 hosts itself, so no request spawns a
+  process any more and Windows has no console flash to hide. `FormData`,
+  `Blob` and `URLSearchParams` bodies now work on every URL, and a failed
+  request is no longer sent a second time. Redirects still follow the
+  browser's rules. **Behavior change:** a connection the runtime can't make
+  now fails instead of falling back to `curl`. That includes certificates
+  only the operating system trusts, such as a corporate TLS-inspecting proxy;
+  point `SSL_CERT_FILE` at a CA bundle for those.
+- **`fetch(new Request(...))`** now gets the same redirect rules as a URL.
+- **Known issue:** large HTTP/2 downloads from far-away servers are slower than
+  before. A 20 MB feed from a host 200 ms away took about 40 s, up from about
+  8 s. Nearby CDNs, including GitHub's, aren't affected.
+
 ## 0.70.3 — 2026-11-03
 
 - **`rememberWindows`: changing `size` takes effect.** A size saved by

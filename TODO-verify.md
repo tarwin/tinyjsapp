@@ -5494,3 +5494,38 @@ source pointers: issue #96. Self-driving page: `test/media-dev/`.
   built ad-hoc launcher (new code identity, no prior TCC grant for it):
   its first `getUserMedia` popped the TCC mic dialog (answered by hand),
   then reached `granted: MacBook Air Microphone`.
+
+## txiki.js 26.11.0 + no more curl in fetch (`txiki-26.11.0`, 2026-11-04)
+
+Pin bumped from v26.6.0. The curl half of bridge.js's fetch wrapper is gone;
+redirects are still followed by hand (TODO-txiki.md says why). On each OS:
+
+    bin/tjs run test/fetch/check.js           (Windows: bin\tjs.exe)
+    bin/tjs run test/update-fetch/check.js
+
+then the rest of the suite (`test/*/check.js`, `test/*/check.py`), and a real
+built app that fetches (amp is the good canary: feeds and radio streams).
+
+- [x] **macOS arm64** — *(2026-11-04, macOS 27.2)* check.js all ok, real hosts
+  included; the whole repo suite passes, GUI harnesses included. Page-level
+  tiny.fetch (TLS 1.2, root path, redirect chain, h2 manual redirect, header
+  gate, POST, radio stream + cancel) in `tinyjs dev` and a built universal app.
+  amp itself not run.
+- [ ] **Linux** — *(2026-11-04, ubuntu:22.04 arm64 container, headless)* built
+  with `TJS_BUILD=1 CC=gcc-12 CXX=g++-12 ./setup.sh`: floor holds (GLIBC 2.35,
+  GLIBCXX 3.4.29, CXXABI 1.3.9), no new libs NEEDED. check.js and update-fetch
+  pass there. Not yet seen on a desktop: a built app, tiny.fetch from a page,
+  amp's feeds. x86_64 only by CI.
+- [ ] **Windows x86_64** — never run. New `tjs.exe` hash is pinned from the
+  release zip. Watch: #1165's connects (`http://151.101.2.133/`, 6 in a row),
+  non-ASCII script paths and arguments (#1164; try it from a path like
+  `C:\中文\`, and a built app given a non-ASCII file), no curl.exe in the task
+  list during a fetch, stdin writes.
+- [ ] **Windows arm64** — never run. CI's source build: the WAMR patches
+  `git apply --check` clean on 26.11.0's deps/wamr (same pin as 26.6.0), but
+  neither the MSVC build nor the wasm test step has run. New since 26.6.0: the
+  build applies `patches/*.patch` with git at configure time. They have LF
+  context and the leg's clone has `core.autocrlf=false`.
+- [ ] **macOS x86_64** — *(2026-11-04, Rosetta only)* `check.js --offline`
+  passes, and a `--universal` build run with `arch -x86_64` did every
+  page-level tiny.fetch case. Not seen on a real Intel Mac.

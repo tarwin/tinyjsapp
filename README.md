@@ -543,16 +543,10 @@ const reader = radio.body.getReader();
 for (;;) { const { value, done } = await reader.read(); if (done) break; /* feed decodeAudioData, MediaSource, … */ }
 // reader.cancel() (or closing the window) tears the upstream connection down.
 //
-// Reachability: tiny.fetch (and plain fetch() in the backend) transparently
-// hands two cases the bundled runtime can't do on its own to the system curl:
-// root-path URLs like https://feeds.example.com/ (the runtime emits 'GET //',
-// which strict CDNs 404) and TLS 1.2-only hosts (art19, anchor.fm — the
-// runtime's TLS stack requires 1.3). Redirects are followed hop by hop so a
-// tracker that bounces into either case still lands. curl is only consulted
-// when the built-in path failed at the wire — a real HTTP error (404, 500)
-// is returned as-is, never retried. curl ships with macOS, Linux, and
-// Windows 10 1803+; without it those two cases fail as before. Details in
-// TODO-txiki.md (the plan is to fix the runtime itself and drop the shim).
+// Redirects: tiny.fetch (and plain fetch() in the backend) follows them hop by
+// hop, the way a browser does. Credentials are dropped on a new origin and a
+// redirect to anything but http(s) is refused; the bundled runtime's own
+// following does neither. See TODO-txiki.md.
 
 // tiny.proxyURL — get a cross-origin stream (internet radio) INTO Web Audio.
 // A MediaElementSource on a cross-origin <audio> outputs silence by spec;
@@ -2068,12 +2062,8 @@ TINYJS_HTML=/path/to/tinyjs/test/smoke.html tinyjs dev
 The same page also runs against a built `dist/<name>` or the `.app`'s
 `Contents/MacOS/<name>` via the same env var.
 
-### Gotchas discovered along the way (txiki.js v26.6.0)
+### Gotchas discovered along the way (txiki.js v26.11.0)
 
-- `tjs.spawn(..., {stdin:'pipe'})` delivered only the first write to the
-  child's stdin (fixed upstream in [PR #1028](https://github.com/saghul/txiki.js/pull/1028);
-  until it's in a tagged release the bridge's Unix socket design sidesteps
-  it — and stays for robustness reasons regardless).
 - `tjs compile` does **not** bundle imports — they resolve at runtime
   relative to cwd. Use `tjs app compile` (app dir + `app.json` manifest).
 - `import.meta.url` throws inside a compiled binary; resolve shipped files

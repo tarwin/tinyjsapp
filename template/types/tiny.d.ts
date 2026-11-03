@@ -310,7 +310,7 @@ declare interface TinyAppInfo {
   version: string;
   /** the tinyjs version the app was built with ('dev' from a checkout) */
   tinyjs: string;
-  /** e.g. 'txiki.js 26.6.0' */
+  /** e.g. 'txiki.js 26.11.0' */
   runtime: string;
 }
 

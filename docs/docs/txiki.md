@@ -6,7 +6,7 @@ title: "txiki.js"
 
 <p class="tagline">the runtime your backend runs on</p>
 
-The [backend](./backend) runs on [txiki.js](https://txikijs.org/), a small JavaScript runtime: the QuickJS engine, libuv for I/O, with SQLite and WebAssembly built in. tinyjs ships **txiki.js 26.6.0**. Everything txiki.js offers is available to your backend — this page is a map of it, with links to [txiki.js's own reference](https://txikijs.org/docs/api-reference) for the details.
+The [backend](./backend) runs on [txiki.js](https://txikijs.org/), a small JavaScript runtime: the QuickJS engine, libuv for I/O, with SQLite and WebAssembly built in. tinyjs ships **txiki.js 26.11.0**. Everything txiki.js offers is available to your backend — this page is a map of it, with links to [txiki.js's own reference](https://txikijs.org/docs/api-reference) for the details.
 
 It isn't Node.js: there's no `require`, no `process`, no `Buffer` and no `node:*` modules. Use the `tjs` global, the `tjs:*` modules and standard Web APIs instead. npm packages work in a TypeScript backend (it's bundled with esbuild) as long as they don't need Node's built-ins.
 
@@ -62,7 +62,7 @@ const digest = createHash('sha256').update(text).digest();
 
 ## Web APIs {#web}
 
-The backend also has the standard Web APIs txiki.js implements, including `fetch`, `WebSocket`, `Worker`, `crypto` (with `crypto.subtle` and `randomUUID`), `TextEncoder`/`TextDecoder`, `URL`, `Blob`, `FormData`, `AbortController`, `CompressionStream`, `structuredClone`, `performance` and `localStorage`. See txiki.js's [Web Platform APIs](https://txikijs.org/docs/features/web-platform-apis) for the full list.
+The backend also has the standard Web APIs txiki.js implements, including `fetch`, `WebSocket`, `EventSource`, `Worker`, `MessageChannel`, `BroadcastChannel`, `crypto` (with `crypto.subtle` and `randomUUID`), `TextEncoder`/`TextDecoder`, `URL`, `Blob`, `FormData`, `AbortController`, `CompressionStream`, `structuredClone`, `performance` and `localStorage`. See txiki.js's [Web Platform APIs](https://txikijs.org/docs/features/web-platform-apis) for the full list.
 
 For an app's settings, prefer [`app.store`](./store) to `localStorage`: it's the same store the page sees, saved in the app's data folder.
 

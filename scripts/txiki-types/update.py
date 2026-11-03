@@ -77,9 +77,9 @@ for name in order:
 # The lib reference: txiki's sockets and files are Disposable/AsyncDisposable
 # (`using`), which live in TypeScript's esnext.disposable lib — not loaded by
 # the es2022 target projects use. It has to come before any statement.
-# @ts-nocheck: 26.6.0's ffi types don't pass `strict` (StaticStringType
-# overrides ArrayType's toBuffer/fromBuffer with incompatible signatures), so
-# `tsc` on a strict backend reported errors in a file the user didn't write.
+# @ts-nocheck: the file leans on the dom lib's types (Response, ReadableStream,
+# console), so a backend with a narrower "lib" got errors in a file the user
+# didn't write. 26.6.0's ffi types also failed `strict` (fixed in 26.11.0).
 # It only silences checking OF this file; code using the types is still checked.
 header = f"""/// <reference lib="esnext.disposable" />
 // @ts-nocheck

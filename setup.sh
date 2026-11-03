@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 TMPD="$(mktemp -d)"
 trap 'rm -rf "$TMPD"' EXIT
 
-TJS_VERSION="${TJS_VERSION:-v26.6.0}"
+TJS_VERSION="${TJS_VERSION:-v26.11.0}"
 REPO="tarwin/tinyjsapp"
 
 OS="$(uname -s)"

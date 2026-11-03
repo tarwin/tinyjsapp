@@ -7,11 +7,9 @@
 //   bin/tjs run test/update-fetch/check.js --quick  (skips the ~32 s tarpit case)
 //
 // The server picks its behaviour from the request path:
-//   //                  drop  — txiki sends a root-path URL as `HEAD //` (Bug A
-//                               in TODO-txiki.md) and curl sends `HEAD /`, so
-//                               pointing the CLI at `/` makes the native fetch
-//                               fail and curl succeed, every time
-//   /                   302 → /ok/releases/tag/v9.9.9
+//   /nativedrop/*       drop anything carrying `pragma:` (native fetch sends it,
+//                       curl doesn't), so the native fetch fails and curl
+//                       succeeds, every time; else as /ok/*
 //   /ok/releases/latest 302 → /ok/releases/tag/v9.9.9
 //   /ok/releases/tag/*  200
 //   /drop/*             close without answering
@@ -44,9 +42,10 @@ async function handle(conn) {
   log.push(`${line} [${ua}]`);
   const reply = (status, extra = '') => writer.write(enc.encode(
     `HTTP/1.1 ${status}\r\n${extra}content-length: 0\r\nconnection: close\r\n\r\n`));
-  if (path === '//' || path.startsWith('/drop/')) { /* close below */ }
+  if (path.startsWith('/drop/')) { /* close below */ }
+  else if (path.startsWith('/nativedrop/') && /\r\npragma:/i.test(head)) { /* close below */ }
   else if (path.startsWith('/tarpit/')) { held.push(conn); return; }
-  else if (path === '/' || path === '/ok/releases/latest') {
+  else if (path === '/ok/releases/latest' || path === '/nativedrop/releases/latest') {
     await reply('302 Found', 'location: /ok/releases/tag/v9.9.9\r\n');
   } else if (path.startsWith('/ok/releases/tag/')) await reply('200 OK');
   else if (path.startsWith('/evil/')) await reply('302 Found', 'location: file:///etc/passwd\r\n');
@@ -113,9 +112,9 @@ const failsWith = (...parts) => (r) =>
     : `expected a failure naming ${parts.map((p) => JSON.stringify(p)).join(', ')}`;
 
 await check('native fetch works (one request: the tag rides the redirect)', base + '/ok/releases/latest', (r) =>
-  available(r) || (log.some((l) => l.startsWith('HEAD //')) ? 'unexpected root request' : null));
+  available(r));
 
-await check('native fetch fails, curl recovers', base + '/', (r) => available(r));
+await check('native fetch fails, curl recovers', base + '/nativedrop/releases/latest', (r) => available(r));
 
 await check('everything drops: error names each attempt', base + '/drop/releases/latest',
   failsWith('could not reach GitHub', 'fetch:', 'curl:'));

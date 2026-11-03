@@ -6,7 +6,7 @@ title: "gotchas"
 
 <p class="tagline">things that cost real debugging</p>
 
-Sharp edges in txiki.js (26.6.0, the runtime tinyjs ships) and the webviews, collected so you don't have to rediscover them. Each feature page lists its own platform differences; this page is for the ones that cut across everything.
+Sharp edges in txiki.js (26.11.0, the runtime tinyjs ships) and the webviews, collected so you don't have to rediscover them. Each feature page lists its own platform differences; this page is for the ones that cut across everything.
 
 ## txiki.js {#txiki}
 
@@ -24,8 +24,6 @@ const db = new Database(dir + '/app.db');   // no await here
 ```js
 tjs.spawn(argv, { stdout: 'ignore', stderr: 'ignore' });
 ```
-
-**Writing to a child's stdin is unreliable.** Several writes to `stdin: 'pipe'` may not all arrive. Pass input as arguments or through a file instead.
 
 **`import.meta.url` throws in a built app**, where the backend is compiled into one executable. Find shipped files through `app.paths()` ([resources](./resources), [executables](./executables)).
 

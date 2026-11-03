@@ -1,4 +1,59 @@
-# TODO — txiki.js runtime bugs worth fixing at the source
+# TODO — txiki.js runtime bugs
+
+Status at **v26.11.0** (pinned 2026-11-04). Bugs A, B, C and D below are all
+fixed in the runtime, and the curl half of the "fetch repair shim" is gone from
+`runtime/bridge.js`. `bin/tjs run test/fetch/check.js` checks all of it on any
+OS, against raw listeners and real hosts. Its `upstream:` lines report whether
+the bugs below are still there.
+
+**Don't follow the old plan's "delete the shim" all the way.** bridge.js still
+follows redirects itself, because native fetch doesn't apply the rules:
+
+## Still open upstream (worth PRs to saghul/txiki.js)
+
+- **Redirect to another scheme kills the process.** `fetch(url)` where the
+  server answers `Location: file:///etc/passwd` throws `Error: Connection
+  failed` outside the returned promise: nothing can catch it, exit 1. The XHR
+  underneath `open()`s the new URL with no scheme check. Why bridge.js and
+  cli.js follow by hand. Same on 26.6.0.
+- **Credentials cross origins.** `Authorization`, `Cookie` and
+  `Proxy-Authorization` follow a redirect to any origin. Also a POST turned
+  into a GET keeps its `Content-Type`. bridge.js handles both (#27).
+- **`fetch(new Request(url, { method: 'POST', body }))` sends the text
+  `[object Blob]`**, whatever the body was, with no content-length.
+  `Request.text()` reads the right bytes, so it's the hand-off in fetch. New in
+  26.11.0 (26.6.0 threw). bridge.js takes a Request apart first.
+- **HTTP/2 downloads are slow from far-away servers.** 26.11.0 turned h2 on.
+  20.6 MB from `feeds.simplecast.com` (~200 ms away, h2): 37–44 s, where
+  26.6.0 (h1) took 6–10 s and curl (h2) 5 s. That's about 550 KB/s and looks
+  capped per round trip. A nearby CDN isn't hit: 30 MB from
+  speed.cloudflare.com took 5.7 s (7.9 s on 26.6.0), a 5 MB GitHub release
+  asset 2.1 s (3.4 s). lws advertises `H2SET_INITIAL_WINDOW_SIZE` 65535, which
+  fits a flow-control cap but isn't proven. Setting only
+  `vinfo.http2_settings[4]` = 8 MiB in `tjs__create_client_vhost` makes large
+  h2 fetches FAIL ("Network request failed", tried 2026-11-04), so the
+  connection-level window (http2.c, `do_windows`, `m = n + 65536`) probably has
+  to move with it. No JS-level way to pick h1: `vinfo.alpn` is compiled in.
+
+Smaller cleanup left: `http://localhost` now reaches a `::1`-only server
+(measured on macOS, 26.6.0 got ECONNREFUSED), so once that's seen on Windows and
+Linux, cli.js can drop its second readiness probe and the scaffold's
+`--host 127.0.0.1`.
+
+## What the curl fallback used to do besides A and B
+
+It also caught every other wire-level failure, so a host that only curl could
+reach worked by accident: a TLS-inspecting proxy whose CA is only in the OS
+store, say (curl uses the system store on macOS and Windows; txiki uses its
+embedded bundle, or `SSL_CERT_FILE` / `TJS_CA_BUNDLE`). Those now fail. cli.js
+keeps one curl attempt for the update check (`latestViaCurl`, #67), since a
+broken update check can't be fixed by updating.
+
+Example apps: nib's Actions stage stdin in a temp file because of Bug C
+(`nib/src/actions.js`, `startRun`). That can now be a plain pipe once nib builds
+on this runtime.
+
+# History: how these were found
 
 Two wire-level bugs in txiki.js v26.6.0's `fetch` (the runtime we ship as
 `bin/tjs`). Both are currently papered over by the **fetch repair shim** in
@@ -18,7 +73,7 @@ exercised anywhere — now measured, and they found Bug D below: a small POST
 body through the shim hung forever (fixed in the shim 2026-09-28). See
 TODO-verify.md.
 
-## Bug A — root-path URLs go out as `GET //`
+### Bug A — root-path URLs go out as `GET //`
 
 Any URL whose path is `/` (or empty) produces a request line with a double
 slash:
@@ -58,7 +113,7 @@ cloudfront`. Verified byte-for-byte with a raw TLS replay: `GET /` → 200,
   certainly a `'/' + path` join where path already starts with (or is) `/`.
   Likely a one-line fix.
 
-## Bug B — TLS 1.2-only hosts never complete a handshake
+### Bug B — TLS 1.2-only hosts never complete a handshake
 
 ```
 fetch('https://rss.art19.com/the-allusionist')
@@ -87,7 +142,7 @@ follows the http→https redirect internally and then fails the handshake.
   is presumably off/misconfigured, making the client 1.3-only. A 1.2
   handshake is a config flag, not new code.
 
-## The plan
+### The plan
 
 0. ~~**Unblock D first**~~ — **done 2026-09-28**: the shim stages bodies in
    a temp file now (see Bug D).
@@ -106,7 +161,7 @@ follows the http→https redirect internally and then fails the handshake.
    TODO-verify.md entry) are a good canary, they cover both bugs plus
    redirect chains.
 
-## While the shim exists — its contract (so nobody "fixes" it wrong)
+### While the shim existed — its contract (so nobody "fixes" it wrong)
 
 - curl is consulted in exactly two cases: the URL (or a redirect hop) has a
   root path, or the native fetch REJECTED (wire-level failure, no response).
@@ -136,7 +191,7 @@ follows the http→https redirect internally and then fails the handshake.
   backend module body then runs first and gets the raw fetch (this was real —
   update.js's bundle probe did it, see CHANGELOG 0.30.0).
 
-## Bug C — small writes to a child's stdin are never delivered
+### Bug C — small writes to a child's stdin are never delivered
 
 > **Root cause found upstream (2026-07):** [saghul/txiki.js#1027] — the
 > stdin sink misreads `tjs_stream_write`'s `true` ("`uv_try_write` took it
@@ -184,7 +239,7 @@ tagged release we pin has it, before anyone builds on the stdin pipe again.
   runtime is pinned — but if the pipe ever works, `startRun` is the one place
   to change.
 
-## ~~Bug D — a SMALL POST body through the shim hangs forever~~ — fixed 2026-09-28
+### ~~Bug D — a SMALL POST body through the shim hangs forever~~ — fixed 2026-09-28
 
 **Fixed** by the cheap fix below: `curlFetch` writes the body to a file in a
 fresh 0700 temp dir, passes `--data-binary @<file>`, spawns curl with
@@ -251,7 +306,7 @@ weeks of three-OS shim verification never touched it.
   OSes are presumed affected, but that is inference, not observation —
   TODO-verify.md.
 
-## Runtime surface: what txiki actually HAS (audited 2026-08-14)
+# Runtime surface: what txiki actually HAS (audited 2026-08-14)
 
 Audited while sizing up whether a *wrapped-agent-backend* app could run its
 whole backend on tjs (prompted by taking KiroCrew apart — an Electron shell
@@ -259,7 +314,8 @@ whose only job is `loadURL('http://localhost:PORT?token=…')` in front of a
 590 MB bundled Python gateway that serves a Vite SPA). Four things were
 assumed missing that are present and working — writing them down so nobody
 re-derives an architecture around absences that aren't there. All probed on
-the shipped `bin/tjs` v26.6.0, macOS arm64:
+the shipped `bin/tjs` v26.6.0, macOS arm64 (26.11.0 adds `MessageChannel`,
+`BroadcastChannel` and `EventSource`, and reworks the `tjs:ffi` API):
 
 | Surface | State | Proof |
 |---|---|---|

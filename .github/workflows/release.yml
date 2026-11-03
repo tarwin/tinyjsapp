@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 env:
-  TJS_VERSION: v26.6.0
+  TJS_VERSION: v26.11.0
 
 jobs:
   # Windows binaries: built here, shipped by the release job below so one

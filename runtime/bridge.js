@@ -51,15 +51,15 @@ const ON_X11 = IS_LINUX && (tjs.env.GDK_BACKEND === 'x11'
 // Windows: argv transform that routes a console command through
 // `launcher --run` (CREATE_NO_WINDOW) so no terminal window flashes when a
 // GUI-subsystem app shells out — tjs.spawn has no flag for this. Identity
-// everywhere else. Module-scoped because the fetch shim's curl hops and
-// probeOk run outside createApp, where the launcher path is otherwise found.
+// everywhere else. Module-scoped because probeOk runs outside createApp, where
+// the launcher path is otherwise found.
 let runPrefix = null;               // ['<launcher>', '--run'] once known
 let runPrefixTried = false;
 const hiddenArgv = (args) => (runPrefix ? [...runPrefix, ...args] : args);
 // createApp sets runPrefix (it validates the path and honors the launcherPath
-// option), but a backend's module top level runs BEFORE createApp — and a
-// fetch there is exactly a case that can need curl. So resolve it on first
-// use too, with createApp's precedence minus the option it can't see.
+// option), but a backend's module top level runs BEFORE createApp, and it can
+// reach probeOk from there. So resolve it on first use too, with createApp's
+// precedence minus the option it can't see.
 async function readyHiddenArgv() {
   if (!IS_WIN || runPrefix || runPrefixTried) return;
   runPrefixTried = true;
@@ -72,165 +72,47 @@ async function readyHiddenArgv() {
   } catch {}                        // no launcher yet: plain spawn, as before
 }
 
-// ── fetch repair shim ───────────────────────────────────────────────────────
-// txiki v26.6.0's fetch has two wire-level bugs (repros + fix notes in
-// TODO-txiki.md; both verified against real hosts):
-//   A. a root-path URL goes out as 'GET //' — S3/CloudFront-backed hosts
-//      answer 404 to the double slash (Radiotopia's publicfeeds.net feeds,
-//      pdrl.fm's redirect targets)
-//   B. mbedtls never completes a handshake with TLS 1.2-only hosts
-//      ("mbedtls connect -1 5 0" — rss.art19.com, anchor.fm, Fastly's
-//      older TLS profiles)
-// Until a patched tjs ships, wrap fetch: follow redirects ourselves so every
-// hop is visible, and route EXACTLY the broken cases through the system curl
-// (always present on macOS/Linux; Windows ships curl.exe since 10 1803).
-// A real HTTP error from a working request is never retried — a genuine 404
-// stays a 404 — and curl bodies stream, so internet radio stays live. Both
-// backend fetch() and every page's tiny.fetch inherit this.
+// ── fetch: the redirect rules native fetch doesn't apply ─────────────────────
+// txiki's native fetch follows redirects without any of the rules a browser
+// applies to them (measured on 26.11.0, repros in TODO-txiki.md):
+//   - a Location on another scheme (file:///etc/passwd) throws outside the
+//     returned promise: nothing can catch it and the process exits
+//   - Authorization and Cookie go along to whatever origin the server names
+//   - a POST turned into a GET keeps its Content-Type
+// So redirects are followed here, one `redirect: 'manual'` hop at a time. Both
+// backend fetch() and every page's tiny.fetch inherit this. Up to v26.6.0 this
+// wrapper also sent root-path URLs and TLS 1.2 hosts through the system curl;
+// txiki fixed both, and the curl path is gone.
 const nativeFetch = globalThis.fetch?.bind(globalThis);
-let curlProbe = null;
-const haveCurl = () => (curlProbe ??= probeOk(['curl', '--version']));
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 // Request headers a redirect must not carry to another origin (#27). WHATWG
 // fetch drops Authorization there; a browser never lets a page set Cookie or
 // Proxy-Authorization at all, but tiny.fetch does, so those go too.
-const CROSS_ORIGIN_STRIP = new Set(['authorization', 'cookie', 'proxy-authorization']);
+const CROSS_ORIGIN_STRIP = ['authorization', 'cookie', 'proxy-authorization'];
 // …and the body's own headers once a redirect turns the request into a GET.
-const BODY_HEADERS = new Set(['content-type', 'content-length', 'content-encoding',
-                              'content-language', 'content-location']);
-// A Headers object, not pairs: txiki's native fetch reads an array as a plain
-// object ({"0": "k,v", "length": …} went onto the wire, measured 26.6.0).
-const dropHeaders = (H, names) =>
-  new Headers(headerPairs(H).filter(([k]) => !names.has(String(k).toLowerCase())));
+const BODY_HEADERS = ['content-type', 'content-length', 'content-encoding',
+                      'content-language', 'content-location'];
+// new Headers() is also the gate for what a page hands tiny.fetch: it refuses
+// a name that isn't an RFC 9110 token and a value with CR/LF/NUL.
+const dropHeaders = (H, names) => {
+  const out = new Headers(H ?? undefined);
+  for (const n of names) out.delete(n);
+  return out;
+};
 
-// Header init (Headers, [[k, v], ...] or a plain object) as validated pairs.
-// WHATWG fetch rejects a name that isn't an RFC 9110 token and a value with
-// CR/LF/NUL; txiki's native fetch checks neither (measured 26.6.0: a CRLF in
-// a value went onto the wire as a separate header), and curl's -H turns a CRLF
-// into extra request lines and a ':' in the name into a different header
-// (Host included). A page's tiny.fetch lands here, so this is the gate.
-const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
-function headerPairs(H) {
-  const pairs = [];
-  if (!H) return pairs;
-  if (Array.isArray(H)) for (const [k, v] of H) pairs.push([k, v]);
-  else if (typeof H.forEach === 'function') H.forEach((v, k) => pairs.push([k, v]));
-  else for (const k of Object.keys(H)) pairs.push([k, H[k]]);
-  for (const [k, v] of pairs) {
-    if (!HEADER_NAME.test(String(k))) throw new TypeError('Invalid header name: ' + JSON.stringify(String(k)));
-    if (/[\r\n\0]/.test(String(v))) throw new TypeError('Invalid header value for ' + k);
+if (nativeFetch) globalThis.fetch = async function fetchFollowingSafely(input, init = {}) {
+  // A Request is taken apart so it gets the same redirect rules. Native fetch
+  // can't send one's body anyway: it goes out as the text "[object Blob]"
+  // (measured 26.11.0). init wins over the Request, as in the spec.
+  if (typeof Request === 'function' && input instanceof Request) {
+    const hasBody = input.method !== 'GET' && input.method !== 'HEAD';
+    const bytes = hasBody && !init.body ? new Uint8Array(await input.arrayBuffer()) : null;
+    init = { method: input.method, headers: input.headers, signal: input.signal,
+             ...(bytes?.length ? { body: bytes } : {}), ...init };
+    input = input.url;
   }
-  return pairs;
-}
-
-// One hop via curl, returned as a real Response with a streaming body.
-// -i puts the header block on stdout ahead of the body; no -L — the wrapper
-// follows redirects itself, so one call is always exactly one hop.
-async function curlFetch(url, init = {}) {
-  const method = (init.method || 'GET').toUpperCase();
-  // --proto locks curl to http(s) even if a caller slips something exotic
-  // past the wrapper; --proto-redir guards curl's own redirect handling
-  // (unused — we never pass -L — but belt and braces)
-  const args = ['curl', '-s', '-i', '--connect-timeout', '30',
-                '--proto', '=http,https', '--proto-redir', '=http,https'];
-  if (method === 'HEAD') args.push('--head');
-  else if (method !== 'GET') args.push('-X', method);
-  // validated again here (fetchRepaired already did): a CRLF in an -H arg is
-  // request smuggling, so this hop doesn't lean on its caller
-  const pairs = headerPairs(init.headers);
-  // identity unless the caller asked for something: curl won't decode what we
-  // don't tell the server to send, and honest lengths beat saved bytes here
-  if (!pairs.some(([k]) => k.toLowerCase() === 'accept-encoding')) pairs.push(['accept-encoding', 'identity']);
-  // hiddenArgv: on Windows every hop would otherwise flash a console window
-  // (curl.exe is a console app, the packaged app is GUI-subsystem)
-  await readyHiddenArgv();
-  const body = init.body;
-  if (body != null && typeof body !== 'string' && !(body instanceof Uint8Array))
-    throw new TypeError('fetch fallback: only string/Uint8Array bodies');
-  // Headers and body go through files in a 0700 temp dir, never argv: argv is
-  // readable by every local user via `ps`, and headers carry Authorization /
-  // Cookie (#27). One header per line (headerPairs already refused CR/LF);
-  // "Name:" with nothing after it tells curl to REMOVE that header, "Name;"
-  // is its spelling for sending it empty. `-H @file` needs curl 7.55 (2017;
-  // Windows 10 1803's curl.exe is 7.55.1). The body is a file rather than
-  // stdin because txiki 26.6.0 never settles a spawned child's stdin write
-  // (saghul/txiki.js#1027, fixed after that release). The dir goes once curl
-  // has exited.
-  const ioDir = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-fetch-XXXXXX');
-  const dropIo = () => tjs.remove(ioDir, { recursive: true }).catch(() => {});
-  try {
-    const lines = pairs.map(([k, v]) => (String(v).trim() === '' ? k + ';' : k + ': ' + v));
-    await tjs.writeFile(ioDir + '/headers', enc.encode(lines.join('\n') + '\n'));
-    args.push('-H', '@' + ioDir + '/headers');
-    if (body != null) {
-      await tjs.writeFile(ioDir + '/body', typeof body === 'string' ? enc.encode(body) : body);
-      args.push('--data-binary', '@' + ioDir + '/body');
-    }
-  } catch (e) { dropIo(); throw e; }
-  args.push('--', url);   // never let a URL parse as a flag
-  let p;
-  try {
-    p = tjs.spawn(hiddenArgv(args), { stdin: 'ignore', stdout: 'pipe', stderr: 'ignore' });
-  } catch (e) { dropIo(); throw e; }
-  p.wait().then(dropIo, dropIo);
-  if (init.signal) {
-    const kill = () => { try { p.kill(); } catch {} };
-    init.signal.aborted ? kill() : init.signal.addEventListener('abort', kill);
-  }
-  const reader = p.stdout.getReader();
-  // accumulate until the end of the header block; 1xx interim blocks (100
-  // Continue from the --data-binary path) are skipped like a client should
-  let buf = new Uint8Array(0);
-  const blockEnd = (b, from) => {
-    for (let i = from; i + 3 < b.length; i++)
-      if (b[i] === 13 && b[i + 1] === 10 && b[i + 2] === 13 && b[i + 3] === 10) return i;
-    return -1;
-  };
-  let head = null, rest = null;
-  while (head === null) {
-    const { done, value } = await reader.read();
-    if (value) {
-      const n = new Uint8Array(buf.length + value.length);
-      n.set(buf); n.set(value, buf.length); buf = n;
-    }
-    let idx;
-    while ((idx = blockEnd(buf, 0)) !== -1) {
-      const block = dec.decode(buf.subarray(0, idx));
-      buf = buf.subarray(idx + 4);
-      const m = /^HTTP\/[\d.]+ (\d{3})(?: (.*))?/.exec(block);
-      if (!m) break;                       // not HTTP — fail below
-      if (+m[1] >= 200 || +m[1] < 100) { head = { status: +m[1], statusText: m[2] || '', block }; rest = buf; break; }
-    }
-    if (done) break;
-  }
-  if (!head) {
-    const st = await p.wait();
-    throw new TypeError('Network request failed (curl exit ' + (st.term_signal || st.exit_status) + ')');
-  }
-  const headers = [];
-  for (const line of head.block.split('\r\n').slice(1)) {
-    const c = line.indexOf(':');
-    if (c > 0) headers.push([line.slice(0, c).trim(), line.slice(c + 1).trim()]);
-  }
-  const noBody = method === 'HEAD' || head.status === 204 || head.status === 304 || head.status === 205;
-  const stream = noBody ? null : new ReadableStream({
-    start(c) { if (rest.length) c.enqueue(rest.slice()); },
-    async pull(c) {
-      const { done, value } = await reader.read();
-      if (done) { c.close(); p.wait().catch(() => {}); }
-      else c.enqueue(value);
-    },
-    cancel() { try { p.kill(); } catch {} },
-  });
-  return new Response(stream, { status: head.status, statusText: head.statusText, headers });
-}
-
-if (nativeFetch) globalThis.fetch = async function fetchRepaired(input, init = {}) {
-  // before any routing: the native path needs this as much as curl does
-  headerPairs(init.headers);
-  if (input?.headers) headerPairs(input.headers);        // a Request object
-  // exotic inputs (Request objects, data:/file: urls, stream bodies) keep the
-  // native path untouched — the repair rules only understand plain http(s)
+  // exotic inputs (data:/file: urls) keep the native path untouched — the rules
+  // here only understand plain http(s)
   const url0 = typeof input === 'string' ? input : (input instanceof URL ? input.href : null);
   if (url0 === null || !/^https?:\/\//i.test(url0)) return nativeFetch(input, init);
   const mode = init.redirect || 'follow';
@@ -239,19 +121,7 @@ if (nativeFetch) globalThis.fetch = async function fetchRepaired(input, init = {
   let body = init.body;
   let headers = init.headers;
   for (let hop = 0; ; hop++) {
-    let rootPath = false;
-    try { const u = new URL(url); rootPath = u.pathname === '/' || u.pathname === ''; } catch {}
-    let res;
-    if (rootPath && await haveCurl()) {
-      res = await curlFetch(url, { ...init, headers, method, body });        // bug A
-    } else {
-      try {
-        res = await nativeFetch(url, { ...init, headers, method, body, redirect: 'manual' });
-      } catch (e) {
-        if (!(await haveCurl())) throw e;
-        res = await curlFetch(url, { ...init, headers, method, body });      // bug B — no response existed
-      }
-    }
+    const res = await nativeFetch(url, { ...init, headers, method, body, redirect: 'manual' });
     const loc = REDIRECT_CODES.has(res.status) ? res.headers.get('location') : null;
     if (!loc || mode === 'manual') {
       // best effort: report the landing url like a spec fetch would
@@ -264,8 +134,7 @@ if (nativeFetch) globalThis.fetch = async function fetchRepaired(input, init = {
     if (mode === 'error') throw new TypeError('redirected (redirect: "error")');
     if (hop >= 20) throw new TypeError('too many redirects');
     try { res.body?.cancel(); } catch {}
-    // a hostile Location: must not walk us onto another scheme — curl would
-    // happily fetch file:///etc/passwd
+    // a hostile Location: must not walk us onto another scheme
     const next = new URL(loc, url);
     if (next.protocol !== 'http:' && next.protocol !== 'https:')
       throw new TypeError('redirect to non-http(s) scheme blocked: ' + next.protocol);

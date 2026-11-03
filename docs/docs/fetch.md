@@ -49,11 +49,11 @@ Redirects are followed hop by hop, up to 20, the way a browser does: a 303, or a
 
 With `redirect: 'manual'`, the 3xx response itself resolves, and unlike in a browser you can read its `status` and `Location` header. `redirect: 'error'` rejects on the first redirect.
 
-### hosts the runtime can't reach alone {#curl}
+### HTTP versions and TLS {#network}
 
-The backend's runtime has two gaps: a URL whose path is only `/` (`https://feeds.example.com/`) goes out as `GET //`, which strict CDNs answer with 404, and it can't connect to hosts that only speak TLS 1.2 (art19 and anchor.fm feeds, for example). tinyjs sends those requests through the system `curl` instead: root-path URLs always, and any request whose connection failed. Because redirects are followed one hop at a time, a tracking URL that bounces onto either kind of host still arrives. A real HTTP error (404, 500) is returned as it is, never retried through curl.
+The backend's runtime speaks HTTP/1.1 and HTTP/2 over TLS 1.2 and 1.3, and can move to HTTP/3 on hosts that advertise it. It checks certificates against its own bundled list, not the operating system's, so a certificate only your system trusts (a corporate TLS-inspecting proxy, for example) fails with a network error. To trust one, start the app with `SSL_CERT_FILE` set to a PEM file of CA certificates. Proxies come from the usual `http_proxy` and `https_proxy` environment variables. The same applies to `fetch()` in the backend.
 
-`curl` comes with macOS, Linux and Windows 10 1803 or later. Without it, those two cases fail as they would without tinyjs. The same applies to `fetch()` in the backend.
+On HTTP/2, a large response from a far-away server can be slower than on HTTP/1.1: a 20 MB download took about 40 s from a host 200 ms away, where curl took 5 s. Nearby CDNs aren't affected.
 
 ## streaming a response {#stream}
 

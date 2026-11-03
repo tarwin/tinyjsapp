@@ -976,11 +976,12 @@ async function latestViaFetch(ms) {
   throw new Error('too many redirects');
 }
 
-// txiki's fetch drops connections on some networks where curl and browsers
-// don't ("closed before established", #67), and the CLI runs on bare tjs —
-// bridge.js's fetch repair shim never loads here. curl ships with macOS,
-// Linux distros and Windows 10 1803+. --proto keeps every hop http(s); the
-// URL sits after -- so it can't parse as a flag.
+// txiki's fetch dropped connections on some networks where curl and browsers
+// didn't ("closed before established", #67). A failed check means `tinyjs
+// update` can't fix whatever is wrong, so this last attempt stays even with a
+// fixed fetch. curl ships with macOS, Linux distros and Windows 10 1803+.
+// --proto keeps every hop http(s); the URL sits after -- so it can't parse as
+// a flag.
 async function latestViaCurl() {
   const p = tjs.spawn(['curl', '-sS', '-I', '-L', '--max-redirs', '5',
     '--proto', '=http,https', '--proto-redir', '=http,https',
@@ -1763,7 +1764,7 @@ export function init(app${ts ? ': TinyApp' : ''}) {
   const pkg = JSON.parse(dec.decode(await tjs.readFile(pkgPath)));
   pkg.scripts = pkg.scripts ?? {};
   // --host 127.0.0.1: modern node binds ::1 for 'localhost', which txiki's
-  // IPv4 fetch (our readiness probe) can't reach. Vite+ projects keep their
+  // fetch (our readiness probe) couldn't reach before 26.11. Vite+ projects keep their
   // vp front end (same flags; vp dev/build pass them to Vite).
   const viteBin = /^vp\b/.test(String(pkg.scripts.dev ?? '')) ? 'vp dev' : 'vite';
   pkg.scripts.dev = viteBin + ' --host 127.0.0.1 --port 5173 --strictPort';
@@ -2547,8 +2548,9 @@ async function cmdDev() {
       console.log('==> starting frontend dev server: ' + fe.dev);
       devServer = tjs.spawn(shellArgv(fe.dev), { stdout: 'inherit', stderr: 'inherit' });
     }
-    // Probe both spellings: 'localhost' may be ::1-only (modern node) which
-    // txiki's fetch can't reach even when the server is up.
+    // Probe both spellings: 'localhost' may be ::1-only (modern node), which
+    // txiki's fetch couldn't reach before 26.11 (fixed on macOS; not yet seen
+    // on Windows or Linux, so the second probe stays for now).
     const probes = [fe.devUrl];
     if (fe.devUrl.includes('//localhost')) probes.push(fe.devUrl.replace('//localhost', '//127.0.0.1'));
     const deadline = Date.now() + 60000;

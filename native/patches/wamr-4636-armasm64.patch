@@ -1,7 +1,7 @@
 # WAMR PR #4636 (bytecodealliance/wasm-micro-runtime commit
 # 1b9542830e9fa3d6eaabf4df16a9b7224db85473, Apache-2.0 WITH LLVM-exception):
 # invokeNative in armasm64 syntax, for MSVC on Windows ARM64. txiki.js
-# v26.6.0 pins WAMR 8c18e3f (a 2.4.x release-branch commit) that lacks it,
+# v26.11.0 (like v26.6.0) pins WAMR 8c18e3f (a 2.4.x release-branch commit) that lacks it,
 # and without it WAMR has no working way to call native (WASI) functions
 # there: its AArch64 routine is GNU-assembler syntax MSVC can't build, and
 # its "general" C fallback passes 32-bit args, splitting 64-bit pointers.
