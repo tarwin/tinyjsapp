@@ -134,3 +134,5 @@ img.src = tiny.fileURL(path);
 Building the URL by hand with `'file://' + path` breaks on Windows: the drive letter becomes the URL's host.
 
 On macOS the page may only load files inside its own folder. For anything outside it — and a path from the backend usually is — set [`readAccess`](./config#readAccess) in tinyjs.json. Without it the element fires `error` and nothing says why. Windows and Linux don't need it.
+
+macOS also won't let a `file://` page load files from a different disk, even with `"readAccess": "/"`: a second partition, a USB drive or a network share under `/Volumes`, or the startup disk for an app run from a mounted `.dmg`. For a path on a different disk than the page, `tiny.fileURL` returns a `tiny-media://file/…` URL, and the app serves the file itself (seeking works). It's still limited to the `readAccess` folder, and only the app's own pages can use it. Web Audio (`createMediaElementSource`) works on it the same as on a `file://` track.

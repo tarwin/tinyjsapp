@@ -1336,10 +1336,11 @@ export function shellOpenAllowed(target, origin, ownOrigins) {
 
 // getUserMedia consent (#24), and the tiny-media proxy (#30, kind "proxy",
 // pseudo-method media.proxy: a proxied response is CORS-open, so the proxy
-// is a read-anything key). The launcher grants mic/camera silently only to
-// the app's own pages (file://, plus the frontend dev server in dev) and to
-// origins the manifest EXPLICITLY trusts: an "api.origins" key whose gate
-// allows the pseudo-method "media.camera" / "media.microphone". Top-level
+// is a read-anything key), plus kind "file" for the macOS launcher's
+// tiny-media://file/ route (own pages only). The launcher grants mic/camera
+// silently only to the app's own pages (file://, plus the frontend dev
+// server in dev) and to origins the manifest EXPLICITLY trusts: an
+// "api.origins" key whose gate allows the pseudo-method "media.camera" / "media.microphone". Top-level
 // lists and an absent "api" never count — a wrapped site or a redirect target
 // must not inherit the device just because the app itself may use it.
 // Everything else gets the engine's per-origin prompt (macOS) or a denial
@@ -1349,7 +1350,9 @@ export function shellOpenAllowed(target, origin, ownOrigins) {
 // `tinyjs build` writes the same lines into Info.plist (TinyjsMediaOrigins).
 export function mediaTrustLines(spec, ownOrigins) {
   const lines = [];
-  for (const o of ownOrigins) lines.push('camera ' + o, 'microphone ' + o, 'proxy ' + o);
+  // "file" (tiny-media://file/, tiny.fileURL on another volume) is the
+  // app's own pages only: no "api.origins" key can grant it.
+  for (const o of ownOrigins) lines.push('camera ' + o, 'microphone ' + o, 'proxy ' + o, 'file ' + o);
   if (spec && typeof spec === 'object' && !Array.isArray(spec) &&
       spec.origins && typeof spec.origins === 'object') {
     for (const [pat, sub] of Object.entries(spec.origins)) {

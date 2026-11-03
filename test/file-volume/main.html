@@ -1,0 +1,20 @@
+<!DOCTYPE html><html><body>file-volume<script>
+// tiny.fileURL across volumes (tinyjsapp-examples#2). See README.md.
+const V = '/Volumes/TinyVolTest/t.m4a';
+const H = ''; // reverse check: a file on the startup disk, e.g. '/Users/<you>/tvt.m4a'
+const load = (p) => new Promise((res) => {
+  const a = new Audio(), t = setTimeout(() => res('timeout'), 8000);
+  a.oncanplay = () => { clearTimeout(t); res('ok'); };
+  a.onerror = () => { clearTimeout(t); res('error ' + (a.error && a.error.code)); };
+  a.src = tiny.fileURL(p); a.load();
+});
+const range = async (p) => {
+  try { const r = await fetch(tiny.fileURL(p), { headers: { Range: 'bytes=0-9' } });
+    return r.status + ' ' + (await r.arrayBuffer()).byteLength; } catch (e) { return 'err ' + e; }
+};
+(async () => {
+  const out = { vurl: tiny.fileURL(V), vol: await load(V), range: await range(V) };
+  if (H) { out.hurl = tiny.fileURL(H); out.home = await load(H); }
+  await tiny.store.set('fv', out);
+})();
+</script></body></html>

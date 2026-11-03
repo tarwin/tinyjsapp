@@ -342,7 +342,9 @@
 #include <thread>
 
 #include <spawn.h>
+#include <fcntl.h>    // open (tiny-media://file)
 #include <sys/socket.h>
+#include <sys/stat.h> // stat (tiny-media://file)
 #include <sys/un.h>
 #include <unistd.h>
 
@@ -5416,6 +5418,155 @@ static void install_first_mouse_hook() {
   id<WKURLSchemeTask> st = [_dataToScheme objectForKey:dt];
   return (st && [_live containsObject:st]) ? st : nil;
 }
+// --- tiny-media://file/<path>: local files on another volume (#2 in
+// tinyjsapp-examples). WebKit's file:// read grant (loadFileURL:
+// allowingReadAccessToURL:) stops at the volume the page sits on — even with
+// readAccess "/", a page on the boot disk can't load /Volumes/<other>/x.flac
+// (or a network share), and vice versa for an app run from a mounted dmg; the
+// element just fails with error 4 and nothing logs why. The launcher isn't
+// under WebContent's sandbox, so it reads the file itself and serves it here,
+// byte ranges included (media seeks). tiny.fileURL picks this URL only for a
+// path on a different volume than the page. Same read root as file://:
+// readAccess, symlinks resolved, regular files only.
+static NSString *tiny_media_file_mime(NSString *path) {
+  NSString *ext = path.pathExtension.lowercaseString;
+  // The custom-scheme media loader goes by Content-Type, and UTType doesn't
+  // know every audio extension (opus) or picks a spelling AVFoundation
+  // ignores, so the common media types are pinned.
+  static NSDictionary *pinned = [@{
+    @"mp3": @"audio/mpeg", @"m4a": @"audio/mp4", @"m4b": @"audio/mp4",
+    @"aac": @"audio/aac", @"flac": @"audio/flac", @"wav": @"audio/wav",
+    @"aif": @"audio/aiff", @"aiff": @"audio/aiff", @"aifc": @"audio/aiff",
+    @"caf": @"audio/x-caf", @"ogg": @"audio/ogg", @"oga": @"audio/ogg",
+    @"opus": @"audio/ogg", @"mp4": @"video/mp4", @"m4v": @"video/mp4",
+    @"mov": @"video/quicktime", @"webm": @"video/webm",
+  } retain];
+  NSString *m = pinned[ext];
+  if (!m && ext.length) m = [UTType typeWithFilenameExtension:ext].preferredMIMEType;
+  return m ?: @"application/octet-stream";
+}
+- (void)serveFile:(id<WKURLSchemeTask>)task {
+  void (^fail)(NSInteger, NSString *) = ^(NSInteger code, NSString *msg) {
+    [task didFailWithError:[NSError errorWithDomain:@"tinyjs" code:code
+        userInfo:@{NSLocalizedDescriptionKey: msg}]];
+  };
+  if (g_read_access.empty()) {
+    fail(403, @"tiny.fileURL: a file outside the page's folder needs \"readAccess\" in tinyjs.json");
+    return;
+  }
+  NSString *path = task.request.URL.path; // percent-decoded
+  char real[PATH_MAX], root[PATH_MAX];
+  struct stat st;
+  if (!path.length || !realpath(path.fileSystemRepresentation, real) ||
+      stat(real, &st) != 0 || !S_ISREG(st.st_mode)) {
+    fail(404, @"tiny.fileURL: no such file");
+    return;
+  }
+  std::string f = real, r = realpath(g_read_access.c_str(), root) ? root : "";
+  bool under = !r.empty() && (r == "/" || f == r ||
+               f.compare(0, r.size() + 1, r + "/") == 0);
+  if (!under) {
+    fprintf(stderr, "tinyjs: tiny-media file refused: %s is outside readAccess (%s)\n",
+            real, g_read_access.c_str());
+    fail(403, @"tiny.fileURL: file is outside the app's readAccess root");
+    return;
+  }
+  // One byte range (bytes=a-b, a-, -n) — all a media element sends. A
+  // multi-range request just gets the whole file.
+  long long size = st.st_size, start = 0, end = size - 1;
+  BOOL partial = NO;
+  NSString *range = [task.request valueForHTTPHeaderField:@"Range"];
+  if ([range hasPrefix:@"bytes="] && [range rangeOfString:@","].location == NSNotFound) {
+    NSArray *ab = [[range substringFromIndex:6] componentsSeparatedByString:@"-"];
+    if (ab.count == 2) {
+      NSString *a = [ab[0] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+      NSString *b = [ab[1] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+      if (!a.length && b.length) {
+        start = MAX(0LL, size - b.longLongValue);
+      } else {
+        start = a.longLongValue;
+        if (b.length) end = MIN(b.longLongValue, size - 1);
+      }
+      partial = YES;
+    }
+  }
+  NSMutableDictionary *h = [NSMutableDictionary dictionaryWithDictionary:@{
+    @"Content-Type": tiny_media_file_mime(path),
+    @"Accept-Ranges": @"bytes",
+    @"Cache-Control": @"no-cache",
+    @"Access-Control-Allow-Origin": @"*",
+    @"Access-Control-Allow-Headers": @"*",
+    @"Access-Control-Expose-Headers": @"*",
+    @"Content-Security-Policy": @"sandbox",
+  }];
+  if (partial && (start > end || start >= size)) {
+    h[@"Content-Range"] = [NSString stringWithFormat:@"bytes */%lld", size];
+    h[@"Content-Length"] = @"0";
+    [task didReceiveResponse:[[[NSHTTPURLResponse alloc]
+        initWithURL:task.request.URL statusCode:416 HTTPVersion:@"HTTP/1.1"
+       headerFields:h] autorelease]];
+    [task didFinish];
+    return;
+  }
+  long long len = size > 0 ? end - start + 1 : 0;
+  h[@"Content-Length"] = [NSString stringWithFormat:@"%lld", len];
+  if (partial)
+    h[@"Content-Range"] = [NSString stringWithFormat:@"bytes %lld-%lld/%lld", start, end, size];
+  NSHTTPURLResponse *resp = [[[NSHTTPURLResponse alloc]
+      initWithURL:task.request.URL statusCode:partial ? 206 : 200
+      HTTPVersion:@"HTTP/1.1" headerFields:h] autorelease];
+  [_live addObject:task];
+  // Read off the main thread (a network share can stall), hand every chunk
+  // to WebKit on main — where stopURLSchemeTask runs too, so _live needs no
+  // lock and a stopped task is never touched. dispatch_sync paces the reads
+  // to WebKit's intake instead of queueing the whole file in memory.
+  std::string file = f;
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    __block BOOL alive = YES;
+    __block NSError *err = nil;
+    int fd = open(file.c_str(), O_RDONLY);
+    if (fd < 0)
+      err = [[NSError errorWithDomain:NSPOSIXErrorDomain code:errno userInfo:nil] retain];
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      alive = !err && [self->_live containsObject:task];
+      if (alive) {
+        @try { [task didReceiveResponse:resp]; } @catch (NSException *e) { alive = NO; }
+      }
+    });
+    const size_t cap = 256 * 1024;
+    char *buf = alive ? (char *)malloc(cap) : nullptr;
+    long long pos = start, left = len;
+    while (alive && buf && left > 0) {
+      ssize_t n = pread(fd, buf, (size_t)MIN((long long)cap, left), pos);
+      if (n <= 0) {
+        err = [[NSError errorWithDomain:NSPOSIXErrorDomain
+                                   code:n < 0 ? errno : EIO userInfo:nil] retain];
+        break;
+      }
+      pos += n; left -= n;
+      @autoreleasepool {
+        NSData *d = [NSData dataWithBytes:buf length:(NSUInteger)n];
+        dispatch_sync(dispatch_get_main_queue(), ^{
+          alive = [self->_live containsObject:task];
+          if (alive) {
+            @try { [task didReceiveData:d]; } @catch (NSException *e) { alive = NO; }
+          }
+        });
+      }
+    }
+    free(buf);
+    if (fd >= 0) close(fd);
+    dispatch_sync(dispatch_get_main_queue(), ^{
+      if (![self->_live containsObject:task]) return;
+      [self->_live removeObject:task];
+      @try {
+        if (err) [task didFailWithError:err];
+        else [task didFinish];
+      } @catch (NSException *e) {}
+    });
+    [err release];
+  });
+}
 - (void)webView:(WKWebView *)wv startURLSchemeTask:(id<WKURLSchemeTask>)task {
   // Who may use it (#30): a proxied response carries ACAO:*, so whoever can
   // fetch it can read any URL the launcher can reach, CORS bypassed. The
@@ -5431,21 +5582,30 @@ static void install_first_mouse_hook() {
   // whatever the page set, which can't make it a navigation). Every
   // response also carries CSP sandbox, so a document that slipped through
   // anyway would get an opaque origin and send Origin: null.
+  // tiny-media://file/<path> (tiny.fileURL on another volume) goes through
+  // the same gate under its own kind, "file", which only the app's own
+  // pages hold — a wrapped site never reads the disk.
+  BOOL isFile = [task.request.URL.host isEqualToString:@"file"];
   {
     NSString *acc = [task.request valueForHTTPHeaderField:@"Accept"];
     NSString *org = [task.request valueForHTTPHeaderField:@"Origin"];
     std::string who = org ? std::string(org.UTF8String)
                           : url_origin_str(task.request.mainDocumentURL);
     BOOL doc = acc && [acc rangeOfString:@"text/html"].location != NSNotFound;
-    if (doc || !media_trusted("proxy", who)) {
-      fprintf(stderr, "tinyjs: tiny-media proxy refused for %s%s\n", who.c_str(),
-              doc ? " (document load)" : " (not trusted: allow media.proxy in tinyjs.json \"api\".origins)");
+    if (doc || !media_trusted(isFile ? "file" : "proxy", who)) {
+      fprintf(stderr, "tinyjs: tiny-media %s refused for %s%s\n",
+              isFile ? "file" : "proxy", who.c_str(),
+              doc ? " (document load)"
+                  : isFile ? " (not one of the app's own pages)"
+                           : " (not trusted: allow media.proxy in tinyjs.json \"api\".origins)");
       [task didFailWithError:[NSError errorWithDomain:@"tinyjs" code:403
           userInfo:@{NSLocalizedDescriptionKey:
-                     @"tiny.proxyURL: this origin may not use the media proxy"}]];
+                     isFile ? @"tiny.fileURL: this origin may not read local files"
+                            : @"tiny.proxyURL: this origin may not use the media proxy"}]];
       return;
     }
   }
+  if (isFile) { [self serveFile:task]; return; }
   NSURLComponents *c = [NSURLComponents componentsWithURL:task.request.URL
                                   resolvingAgainstBaseURL:NO];
   NSString *upstream = nil;

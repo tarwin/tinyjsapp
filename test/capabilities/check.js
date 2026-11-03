@@ -71,6 +71,8 @@ check('proxy: wrapper key lacks it', !mediaTrusted(lines, 'proxy', S));
 check('proxy: stranger', !mediaTrusted(lines, 'proxy', 'https://evil.net'));
 check('proxy: no stamp', !mediaTrusted(lines, 'proxy', undefined));
 check('proxy: kind matters', !mediaTrusted(lines, 'camera', 'https://x.a.com'));
+check('file: own page', mediaTrusted(lines, 'file', 'file://'));
+check('file: no api key grants it', !mediaTrusted(lines, 'file', 'https://x.a.com') && !mediaTrusted(lines, 'file', S));
 
 // ── page: tiny.js maps paths onto wire names ────────────────────────────────
 const here = new URL('.', import.meta.url).pathname;

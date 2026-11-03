@@ -138,8 +138,28 @@
     // usually is — needs "readAccess" in tinyjs.json (true for the home dir,
     // or a specific directory). Without it the element just fires `error`,
     // with nothing saying why.
+    //
+    // macOS: WebKit's file:// read grant also stops at the page's VOLUME —
+    // even readAccess "/" can't reach /Volumes/<other disk> or a network
+    // share, nor (for an app run off a mounted dmg) the boot disk. A path on
+    // another volume than the page gets tiny-media://file/<path> instead,
+    // which the launcher serves itself (same readAccess root, seekable).
+    // A MediaElementSource taps it like a file:// track, with or without
+    // crossOrigin (measured); responses carry ACAO:*, so crossorigin images
+    // and cors fetches read it too.
     fileURL: (p) => {
       p = String(p);
+      if (p.startsWith('/') && !p.startsWith('//') && /Macintosh/.test(navigator.userAgent)) {
+        // Every mounted volume but the boot disk lives under /Volumes;
+        // autofs network mounts under /Network or /net.
+        const vol = (q) => (/^\/(?:Volumes|Network|net)\/[^/]+/.exec(q) || ['/'])[0];
+        let page = null; // a dev-server page has no file:// grant at all
+        try {
+          if (location.protocol === 'file:') page = vol(decodeURIComponent(location.pathname));
+        } catch {}
+        if (page !== vol(p))
+          return 'tiny-media://file' + p.split('/').map(encodeURIComponent).join('/');
+      }
       // Backslashes are separators ONLY in Windows-shaped paths (drive
       // letter or \\server UNC) — Unix filenames may legally contain them.
       if (/^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\')) p = p.replace(/\\/g, '/');

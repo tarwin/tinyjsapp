@@ -261,7 +261,7 @@ Replaces the webview's user agent, for sites that sniff it.
 
 `true` or a folder path · macOS
 
-Lets the page load local files from outside its own folder — your home folder with `true`, or one folder — through [`tiny.fileURL(path)`](./api). Windows and Linux already allow it.
+Lets the page load local files from outside its own folder — your home folder with `true`, or one folder — through [`tiny.fileURL(path)`](./api#fileURL). Windows and Linux already allow it. `"/"` covers every disk, including other volumes and network shares.
 
 ## OS integration {#os-integration}
 

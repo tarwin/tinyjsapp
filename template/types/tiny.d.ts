@@ -864,7 +864,12 @@ declare interface Tiny {
   /** A correct file:// URL for a disk path on every platform — use for
    *  <audio>/<img>/<video> src of backend-provided paths. Hand-rolled
    *  'file://' + path breaks on Windows (the drive letter becomes the URL
-   *  host). */
+   *  host). macOS: a path outside the page's folder needs "readAccess" in
+   *  tinyjs.json, and a path on a DIFFERENT DISK than the page (/Volumes/…,
+   *  a network share, or the startup disk for an app run off a dmg) comes
+   *  back as tiny-media://file/<path>, which the launcher serves itself —
+   *  WebKit won't load file:// across volumes. Same readAccess root, the
+   *  app's own pages only. */
   fileURL(path: string): string;
 
   /** print to the backend's console (the tinyjs dev terminal); any JSON value */

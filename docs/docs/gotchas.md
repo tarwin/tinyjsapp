@@ -33,7 +33,7 @@ tjs.spawn(argv, { stdout: 'ignore', stderr: 'ignore' });
 
 **Hidden windows are slowed down.** The webview throttles `requestAnimationFrame` and timers in a window that's covered, minimized or off-screen, so a hidden window can't reliably drive a visible one. Do continuous work in the visible window, or in the [backend](./backend) (which isn't a webview) and [push](./backend#push) the results.
 
-**On macOS, local media is limited to the page's folder.** `<img>`, `<audio>` and `<video>` there can only load files under the frontend folder; widen that with [`readAccess`](./config#readAccess), and build the URL with [`tiny.fileURL(path)`](./api#fileURL). Windows and Linux already let a `file://` page load other local files.
+**On macOS, local media is limited to the page's folder.** `<img>`, `<audio>` and `<video>` there can only load files under the frontend folder; widen that with [`readAccess`](./config#readAccess), and build the URL with [`tiny.fileURL(path)`](./api#fileURL). Windows and Linux already let a `file://` page load other local files. Don't build `file://` URLs by hand: a file on another disk (`/Volumes/…`) never loads over `file://`, even with `"readAccess": "/"`, so `tiny.fileURL` hands out a `tiny-media://file/` URL for those.
 
 **Pages are real `file://` documents**, not HTML injected into `about:blank`. That's what makes relative paths work, and it's a secure context, so APIs that need one (WebGPU's `navigator.gpu`, for instance) are there. On macOS 15 and earlier, tinyjs also turns on WebKit's WebGPU switch for you.
 
