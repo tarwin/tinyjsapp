@@ -187,7 +187,7 @@ How the main window looks before the page draws anything: frameless, translucent
 
 `boolean` · default: `false`
 
-Put every window back where the user left it — position, size, maximized or full screen — remembered separately for each set of plugged-in screens. The main window stays hidden until it's been placed, so it doesn't jump. See [tiny.win](./window).
+Put every window back where the user left it — position, size, maximized or full screen — remembered separately for each set of plugged-in screens. The main window stays hidden until it's been placed, so it doesn't jump. If you change `size` (or a `win.open` size), the new size is used next launch and only the saved position is kept. See [tiny.win](./window).
 
 ### `offscreenRescue` {#offscreenRescue}
 

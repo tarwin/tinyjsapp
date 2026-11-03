@@ -1323,7 +1323,10 @@ under the cursor at the same relative spot, clamped to fit.
 The main window is built hidden and shown once it's been placed, so it never
 flashes at the default position (it shows anyway after 3s if something goes
 wrong). A `win.open()` without `x`/`y`/`screen` reopens where that window id
-last was; an explicit position always wins. The state lives in
+last was; an explicit position always wins. A saved size only comes back
+while the app still declares the size it was saved under: change `"size"`
+(or a `win.open` size) and the new one is used, at the saved position. The
+state lives in
 `window-state.json` next to `store.json`. Off by default. Apps with their own
 policy can build it from `getState()` (`screenId`, `local`, `pixels`),
 `matchScreen()` and `setPosition(x, y, { screen })` instead. On Wayland only

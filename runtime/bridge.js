@@ -1533,7 +1533,24 @@ function placementFor(list, saved, fallback) {
   const y = Math.max(vy, Math.min(saved.rect.y, vy + v.height - height));
   return { screen: s, x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
 }
-export const __screensForTest = { screenAtIn, screenForIn, matchScreenIn, layoutKey, placementFor, screenSnapshot };
+// "600x180" → "600x180" (normalized), anything else → null
+function declaredSize(s) {
+  const m = /^\s*(\d+)\s*x\s*(\d+)\s*$/i.exec(String(s ?? ''));
+  return m ? `${+m[1]}x${+m[2]}` : null;
+}
+// A saved rect remembers the size the user left the window at, but only
+// while the app still declares the size it was saved under: once the
+// developer changes tinyjs.json's "size" (or a win.open size), the new one
+// wins and only the saved position is kept (#106 — a 960x640 saved off the
+// template kept coming back after "size" became 600x180). Entries saved
+// before the size was recorded count as changed, so they reset once.
+function withDeclaredSize(saved, declared) {
+  const d = declaredSize(declared);
+  if (!saved?.rect || !d || saved.declared === d) return saved;
+  const [width, height] = d.split('x').map(Number);
+  return { ...saved, rect: { ...saved.rect, width, height } };
+}
+export const __screensForTest = { screenAtIn, screenForIn, matchScreenIn, layoutKey, placementFor, screenSnapshot, withDeclaredSize };
 
 export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, onNavigate, onDownload, onWindowOpen, chrome = null, update = null, activation = null, mainWindow = true, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null, downloads = null, popups = null, apiAccess = null, inject = null, resourcesPath = null, executablesPath = null, rememberWindows = false }) {
   if (typeof mainWindow !== 'boolean') throw new Error('mainWindow must be a boolean');
@@ -2184,6 +2201,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   let placeLayouts = null;                 // in memory once loaded (sync reads)
   const placeTimers = new Map();
   const pendingShowState = new Map();      // win id -> deferred applyPlacementState (show:false)
+  // win id -> the size the app declares for it (tinyjs.json / win.open),
+  // saved beside each rect — see withDeclaredSize
+  const declaredSizes = new Map([['main', size]]);
   const MAX_LAYOUTS = 8;
   function placementDirty(wid) {
     clearTimeout(placeTimers.get(wid));
@@ -2206,11 +2226,13 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     const prev = lay.windows[wid];
     const s = list.find((o) => o.id === st.screenId) ??
       screenForIn(list, { x: st.x, y: st.y, width: st.outer?.width ?? st.width, height: st.outer?.height ?? st.height });
-    const entry = { screen: prev?.screen ?? null, rect: prev?.rect ?? null, maximized, fullscreen };
+    // a kept (maximized/fullscreen) rect keeps the declared size it was saved under
+    const entry = { screen: prev?.screen ?? null, rect: prev?.rect ?? null, declared: prev?.declared ?? null, maximized, fullscreen };
     if (s && (maximized || fullscreen)) entry.stateScreen = screenSnapshot(list, s);
     else if (s) {
       entry.screen = screenSnapshot(list, s);
       entry.rect = { x: st.local?.x ?? st.x - s.x, y: st.local?.y ?? st.y - s.y, width: st.width, height: st.height };
+      entry.declared = declaredSize(declaredSizes.get(wid));
     }
     lay.windows[wid] = entry;
     lay.used = Date.now();
@@ -2223,13 +2245,13 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   function savedPlacement(wid, list) {
     if (!placeLayouts) return null;
     const exact = placeLayouts[layoutKey(list)]?.windows?.[wid];
-    if (exact) return exact;
+    if (exact) return withDeclaredSize(exact, declaredSizes.get(wid));
     let best = null, used = -1;
     for (const lay of Object.values(placeLayouts)) {
       const e = lay?.windows?.[wid];
       if (e && (lay.used || 0) > used) { best = e; used = lay.used || 0; }
     }
-    return best;
+    return withDeclaredSize(best, declaredSizes.get(wid));
   }
   // maximized / fullscreen go back on top of the restored normal rect
   function applyPlacementState(wid, saved, list, onto) {
@@ -3158,6 +3180,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
       // rememberWindows: a window opened without an explicit place goes back
       // where it last was (on this layout of screens, or the closest match)
       let restored = null;
+      declaredSizes.set(String(id), size ?? '600x400');
       if (rememberWindows && x == null && y == null && after == null && screensCache) {
         restored = savedPlacement(String(id), screensCache);
         const p = placementFor(screensCache, restored, null);
