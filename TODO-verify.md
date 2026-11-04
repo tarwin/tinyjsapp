@@ -5528,6 +5528,13 @@ built app that fetches (amp is the good canary: feeds and radio streams).
   tiny.fetch (TLS 1.2, root path, redirect chain, h2 manual redirect, header
   gate, POST, radio stream + cancel) in `tinyjs dev` and a built universal app.
   amp itself not run.
+**2026-11-04, bridge.js now sends `connection: close` on every fetch and check.js
+has keep-alive and parallel cases (TODO-txiki.md). The results below predate that;
+redo them on whichever txiki build is pinned next.** So far: macOS arm64, 26.11.0
+tag and master 4cf1ecc, check.js all ok with real hosts. ubuntu:22.04 arm64
+container: tag aborts (rc 134) on the h3 case; master passes except 3 hosts failing
+DNS on Docker Desktop's resolver. Windows not run. amp not run on any of these.
+
 - [ ] **Linux** — *(2026-11-04, ubuntu:22.04 arm64 container, headless)* built
   with `TJS_BUILD=1 CC=gcc-12 CXX=g++-12 ./setup.sh`: floor holds (GLIBC 2.35,
   GLIBCXX 3.4.29, CXXABI 1.3.9), no new libs NEEDED. check.js and update-fetch

@@ -24,7 +24,18 @@ https://tinyjs.app/changelog.
   now fails instead of falling back to `curl`. That includes certificates
   only the operating system trusts, such as a corporate TLS-inspecting proxy;
   point `SSL_CERT_FILE` at a CA bundle for those.
+- **Breaking, `tjs:ffi`: `Lib`, `CFunction` and `DlSymbol` are gone.** txiki
+  26.11.0 makes `dlopen()` the only way to bind a library, and importing a
+  removed name stops the backend at startup with a SyntaxError. Move to
+  `dlopen(path, { name: { args, returns } })` and call `symbols.name(x)`
+  directly; a leftover `.call(x)` passes `x` as `this` and loses the argument.
+  Keep the `dlopen()` result itself, not just its symbols. `dlopen` works on
+  26.6.0 too, so an app can move before it updates. An app you've already built
+  keeps working until you rebuild it.
 - **`fetch(new Request(...))`** now gets the same redirect rules as a URL.
+- **`fetch` opens one connection per request,** as it did before this update,
+  because the runtime's connection pool loses requests. An app that wants the
+  pool can send `Connection: keep-alive`.
 - **Known issue:** large HTTP/2 downloads from far-away servers are slower than
   before. A 20 MB feed from a host 200 ms away took about 40 s, up from about
   8 s. Nearby CDNs, including GitHub's, aren't affected.

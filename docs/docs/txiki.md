@@ -45,7 +45,7 @@ On Windows, use [`app.spawnHidden()`](./backend#app) rather than `tjs.spawn()` f
 | `tjs:path` | joining and splitting paths | [tjs:path](https://txikijs.org/docs/api/tjs-path) |
 | `tjs:hashing` | MD5, SHA-1, SHA-256 and other digests | [tjs:hashing](https://txikijs.org/docs/api/tjs-hashing) |
 | `tjs:uuid` | UUIDs | [tjs:uuid](https://txikijs.org/docs/api/tjs-uuid) |
-| `tjs:ffi` | calling C libraries directly | [tjs:ffi](https://txikijs.org/docs/api/tjs-ffi) |
+| `tjs:ffi` | calling C libraries directly, through `dlopen()` | [tjs:ffi](https://txikijs.org/docs/api/tjs-ffi) |
 | `tjs:wasi` | running WASI WebAssembly modules | [tjs:wasi](https://txikijs.org/docs/api/tjs-wasi) |
 | `tjs:posix-socket` | raw sockets | [tjs:posix-socket](https://txikijs.org/docs/api/tjs-posix-socket) |
 | `tjs:ipaddr` | parsing IP addresses | [tjs:ipaddr](https://txikijs.org/docs/api/tjs-ipaddr) |

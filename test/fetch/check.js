@@ -72,6 +72,49 @@ serve(a, () => b.localPort);
 serve(b, () => a.localPort);
 const A = `http://127.0.0.1:${a.localPort}`;
 
+// A server that keeps connections open, as nearly every real one does. The
+// listeners above all answer `connection: close`, which is what let the pooling
+// regressions in 26.11.0 through (TODO-txiki.md).
+const kaConns = { n: 0 };
+const kaSeen = [];
+const k = await (await tjs.listen('tcp', '127.0.0.1', 0)).opened;
+(async () => {
+  const accept = k.readable.getReader();
+  for (;;) {
+    const { value, done } = await accept.read();
+    if (done) break;
+    kaConns.n++;
+    (async (conn) => {
+      const { readable, writable } = await conn.opened;
+      const rd = readable.getReader(), wr = writable.getWriter();
+      let text = '';
+      for (;;) {
+        while (!text.includes('\r\n\r\n')) {
+          const { value: v, done: d } = await rd.read().catch(() => ({ done: true }));
+          if (d) return;
+          text += dec.decode(v);
+        }
+        const at = text.indexOf('\r\n\r\n');
+        const head = text.slice(0, at);
+        text = text.slice(at + 4);
+        const line = head.split('\r\n')[0], path = line.split(' ')[1];
+        kaSeen.push(head.toLowerCase());
+        const close = /\r\nconnection: *close/i.test(head);
+        const c = close ? 'connection: close\r\n' : 'connection: keep-alive\r\n';
+        if (path === '/moved') await wr.write(enc.encode(`HTTP/1.1 301 Moved\r\nlocation: /landed\r\ncontent-length: 5\r\n${c}\r\nmoved`));
+        else if (path === '/stream') {
+          await wr.write(enc.encode(`HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n${c}\r\n`));
+          const chunk = enc.encode(`1000\r\n${'x'.repeat(4096)}\r\n`);
+          try { for (;;) { await wr.write(chunk); await new Promise((r) => setTimeout(r, 20)); } } catch {}
+          return;
+        } else await wr.write(enc.encode(`HTTP/1.1 200 OK\r\ncontent-length: ${line.length}\r\n${c}\r\n${line}`));
+        if (close) { await wr.close().catch(() => {}); return; }
+      }
+    })(value).catch(() => {});
+  }
+})();
+const K = `http://127.0.0.1:${k.localPort}`;
+
 let failed = 0;
 const within = (p, ms) => Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error(`timed out after ${ms / 1000}s`)), ms))]);
 // fn returns null when fine, or what was wrong
@@ -132,6 +175,56 @@ await check('redirect: "error" rejects', () => rejects(() => fetch(A + '/same', 
 await check('redirect: "manual" returns the 3xx', async () => {
   const r = await fetch(A + '/same', { redirect: 'manual' });
   return expect(r.status, 302) || expect(r.headers.get('location'), '/landed');
+});
+
+console.log('\n-- keep-alive servers: one fetch must not break the next (bridge.js)');
+const landed = 'GET /landed HTTP/1.1';
+const openStream = async (signal) => {
+  const r = await fetch(K + '/stream', { signal });
+  const rd = r.body.getReader();
+  await rd.read();
+  return rd;
+};
+await check('a plain fetch leaves the pool', async () => {
+  await fetch(K + '/landed');
+  return kaSeen.at(-1).includes('connection: close') ? null : 'no connection: close on the wire';
+});
+await check('same-origin redirect', async () => expect(await (await fetch(K + '/moved')).text(), landed));
+await check('redirect: "manual", cancel the 3xx, then fetch', async () => {
+  const r = await fetch(K + '/moved', { redirect: 'manual' });
+  await r.body?.cancel();
+  return expect(await (await fetch(K + '/landed')).text(), landed);
+});
+await check('fetch straight after reader.cancel()', async () => {
+  await (await openStream()).cancel();
+  return expect(await (await fetch(K + '/landed')).text(), landed);
+});
+await check('fetch straight after abort()', async () => {
+  const ac = new AbortController();
+  await openStream(ac.signal);
+  ac.abort();
+  return expect(await (await fetch(K + '/landed')).text(), landed);
+});
+await check('fetch while a stream to that origin is open', async () => {
+  const ac = new AbortController();
+  await openStream(ac.signal);
+  try { return expect(await within(fetch(K + '/landed').then((r) => r.text()), 4000), landed); } finally { ac.abort(); }
+});
+await check('two streams from one origin at once', async () => {
+  const ac = new AbortController();
+  try { await openStream(ac.signal); await within(openStream(ac.signal), 4000); return null; } finally { ac.abort(); }
+});
+await check('8 fetches at once', async () => {
+  const got = await Promise.all(Array.from({ length: 8 }, (_, i) => fetch(`${K}/p${i}`).then((r) => r.text())));
+  return got.every((t, i) => t === `GET /p${i} HTTP/1.1`) ? null : JSON.stringify(got);
+});
+await check('asking for keep-alive still reuses a connection', async () => {
+  await new Promise((r) => setTimeout(r, 100));
+  const headers = { connection: 'keep-alive' };
+  await (await fetch(K + '/warm', { headers })).text();
+  const before = kaConns.n;
+  await (await fetch(K + '/warm', { headers })).text();
+  return expect(kaConns.n, before);
 });
 
 console.log('\n-- bodies and streams');
@@ -201,6 +294,14 @@ await check('non-ASCII script path and argument', async () => {
 
 if (!offline) {
   console.log('\n-- real hosts: [status, bytes, final url]');
+  // This has to be the first real hostname the process looks up. Master after
+  // 26.11.0 failed it on a Mac with a link-local resolver (TODO-txiki.md), and
+  // everything else here runs too soon after startup to notice.
+  await check('first lookup 5 s after the first fetch', async () => {
+    await new Promise((r) => setTimeout(r, 5000));
+    await (await fetch('https://github.com/robots.txt')).arrayBuffer();
+    return null;
+  }, 20000);
   // root path on S3/CloudFront, TLS 1.2 ceiling, redirect chains into both,
   // and #1165's Windows connect and h2 cases (literal IP, anchor.fm's 302 over
   // h2, repeated fetches to a front end that PINGs).
@@ -237,6 +338,19 @@ if (!offline) {
     }
     return null;
   }, 40000);
+  // Each crashed or lost requests when pooled on 26.11.0: google.com aborted the
+  // process on Linux once it had learned the origin's h3, and simplecast lost 2
+  // of 4 (and took amp down with it).
+  await check('4 at once to an h2 + h3 host, 3 rounds', async () => {
+    for (let i = 0; i < 3; i++) {
+      await Promise.all(Array.from({ length: 4 }, () => fetch('https://www.google.com/').then((r) => r.arrayBuffer())));
+    }
+    return null;
+  }, 40000);
+  await check('4 at once to simplecast (20 MB each)', async () => {
+    await Promise.all(Array.from({ length: 4 }, () => fetch('https://feeds.simplecast.com/54nAGcIl').then((r) => r.arrayBuffer())));
+    return null;
+  }, 180000);
 }
 
 console.log('\n-- upstream: what native fetch still gets wrong (report only)');

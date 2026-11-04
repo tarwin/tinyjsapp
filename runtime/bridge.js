@@ -99,6 +99,16 @@ const dropHeaders = (H, names) => {
   for (const n of names) out.delete(n);
   return out;
 };
+// Every fetch gets its own connection, as it did before txiki 26.11.0 pooled
+// them. On 26.11.0's pool (measured, TODO-txiki.md): an open stream blocks every
+// other fetch to its origin, a fetch right after a cancel rejects, and parallel
+// fetches to one h2 host lose requests. A caller who sends any other Connection
+// value opts back in, since txiki drops that header and lets the pool decide.
+const ownConnection = (H) => {
+  const out = new Headers(H ?? undefined);
+  if (!out.has('connection')) out.set('connection', 'close');
+  return out;
+};
 
 if (nativeFetch) globalThis.fetch = async function fetchFollowingSafely(input, init = {}) {
   // A Request is taken apart so it gets the same redirect rules. Native fetch
@@ -119,7 +129,7 @@ if (nativeFetch) globalThis.fetch = async function fetchFollowingSafely(input, i
   let url = url0;
   let method = (init.method || 'GET').toUpperCase();
   let body = init.body;
-  let headers = init.headers;
+  let headers = ownConnection(init.headers);
   for (let hop = 0; ; hop++) {
     const res = await nativeFetch(url, { ...init, headers, method, body, redirect: 'manual' });
     const loc = REDIRECT_CODES.has(res.status) ? res.headers.get('location') : null;
