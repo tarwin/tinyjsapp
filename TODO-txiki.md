@@ -35,10 +35,22 @@ follows redirects itself, because native fetch doesn't apply the rules:
   connection-level window (http2.c, `do_windows`, `m = n + 65536`) probably has
   to move with it. No JS-level way to pick h1: `vinfo.alpn` is compiled in.
 
-Smaller cleanup left: `http://localhost` now reaches a `::1`-only server
-(measured on macOS, 26.6.0 got ECONNREFUSED), so once that's seen on Windows and
-Linux, cli.js can drop its second readiness probe and the scaffold's
-`--host 127.0.0.1`.
+- **A streaming response blocks its whole origin on an HTTP/1.1 keep-alive
+  server (new in 26.11.0).** Measured on Windows only (x64 tjs, emulated on
+  arm64), against a raw local listener sending chunked keep-alive. While one
+  fetch's endless body is being read, another fetch to that origin hangs (6 s
+  limit hit, the stream keeps flowing). If the body is never read, every later
+  fetch hangs. `abort()` or `reader.cancel()` frees it. 26.6.0 opened a new
+  connection each time and passes all of this. Finite bodies left unread are
+  fine; a slow finite download wasn't tried, nor h2 or `Connection: close`
+  servers locally (SomaFM, which sends `Close`, isn't affected). Looks like the
+  new connection pooling queueing on the one connection, not proven. Real host:
+  `http://icecast.radiofrance.fr/fipjazz-hifi.aac` with the body left unread.
+
+Smaller cleanup left: `http://localhost` now reaches a `::1`-only server on
+macOS (26.6.0 got ECONNREFUSED) but NOT on Windows ("conn fail: wsaerrno 0",
+measured 2026-11-04; `http://[::1]:port` works). Linux not seen. cli.js keeps
+its second readiness probe and the scaffold its `--host 127.0.0.1`.
 
 ## What the curl fallback used to do besides A and B
 

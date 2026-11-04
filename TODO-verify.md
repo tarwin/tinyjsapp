@@ -32,6 +32,12 @@ until the window's first `show()` (applying it would show the window).
   After the fix both runs PASS; kid paints (#f66 sampled), its owner is
   main; run 2 opened hidden at 300,200 and maximized on show. Not seen:
   backend `app.window(id).show()` (same WINOP, untested) and dragging.
+  *Seen 2026-11-04 (same VM, tjs 26.11.0):* backend show() shows it and the
+  page reports `visible`; real mouse drags by the title bar and a
+  `data-tiny-drag` strip land exactly and kid stays painted; dragging main
+  leaves kid in place and above main; both test runs still PASS. Noticed: after
+  a later `hide()` the page still says `visibilityState: 'visible'` (only the
+  never-shown case reports hidden).
 - [x] **Linux** — *(2026-11-01, Ubuntu 24.04 arm64, GNOME 46, WebKitGTK
   2.52.6; test/win-open-hidden both runs, X11 via GDK_BACKEND=x11 and native
   Wayland, kid's map state + geometry polled from outside with xwininfo
@@ -5495,6 +5501,17 @@ source pointers: issue #96. Self-driving page: `test/media-dev/`.
   its first `getUserMedia` popped the TCC mic dialog (answered by hand),
   then reached `granted: MacBook Air Microphone`.
 
+## `rememberWindows` + declared size (#106, 0.70.3)
+
+- [x] **Windows** — *(2026-11-04, Windows 11 arm64 VM, 200%, dev run, read back
+  via getState)* changed `size`: main and a win.open window take the new size at
+  their saved position; a size set by setSize comes back while the declared size
+  is unchanged; a placement with no `declared` resets its size once and keeps its
+  position. **Separate, older (since #70), shared code so probably every OS:** a
+  `win.open` called straight away in `init` skips the saved placement altogether,
+  because `screensCache` is still null (bridge.js, `win.open`). Opened 800 ms
+  later it restores fine.
+
 ## txiki.js 26.11.0 + no more curl in fetch (`txiki-26.11.0`, 2026-11-04)
 
 Pin bumped from v26.6.0. The curl half of bridge.js's fetch wrapper is gone;
@@ -5521,6 +5538,37 @@ built app that fetches (amp is the good canary: feeds and radio streams).
   non-ASCII script paths and arguments (#1164; try it from a path like
   `C:\中文\`, and a built app given a non-ASCII file), no curl.exe in the task
   list during a fetch, stdin writes.
+  *2026-11-04, Windows 11 arm64 VM, so the x64 `tjs.exe` ran EMULATED; not seen
+  on x64 hardware.* Seen working: check.js all ok, real hosts included (#1165's
+  connects, 6 in a row, stdin writes, non-ASCII script path and argument); no
+  curl.exe during check.js, a dev + built app, or amp. Page-level tiny.fetch in
+  dev and built (TLS 1.2, root path, redirect chain, h2 manual redirect, header
+  gate, POST bodies, stream + cancel), from a Cyrillic/CJK/emoji project folder,
+  built app given a non-ASCII file. tinyjs itself installed under such a folder
+  runs `--version` and `dev` (26.6.0 ENOENTs there). SSL_CERT_FILE honoured.
+  Built amp copy, its own RPCs called from inside the exe (no CDP in built apps):
+  8/8 feeds, resolveStream, 2/3 streams. The third (FIP) is the instant-refetch
+  failure below. Suite: pass or skip, except:
+  - **OPEN, regression — keeps this box unticked:** on an HTTP/1.1 keep-alive
+    origin an in-flight streaming response blocks every other fetch to that
+    origin until it's cancelled or aborted, and an unread endless body blocks
+    them for good. Local repro, 26.6.0 fine, 26.11.0 hangs, details in
+    TODO-txiki.md. Not yet run on macOS/Linux.
+  - FIP (nginx, chunked keep-alive): a fetch right after cancel/abort fails at
+    once. 26.6.0 fails too ("HS: URI missing"), so not a regression.
+  - update-fetch fails as written, on 26.6.0 too: `inst + '/cli.js'` is a mixed
+    path, and tjs can't resolve relative imports from one (`bin\tjs.exe run
+    test/x/check.js` hits the same thing; use backslashes). A scratch copy with
+    backslash paths passes all six, tarpit 30.7 s.
+  - capabilities needs TINY_JS set (`here` is a /C:/ path), then all ok.
+    linux-mime ends in ENOENT on `rm` once PATH has no Git Bash; no FAIL lines.
+    Neither is new.
+  - resources crashes in `publish`: bsdtar on `данные` (known, entry above).
+    Passes with that fixture renamed `données`.
+  - `http://localhost` still can't reach a ::1-only server here ("conn fail:
+    wsaerrno 0", `[::1]` works), so cli.js's second probe and the scaffold's
+    `--host 127.0.0.1` stay.
+  Not run: a real ears-on radio play in amp; the #67 reporter's network.
 - [ ] **Windows arm64** — never run. CI's source build: the WAMR patches
   `git apply --check` clean on 26.11.0's deps/wamr (same pin as 26.6.0), but
   neither the MSVC build nor the wasm test step has run. New since 26.6.0: the
