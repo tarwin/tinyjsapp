@@ -5533,7 +5533,8 @@ has keep-alive and parallel cases (TODO-txiki.md). The results below predate tha
 redo them on whichever txiki build is pinned next.** So far: macOS arm64, 26.11.0
 tag and master 4cf1ecc, check.js all ok with real hosts. ubuntu:22.04 arm64
 container: tag aborts (rc 134) on the h3 case; master passes except 3 hosts failing
-DNS on Docker Desktop's resolver. Windows not run. amp not run on any of these.
+DNS on Docker Desktop's resolver. Windows: 26.11.0 tag only, under Windows x86_64
+below. amp not run on the others. Master not run on Windows.
 
 - [ ] **Linux** — *(2026-11-04, ubuntu:22.04 arm64 container, headless)* built
   with `TJS_BUILD=1 CC=gcc-12 CXX=g++-12 ./setup.sh`: floor holds (GLIBC 2.35,
@@ -5626,6 +5627,22 @@ DNS on Docker Desktop's resolver. Windows not run. amp not run on any of these.
     wsaerrno 0", `[::1]` works), so cli.js's second probe and the scaffold's
     `--host 127.0.0.1` stay.
   Not run: a real ears-on radio play in amp; the #67 reporter's network.
+
+  **Rerun on ca71c32 (`connection: close`), 2026-11-04, same VM, 26.11.0 tag, x64
+  emulated. Replaces the OPEN regression and FIP bullets above for fetches through
+  bridge.js; native pooled fetch wasn't re-measured.** check.js all ok, including the
+  new keep-alive and parallel cases, 3 rounds of 4 to google.com and 4 at once to
+  simplecast: the Linux abort didn't show. Page-level tiny.fetch dev and built from
+  a non-ASCII folder: all ok but `tiny.proxyURL` (documented macOS/Linux only), 0
+  curl.exe. Built amp 0.15.1 (examples `origin/main` 6dc2423): 8/8 feeds, 3/3
+  streams including FIP, `.pls`, 0 curl.exe.
+  `tjs:ffi`, built and launched, examples 6dc2423: matcha, boo, coo3d, kraa, kraa3d,
+  treez and kitchen-sink all exit 1 with no backend; the import alone gives
+  "SyntaxError: Could not find export 'Lib'". Examples `origin/ffi-dlopen` 098328f
+  (not merged): all 7 backends run. matcha's SetThreadExecutionState through dlopen
+  returned 0x80000000 then 0x80000001, so its call landed with the high bit intact.
+  Only startup was checked for the other six, not their FFI behaviour.
+  The rest of the suite and update-fetch weren't rerun (cli.js doesn't load bridge.js).
 - [ ] **Windows arm64** — never run. CI's source build: the WAMR patches
   `git apply --check` clean on 26.11.0's deps/wamr (same pin as 26.6.0), but
   neither the MSVC build nor the wasm test step has run. New since 26.6.0: the
