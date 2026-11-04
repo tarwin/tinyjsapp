@@ -2581,7 +2581,12 @@ are the ones that assert from outside the page.
       and zlib round-trips (zlibVersion 1.3, compress→decompress true).
       x86_64 remains assumed-by-ABI, which is the direction the offsets were
       written for.
-- [ ] **kitchen-sink FFI, Windows** — **this entry described code that was
+- [x] **kitchen-sink FFI, Windows** — *2026-11-04: the Windows branch now exists and
+      works, seen from examples' unmerged `origin/ffi-dlopen` (backend API, not the
+      page; `tjs:ffi` section near the end of this file). `sysinfo`'s cpu is
+      `cpus[0].model` now, not hardcoded; "Apple Silicon × 4" is what this VM
+      reports. The rest of this entry is the history.*
+      **this entry described code that was
       never written.** Checked 2026-07-28: `kitchen-sink/src/main.js` has no
       Windows branch at all — `ffiLibs()` hardcodes
       `/usr/lib/libSystem.B.dylib` and `/usr/lib/libz.dylib`, and `kernel32`
@@ -5641,7 +5646,8 @@ below. amp not run on the others. Master not run on Windows.
   "SyntaxError: Could not find export 'Lib'". Examples `origin/ffi-dlopen` 098328f
   (not merged): all 7 backends run. matcha's SetThreadExecutionState through dlopen
   returned 0x80000000 then 0x80000001, so its call landed with the high bit intact.
-  Only startup was checked for the other six, not their FFI behaviour.
+  Only startup was checked for the other six here; FFI itself has its own section
+  below.
   The rest of the suite and update-fetch weren't rerun (cli.js doesn't load bridge.js).
 - [ ] **Windows arm64** — never run. CI's source build: the WAMR patches
   `git apply --check` clean on 26.11.0's deps/wamr (same pin as 26.6.0), but
@@ -5651,3 +5657,54 @@ below. amp not run on the others. Master not run on Windows.
 - [ ] **macOS x86_64** — *(2026-11-04, Rosetta only)* `check.js --offline`
   passes, and a `--universal` build run with `arch -x86_64` did every
   page-level tiny.fetch case. Not seen on a real Intel Mac.
+
+## `tjs:ffi` on txiki 26.11.0: `Lib`/`CFunction` gone, `dlopen()` only (2026-11-04)
+
+Examples' `origin/ffi-dlopen` (098328f, NOT merged) moves its 7 FFI apps over; on
+`main` they exit at startup on 26.11.0. On Windows:
+
+    bin\tjs.exe run C:\full\path\to\test\ffi\check.js
+
+- [x] **Windows, x64 tjs EMULATED on arm64** — *(2026-11-04, Windows 11 26200, the
+  Parallels VM, tjs 26.11.0)*
+  - test/ffi/check.js, all 33: ints, the uint32 high bit both ways, 64-bit ints,
+    float/double beside ints, UTF-8 strings, buffers, wide strings through buffers,
+    pointers and views (the exe's own MZ/PE header), bool_u32, structs by pointer,
+    struct returns by value at 8 and 16 bytes (`StructType` and `defineStruct`),
+    POINT passed by value, Pointer/PointerType, JSCallback (EnumWindows, 26k qsort
+    calls, a throw inside one), variadic doubles, `name`, data symbols, `'c'`/`'m'`,
+    `dlopenCProto`, catchable load errors, `optional`, `close`/`using`, a kept
+    result through GC and a timer, spread and detached symbols, a non-ASCII DLL
+    path, and a soak (working set 27.0 MB before and after).
+  - matcha, built, its own functions: api.activate/deactivate, tray left click,
+    `allowDisplaySleep` both ways, a timed session ending by its own timer, after
+    GC. CallNtPowerInformation from ANOTHER process saw ES_SYSTEM_REQUIRED come
+    and go at every step, and go when the process was killed. This VM holds
+    ES_DISPLAY_REQUIRED already (baseline 0x2), so that bit can't be read from
+    outside; the check.js case reads it back from SetThreadExecutionState's return
+    value (0x80000003, 0x80000001, 0x80000000), on matcha's expression but not in
+    the app. Not done: a real tray click with the mouse, or an actual idle-sleep wait.
+  - kitchen-sink, built: `ffiInfo` RAM, uptime and pid agree with the same calls
+    made from Python; `ffiSysctl` and `zlibRoundtrip` throw their explanations;
+    `sysinfo` says ram n/a. Backend API only; its page wasn't opened.
+  - boo, coo3d, kraa, kraa3d, treez: start, and only `dlopen` in their macOS branch,
+    so Windows runs no FFI in them.
+  - The same dlopen, StructType, string, buffer and STES shapes also pass on 26.6.0.
+
+  Limits seen, none used by an app. `errno()` reads 0 after a CRT call fails, here
+  and on 26.6.0: it doesn't see a DLL's C runtime, so read `_errno()` from that DLL
+  or use GetLastError. `dlopenCProto` throws on a `(void)` parameter list ("Unknown
+  type") and on calling a struct returned by value; this parser is JS, so probably
+  not Windows-only, but that's unchecked. A u64 past 2^53 comes back as a rounded
+  number and BigInt args are refused, as tjs.d.ts says, while a `defineStruct` u64
+  field unpacks to a BigInt.
+- [ ] **Windows arm64, native tjs** — not run. Different FFI ABI (libffi on Windows
+  arm64), and its tjs only comes from CI, so x64 emulation says nothing about it.
+  Needs a `release-test/*` build, then test/ffi/check.js and matcha on it.
+- [ ] **Windows x64 hardware** — not run. test/ffi/check.js and matcha.
+- [ ] **macOS** — not run from here. The apps' real calls live here: CGEventCreate,
+  CGEventGetLocation (a struct of two doubles by value, which Windows can't stand in
+  for), CFRelease; kitchen-sink's sysctlbyname and zlib. Note `.call(x)` left behind
+  anywhere would pass `x` as `this` and lose the argument.
+- [ ] **Linux** — not run from here. kitchen-sink's `...libc.symbols`, sysinfo,
+  gethostname, optional libz.so.1, plus the apps starting.
