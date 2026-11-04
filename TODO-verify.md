@@ -5533,6 +5533,56 @@ built app that fetches (amp is the good canary: feeds and radio streams).
   GLIBCXX 3.4.29, CXXABI 1.3.9), no new libs NEEDED. check.js and update-fetch
   pass there. Not yet seen on a desktop: a built app, tiny.fetch from a page,
   amp's feeds. x86_64 only by CI.
+
+  **Desktop pass, 2026-11-04, NOT ticked: regressions.** Ubuntu 24.04 arm64
+  (Parallels), binaries built as CI does in ubuntu:22.04, arm64 and x86_64; old
+  = `main` + 26.6.0. Passing: floor, arch and linked features on both arches;
+  check.js and update-fetch on arm64 and in an x86_64 container (Rosetta); the
+  rest of the suite on arm64 (signed-updates' packaged-app case skips off
+  macOS); page-level tiny.fetch in `tinyjs dev` and a built app (TLS 1.2, root
+  path, redirect chain, h2 manual redirect, header gate, POST, radio stream +
+  cancel, 0 curl calls); `SSL_CERT_FILE` with a private CA, on TLS 1.2 and 1.3;
+  all 60 of amp's picked feeds when fetched one at a time.
+
+  Failing on 26.11.0, fine on old. check.js misses all of these: its listeners
+  send `connection: close` and it never fetches in parallel.
+  - **Same-origin redirect on a keep-alive connection fails**, every time.
+    bridge.js cancels the 3xx body and refetches, which hits the next bug.
+    Native follow works. Real: `https://stream.gensokyoradio.net/3` (301 to
+    `/3/`), `https://www.prun.net/stream`; amp's now-playing for gensokyo is null.
+  - **A fetch right after abort() or reader.cancel() rejects** on that origin
+    ("Network request failed"), as does one already in flight. 1 to 5 ms later
+    it's fine. Native fetch too, so not bridge.js.
+  - **While an HTTP/1.1 stream is open, another fetch to that origin never
+    answers.** Local fixture over http and https, and a second stream on
+    icecast.radiofrance.fr. A second stream on ice1.somafm.com was fine
+    (protocol not checked). Sending `connection: close` on the stream avoids it
+    (fixture only).
+  - **Parallel fetches to one h2 host fail or kill the process.** simplecast:
+    2 of 4 and 2 of 8 succeed. `www.google.com`, three rounds of 4 on bare tjs:
+    SIGABRT, 5 of 5, in `uv.epoll_ctl_flush` under `uv_run`; a single round of
+    4 tiny.fetch in a built app returned four 200s, so it may take a later
+    round. amp exits on 4 parallel `podFetchFeed` to simplecast (2 of 2).
+    cloudflare, raw.githubusercontent, itunes and art19 pass.
+  - **`tjs:ffi` dropped `Lib`, `CFunction` and `DlSymbol`**, so a static import
+    is a SyntaxError at startup. matcha exits 1 in dev and built. boo, coo3d,
+    kitchen-sink, kraa, kraa3d and treez import the same names. Not in
+    CHANGELOG. Not Linux-specific: it's the module's export list.
+
+  Hosts the curl fallback was rescuing: 5 of amp's 415 stations (`wmse.streamguys1.com`,
+  `s2.voscast.com`, 2 on `mediaserv38.live-streams.nl`, `server.laradio.online`)
+  fail "certificate validity has expired". curl accepts them and OpenSSL
+  verified wmse's chain; `SSL_CERT_FILE` with the system bundle doesn't help.
+  Cause not found. No real station in the sweep failed on an `ICY 200 OK` status
+  line, though a fixture sending one is rejected ("HS: URI missing").
+
+  `http://localhost` reaches a `::1`-only server when /etc/hosts maps localhost
+  to ::1 (22.04 container). Stock Ubuntu maps it to 127.0.0.1 only, so there it's
+  refused.
+  Not from this branch: `tiny.fetch` with a `URLSearchParams` body goes out as
+  `text/plain` (tiny.js stringifies it), and amp's `tiny.proxyURL` radio check
+  got media error 4 on old and new alike.
+  Still not run: amp's own UI by hand, a real x86_64 desktop.
 - [ ] **Windows x86_64** — never run. New `tjs.exe` hash is pinned from the
   release zip. Watch: #1165's connects (`http://151.101.2.133/`, 6 in a row),
   non-ASCII script paths and arguments (#1164; try it from a path like
