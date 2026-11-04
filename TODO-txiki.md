@@ -27,7 +27,8 @@ New on master, report upstream:
   records for `feed.proxypodcast.com`, `feed.articlesofinterest.club` and
   `rss.pdrl.fm` past 512 bytes. Deleting the `asked = 0` line in a scratch build
   made all three resolve; putting it back made them fail. Any resolver that sets TC
-  on AAAA after answering A should hit this. Not tried on systemd-resolved.
+  on AAAA after answering A should hit this. Those three hosts resolve fine through
+  systemd-resolved (Ubuntu 24.04 VM, 2026-11-04), whether or not it sets TC there.
 - **A first lookup 3 s or more after the first fetch fails on macOS with a link-local
   resolver (send path proven, trigger timing not).** Not about streams, as first
   thought: a finished fetch to 127.0.0.1, a wait, then any new hostname: 0, 0.5 and
@@ -69,6 +70,12 @@ stream blocks its origin and a cold round of parallel fetches to simplecast lose
 2 of 4. A caller who sends another `Connection` value gets the pool. Take it out
 once those two pass pooled in check.js. cli.js doesn't load bridge.js, but only
 fetches one at a time.
+
+**Master with `connection: close` loses about 1 in 5 fetches to
+`feeds.megaphone.fm`** (Linux arm64, 2026-11-04): "Network request failed" in under
+150 ms, 24/30 serial, gaps don't help. The tag with `connection: close`, master with
+`keep-alive` and 26.6.0 all get 30/30. Cause not found, not tried on macOS or Windows,
+and check.js doesn't cover it. Check this before pinning master.
 
 **RSA-only servers can't connect, and it won't change by itself.** Five of amp's
 stations (`wmse.streamguys1.com`, `s2.voscast.com`, `server.laradio.online`, 2 on

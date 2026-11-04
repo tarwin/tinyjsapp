@@ -5596,6 +5596,34 @@ below. amp not run on the others. Master not run on Windows.
   `text/plain` (tiny.js stringifies it), and amp's `tiny.proxyURL` radio check
   got media error 4 on old and new alike.
   Still not run: amp's own UI by hand, a real x86_64 desktop.
+
+  **Rerun on ca71c32 (`connection: close`), 2026-11-04, same VM, arm64, resolver
+  systemd-resolved (127.0.0.53). Replaces the fetch failures above for fetches
+  through bridge.js. Stays unticked: the tag aborts, master fails megaphone.**
+  - **26.11.0 tag:** check.js aborts (rc 134) at the h3 case, after 47 ok. Repeated
+    rounds of parallel fetches to google.com and simplecast abort, 4 of 4. Before
+    that, the keep-alive, redirect, abort and open-stream cases all pass. Page tests
+    and amp not rerun on it.
+  - **Master 4cf1ecce** (built in ubuntu:22.04 with gcc-12, loads there; floor holds
+    but now sits AT the ceiling: GLIBC 2.35, GLIBCXX 3.4.30, CXXABI 1.3.13): check.js
+    all ok including h3, the 5 s first lookup and 20 MB × 4 to simplecast;
+    update-fetch and the rest of the suite pass (dialogs needs a short cwd, below).
+    Page-level tiny.fetch same in dev and built, 0 curl calls. amp's handlers through
+    its real backend: 7/7 feeds, 4 parallel `podFetchFeed` return, gensokyo's
+    now-playing is back. 8 × 3 rounds to google, simplecast, cloudflare: all ok.
+    The three truncated-DNS hosts resolve in 0.6 to 1.6 s on this resolver.
+    Sweep of amp's lists: radio 393/415 (curl 397; the gap is the 5 RSA-only hosts
+    in TODO-txiki.md, and radiorakel timing out once), feeds 55/60.
+  - **OPEN, master only, not in check.js: `feeds.megaphone.fm` fails about 1 fetch
+    in 5** ("Network request failed", under 150 ms), serial too: 24/30, with 300 ms
+    gaps 12/15, 1.5 s gaps 6/8. It's the 5 feeds missing from that sweep; amp picks
+    10 from this host. `connection: keep-alive` on master 30/30, tag with
+    `connection: close` 30/30, 26.6.0 30/30. The host advertises h3, but that's not
+    shown to be the cause: google and cloudflare do too and pass 30/30.
+  - `test/dialogs/check.js` EADDRINUSE was the rig: its socket under `tjs.cwd` passes
+    108 bytes, and a long enough cwd truncates onto `.tmp` itself. Passes 3/3 from a
+    short cwd. Run the suite from a short path.
+  Not run: x86_64 of master, amp's UI by hand, Wayland vs X11 differences.
 - [ ] **Windows x86_64** — never run. New `tjs.exe` hash is pinned from the
   release zip. Watch: #1165's connects (`http://151.101.2.133/`, 6 in a row),
   non-ASCII script paths and arguments (#1164; try it from a path like
@@ -5706,5 +5734,12 @@ Examples' `origin/ffi-dlopen` (098328f, NOT merged) moves its 7 FFI apps over; o
   CGEventGetLocation (a struct of two doubles by value, which Windows can't stand in
   for), CFRelease; kitchen-sink's sysctlbyname and zlib. Note `.call(x)` left behind
   anywhere would pass `x` as `this` and lose the argument.
-- [ ] **Linux** — not run from here. kitchen-sink's `...libc.symbols`, sysinfo,
-  gethostname, optional libz.so.1, plus the apps starting.
+- [x] **Linux arm64** — *(2026-11-04, Ubuntu 24.04 desktop, examples
+  `origin/ffi-dlopen` 098328f, tjs 26.11.0 tag and master 4cf1ecce, same results)*
+  All 7 apps build, and their built backends are still up after 7 s with no errors
+  logged; windows weren't looked at. kitchen-sink's `...libc.symbols`, through its
+  backend API: gethostname, sysinfo uptime and RAM agree with `hostname` and /proc,
+  getpid matches tjs.pid, libz.so.1 round-trips, ffiSysctl throws its explanation.
+  `test/ffi/check.js` skips here (Windows only), so the feature matrix didn't run.
+  A leftover `.call(x)` throws `RangeError: expected 1 arguments but got 0` on a
+  one-argument symbol (`abs.call(-5)`) rather than quietly losing it. x86_64 not run.
