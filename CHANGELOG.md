@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.71.0 — 2026-11-06
 
 - **Runtime: txiki.js 26.11.0.** The update brings HTTP/2 and HTTP/3 to
   `fetch`, connection pooling, and `MessageChannel`, `BroadcastChannel` and
