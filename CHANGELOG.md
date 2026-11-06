@@ -4,6 +4,29 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.71.1 — 2026-11-06
+
+- **Windows: built apps do nothing when double-clicked.** We're sorry about
+  this one. Every Windows app built with tinyjs 0.71.0 fails to open from
+  Explorer: no window, no error message, and no process left running. Opening
+  an app is the most basic thing tinyjs has to get right, and we should have
+  caught this before releasing it.
+
+  **What went wrong:** a built Windows app is a GUI program, so a double-click
+  starts it with no standard input, output or error handles. On txiki.js
+  26.11.0, which arrived in 0.71.0, `tjs.spawn` throws an `UNKNOWN` error in
+  that situation if stdin, stdout and stderr are all inherited. tinyjs started
+  its launcher exactly that way, so the backend exited before any window existed,
+  with no console to show why. `tinyjs dev` gives the app those handles, so
+  everything looked fine there. tinyjs now sets the launcher's stdin to `ignore`.
+
+  **What you need to do:** update tinyjs, then rebuild and reship any Windows app
+  you built with 0.71.0. Those apps can't update themselves, because they exit
+  before their updater can run, so people who have one need to download the new
+  version by hand. If your own backend starts a process with all three streams
+  inherited, including a bare `tjs.spawn(cmd)`, it hits the same error in a
+  double-clicked build: set at least one of them to `ignore` or `pipe`.
+
 ## 0.71.0 — 2026-11-06
 
 - **Runtime: txiki.js 26.11.0.** The update brings HTTP/2 and HTTP/3 to
