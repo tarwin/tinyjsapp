@@ -295,7 +295,8 @@ jobs:
           # image changing. Without this bump a 22.04 run restores the tjs built
           # on 24.04 and ships the exact binary this move exists to replace —
           # green build, same broken download. Bump on every toolchain change.
-          key: tjs-${{ env.TJS_VERSION }}-linux-${{ matrix.arch }}-v2
+          # v3: setup.sh builds with HTTP/3 off, which the key can't notice either.
+          key: tjs-${{ env.TJS_VERSION }}-linux-${{ matrix.arch }}-v3
 
       - name: Build (setup.sh — build tjs from source if uncached, compile launcher)
         # CC/CXX reach cmake's first configure for the tjs build (see the

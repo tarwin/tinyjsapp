@@ -49,6 +49,15 @@ function serve(info, other) {
     else if (path === '/p308') await to('308 Permanent Redirect', '/landed');
     else if (path === '/tofile') await to('302 Found', 'file:///etc/passwd');
     else if (path === '/loop') await to('302 Found', '/loop');
+    // Native fetch sends `pragma:` and curl doesn't, so this closes on the
+    // runtime's attempt and answers curl's.
+    else if (path.startsWith('/nativedrop') && /\r\npragma:/i.test(head)) { /* close below */ }
+    else if (path === '/nativedrop/redirect') await to('302 Found', '/landed');
+    else if (path === '/nativedrop/404') await reply('404 Not Found', '', 'nope');
+    else if (path === '/nativedrop/stream') {
+      await wr.write(enc.encode('HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\nconnection: close\r\n\r\nfirst'));
+      try { for (;;) { await wr.write(new Uint8Array(4096)); await new Promise((r) => setTimeout(r, 20)); } } catch {}
+    } else if (path === '/dropall') { /* close below */ }
     else if (path === '/stream') {
       await wr.write(enc.encode('HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\nconnection: close\r\n\r\n'));
       try { for (;;) { await wr.write(new Uint8Array(4096)); await new Promise((r) => setTimeout(r, 20)); } } catch {}
@@ -292,6 +301,68 @@ await check('non-ASCII script path and argument', async () => {
   return expect(out.trim(), JSON.stringify(name)) && `${out.trim()} ${err.trim()}`;
 });
 
+console.log('\n-- curl fallback: only when no response existed, and only GET and HEAD');
+const countOf = (path) => seen.filter((r) => r.line.split(' ')[1] === path).length;
+await check('GET the runtime fails is answered by curl, headers kept', async () => {
+  const r = await fetch(A + '/nativedrop/ok', { headers: { 'x-keep': '1' } });
+  const text = await r.text();
+  return expect(r.status, 200) || expect(text, 'GET /nativedrop/ok HTTP/1.1|0')
+    || expect(r.url, A + '/nativedrop/ok')
+    || (last().head.includes('x-keep: 1') ? null : 'lost its header')
+    || (last().head.includes('pragma:') ? 'the last attempt was not curl' : null);
+});
+await check('HEAD falls back too', async () => {
+  const r = await fetch(A + '/nativedrop/ok', { method: 'HEAD' });
+  return expect(r.status, 200) || expect(last().line, 'HEAD /nativedrop/ok HTTP/1.1');
+});
+await check('an HTTP error through curl stays an error', async () => {
+  const r = await fetch(A + '/nativedrop/404');
+  return expect(r.status, 404) || expect(await r.text(), 'nope');
+});
+await check('a redirect through curl follows the same rules', async () => {
+  const r = await fetch(A + '/nativedrop/redirect');
+  return expect(last().line.split(' ')[1], '/landed') || expect(r.status, 200) || expect(r.redirected, true);
+});
+await check('a stream through curl stays live and cancels', async () => {
+  const r = await fetch(A + '/nativedrop/stream');
+  const rd = r.body.getReader();
+  const { value } = await rd.read();
+  await rd.cancel();
+  return value?.length ? null : 'no first chunk';
+});
+await check('POST is not sent a second time', async () => {
+  const before = countOf('/dropall');
+  const err = await fetch(A + '/dropall', { method: 'POST', body: 'x' }).then(() => null, (e) => e);
+  return (err ? null : 'it resolved') || expect(countOf('/dropall') - before, 1);
+});
+await check('an abort is not retried', async () => {
+  const before = countOf('/hold');
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 200);
+  const err = await fetch(A + '/hold', { signal: ac.signal }).then(() => null, (e) => e);
+  return (err ? null : 'it resolved') || expect(countOf('/hold') - before, 1);
+});
+await check('both failing reports the runtime\'s error, not curl\'s', async () => {
+  const before = countOf('/dropall');
+  const err = await fetch(A + '/dropall').then(() => null, (e) => e);
+  if (!err) return 'it resolved';
+  return expect(countOf('/dropall') - before, 2) || (/curl/.test(err.message) ? err.message : null);
+});
+await check('no curl on PATH: the runtime\'s error, nothing else breaks', async () => {
+  const bridge = new URL('../../runtime/bridge.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  await tjs.writeFile(dir + '/nc.js', enc.encode(`await import(${JSON.stringify(bridge)});
+const e = await fetch('${A}/nativedrop/ok').then(() => null, (x) => x);
+console.log(e ? 'rejected' : 'resolved');
+tjs.exit(0);
+`));
+  const p = tjs.spawn([tjs.exePath, 'run', dir + '/nc.js'], {
+    env: { ...tjs.env, PATH: dir, Path: dir }, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
+  });
+  const [out] = await Promise.all([readAll(p.stdout), readAll(p.stderr)]);
+  await p.wait();
+  return expect(out.trim(), 'rejected');
+}, 15000);
+
 if (!offline) {
   console.log('\n-- real hosts: [status, bytes, final url]');
   // This has to be the first real hostname the process looks up. Master after
@@ -338,6 +409,12 @@ if (!offline) {
     }
     return null;
   }, 40000);
+  // TLS_RSA_* only, which txiki's mbedtls_config.h compiles out: curl is the only
+  // way in. A radio station, so a miss may just mean it's down (TODO-txiki.md).
+  await check('an RSA-only server, through curl', async () => {
+    const r = await fetch('https://wmse.streamguys1.com/', { method: 'HEAD' });
+    return r.status > 0 ? null : 'no status';
+  }, 45000);
   // Each crashed or lost requests when pooled on 26.11.0: google.com aborted the
   // process on Linux once it had learned the origin's h3, and simplecast lost 2
   // of 4 (and took amp down with it).
@@ -364,8 +441,6 @@ const crash = await native(`await fetch(A + '/tofile').catch(() => {});`);
 console.log(`upstream: redirect to file:// ${crash.code ? 'still kills the process' : 'fixed'}`);
 await native(`await fetch(A + '/cross', { headers: { authorization: 'x' } });`);
 console.log(`upstream: Authorization across origins ${last().head.includes('authorization:') ? 'still forwarded' : 'fixed'}`);
-await native(`await fetch(new Request(A + '/up', { method: 'POST', body: 'abc' }));`);
-console.log(`upstream: Request body ${last().body === 'abc' ? 'fixed' : 'still mangled (the text "[object Blob]", no content-length)'}`);
 
 await tjs.remove(dir, { recursive: true }).catch(() => {});
 console.log(failed ? `\n${failed} case(s) FAILED` : '\nall cases passed');

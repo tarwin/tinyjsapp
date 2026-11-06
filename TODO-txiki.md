@@ -71,6 +71,14 @@ stream blocks its origin and a cold round of parallel fetches to simplecast lose
 once those two pass pooled in check.js. cli.js doesn't load bridge.js, but only
 fetches one at a time.
 
+**Released on the 26.11.0 tag with these mitigations (decided 2026-11-06):**
+- Linux builds with HTTP/3 off (`setup.sh`), to stop the abort. Take it out, and
+  bump the cache key in release.yml, once a release has the fix.
+- A GET or HEAD the runtime can't make goes through curl (`bridge.js`), for RSA-only
+  servers and OS-trusted certificates. Other methods fail rather than send twice.
+- Slow large h2 downloads stay as a known issue on macOS and Windows x64: their
+  binaries come from upstream's releases, so the window can't be patched here.
+
 **Master with `connection: close` loses about 1 in 5 fetches to
 `feeds.megaphone.fm`** (Linux arm64, 2026-11-04): "Network request failed" in under
 150 ms, 24/30 serial, gaps don't help. The tag with `connection: close`, master with
@@ -120,10 +128,6 @@ compiled out is a separate question for upstream).
 - **Credentials cross origins.** `Authorization`, `Cookie` and
   `Proxy-Authorization` follow a redirect to any origin. Also a POST turned
   into a GET keeps its `Content-Type`. bridge.js handles both (#27).
-- **`fetch(new Request(url, { method: 'POST', body }))` sends the text
-  `[object Blob]`**, whatever the body was, with no content-length.
-  `Request.text()` reads the right bytes, so it's the hand-off in fetch. New in
-  26.11.0 (26.6.0 threw). bridge.js takes a Request apart first.
 - **HTTP/2 downloads are slow from far-away servers: lws's receive window.**
   26.11.0 turned h2 on, and master 4cf1ecc is the same. 20.6 MB from
   `feeds.simplecast.com` (197 ms away), alternating on one connection,

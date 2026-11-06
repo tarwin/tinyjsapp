@@ -80,10 +80,98 @@ async function readyHiddenArgv() {
 //   - Authorization and Cookie go along to whatever origin the server names
 //   - a POST turned into a GET keeps its Content-Type
 // So redirects are followed here, one `redirect: 'manual'` hop at a time. Both
-// backend fetch() and every page's tiny.fetch inherit this. Up to v26.6.0 this
-// wrapper also sent root-path URLs and TLS 1.2 hosts through the system curl;
-// txiki fixed both, and the curl path is gone.
+// backend fetch() and every page's tiny.fetch inherit this.
+//
+// A GET or HEAD the runtime can't make goes through the system curl (always on
+// macOS and Linux distros; Windows ships curl.exe since 10 1803). txiki 26.11.0
+// can't reach RSA-only servers and doesn't read the OS's certificates, and
+// curl can do both (TODO-txiki.md). Only when no response existed: a real HTTP
+// error stays an error, and other methods aren't sent twice.
 const nativeFetch = globalThis.fetch?.bind(globalThis);
+let curlProbe = null;
+const haveCurl = () => (curlProbe ??= probeOk(['curl', '--version']));
+
+// One GET or HEAD hop via curl, returned as a real Response with a streaming
+// body, so internet radio stays live. -i puts the header block on stdout ahead
+// of the body; no -L, since the wrapper follows redirects itself.
+async function curlFetch(url, { method, headers, signal }) {
+  // --proto locks curl to http(s) whatever a caller slips past the wrapper
+  const args = ['curl', '-s', '-i', '--connect-timeout', '30', '--proto', '=http,https'];
+  if (method === 'HEAD') args.push('--head');
+  // Headers go through a file in a 0700 temp dir, never argv: argv is readable
+  // by every local user via `ps`, and headers carry Authorization / Cookie
+  // (#27). `headers` already passed new Headers(), which refuses CR/LF. "Name;"
+  // is curl's spelling for sending a header empty. `-H @file` needs curl 7.55
+  // (2017; Windows 10 1803's curl.exe is 7.55.1).
+  const lines = [];
+  let encoding = false;
+  headers.forEach((v, k) => {
+    if (k === 'accept-encoding') encoding = true;
+    lines.push(String(v).trim() === '' ? k + ';' : k + ': ' + v);
+  });
+  // curl won't decode what we don't tell the server to send
+  if (!encoding) lines.push('accept-encoding: identity');
+  const ioDir = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-fetch-XXXXXX');
+  const dropIo = () => tjs.remove(ioDir, { recursive: true }).catch(() => {});
+  let p;
+  try {
+    await tjs.writeFile(ioDir + '/headers', enc.encode(lines.join('\n') + '\n'));
+    args.push('-H', '@' + ioDir + '/headers', '--', url);   // never let a URL parse as a flag
+    // hiddenArgv: curl.exe would otherwise flash a console window from a
+    // GUI-subsystem app
+    await readyHiddenArgv();
+    p = tjs.spawn(hiddenArgv(args), { stdin: 'ignore', stdout: 'pipe', stderr: 'ignore' });
+  } catch (e) { dropIo(); throw e; }
+  p.wait().then(dropIo, dropIo);
+  const kill = () => { try { p.kill(); } catch {} };
+  if (signal) signal.aborted ? kill() : signal.addEventListener('abort', kill);
+  // A server that accepts and never answers mustn't leave this pending for
+  // good. Only until the headers: a stream has no end to time.
+  const noHeaders = setTimeout(kill, 30000);
+  const reader = p.stdout.getReader();
+  let buf = new Uint8Array(0), head = null;
+  while (!head) {
+    const { done, value } = await reader.read();
+    if (value) {
+      const n = new Uint8Array(buf.length + value.length);
+      n.set(buf); n.set(value, buf.length); buf = n;
+    }
+    // header blocks end in a blank line; 1xx interim blocks are skipped
+    let idx;
+    while (!head && (idx = dec.decode(buf).indexOf('\r\n\r\n')) !== -1) {
+      const block = dec.decode(buf.subarray(0, idx));
+      const m = /^HTTP\/[\d.]+ (\d{3})(?: (.*))?/.exec(block);
+      if (!m) break;
+      buf = buf.subarray(idx + 4);
+      if (+m[1] >= 200) head = { status: +m[1], statusText: m[2] || '', block };
+    }
+    if (done) break;
+  }
+  clearTimeout(noHeaders);
+  if (!head) {
+    const st = await p.wait();
+    throw new TypeError('Network request failed (curl exit ' + (st.term_signal || st.exit_status) + ')');
+  }
+  const out = [];
+  for (const line of head.block.split('\r\n').slice(1)) {
+    const c = line.indexOf(':');
+    if (c > 0) out.push([line.slice(0, c).trim(), line.slice(c + 1).trim()]);
+  }
+  const noBody = method === 'HEAD' || [204, 205, 304].includes(head.status);
+  const stream = noBody ? null : new ReadableStream({
+    start(c) { if (buf.length) c.enqueue(buf.slice()); },
+    async pull(c) {
+      const { done, value } = await reader.read();
+      if (done) c.close();
+      else c.enqueue(value);
+    },
+    cancel: kill,
+  });
+  const res = new Response(stream, { status: head.status, statusText: head.statusText, headers: out });
+  Object.defineProperty(res, 'url', { get: () => url });
+  return res;
+}
+
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);
 // Request headers a redirect must not carry to another origin (#27). WHATWG
 // fetch drops Authorization there; a browser never lets a page set Cookie or
@@ -111,9 +199,8 @@ const ownConnection = (H) => {
 };
 
 if (nativeFetch) globalThis.fetch = async function fetchFollowingSafely(input, init = {}) {
-  // A Request is taken apart so it gets the same redirect rules. Native fetch
-  // can't send one's body anyway: it goes out as the text "[object Blob]"
-  // (measured 26.11.0). init wins over the Request, as in the spec.
+  // A Request is taken apart so it gets the same redirect rules. init wins over
+  // the Request, as in the spec.
   if (typeof Request === 'function' && input instanceof Request) {
     const hasBody = input.method !== 'GET' && input.method !== 'HEAD';
     const bytes = hasBody && !init.body ? new Uint8Array(await input.arrayBuffer()) : null;
@@ -131,7 +218,15 @@ if (nativeFetch) globalThis.fetch = async function fetchFollowingSafely(input, i
   let body = init.body;
   let headers = ownConnection(init.headers);
   for (let hop = 0; ; hop++) {
-    const res = await nativeFetch(url, { ...init, headers, method, body, redirect: 'manual' });
+    let res;
+    try {
+      res = await nativeFetch(url, { ...init, headers, method, body, redirect: 'manual' });
+    } catch (e) {
+      if ((method !== 'GET' && method !== 'HEAD') || init.signal?.aborted
+          || e?.name === 'AbortError' || !(await haveCurl())) throw e;
+      // curl's failure says less than the runtime's, so the runtime's is the one reported
+      res = await curlFetch(url, { method, headers, signal: init.signal }).catch(() => { throw e; });
+    }
     const loc = REDIRECT_CODES.has(res.status) ? res.headers.get('location') : null;
     if (!loc || mode === 'manual') {
       // best effort: report the landing url like a spec fetch would

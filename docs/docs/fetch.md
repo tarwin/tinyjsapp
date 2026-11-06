@@ -51,7 +51,7 @@ With `redirect: 'manual'`, the 3xx response itself resolves, and unlike in a bro
 
 ### HTTP versions and TLS {#network}
 
-The backend's runtime speaks HTTP/1.1 and HTTP/2 over TLS 1.2 and 1.3, and can move to HTTP/3 on hosts that advertise it. It checks certificates against its own bundled list, not the operating system's, so a certificate only your system trusts (a corporate TLS-inspecting proxy, for example) fails with a network error. To trust one, start the app with `SSL_CERT_FILE` set to a PEM file of CA certificates. Proxies come from the usual `http_proxy` and `https_proxy` environment variables. The same applies to `fetch()` in the backend.
+The backend's runtime speaks HTTP/1.1 and HTTP/2 over TLS 1.2 and 1.3, and on macOS and Windows can move to HTTP/3 on hosts that advertise it. It checks certificates against its own bundled list, not the operating system's, and can't reach servers that only offer `TLS_RSA_*` ciphers. A `GET` or `HEAD` it can't make goes through the system `curl` instead, which may get through where the runtime can't, such as behind a corporate TLS-inspecting proxy whose certificate your system trusts. Other methods aren't sent twice, so they fail with a network error. To make the runtime trust a certificate itself, start the app with `SSL_CERT_FILE` set to a PEM file of CA certificates. Proxies come from the usual `http_proxy` and `https_proxy` environment variables. The same applies to `fetch()` in the backend.
 
 On HTTP/2, a large response from a far-away server can be slower than on HTTP/1.1: a 20 MB download took about 40 s from a host 200 ms away, where curl took 5 s. Nearby CDNs aren't affected.
 

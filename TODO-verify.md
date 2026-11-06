@@ -5686,6 +5686,23 @@ below. amp not run on the others. Master not run on Windows.
   passes, and a `--universal` build run with `arch -x86_64` did every
   page-level tiny.fetch case. Not seen on a real Intel Mac.
 
+## Release mitigations on txiki 26.11.0: curl fallback, Linux without HTTP/3 (2026-11-06)
+
+`bin/tjs run test/fetch/check.js` (Windows `bin\tjs.exe`) covers both. macOS arm64
+passes, on the tag and on the tag built with HTTP/3 off, which only shows that the
+build works and fetch still does without QUIC. It says nothing about the abort.
+
+- [ ] **Linux: HTTP/3 off stops the abort** — not run. `rm bin/tjs && TJS_BUILD=1
+  CC=gcc-12 CXX=g++-12 ./setup.sh`, then check.js passes `4 at once to an h2 + h3
+  host, 3 rounds` with no exit 134. Also amp's feeds and streams, and whether curl
+  on PATH is what reaches the RSA-only station.
+- [ ] **Linux: a CI build has HTTP/3 off** — not run. The cache key moved to v3, and
+  the glibc floor and verify steps need to pass on a `release-test/*` run.
+- [ ] **Windows: curl fallback** — not run. check.js's `curl fallback` cases, in a
+  built GUI app too: `curl.exe` must not flash a console window.
+- [ ] **Windows arm64** — not run. Keeps HTTP/3 on; nothing has shown whether the
+  abort happens there.
+
 ## `tjs:ffi` on txiki 26.11.0: `Lib`/`CFunction` gone, `dlopen()` only (2026-11-04)
 
 Examples' `origin/ffi-dlopen` (098328f, NOT merged) moves its 7 FFI apps over; on
@@ -5730,10 +5747,18 @@ Examples' `origin/ffi-dlopen` (098328f, NOT merged) moves its 7 FFI apps over; o
   arm64), and its tjs only comes from CI, so x64 emulation says nothing about it.
   Needs a `release-test/*` build, then test/ffi/check.js and matcha on it.
 - [ ] **Windows x64 hardware** — not run. test/ffi/check.js and matcha.
-- [ ] **macOS** — not run from here. The apps' real calls live here: CGEventCreate,
-  CGEventGetLocation (a struct of two doubles by value, which Windows can't stand in
-  for), CFRelease; kitchen-sink's sysctlbyname and zlib. Note `.call(x)` left behind
-  anywhere would pass `x` as `this` and lose the argument.
+- [x] **macOS arm64** — *(2026-11-04, macOS 27.2, M3 Max, examples `origin/ffi-dlopen`
+  098328f, scratch copies with throwaway ids)* CGEventCreate, CGEventGetLocation (a
+  struct of two doubles by value), CFRelease, sysctlbyname and libz, called directly:
+  all fine on the 26.11.0 tag, master 4cf1ecc and 26.6.0, including 200k cursor calls.
+  Values agree with `sysctl`, and zlib's output size with Python's. All 7 apps stay up
+  under `tinyjs dev` and built, with nothing logged, on the tag. boo, coo3d, kraa,
+  kraa3d and treez each read the real pointer through their own `cursor()`, seen with
+  a probe appended to the scratch copies, dev and built. kitchen-sink's backend API,
+  called from a test page under `tinyjs dev`: ffiInfo, ffiSysctl (a bad name throws)
+  and zlibRoundtrip are right. Not checked: whether the apps visibly react to the
+  pointer, kitchen-sink's own page. `test/ffi/check.js` is Windows only and didn't run.
+- [ ] **macOS x86_64** — not run. The same calls on a real Intel Mac.
 - [x] **Linux arm64** — *(2026-11-04, Ubuntu 24.04 desktop, examples
   `origin/ffi-dlopen` 098328f, tjs 26.11.0 tag and master 4cf1ecce, same results)*
   All 7 apps build, and their built backends are still up after 7 s with no errors

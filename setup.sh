@@ -84,6 +84,12 @@ if [ "$OS" = "Linux" ]; then
       # GCC 13+/clang, so it runs unconditionally.
       grep -rl '#pragma region' "$TMPD/txiki-src" --include='*.c' --include='*.h' --include='*.cc' --include='*.cpp' 2>/dev/null \
         | xargs -r sed -i 's/^[[:space:]]*#pragma[[:space:]]\{1,\}\(end\)\{0,1\}region.*$//'
+      # HTTP/3 off: 26.11.0 aborts the whole process on Linux when lws races QUIC
+      # after an Alt-Svc (TODO-txiki.md). Hosts that offer h3 still take h1 or h2.
+      # Fail loudly if this stops matching: the build would otherwise ship the abort.
+      sed -i -E 's/^set\((LWS_WITH_HTTP3|LWS_ROLE_QUIC) ON /set(\1 OFF /' "$TMPD/txiki-src/CMakeLists.txt"
+      [ "$(grep -cE '^set\((LWS_WITH_HTTP3|LWS_ROLE_QUIC) OFF ' "$TMPD/txiki-src/CMakeLists.txt")" = 2 ] \
+        || { echo "couldn't turn HTTP/3 off in txiki's CMakeLists.txt" >&2; exit 1; }
       GEN="Unix Makefiles"; command -v ninja >/dev/null && GEN=Ninja
       cmake -S "$TMPD/txiki-src" -B "$TMPD/txiki-src/build" -DCMAKE_BUILD_TYPE=Release -G "$GEN"
       # tjs-cli is the executable (OUTPUT_NAME tjs); the "tjs" target is

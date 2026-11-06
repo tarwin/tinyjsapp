@@ -15,15 +15,19 @@ https://tinyjs.app/changelog.
   ([txiki#1165](https://github.com/saghul/txiki.js/pull/1165)), and Windows
   command-line arguments outside the system code page arrive intact
   ([txiki#1164](https://github.com/saghul/txiki.js/pull/1164)).
-- **`fetch` and `tiny.fetch` no longer use the system `curl`.** The runtime
-  now reaches root-path URLs and TLS 1.2 hosts itself, so no request spawns a
-  process any more and Windows has no console flash to hide. `FormData`,
-  `Blob` and `URLSearchParams` bodies now work on every URL, and a failed
-  request is no longer sent a second time. Redirects still follow the
-  browser's rules. **Behavior change:** a connection the runtime can't make
-  now fails instead of falling back to `curl`. That includes certificates
-  only the operating system trusts, such as a corporate TLS-inspecting proxy;
-  point `SSL_CERT_FILE` at a CA bundle for those.
+- **`fetch` and `tiny.fetch` use the system `curl` less.** The runtime now
+  reaches root-path URLs and TLS 1.2 hosts itself, so normal requests don't
+  spawn a process any more. `FormData`, `Blob` and `URLSearchParams` bodies now
+  work on every URL. Redirects still follow the browser's rules. `curl` is now
+  only a fallback, for a `GET` or `HEAD` that gets no response from the runtime,
+  such as a server that only offers `TLS_RSA_*` ciphers or a certificate only
+  the operating system trusts. **Behavior change:** any other method now fails
+  there instead of going through `curl`, so a `POST` is never sent twice. To
+  make the runtime trust a certificate itself, point `SSL_CERT_FILE` at a CA
+  bundle.
+- **Linux: no HTTP/3.** tinyjs builds the Linux runtime with HTTP/3 off, because
+  26.11.0's HTTP/3 can crash the whole process there. Hosts that offer it still
+  answer over HTTP/1.1 or HTTP/2.
 - **Breaking, `tjs:ffi`: `Lib`, `CFunction` and `DlSymbol` are gone.** txiki
   26.11.0 makes `dlopen()` the only way to bind a library, and importing a
   removed name stops the backend at startup with a SyntaxError. Move to
