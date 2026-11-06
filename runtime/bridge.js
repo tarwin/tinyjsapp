@@ -1802,7 +1802,10 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
           (b) => b.toString(16).padStart(2, '0')).join('')
       : null;
     if (pipeToken) spawnEnv.TINYJS_PIPE_TOKEN = pipeToken;
-    const spawnOpts = { stderr: 'inherit', env: spawnEnv };
+    // stdin stays explicit: a double-clicked Windows build has no std handles,
+    // and txiki 26.11.0's spawn then throws UNKNOWN if all three streams are
+    // inherited. The launcher never reads it, and it keeps stdout/stderr for dev.
+    const spawnOpts = { stdin: 'ignore', stderr: 'inherit', env: spawnEnv };
     // macOS: a bare (non-bundled) binary takes its OS-facing app name — menu
     // bar, cmd-tab — from the executable's file name. In dev that reads
     // "launcher". Exec through a symlink named after the app instead, so the
