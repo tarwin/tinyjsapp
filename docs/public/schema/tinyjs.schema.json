@@ -85,6 +85,7 @@
         "windowPlacement": { "$ref": "#/$defs/optionalBoolean", "description": "On Linux, prefer X11/XWayland for app-controlled window placement." },
         "offscreenRescue": { "$ref": "#/$defs/optionalBoolean", "description": "false disables automatic offscreen window recovery." },
         "rememberWindows": { "$ref": "#/$defs/optionalBoolean", "description": "Restore each window's position, size and maximized/fullscreen state per screen layout (main is shown once restored)." },
+        "embedHosts": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Extra hostnames tiny.embedURL may frame, on top of YouTube and Vimeo." },
         "update": {
           "type": ["object", "null"],
           "properties": {

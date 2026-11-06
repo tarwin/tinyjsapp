@@ -1354,6 +1354,86 @@ export function shellOpenAllowed(target, origin, ownOrigins) {
   return /^(https?|mailto):/i.test(String(target ?? '').trim());
 }
 
+// tiny.embedURL (#107). Players like YouTube's refuse to run without a Referer
+// (Error 153), and engines send none from a file:// document — or a custom
+// scheme, measured on WKWebView — and there's no public macOS hook to add one.
+// So a page that embeds goes through a small page served on loopback, whose
+// real http:// origin earns the Referer. Nothing about the app's own pages moves.
+//
+// A target is registered in the backend and served at /e/<unguessable id>, so
+// the URL carries no target: nothing local can use this as an open framing
+// proxy. Binds 127.0.0.1 explicitly (tjs.serve's default is 0.0.0.0) on port 0,
+// so the OS picks a free port at bind time with no check-then-bind race. The
+// Host check is what stops DNS rebinding reaching it from a web page.
+const EMBED_DEFAULT_HOSTS = ['www.youtube.com', 'www.youtube-nocookie.com', 'player.vimeo.com'];
+const EMBED_ALLOW = 'accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share';
+export function embedTarget(url, extraHosts) {
+  let u;
+  try { u = new URL(String(url ?? '')); } catch { throw new Error(`embedURL: not a URL: ${url}`); }
+  if (u.protocol !== 'https:' || u.username || u.password || u.port)
+    throw new Error(`embedURL: only plain https URLs can be embedded: ${url}`);
+  const host = u.hostname.toLowerCase();
+  const extra = Array.isArray(extraHosts) ? extraHosts.map((h) => String(h).toLowerCase()) : [];
+  if (!EMBED_DEFAULT_HOSTS.includes(host) && !extra.includes(host))
+    throw new Error(`embedURL: ${host} isn't an allowed embed host — add it to "embedHosts" in tinyjs.json`);
+  return u.href;
+}
+export function embedPage(href) {
+  const attr = href.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Embed</title></head><body style="margin:0">` +
+    `<iframe style="display:block;border:0;width:100vw;height:100vh" title="Embedded content" src="${attr}" ` +
+    `referrerpolicy="strict-origin-when-cross-origin" allow="${EMBED_ALLOW}" allowfullscreen></iframe></body></html>`;
+}
+export function makeEmbedHost(extraHosts) {
+  const byId = new Map();   // id -> page
+  // href -> id, so asking for the same URL again adds nothing. Each new URL does
+  // add an entry (a new query string counts), and they last until the app exits.
+  const idFor = new Map();
+  let server = null;
+  const notFound = () => new Response('not found', { status: 404 });
+  const start = () => {
+    try {
+      server = tjs.serve({
+        port: 0,
+        listenIp: '127.0.0.1',
+        fetch(req) {
+          if (req.method !== 'GET') return notFound();
+          if (req.headers.get('host') !== `127.0.0.1:${server.port}`) return notFound();
+          const page = byId.get(new URL(req.url).pathname.replace(/^\/e\//, ''));
+          if (!page) return notFound();
+          return new Response(page, { headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'cache-control': 'no-store',
+            'x-content-type-options': 'nosniff',
+            'referrer-policy': 'strict-origin-when-cross-origin',
+            // The page has no script of its own. https: and not the target's
+            // origin, or a player's redirect to another of its hosts would die.
+            'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-src https:",
+          } });
+        },
+      });
+    } catch (e) {
+      server = null;
+      throw new Error(`embedURL: couldn't start the local embed server: ${e?.message ?? e}`);
+    }
+  };
+  return {
+    url(target) {
+      const href = embedTarget(target, extraHosts);
+      if (!server) start();
+      let id = idFor.get(href);
+      if (!id) {
+        id = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+          (b) => b.toString(16).padStart(2, '0')).join('');
+        idFor.set(href, id);
+        byId.set(id, embedPage(href));
+      }
+      return `http://127.0.0.1:${server.port}/e/${id}`;
+    },
+    close: () => server?.close(),
+  };
+}
+
 // getUserMedia consent (#24), and the tiny-media proxy (#30, kind "proxy",
 // pseudo-method media.proxy: a proxied response is CORS-open, so the proxy
 // is a read-anything key), plus kind "file" for the macOS launcher's
@@ -1572,7 +1652,7 @@ function withDeclaredSize(saved, declared) {
 }
 export const __screensForTest = { screenAtIn, screenForIn, matchScreenIn, layoutKey, placementFor, screenSnapshot, withDeclaredSize };
 
-export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, onNavigate, onDownload, onWindowOpen, chrome = null, update = null, activation = null, mainWindow = true, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null, downloads = null, popups = null, apiAccess = null, inject = null, resourcesPath = null, executablesPath = null, rememberWindows = false }) {
+export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, onNavigate, onDownload, onWindowOpen, chrome = null, update = null, activation = null, mainWindow = true, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null, downloads = null, popups = null, apiAccess = null, inject = null, resourcesPath = null, executablesPath = null, rememberWindows = false, embedHosts = null }) {
   if (typeof mainWindow !== 'boolean') throw new Error('mainWindow must be a boolean');
   if (!mainWindow && url) throw new Error('`url` needs a main window to load into — drop mainWindow: false');
   // mainWindow: false — the launcher starts with no main window or WebView
@@ -2208,6 +2288,8 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   // 500ms for a burst to settle) made the real change look like no change.
   let screensAnnounced = null;
 
+  const embedHost = makeEmbedHost(embedHosts);
+
   // ── remembered placement ("rememberWindows": true) ────────────────────────
   // Kept per screen LAYOUT (the set of plugged-in screens), per window id:
   // the screen it was on as a snapshot (uid, name, size, scale, built-in,
@@ -2653,6 +2735,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     // the Trash (recoverable — prefer it over tjs.remove for user files).
     // Resolve true; throw with the reason ('no such file', 'no application
     // registered for URL', …) on failure.
+    embedURL: (target) => embedHost.url(target),
     shell: {
       open: (target) => shellOp('open', target),
       reveal: (path) => shellOp('reveal', path),
@@ -3941,6 +4024,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
         throw new Error(`shell.open: a page from ${meta.origin} may only open http(s) and mailto links`);
       return app.shell.open(target);
     },
+    'embed.url': async ({ url }) => app.embedURL(url),
     'shell.reveal': async ({ path }) => app.shell.reveal(path),
     'shell.trash': async ({ path }) => app.shell.trash(path),
     'login.get': async () => app.launchAtLogin.get(),

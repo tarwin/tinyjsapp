@@ -8,6 +8,39 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #107 — `tiny.embedURL` (`feat/embed-url`, 2026-11-07)
+
+Self-driving app: `test/embed-url/app` (README there). Headless, any OS:
+`bin/tjs run test/embed-url/check.js`. Look for: the right-hand player shows the
+video and plays when pressed, the left-hand direct iframe's result (may differ per
+engine), `lsof`/`ss`/`netstat` shows the listener on 127.0.0.1 only, fullscreen.
+
+- [x] **macOS** (27.2, dev run, 2026-11-07): direct iframe shows Error 153, the
+  embedURL frame shows the player, listener on 127.0.0.1 only, gone when the launcher
+  exits. Muted `autoplay=1` played: captions advanced between screenshots 12 s apart.
+  Built, signed .app, by hand: play, sound and volume, fullscreen in and out, and the
+  "Watch on YouTube" link all behaved as expected. After Cmd+Q no process or listener
+  is left. Not seen: Vimeo.
+- [x] **Windows** (11 26200, dev run, 2026-11-07): the embedURL frame shows the
+  player with `document.referrer` `http://127.0.0.1:<port>/`, listener on 127.0.0.1
+  only, gone when the window closes. A muted click sent over CDP played: currentTime
+  0.8 → 4.8 → 8.8 s. `document.fullscreenEnabled` and the autoplay policy are true in
+  the loopback and player frames. The direct iframe doesn't get 153: it lands on
+  `chrome-error://chromewebdata/` (a grey cloud), cause not found. `check.js` passes
+  with an absolute backslash path (README).
+  Built app, started with no std handles: backend, launcher and a 127.0.0.1 listener
+  all ran and exited on close, but DevTools are off there, so the player wasn't seen.
+  Not seen: pressing play by hand, sound, entering fullscreen, the player in a built
+  app, autoplay under the default policy (that run had it relaxed).
+- [x] **Linux** (Ubuntu 24.04 arm64, WebKitGTK 2.52.6, tjs 26.11.0, dev run under
+  XWayland, 2026-11-07): direct iframe shows Error 153, the embedURL frame shows the
+  player, listener on 127.0.0.1 only, gone when the launcher exits. Muted `autoplay=1`
+  played: captions showing, 44% of the panel changed between `xwd` captures 12 s apart,
+  and the app had a running PipeWire stream. `check.js` passes. YouTube's `enablejsapi`
+  handshake: nothing back from `iframe.contentWindow`, `onReady` from
+  `iframe.contentWindow.frames[0]`. Not seen: pressing play by hand, sound, fullscreen,
+  a built app, `YT.Player` itself, Vimeo.
+
 ## #102 — `win.open({ show: false })` (`feat/win-open-hidden`, 2026-11-01)
 
 WINOPEN gained field 16: `"0"` = open hidden. Plan + gotchas:

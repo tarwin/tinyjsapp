@@ -4,6 +4,29 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.72.0 — 2026-11-07
+
+- **`tiny.embedURL()`: YouTube and other players in an iframe** (#107). A
+  YouTube iframe in an app page didn't play: it showed Error 153 on macOS and
+  Linux, and a browser error page on Windows. YouTube needs a `Referer`, and
+  the webview sends none from a `file://` page. Now you can write:
+
+  ```js
+  iframe.src = await tiny.embedURL('https://www.youtube.com/embed/ID');
+  ```
+
+  The backend serves a small page on `127.0.0.1` that frames the player, so the
+  player gets a `Referer`, and your own page stays on `file://`. The server
+  starts on the first call, on a free port the OS picks, and only serves URLs
+  your app asked for. The port changes every launch, so call it each time
+  rather than saving the result. `app.embedURL()` does the same from the backend.
+
+  It takes plain `https` URLs on YouTube and Vimeo, and the new `embedHosts` key
+  in `tinyjs.json` adds other hosts. If your app has an `api` block, add
+  `embed.url` to its `enable` list. Your iframe holds the small page rather than
+  the player, so script that talks to the player has to use
+  `iframe.contentWindow.frames[0]`. See [embeds](https://tinyjs.app/docs/embeds).
+
 ## 0.71.1 — 2026-11-06
 
 - **Windows: built apps do nothing when double-clicked.** We're sorry about

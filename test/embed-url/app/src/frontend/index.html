@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="background:#222;color:#eee;font:12px sans-serif">
+  <table>
+    <tr><td>direct iframe</td><td>tiny.embedURL</td></tr>
+    <tr>
+      <td><iframe width="320" height="240" src="https://www.youtube.com/embed/tgbNymZ7vqY"
+                  allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe></td>
+      <td><iframe id="viaEmbed" width="320" height="240"
+                  allow="autoplay; encrypted-media; fullscreen; picture-in-picture" allowfullscreen></iframe></td>
+    </tr>
+  </table>
+  <div id="status"></div>
+  <script>
+    (async () => {
+      const result = { protocol: location.protocol };
+      try {
+        result.url = await tiny.embedURL('https://www.youtube.com/embed/tgbNymZ7vqY');
+        document.getElementById('viaEmbed').src = result.url;
+      } catch (e) {
+        result.error = String(e?.message ?? e);
+      }
+      try {
+        await tiny.embedURL('https://evil.example/');
+        result.refused = 'HOLE';
+      } catch {
+        result.refused = 'ok';
+      }
+      document.getElementById('status').textContent =
+        `refused: ${result.refused} — ${result.url ?? result.error}`;
+      await tiny.store.set('embedUrl', result);
+    })();
+  </script>
+</body>
+</html>
