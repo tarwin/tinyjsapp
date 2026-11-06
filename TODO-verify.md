@@ -5711,9 +5711,14 @@ build works and fetch still does without QUIC. It says nothing about the abort.
   - **Fallback:** a certificate only curl trusts (`CURL_CA_BUNDLE`, standing in for
     the OS store): GET 200, POST rejected. With `SSL_CERT_FILE`, both 200 and no
     curl. Cancel and abort leave no curl running; the URL and headers aren't in argv.
-  - **Fixed since, not rerun here:** a fetch where the runtime and curl both fail, then
-    an exit at once, left its `tinyjs-fetch-*` dir with the headers file in it. It's
-    awaited now, and check.js has a case for it (macOS arm64). With no curl, the error for an
+  - **Fixed since:** a fetch where the runtime and curl both fail, then an exit at once,
+    left its `tinyjs-fetch-*` dir with the headers file in it. It's awaited now, and
+    check.js has a case for it (macOS arm64). Rerun on a2e94c4: check.js all ok (68) on
+    both Linux arches, once each. With a private TMPDIR, no dir is left after that exit,
+    after a HEAD then an exit at once, or with a live stream's body unread. An exit
+    mid-stream also left no dir, though one such run returned rc 1, cause not captured,
+    and 9 more (6 on a2e94c4, 3 on f907a19) returned 0. curl goes once its next write fails.
+  - **Still open:** with no curl, the error for an
     RSA-only host reads "The certificate validity has expired", which is misleading.
 - [ ] **Linux: a CI build has HTTP/3 off** — not run. The cache key moved to v3, and
   the glibc floor and verify steps need to pass on a `release-test/*` run.
@@ -5763,7 +5768,15 @@ without the flag.
   authenticating proxy (407 first) not tried.
 - [x] **macOS arm64** — *(2026-11-06, curl 8.7.1, SecureTransport)* check.js's three
   proxy cases pass, including wmse by GET and HEAD. Built apps with `https_proxy` not tried.
-- [ ] **Linux** — not run. The same, and curl is whatever the distro ships.
+- [x] **Linux** — *(2026-11-06, f907a19, Ubuntu 24.04 arm64 VM, curl 8.5.0, and x86_64
+  under Rosetta in a 22.04 container, curl 7.81.0)* check.js all ok (67), 2 of 2 on arm64
+  and once on x86_64; update-fetch passes. A separate tunnelling proxy with `https_proxy`
+  set, to RSA-only wmse: GET has the real headers and a clean body, HEAD matches what
+  curl gets without a proxy, in bare tjs and a built app, plus a stream through
+  `tiny.fetch`. A proxy refusing CONNECT rejects with "http_proxy -> 403". With the flag
+  taken out of a scratch copy, the same runs show the bug: the proxy's header, the real
+  block in the body, and its 403 as the response. An authenticating proxy (407 first)
+  not tried.
 
 ## `tjs:ffi` on txiki 26.11.0: `Lib`/`CFunction` gone, `dlopen()` only (2026-11-04)
 

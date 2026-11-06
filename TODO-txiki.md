@@ -113,6 +113,14 @@ not seen on real x64 hardware, and native arm64 isn't measured:
 
 Native fetch, without bridge.js's fallback, so a failure there is what curl would rescue.
 
+Not seen on Linux (arm64 VM, 2026-11-06), even with HTTP/3 on. So if QUIC is involved,
+it isn't enough on its own. Median of 7 with `close`, google / youtube / megaphone:
+tag 306 / 284 / 230 ms, HTTP/3 off 348 / 332 / 286, 26.6.0 297 / 298 / 258. Through
+bridge.js with HTTP/3 off: google median 312 ms of 72, cloudflare 111 ms of 30, no
+failures and no curl. Native fetch pooled to google with HTTP/3 off is still bad: 4 of
+7 failed, taking 5 or 10 s each, while youtube and megaphone were fine. bridge.js
+sends `close`, so that only reaches an app asking for `connection: keep-alive`.
+
 **Master with `connection: close` loses about 1 in 5 fetches to
 `feeds.megaphone.fm`** (Linux arm64, 2026-11-04): "Network request failed" in under
 150 ms, 24/30 serial, gaps don't help. The tag with `connection: close`, master with
