@@ -151,7 +151,7 @@ async function curlFetch(url, { method, headers, signal }) {
     // GUI-subsystem app
     await readyHiddenArgv();
     p = tjs.spawn(hiddenArgv(args), { stdin: 'ignore', stdout: 'pipe', stderr: 'ignore' });
-  } catch (e) { dropIo(); throw e; }
+  } catch (e) { await dropIo(); throw e; }
   p.wait().then(dropIo, dropIo);
   const kill = () => { try { p.kill(); } catch {} };
   // A server that accepts and never answers mustn't leave this pending for
@@ -208,8 +208,10 @@ async function curlFetch(url, { method, headers, signal }) {
     Object.defineProperty(res, 'url', { get: () => url });
     return res;
   } catch (e) {
-    // a stream nobody will read would hold curl open for good
+    // a stream nobody will read would hold curl open for good. Awaited for the
+    // same reason as above: this is the failure path of the same files.
     kill();
+    await dropIo();
     throw e;
   } finally {
     clearTimeout(noHeaders);

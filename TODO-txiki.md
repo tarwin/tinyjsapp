@@ -80,7 +80,7 @@ fetches one at a time.
   binaries come from upstream's releases, so the window can't be patched here.
 
 **With `connection: close`, repeat fetches to a host advertising h3 are slow or fail
-(Windows, x64 tag emulated on an arm64 VM, 2026-11-06; macOS not measured).** The
+(Windows, x64 tag emulated on an arm64 VM, 2026-11-06; not on macOS, table below).** The
 first fetch in a process takes about 0.35 s, then:
 
 | 7 in a row, ms | tag, `close` | tag, pooled | 26.6.0, `close` |
@@ -99,6 +99,19 @@ from the same VM, Google and YouTube answer a QUIC probe on UDP 443 in 13 to 94 
 and curl to google stays around 0.5 s. So the mitigation for the pool costs about 2 s
 a fetch on these hosts here. The Windows x64 binary is upstream's, so HTTP/3 can't be
 built out as on Linux.
+
+macOS arm64 doesn't have this, 8 in a row, 2026-11-06. So it's Windows or that VM;
+not seen on real x64 hardware, and native arm64 isn't measured:
+
+| ms | tag, `close` | tag, pooled | 26.6.0, `close` |
+|---|---|---|---|
+| www.google.com | 351 313 273 326 273 316 274 285 | 337 **fail 10 s** **fail 5 s** 320 295 302 290 324 | 382 300 421 299 292 311 287 301 |
+| www.youtube.com | 349 285 272 317 318 289 274 342 | 361 218 136 136 136 141 135 137 | 333 297 300 296 305 295 301 315 |
+| feeds.megaphone.fm | 365 56 47 80 41 43 47 44 | 140 110 21 21 42 24 25 54 | 109 57 153 111 61 72 63 91 |
+| www.cloudflare.com | 143 60 162 94 **fail 3 s** 129 111 108 | 102 39 50 46 38 41 33 45 | 114 93 110 93 72 187 69 113 |
+| github.com | 125 118 98 145 193 125 101 140 | 132 25 52 26 25 26 27 38 | 96 84 122 89 90 84 122 161 |
+
+Native fetch, without bridge.js's fallback, so a failure there is what curl would rescue.
 
 **Master with `connection: close` loses about 1 in 5 fetches to
 `feeds.megaphone.fm`** (Linux arm64, 2026-11-04): "Network request failed" in under

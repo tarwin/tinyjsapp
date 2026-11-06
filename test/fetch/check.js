@@ -372,6 +372,24 @@ tjs.exit(0);
   return expect(last().line, 'GET /nativedrop/rc HTTP/1.1')
     || (last().head.includes('x-from-curlrc') ? 'read the file' : null);
 }, 15000);
+await check('both failing, then an exit at once, leaves no headers file behind', async () => {
+  const tmp = await tjs.makeTempDir(tjs.tmpDir + '/tinyjs-fetch-leak-XXXXXX');
+  const bridge = new URL('../../runtime/bridge.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+    .replace(/\//g, IS_WIN ? '\\' : '/');
+  await tjs.writeFile(tmp + '/l.js', enc.encode(`await import(${JSON.stringify(bridge)});
+await fetch('${A}/dropall', { headers: { authorization: 'Bearer x' } }).catch(() => {});
+tjs.exit(0);
+`));
+  const p = tjs.spawn([tjs.exePath, 'run', tmp + '/l.js'], {
+    env: { ...tjs.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp }, stdin: 'ignore', stdout: 'ignore', stderr: 'ignore',
+  });
+  await p.wait();
+  const left = [];
+  const d = await tjs.readDir(tmp);
+  for await (const e of d) if (e.name.startsWith('tinyjs-fetch-')) left.push(e.name);
+  await tjs.remove(tmp, { recursive: true }).catch(() => {});
+  return left.length ? 'left ' + left : null;
+}, 15000);
 await check('POST is not sent a second time', async () => {
   const before = countOf('/dropall');
   const err = await fetch(A + '/dropall', { method: 'POST', body: 'x' }).then(() => null, (e) => e);

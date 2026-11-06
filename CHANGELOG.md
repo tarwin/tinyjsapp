@@ -40,6 +40,9 @@ https://tinyjs.app/changelog.
 - **`fetch` opens one connection per request,** as it did before this update,
   because the runtime's connection pool loses requests. An app that wants the
   pool can send `Connection: keep-alive`.
+- **Known issue, Windows:** repeat requests to a host that offers HTTP/3 can take
+  about 2 s each, up from about 0.5 s, measured in an emulated x64 VM. macOS isn't
+  affected, and Linux builds without HTTP/3.
 - **Known issue:** large HTTP/2 downloads from far-away servers are slower than
   before. A 20 MB feed from a host 200 ms away took about 40 s, up from about
   8 s. Nearby CDNs, including GitHub's, aren't affected.

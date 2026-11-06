@@ -5711,9 +5711,9 @@ build works and fetch still does without QUIC. It says nothing about the abort.
   - **Fallback:** a certificate only curl trusts (`CURL_CA_BUNDLE`, standing in for
     the OS store): GET 200, POST rejected. With `SSL_CERT_FILE`, both 200 and no
     curl. Cancel and abort leave no curl running; the URL and headers aren't in argv.
-  - **Still open:** a fetch where the runtime and curl both fail, then an exit at
-    once, leaves its `tinyjs-fetch-*` dir with the headers file in it (0700), since
-    only the path with a response awaits the cleanup. With no curl, the error for an
+  - **Fixed since, not rerun here:** a fetch where the runtime and curl both fail, then
+    an exit at once, left its `tinyjs-fetch-*` dir with the headers file in it. It's
+    awaited now, and check.js has a case for it (macOS arm64). With no curl, the error for an
     RSA-only host reads "The certificate validity has expired", which is misleading.
 - [ ] **Linux: a CI build has HTTP/3 off** — not run. The cache key moved to v3, and
   the glibc floor and verify steps need to pass on a `release-test/*` run.
@@ -5761,8 +5761,8 @@ without the flag.
   ok, 2 of 2. A built app with `https_proxy` set against a separate proxy: real headers
   and a clean body, by GET and HEAD. Rest of the built-app run and amp unchanged. An
   authenticating proxy (407 first) not tried.
-- [ ] **macOS** — not run. The same flags, so the same bug and fix are expected:
-  check.js, and note the system curl's version.
+- [x] **macOS arm64** — *(2026-11-06, curl 8.7.1, SecureTransport)* check.js's three
+  proxy cases pass, including wmse by GET and HEAD. Built apps with `https_proxy` not tried.
 - [ ] **Linux** — not run. The same, and curl is whatever the distro ships.
 
 ## `tjs:ffi` on txiki 26.11.0: `Lib`/`CFunction` gone, `dlopen()` only (2026-11-04)
