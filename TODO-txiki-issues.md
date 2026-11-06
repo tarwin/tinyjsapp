@@ -323,3 +323,91 @@ Not explained: why lookups under about 3 s don't fail this way. I also didn't tr
 - **Redirect to `file://` killing the process, and fetch failing after a cancel or
   abort:** fixed on master, and mentioned in issue 1.
 - **Windows arm64 releases:** already upstream's #1171.
+
+---
+
+## libuv issue
+
+For <https://github.com/libuv/libuv/issues>, not txiki. It's why built Windows apps
+did nothing when double-clicked in tinyjs 0.71.0; 0.71.1 works around it with
+`stdin: 'ignore'` (2b73d2f).
+
+**Checked 2026-11-06:** v1.x head 9e40720a0c still has this code, and searching
+libuv's issues found no report of it.
+
+- [ ] Build the repro against v1.53.0, launch it from Explorer, and fill in the
+  `TODO` row. **This hasn't been run:** the v1.52.1 row and the
+  `UpdateProcThreadAttribute` result were measured, but v1.53.0's failure so far is
+  only seen through txiki 26.11.0.
+- [ ] Check that the error is `UNKNOWN`, and the suggested fix hasn't been tried, so
+  reword it if the run disagrees.
+
+**Title:** win: uv_spawn fails with UV_UNKNOWN when no stdio handle is valid (regression in 1.53.0)
+
+````markdown
+* **Version**: 1.53.0 (and v1.x at 9e40720a0c, by reading the code)
+* **Platform**: Windows 11 Pro 10.0.26200, x64
+
+Since #5100, `uv_spawn` fails with `UV_UNKNOWN` if the parent has no valid std handles and stdin, stdout and stderr are all `UV_INHERIT_FD`. A GUI-subsystem program started from Explorer is in exactly that state, so it can't spawn a child this way. The same call worked in 1.52.1.
+
+`uv__stdio_create` deliberately tolerates invalid fds 0-2 and marks those slots `INVALID_HANDLE_VALUE`. `uv_spawn` then leaves them out of the handle list, so the list is empty and it calls:
+
+```c
+UpdateProcThreadAttribute(attr_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                          handle_list, 0 * sizeof(HANDLE), NULL, NULL);
+```
+
+Windows rejects a zero-length list with `ERROR_BAD_LENGTH` (24). I checked that call on its own: a zero-length list fails with 24, and a one-handle list succeeds. `uv_translate_sys_error` has no case for 24, so it comes back as `UV_UNKNOWN`.
+
+Setting any one stream to `UV_IGNORE` avoids it, because libuv opens a NUL handle for that stream and the list is no longer empty.
+
+### Repro
+
+Build as a GUI program and start it from Explorer (a double-click, or `explorer.exe repro.exe`). It logs to `%TEMP%\uv-spawn-repro.txt`, since it has no console.
+
+```c
+#include <stdio.h>
+#include <stdlib.h>
+#include <uv.h>
+
+int main(void) {
+  char log[1024];
+  snprintf(log, sizeof log, "%s/uv-spawn-repro.txt", getenv("TEMP"));
+  FILE* f = fopen(log, "a");
+
+  char* args[] = { "cmd.exe", "/c", "exit", NULL };
+  uv_stdio_container_t stdio[3];
+  for (int i = 0; i < 3; i++) {
+    stdio[i].flags = UV_INHERIT_FD;
+    stdio[i].data.fd = i;
+  }
+  uv_process_options_t opts = { 0 };
+  opts.file = args[0];
+  opts.args = args;
+  opts.stdio = stdio;
+  opts.stdio_count = 3;
+
+  uv_process_t p;
+  int r = uv_spawn(uv_default_loop(), &p, &opts);
+  fprintf(f, "%s uv_spawn: %d (%s)\n", uv_version_string(), r, r ? uv_err_name(r) : "ok");
+  fclose(f);
+  return 0;
+}
+```
+
+```
+gcc -mwindows -D_WIN32_WINNT=0x0A00 -DWIN32_LEAN_AND_MEAN -Iinclude -Isrc repro.c src/*.c src/win/*.c \
+  -lws2_32 -liphlpapi -luserenv -lpsapi -ldbghelp -lole32 -lshell32 -luuid -lsynchronization -o repro.exe
+```
+
+| libuv | Result from Explorer |
+|---|---|
+| 1.52.1 | `uv_spawn: 0 (ok)` |
+| 1.53.0 | TODO |
+
+I found this through txiki.js 26.11.0, whose bundled libuv includes #5100: `tjs.spawn` throws `UNKNOWN` in a double-clicked build when all three streams are inherited, and in none of the other stdio combinations I tried. It's easy to miss, because anything run from a terminal has handles.
+
+### Possible fix
+
+Skip the attribute when the list is empty. `CreateProcessW` would also need `bInheritHandles` to be false in that case, because it's currently always 1, and without a list the child would inherit every inheritable handle, which is the leak #5100 closed. So roughly `bInheritHandles = n > 0`. I haven't tested this.
+````
