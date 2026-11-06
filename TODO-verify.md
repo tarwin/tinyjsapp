@@ -18,7 +18,9 @@ engine), `lsof`/`ss`/`netstat` shows the listener on 127.0.0.1 only, fullscreen.
 - [x] **macOS** (27.2, dev run, 2026-11-07): direct iframe shows Error 153, the
   embedURL frame shows the player, listener on 127.0.0.1 only, gone when the launcher
   exits. Muted `autoplay=1` played: captions advanced between screenshots 12 s apart.
-  Not seen: pressing play by hand, sound, fullscreen, a built app.
+  Built, signed .app, by hand: play, sound and volume, fullscreen in and out, and the
+  "Watch on YouTube" link all behaved as expected. After Cmd+Q no process or listener
+  is left. Not seen: Vimeo.
 - [x] **Windows** (11 26200, dev run, 2026-11-07): the embedURL frame shows the
   player with `document.referrer` `http://127.0.0.1:<port>/`, listener on 127.0.0.1
   only, gone when the window closes. A muted click sent over CDP played: currentTime
