@@ -30,7 +30,14 @@ engine), `lsof`/`ss`/`netstat` shows the listener on 127.0.0.1 only, fullscreen.
   all ran and exited on close, but DevTools are off there, so the player wasn't seen.
   Not seen: pressing play by hand, sound, entering fullscreen, the player in a built
   app, autoplay under the default policy (that run had it relaxed).
-- [ ] **Linux** — WebKitGTK: does it play, and does the direct iframe also get 153?
+- [x] **Linux** (Ubuntu 24.04 arm64, WebKitGTK 2.52.6, tjs 26.11.0, dev run under
+  XWayland, 2026-11-07): direct iframe shows Error 153, the embedURL frame shows the
+  player, listener on 127.0.0.1 only, gone when the launcher exits. Muted `autoplay=1`
+  played: captions showing, 44% of the panel changed between `xwd` captures 12 s apart,
+  and the app had a running PipeWire stream. `check.js` passes. YouTube's `enablejsapi`
+  handshake: nothing back from `iframe.contentWindow`, `onReady` from
+  `iframe.contentWindow.frames[0]`. Not seen: pressing play by hand, sound, fullscreen,
+  a built app, `YT.Player` itself, Vimeo.
 
 ## #102 — `win.open({ show: false })` (`feat/win-open-hidden`, 2026-11-01)
 

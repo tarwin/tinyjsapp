@@ -6,7 +6,7 @@ title: "embeds"
 
 <p class="tagline">tiny.embedURL — YouTube and other players in an iframe</p>
 
-A YouTube iframe in an app page doesn't play. On macOS it shows **Error 153** ("Video player configuration error"), and on Windows the frame shows a browser error page instead. YouTube needs a `Referer` to run, and the webview sends none from a `file://` page. `referrerpolicy` can't change that.
+A YouTube iframe in an app page doesn't play. On macOS and Linux it shows **Error 153** ("Video player configuration error"), and on Windows the frame shows a browser error page instead. YouTube needs a `Referer` to run, and the webview sends none from a `file://` page. `referrerpolicy` can't change that.
 
 `tiny.embedURL()` gives you a URL that works instead:
 
@@ -47,5 +47,6 @@ The port changes every launch, so call `embedURL` each time and don't save the r
 
 - **It relies on the player accepting a loopback `Referer`.** YouTube does today, but that's its decision and it could change.
 - **A strict CSP on your page has to allow the frame**: `frame-src http://127.0.0.1:*`.
+- **Your iframe holds the loopback page, not the player.** Messages sent to `iframe.contentWindow` go nowhere, and a player library that posts there won't connect. The player is one level down, at `iframe.contentWindow.frames[0]`.
 - **The call goes through the [`api`](./config#api) gate.** If your `tinyjs.json` has an `api` block, add `embed.url` to its `enable` list. The `"wrapper"` preset doesn't include it.
 - **A hosted page doesn't need this.** A site wrapper's page has a web origin of its own, so it can frame the player directly.

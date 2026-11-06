@@ -9,7 +9,7 @@ In a real window: `cd test/embed-url/app && tinyjs dev`. It needs internet acces
 
 | panel | expected |
 |---|---|
-| left, direct iframe | Error 153 on macOS; a browser error page (a grey cloud, `chrome-error://`) on Windows. Record what Linux does. |
+| left, direct iframe | Error 153 on macOS and Linux; a browser error page (a grey cloud, `chrome-error://`) on Windows. |
 | right, `tiny.embedURL` | the video's poster and a play button. Press it: the video plays. |
 
 The caption under the panels reads `refused: ok` when `tiny.embedURL` rejected a
