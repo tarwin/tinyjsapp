@@ -59,6 +59,7 @@ const sidebar: DefaultTheme.SidebarItem[] = [
       { text: 'sound effects', link: '/docs/sampler' },
       { text: 'audio tap', link: '/docs/audiotap' },
       { text: 'media', link: '/docs/media' },
+      { text: 'embeds', link: '/docs/embeds' },
       { text: 'shell & app surface', link: '/docs/shell' },
       { text: 'system services', link: '/docs/services' },
       { text: 'system', link: '/docs/system' },

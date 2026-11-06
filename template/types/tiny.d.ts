@@ -861,6 +861,16 @@ declare interface Tiny {
    *  loads nothing — check tiny.system.capabilities().proxyURL !== false. */
   proxyURL(url: string): string;
 
+  /** A URL to use as an iframe's src for a video player that needs a Referer.
+   *  YouTube answers a direct iframe in an app page with Error 153, because
+   *  file:// pages send no Referer. This serves a small page on 127.0.0.1 that
+   *  frames the target, so the player gets one:
+   *    iframe.src = await tiny.embedURL('https://www.youtube.com/embed/ID');
+   *  Rejects unless the URL is https on www.youtube.com, www.youtube-nocookie.com,
+   *  player.vimeo.com or a host in tinyjs.json's "embedHosts". The URL only
+   *  works for this run of the app, so ask each launch rather than saving it. */
+  embedURL(url: string): Promise<string>;
+
   /** A correct file:// URL for a disk path on every platform — use for
    *  <audio>/<img>/<video> src of backend-provided paths. Hand-rolled
    *  'file://' + path breaks on Windows (the drive letter becomes the URL
@@ -1654,6 +1664,8 @@ declare interface TinyApp {
    *  (reading app.paths.data as an object still works but is deprecated) */
   paths: (() => Promise<TinyPaths>) & TinyPathsDeprecatedFields;
   shell: TinyShell;
+  /** see tiny.embedURL — resolves the same way, synchronously */
+  embedURL(url: string): string;
   launchAtLogin: TinyLaunchAtLogin;
   /** '' clears the badge */
   badge(text: string): boolean;

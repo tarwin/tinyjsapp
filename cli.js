@@ -1557,6 +1557,7 @@ const app = await createApp({
   permissions: ${JSON.stringify(cfg.permissions ?? null)},
   offscreenRescue: ${JSON.stringify(cfg.offscreenRescue ?? null)},
   rememberWindows: ${JSON.stringify(cfg.rememberWindows ?? false)},
+  embedHosts: ${JSON.stringify(cfg.embedHosts ?? null)},
 });
 if (appMod.init) appMod.init(app);
 `;

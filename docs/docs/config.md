@@ -189,6 +189,12 @@ How the main window looks before the page draws anything: frameless, translucent
 
 Put every window back where the user left it — position, size, maximized or full screen — remembered separately for each set of plugged-in screens. The main window stays hidden until it's been placed, so it doesn't jump. If you change `size` (or a `win.open` size), the new size is used next launch and only the saved position is kept. See [tiny.win](./window).
 
+### `embedHosts` {#embedHosts}
+
+`string[]` · default: none
+
+Extra hostnames [`tiny.embedURL`](./embeds) may frame, on top of `www.youtube.com`, `www.youtube-nocookie.com` and `player.vimeo.com`. Each is an exact hostname, so `example.com` doesn't cover `www.example.com`.
+
 ### `offscreenRescue` {#offscreenRescue}
 
 `boolean` · default: `true`

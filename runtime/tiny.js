@@ -128,6 +128,12 @@
     // keys that allow media.proxy (#30).
     proxyURL: (url) => 'tiny-media://proxy/?u=' + encodeURIComponent(String(url)),
 
+    // A URL to use as an iframe's src for a player that refuses to run without
+    // a Referer (YouTube's Error 153): file:// pages send none, so the backend
+    // serves a small page on loopback that frames the target. Allowed hosts:
+    // YouTube, Vimeo, and tinyjs.json's "embedHosts". Good for this run only.
+    embedURL: (url) => call('embed.url', { url }),
+
     // A correct file:// URL for a disk path on every platform — hand-rolled
     // versions break on Windows (file://C:/… makes the drive the URL host).
     // Use for <audio>/<img>/<video> src of backend-provided paths.

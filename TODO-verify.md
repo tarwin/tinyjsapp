@@ -8,6 +8,21 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #107 — `tiny.embedURL` (`feat/embed-url`, 2026-11-07)
+
+Self-driving app: `test/embed-url/app` (README there). Headless, any OS:
+`bin/tjs run test/embed-url/check.js`. Look for: the right-hand player shows the
+video and plays when pressed, the left-hand direct iframe's result (may differ per
+engine), `lsof`/`ss`/`netstat` shows the listener on 127.0.0.1 only, fullscreen.
+
+- [x] **macOS** (27.2, dev run, 2026-11-07): direct iframe shows Error 153, the
+  embedURL frame shows the player, listener on 127.0.0.1 only, gone when the launcher
+  exits. Muted `autoplay=1` played: captions advanced between screenshots 12 s apart.
+  Not seen: pressing play by hand, sound, fullscreen, a built app.
+- [ ] **Windows** — WebView2: file:// page framing http://127.0.0.1. Autoplay and
+  fullscreen depend on the outer iframe's `allow`.
+- [ ] **Linux** — WebKitGTK: does it play, and does the direct iframe also get 153?
+
 ## #102 — `win.open({ show: false })` (`feat/win-open-hidden`, 2026-11-01)
 
 WINOPEN gained field 16: `"0"` = open hidden. Plan + gotchas:

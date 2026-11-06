@@ -8,6 +8,10 @@ const { compileApiGate } = await import(tjs.env.BRIDGE_JS || '../../runtime/brid
 
 const A = 'https://a.com', B = 'https://b.com';
 const cases = [
+  // tiny.embedURL: off for a wrapper and for any list that doesn't name it
+  ['wrapper', 'embed.url', A, false],
+  [{ disable: ['*'], enable: ['win.*'] }, 'embed.url', A, false],
+  [{ disable: ['*'], enable: ['embed.url'] }, 'embed.url', A, true],
   // no gate
   [undefined, 'store.get', A, true],
   [null, 'store.get', A, true],
