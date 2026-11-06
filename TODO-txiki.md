@@ -79,6 +79,27 @@ fetches one at a time.
 - Slow large h2 downloads stay as a known issue on macOS and Windows x64: their
   binaries come from upstream's releases, so the window can't be patched here.
 
+**With `connection: close`, repeat fetches to a host advertising h3 are slow or fail
+(Windows, x64 tag emulated on an arm64 VM, 2026-11-06; macOS not measured).** The
+first fetch in a process takes about 0.35 s, then:
+
+| 7 in a row, ms | tag, `close` | tag, pooled | 26.6.0, `close` |
+|---|---|---|---|
+| www.google.com | 381 869 1938 1905 1840 2332 984 | 401 157 167 212 177 160 158 | 721 507 591 587 624 609 554 |
+| www.youtube.com | 352 2382 2397 2463 2378 2350 2439 | 494 139 138 171 145 149 138 | 339 383 393 355 378 358 372 |
+| feeds.megaphone.fm | 358 2160 2165 2151 44 583 2118 | 213 33 20 20 17 26 18 | 520 194 340 192 157 193 124 |
+
+github, raw.githubusercontent and art19, which didn't advertise it, aren't affected.
+Through bridge.js, 72 fetches to google: median 2389 ms, no failures. An earlier run
+of 30 had 2 over 4 s, the worst 11.6 s, and a fetch of the same length failed check.js's
+`6 fetches in a row` once in 3 runs. Its 4 s limit hides the usual 2.4 s. www.cloudflare.com: 8 of 30 native fetches rejected, after
+about 3.6 s, and curl rescued all 8 at up to 3.9 s total. Looks like the QUIC
+race on each cold connect, as in the Linux abort, but not proven. Not a blocked network:
+from the same VM, Google and YouTube answer a QUIC probe on UDP 443 in 13 to 94 ms,
+and curl to google stays around 0.5 s. So the mitigation for the pool costs about 2 s
+a fetch on these hosts here. The Windows x64 binary is upstream's, so HTTP/3 can't be
+built out as on Linux.
+
 **Master with `connection: close` loses about 1 in 5 fetches to
 `feeds.megaphone.fm`** (Linux arm64, 2026-11-04): "Network request failed" in under
 150 ms, 24/30 serial, gaps don't help. The tag with `connection: close`, master with

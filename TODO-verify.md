@@ -5717,10 +5717,53 @@ build works and fetch still does without QUIC. It says nothing about the abort.
     RSA-only host reads "The certificate validity has expired", which is misleading.
 - [ ] **Linux: a CI build has HTTP/3 off** — not run. The cache key moved to v3, and
   the glibc floor and verify steps need to pass on a `release-test/*` run.
-- [ ] **Windows: curl fallback** — not run. check.js's `curl fallback` cases, in a
-  built GUI app too: `curl.exe` must not flash a console window.
+- [x] **Windows: curl fallback** — check.js's `curl fallback` cases, in a built GUI
+  app too: `curl.exe` must not flash a console window. *(2026-11-06, 41b806d, Windows
+  11 26200 arm64 VM, x64 tjs emulated, System32 curl.)* Rerun on 4f4e8e2 where it says so
+  below. check.js all ok, 2 of 2 on 4f4e8e2, once its `.curlrc` case had a backslash
+  path (tjs can't load bridge.js from a forward-slash one); that case's `-q` is real,
+  since System32's curl sends the file's header without it and not with it. One earlier
+  run hit the slow fetch below. A built app, and
+  one in a Cyrillic/CJK/emoji folder with a TEMP to match:
+  a WinEvent hook saw the control (plain `tjs.spawn(['curl', ...])`) show a console,
+  and no console created or shown across every fallback, including the first
+  `curl --version` probe. `tinyjs dev` works too (flash not measurable there).
+  curl.exe's parent is the launcher, its argv has no headers, and it's gone after
+  cancel, abort and `app.quit()` with a stream open. Refused all the same:
+  self-signed, expired, wrong-host and untrusted-root on badssl. A POST goes out
+  once. `&`, `%PATH%`, `^`, `|`, `$()`, quotes and backslashes in a URL reach the
+  server as text. 3 MB binary byte for byte. wmse (RSA-only) HEAD and GET work.
+  Built amp 0.15.1 (examples main 94456db): 8/8 feeds, 3/3 streams, `.pls`, no
+  curl.exe seen. test/ffi and matcha + kitchen-sink from ffi-dlopen pass again. Suite:
+  pass or skip, except capabilities, linux-mime, update-fetch and resources, as
+  recorded above (their workarounds not rerun). Not run: a certificate only the OS
+  trusts, since that means changing this machine's store.
+  **Fixed by 4f4e8e2, rerun in all of those apps:** a non-ASCII response header no
+  longer corrupts the body (41b806d gave `ose\r\n\r\nBODY`), and the header and URL
+  files are gone once headers arrive, so `app.quit()` with a stream open no longer
+  leaves `authorization: Bearer ...` in temp (a hung server before headers: not
+  tried). System32's curl.exe by full path, `-q`, `--globoff`, `--config`: seen in the
+  argv, no console flash, no secret or URL in it. A URL now goes out normalized through curl
+  (`/sp%20ace`, `/back/slash`), while native still sends `/sp ace` raw, as on 26.6.0.
+  Built amp again: 8/8 feeds, 3/3 streams, `.pls`, no curl.exe seen.
+  **OPEN, runtime, slow or failing after a host advertises h3:** TODO-txiki.md. 4f4e8e2
+  doesn't change it: google through bridge.js, median 2392 ms of 30.
 - [ ] **Windows arm64** — not run. Keeps HTTP/3 on; nothing has shown whether the
   abort happens there.
+
+**CONNECT proxy through the curl fallback.** curl's `-i` printed the proxy's own reply
+first, so the status was the proxy's, headers were empty and the real header block
+landed in the body; a proxy refusing CONNECT read as the site's own 403. Also in the
+code before the bump. Now `--suppress-connect-headers` (curl 7.54). check.js has a
+local proxy for it: a refusal (offline) and wmse by GET and HEAD. All three fail
+without the flag.
+- [x] **Windows** — *(2026-11-06, same VM, x64 tjs emulated, System32 curl)* check.js all
+  ok, 2 of 2. A built app with `https_proxy` set against a separate proxy: real headers
+  and a clean body, by GET and HEAD. Rest of the built-app run and amp unchanged. An
+  authenticating proxy (407 first) not tried.
+- [ ] **macOS** — not run. The same flags, so the same bug and fix are expected:
+  check.js, and note the system curl's version.
+- [ ] **Linux** — not run. The same, and curl is whatever the distro ships.
 
 ## `tjs:ffi` on txiki 26.11.0: `Lib`/`CFunction` gone, `dlopen()` only (2026-11-04)
 

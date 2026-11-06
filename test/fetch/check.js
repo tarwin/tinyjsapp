@@ -358,7 +358,9 @@ await check('endless headers through curl stop at the limit', async () => {
 await check('curl ignores ~/.curlrc', async () => {
   await tjs.writeFile(dir + '/.curlrc', enc.encode('header = "x-from-curlrc: 1"\n'));
   await tjs.writeFile(dir + '/_curlrc', enc.encode('header = "x-from-curlrc: 1"\n'));
-  const bridge = new URL('../../runtime/bridge.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  // Backslashes on Windows: tjs can't resolve bridge.js's own relative imports otherwise.
+  const bridge = new URL('../../runtime/bridge.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+    .replace(/\//g, IS_WIN ? '\\' : '/');
   await tjs.writeFile(dir + '/rc.js', enc.encode(`await import(${JSON.stringify(bridge)});
 await (await fetch('${A}/nativedrop/rc')).text();
 tjs.exit(0);
@@ -403,6 +405,69 @@ tjs.exit(0);
   await p.wait();
   return expect(out.trim(), 'rejected');
 }, 15000);
+
+// A CONNECT proxy, for curl's -i: it prints the proxy's own reply ahead of the
+// response unless told not to. A child process, since the proxy comes from its env.
+const proxySeen = [];
+const proxy = await (await tjs.listen('tcp', '127.0.0.1', 0)).opened;
+const pipeTo = async (rd, wr) => { for (;;) { const { value, done } = await rd.read(); if (done) return; await wr.write(value); } };
+(async () => {
+  const accept = proxy.readable.getReader();
+  for (;;) {
+    const { value, done } = await accept.read();
+    if (done) break;
+    (async (conn) => {
+      const { readable, writable } = await conn.opened;
+      const rd = readable.getReader(), wr = writable.getWriter();
+      let text = '';
+      while (!text.includes('\r\n\r\n')) {
+        const r = await rd.read();
+        if (r.done) return;
+        text += dec.decode(r.value);
+      }
+      const target = text.split(' ')[1];
+      proxySeen.push(target);
+      const [host, port] = target.split(':');
+      if (host === 'proxy-denied.invalid') {
+        await wr.write(enc.encode('HTTP/1.1 403 Forbidden\r\ncontent-length: 0\r\nconnection: close\r\n\r\n'));
+        await wr.close().catch(() => {});
+        return;
+      }
+      const up = await (await tjs.connect('tcp', host, +port)).opened;
+      await wr.write(enc.encode('HTTP/1.1 200 Connection established\r\n\r\n'));
+      await Promise.race([pipeTo(rd, up.writable.getWriter()), pipeTo(up.readable.getReader(), wr)]);
+    })(value).catch(() => {});
+  }
+})();
+const viaProxy = async (url, method = 'GET') => {
+  const bridge = new URL('../../runtime/bridge.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')
+    .replace(/\//g, IS_WIN ? '\\' : '/');
+  await tjs.writeFile(dir + '/px.js', enc.encode(`await import(${JSON.stringify(bridge)});
+let out;
+try {
+  const r = await fetch(${JSON.stringify(url)}, { method: ${JSON.stringify(method)} });
+  const rd = r.body?.getReader();
+  const first = rd ? (await rd.read()).value : null;
+  let headers = 0;
+  r.headers.forEach(() => { headers++; });
+  out = { status: r.status, headers, first: new TextDecoder().decode((first ?? new Uint8Array()).subarray(0, 40)) };
+} catch (e) { out = { error: String(e?.message ?? e) }; }
+console.log(JSON.stringify(out));
+tjs.exit(0);
+`));
+  const at = `http://127.0.0.1:${proxy.localPort}`;
+  const p = tjs.spawn([tjs.exePath, 'run', dir + '/px.js'], {
+    env: { ...tjs.env, https_proxy: at, HTTPS_PROXY: at }, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
+  });
+  const [out, err] = await Promise.all([readAll(p.stdout), readAll(p.stderr)]);
+  await p.wait();
+  try { return JSON.parse(out); } catch { return { error: `no result: ${out} ${err}` }; }
+};
+await check('a proxy refusing CONNECT is a failure, not its 403', async () => {
+  const r = await viaProxy('https://proxy-denied.invalid/');
+  if (!proxySeen.includes('proxy-denied.invalid:443')) return 'never reached the proxy';
+  return r.error ? null : `resolved: ${JSON.stringify(r)}`;
+}, 45000);
 
 if (!offline) {
   console.log('\n-- real hosts: [status, bytes, final url]');
@@ -455,6 +520,16 @@ if (!offline) {
   await check('an RSA-only server, through curl', async () => {
     const r = await fetch('https://wmse.streamguys1.com/', { method: 'HEAD' });
     return r.status > 0 ? null : 'no status';
+  }, 45000);
+  await check('an RSA-only server through curl and a CONNECT proxy: GET', async () => {
+    const r = await viaProxy('https://wmse.streamguys1.com/');
+    if (r.error) return r.error;
+    return (/^HTTP\//.test(r.first) ? `the response's headers are in the body: ${JSON.stringify(r.first)}` : null)
+      || (r.headers ? null : 'no headers: the proxy\'s reply was taken as the response');
+  }, 45000);
+  await check('an RSA-only server through curl and a CONNECT proxy: HEAD', async () => {
+    const r = await viaProxy('https://wmse.streamguys1.com/', 'HEAD');
+    return r.error || (r.headers ? null : 'no headers: the proxy\'s reply was taken as the response');
   }, 45000);
   // Each crashed or lost requests when pooled on 26.11.0: google.com aborted the
   // process on Linux once it had learned the origin's h3, and simplecast lost 2

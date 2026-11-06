@@ -119,7 +119,11 @@ async function curlFetch(url, { method, headers, signal }) {
   // -q has to come first: it skips ~/.curlrc, which could redirect, add headers
   // or turn off TLS checks behind the rules here. --globoff keeps curl from
   // expanding [] and {} in a URL into other requests. --proto locks it to http(s).
-  const args = [CURL, '-q', '--globoff', '-s', '-i', '--connect-timeout', '30', '--proto', '=http,https'];
+  // --suppress-connect-headers keeps a CONNECT proxy's own reply out of -i's output,
+  // where it would be taken for the response. Needs curl 7.54, older than the 7.55
+  // required below.
+  const args = [CURL, '-q', '--globoff', '-s', '-i', '--suppress-connect-headers',
+    '--connect-timeout', '30', '--proto', '=http,https'];
   if (method === 'HEAD') args.push('--head');
   // Headers and URL go through files in a 0700 temp dir, never argv: argv is
   // readable by every local user via `ps`, and headers carry Authorization /
