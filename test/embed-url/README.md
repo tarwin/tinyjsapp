@@ -2,11 +2,14 @@
 
 Headless, every platform: `bin/tjs run test/embed-url/check.js` → `PASS`.
 
+On Windows, give the script as an absolute path with backslashes, or its relative
+imports fail: `bin\tjs.exe run C:\path\to\repo\test\embed-url\check.js`.
+
 In a real window: `cd test/embed-url/app && tinyjs dev`. It needs internet access.
 
 | panel | expected |
 |---|---|
-| left, direct iframe | Error 153 on macOS. Record what other engines do. |
+| left, direct iframe | Error 153 on macOS; a browser error page (a grey cloud, `chrome-error://`) on Windows. Record what Linux does. |
 | right, `tiny.embedURL` | the video's poster and a play button. Press it: the video plays. |
 
 The caption under the panels reads `refused: ok` when `tiny.embedURL` rejected a

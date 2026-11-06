@@ -6,7 +6,7 @@ title: "embeds"
 
 <p class="tagline">tiny.embedURL — YouTube and other players in an iframe</p>
 
-A YouTube iframe in an app page shows **Error 153** ("Video player configuration error"). YouTube needs a `Referer` to run, and the webview sends none from a `file://` page. `referrerpolicy` can't change that.
+A YouTube iframe in an app page doesn't play. On macOS it shows **Error 153** ("Video player configuration error"), and on Windows the frame shows a browser error page instead. YouTube needs a `Referer` to run, and the webview sends none from a `file://` page. `referrerpolicy` can't change that.
 
 `tiny.embedURL()` gives you a URL that works instead:
 

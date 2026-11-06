@@ -1386,7 +1386,9 @@ export function embedPage(href) {
 }
 export function makeEmbedHost(extraHosts) {
   const byId = new Map();   // id -> page
-  const idFor = new Map();  // href -> id, so a page asking in a loop can't grow this
+  // href -> id, so asking for the same URL again adds nothing. Each new URL does
+  // add an entry (a new query string counts), and they last until the app exits.
+  const idFor = new Map();
   let server = null;
   const notFound = () => new Response('not found', { status: 404 });
   const start = () => {

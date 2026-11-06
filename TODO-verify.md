@@ -19,8 +19,17 @@ engine), `lsof`/`ss`/`netstat` shows the listener on 127.0.0.1 only, fullscreen.
   embedURL frame shows the player, listener on 127.0.0.1 only, gone when the launcher
   exits. Muted `autoplay=1` played: captions advanced between screenshots 12 s apart.
   Not seen: pressing play by hand, sound, fullscreen, a built app.
-- [ ] **Windows** — WebView2: file:// page framing http://127.0.0.1. Autoplay and
-  fullscreen depend on the outer iframe's `allow`.
+- [x] **Windows** (11 26200, dev run, 2026-11-07): the embedURL frame shows the
+  player with `document.referrer` `http://127.0.0.1:<port>/`, listener on 127.0.0.1
+  only, gone when the window closes. A muted click sent over CDP played: currentTime
+  0.8 → 4.8 → 8.8 s. `document.fullscreenEnabled` and the autoplay policy are true in
+  the loopback and player frames. The direct iframe doesn't get 153: it lands on
+  `chrome-error://chromewebdata/` (a grey cloud), cause not found. `check.js` passes
+  with an absolute backslash path (README).
+  Built app, started with no std handles: backend, launcher and a 127.0.0.1 listener
+  all ran and exited on close, but DevTools are off there, so the player wasn't seen.
+  Not seen: pressing play by hand, sound, entering fullscreen, the player in a built
+  app, autoplay under the default policy (that run had it relaxed).
 - [ ] **Linux** — WebKitGTK: does it play, and does the direct iframe also get 153?
 
 ## #102 — `win.open({ show: false })` (`feat/win-open-hidden`, 2026-11-01)

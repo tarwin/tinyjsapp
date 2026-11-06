@@ -431,8 +431,9 @@ tiny.audioTap.on(({ pcm, sampleRate, channels, frames, t }) => {
 audio.crossOrigin = 'anonymous';
 audio.src = tiny.proxyURL('https://host/stream.mp3');
 
-// ── YouTube/Vimeo in an iframe: a direct iframe in an app page gets YouTube's
-// Error 153 (file:// sends no Referer). embedURL frames it from a loopback page.
+// ── YouTube/Vimeo in an iframe: a direct YouTube iframe in an app page fails, with
+// Error 153 on macOS and a browser error page on Windows (file:// sends no
+// Referer). embedURL frames it from a loopback page.
 // Other hosts go in tinyjs.json "embedHosts". Ask each launch; don't save the URL.
 iframe.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
 iframe.src = await tiny.embedURL('https://www.youtube.com/embed/ID');

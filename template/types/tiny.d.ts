@@ -862,9 +862,9 @@ declare interface Tiny {
   proxyURL(url: string): string;
 
   /** A URL to use as an iframe's src for a video player that needs a Referer.
-   *  YouTube answers a direct iframe in an app page with Error 153, because
-   *  file:// pages send no Referer. This serves a small page on 127.0.0.1 that
-   *  frames the target, so the player gets one:
+   *  A direct YouTube iframe in an app page fails (Error 153 on macOS, a browser
+   *  error page on Windows), because file:// pages send no Referer. This serves
+   *  a small page on 127.0.0.1 that frames the target, so the player gets one:
    *    iframe.src = await tiny.embedURL('https://www.youtube.com/embed/ID');
    *  Rejects unless the URL is https on www.youtube.com, www.youtube-nocookie.com,
    *  player.vimeo.com or a host in tinyjs.json's "embedHosts". The URL only
