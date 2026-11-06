@@ -88,21 +88,45 @@ async function readyHiddenArgv() {
 // curl can do both (TODO-txiki.md). Only when no response existed: a real HTTP
 // error stays an error, and other methods aren't sent twice.
 const nativeFetch = globalThis.fetch?.bind(globalThis);
+// By full path on Windows, as update.js does for tar: a bare name is also looked
+// up in the current directory there, so a curl.exe planted beside a file the app
+// was opened from would run.
+const CURL = IS_WIN
+  ? (tjs.env.SystemRoot || tjs.env.SYSTEMROOT || 'C:\\Windows') + '\\System32\\curl.exe'
+  : 'curl';
 let curlProbe = null;
-const haveCurl = () => (curlProbe ??= probeOk(['curl', '--version']));
+const haveCurl = () => (curlProbe ??= probeOk([CURL, '--version']));
+// More than any real server sends, and curl -i would otherwise have this buffer a
+// hostile server's endless "headers" without limit.
+const CURL_MAX_HEADERS = 512 * 1024;
+
+// Where the first blank line starts and how long it is. Bytes, because a body
+// may follow that isn't text, and both endings, because curl -i passes on a
+// server's bare LFs as they came.
+function headerEnd(b, from) {
+  for (let i = from; i + 1 < b.length; i++) {
+    if (b[i] !== 10) continue;
+    if (b[i + 1] === 10) return { at: i, len: 2 };
+    if (b[i + 1] === 13 && b[i + 2] === 10) return { at: i, len: 3 };
+  }
+  return null;
+}
 
 // One GET or HEAD hop via curl, returned as a real Response with a streaming
 // body, so internet radio stays live. -i puts the header block on stdout ahead
 // of the body; no -L, since the wrapper follows redirects itself.
 async function curlFetch(url, { method, headers, signal }) {
-  // --proto locks curl to http(s) whatever a caller slips past the wrapper
-  const args = ['curl', '-s', '-i', '--connect-timeout', '30', '--proto', '=http,https'];
+  // -q has to come first: it skips ~/.curlrc, which could redirect, add headers
+  // or turn off TLS checks behind the rules here. --globoff keeps curl from
+  // expanding [] and {} in a URL into other requests. --proto locks it to http(s).
+  const args = [CURL, '-q', '--globoff', '-s', '-i', '--connect-timeout', '30', '--proto', '=http,https'];
   if (method === 'HEAD') args.push('--head');
-  // Headers go through a file in a 0700 temp dir, never argv: argv is readable
-  // by every local user via `ps`, and headers carry Authorization / Cookie
-  // (#27). `headers` already passed new Headers(), which refuses CR/LF. "Name;"
-  // is curl's spelling for sending a header empty. `-H @file` needs curl 7.55
-  // (2017; Windows 10 1803's curl.exe is 7.55.1).
+  // Headers and URL go through files in a 0700 temp dir, never argv: argv is
+  // readable by every local user via `ps`, and headers carry Authorization /
+  // Cookie (#27), and URLs can carry tokens. `headers` already passed new
+  // Headers(), which refuses CR/LF, and href has none. "Name;" is curl's spelling
+  // for sending a header empty. `-H @file` needs curl 7.55 (2017; Windows 10
+  // 1803's curl.exe is 7.55.1).
   const lines = [];
   let encoding = false;
   headers.forEach((v, k) => {
@@ -115,8 +139,10 @@ async function curlFetch(url, { method, headers, signal }) {
   const dropIo = () => tjs.remove(ioDir, { recursive: true }).catch(() => {});
   let p;
   try {
+    const target = new URL(url).href.replace(/[\\"]/g, '\\$&');
     await tjs.writeFile(ioDir + '/headers', enc.encode(lines.join('\n') + '\n'));
-    args.push('-H', '@' + ioDir + '/headers', '--', url);   // never let a URL parse as a flag
+    await tjs.writeFile(ioDir + '/config', enc.encode(`url = "${target}"\n`));
+    args.push('-H', '@' + ioDir + '/headers', '--config', ioDir + '/config');
     // hiddenArgv: curl.exe would otherwise flash a console window from a
     // GUI-subsystem app
     await readyHiddenArgv();
@@ -124,52 +150,66 @@ async function curlFetch(url, { method, headers, signal }) {
   } catch (e) { dropIo(); throw e; }
   p.wait().then(dropIo, dropIo);
   const kill = () => { try { p.kill(); } catch {} };
-  if (signal) signal.aborted ? kill() : signal.addEventListener('abort', kill);
   // A server that accepts and never answers mustn't leave this pending for
   // good. Only until the headers: a stream has no end to time.
   const noHeaders = setTimeout(kill, 30000);
-  const reader = p.stdout.getReader();
-  let buf = new Uint8Array(0), head = null;
-  while (!head) {
-    const { done, value } = await reader.read();
-    if (value) {
-      const n = new Uint8Array(buf.length + value.length);
-      n.set(buf); n.set(value, buf.length); buf = n;
-    }
-    // header blocks end in a blank line; 1xx interim blocks are skipped
-    let idx;
-    while (!head && (idx = dec.decode(buf).indexOf('\r\n\r\n')) !== -1) {
-      const block = dec.decode(buf.subarray(0, idx));
-      const m = /^HTTP\/[\d.]+ (\d{3})(?: (.*))?/.exec(block);
-      if (!m) break;
-      buf = buf.subarray(idx + 4);
-      if (+m[1] >= 200) head = { status: +m[1], statusText: m[2] || '', block };
-    }
-    if (done) break;
-  }
-  clearTimeout(noHeaders);
-  if (!head) {
-    const st = await p.wait();
-    throw new TypeError('Network request failed (curl exit ' + (st.term_signal || st.exit_status) + ')');
-  }
-  const out = [];
-  for (const line of head.block.split('\r\n').slice(1)) {
-    const c = line.indexOf(':');
-    if (c > 0) out.push([line.slice(0, c).trim(), line.slice(c + 1).trim()]);
-  }
-  const noBody = method === 'HEAD' || [204, 205, 304].includes(head.status);
-  const stream = noBody ? null : new ReadableStream({
-    start(c) { if (buf.length) c.enqueue(buf.slice()); },
-    async pull(c) {
+  try {
+    if (signal) signal.aborted ? kill() : signal.addEventListener('abort', kill);
+    const reader = p.stdout.getReader();
+    let buf = new Uint8Array(0), head = null, scanned = 0;
+    while (!head) {
       const { done, value } = await reader.read();
-      if (done) c.close();
-      else c.enqueue(value);
-    },
-    cancel: kill,
-  });
-  const res = new Response(stream, { status: head.status, statusText: head.statusText, headers: out });
-  Object.defineProperty(res, 'url', { get: () => url });
-  return res;
+      if (value) {
+        const n = new Uint8Array(buf.length + value.length);
+        n.set(buf); n.set(value, buf.length); buf = n;
+      }
+      // 1xx interim blocks are skipped
+      let end;
+      while (!head && (end = headerEnd(buf, scanned))) {
+        const block = dec.decode(buf.subarray(0, end.at));
+        const m = /^HTTP\/[\d.]+ (\d{3})(?: (.*))?/.exec(block);
+        if (!m) throw new TypeError('Network request failed (not HTTP)');
+        buf = buf.subarray(end.at + end.len);
+        scanned = 0;
+        if (+m[1] >= 200) head = { status: +m[1], statusText: (m[2] || '').split(/\r?\n/)[0].trim(), block };
+      }
+      if (head) break;
+      if (buf.length > CURL_MAX_HEADERS) throw new TypeError('Network request failed (headers too large)');
+      scanned = Math.max(0, buf.length - 2);
+      if (done) break;
+    }
+    if (!head) {
+      const st = await p.wait();
+      throw new TypeError('Network request failed (curl exit ' + (st.term_signal || st.exit_status) + ')');
+    }
+    // curl has read both files by now, and they hold the caller's credentials.
+    // Awaited: a process that exits right after this must not leave them behind.
+    await dropIo();
+    const out = [];
+    for (const line of head.block.split(/\r?\n/).slice(1)) {
+      const c = line.indexOf(':');
+      if (c > 0) out.push([line.slice(0, c).trim(), line.slice(c + 1).trim()]);
+    }
+    const noBody = method === 'HEAD' || [204, 205, 304].includes(head.status);
+    const stream = noBody ? null : new ReadableStream({
+      start(c) { if (buf.length) c.enqueue(buf.slice()); },
+      async pull(c) {
+        const { done, value } = await reader.read();
+        if (done) c.close();
+        else c.enqueue(value);
+      },
+      cancel: kill,
+    });
+    const res = new Response(stream, { status: head.status, statusText: head.statusText, headers: out });
+    Object.defineProperty(res, 'url', { get: () => url });
+    return res;
+  } catch (e) {
+    // a stream nobody will read would hold curl open for good
+    kill();
+    throw e;
+  } finally {
+    clearTimeout(noHeaders);
+  }
 }
 
 const REDIRECT_CODES = new Set([301, 302, 303, 307, 308]);

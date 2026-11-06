@@ -57,6 +57,13 @@ function serve(info, other) {
     else if (path === '/nativedrop/stream') {
       await wr.write(enc.encode('HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\nconnection: close\r\n\r\nfirst'));
       try { for (;;) { await wr.write(new Uint8Array(4096)); await new Promise((r) => setTimeout(r, 20)); } } catch {}
+    } else if (path === '/nativedrop/lf') {
+      await wr.write(enc.encode('HTTP/1.1 200 OK\nx-lf: 1\nconnection: close\n\nbody'));
+    } else if (path === '/nativedrop/badname') {
+      await wr.write(enc.encode('HTTP/1.1 200 OK\r\nbad name: 1\r\nconnection: close\r\n\r\nbody'));
+    } else if (path === '/nativedrop/endless') {
+      await wr.write(enc.encode('HTTP/1.1 200 OK\r\n'));
+      try { for (;;) { await wr.write(enc.encode('x-a: ' + 'a'.repeat(8000) + '\r\n')); await new Promise((r) => setTimeout(r, 1)); } } catch {}
     } else if (path === '/dropall') { /* close below */ }
     else if (path === '/stream') {
       await wr.write(enc.encode('HTTP/1.1 200 OK\r\ncontent-type: audio/mpeg\r\nconnection: close\r\n\r\n'));
@@ -330,6 +337,39 @@ await check('a stream through curl stays live and cancels', async () => {
   await rd.cancel();
   return value?.length ? null : 'no first chunk';
 });
+await check('curl takes [] and {} in a URL literally', async () => {
+  const before = seen.length;
+  await (await fetch(A + '/nativedrop/ok?a=[1-3]&b={x,y}')).text();
+  const sent = seen.slice(before).filter((r) => !r.head.includes('pragma:'));
+  return expect(sent.length, 1) || expect(sent[0].line.split(' ')[1], '/nativedrop/ok?a=[1-3]&b={x,y}');
+});
+await check('curl parses a server\'s bare LF headers', async () => {
+  const r = await fetch(A + '/nativedrop/lf');
+  return expect(r.headers.get('x-lf'), '1') || expect(await r.text(), 'body');
+});
+await check('an invalid header name through curl rejects, or is dropped', async () => {
+  const r = await fetch(A + '/nativedrop/badname').catch((e) => e);
+  return r instanceof Error || r.status === 200 ? null : 'neither';
+});
+await check('endless headers through curl stop at the limit', async () => {
+  const err = await fetch(A + '/nativedrop/endless').then(() => null, (e) => e);
+  return err ? null : 'it resolved';
+}, 20000);
+await check('curl ignores ~/.curlrc', async () => {
+  await tjs.writeFile(dir + '/.curlrc', enc.encode('header = "x-from-curlrc: 1"\n'));
+  await tjs.writeFile(dir + '/_curlrc', enc.encode('header = "x-from-curlrc: 1"\n'));
+  const bridge = new URL('../../runtime/bridge.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  await tjs.writeFile(dir + '/rc.js', enc.encode(`await import(${JSON.stringify(bridge)});
+await (await fetch('${A}/nativedrop/rc')).text();
+tjs.exit(0);
+`));
+  const p = tjs.spawn([tjs.exePath, 'run', dir + '/rc.js'], {
+    env: { ...tjs.env, HOME: dir, USERPROFILE: dir, CURL_HOME: dir }, stdin: 'ignore', stdout: 'ignore', stderr: 'ignore',
+  });
+  await p.wait();
+  return expect(last().line, 'GET /nativedrop/rc HTTP/1.1')
+    || (last().head.includes('x-from-curlrc') ? 'read the file' : null);
+}, 15000);
 await check('POST is not sent a second time', async () => {
   const before = countOf('/dropall');
   const err = await fetch(A + '/dropall', { method: 'POST', body: 'x' }).then(() => null, (e) => e);
@@ -348,7 +388,8 @@ await check('both failing reports the runtime\'s error, not curl\'s', async () =
   if (!err) return 'it resolved';
   return expect(countOf('/dropall') - before, 2) || (/curl/.test(err.message) ? err.message : null);
 });
-await check('no curl on PATH: the runtime\'s error, nothing else breaks', async () => {
+// Windows runs System32's curl.exe by full path, whatever PATH says.
+if (!IS_WIN) await check('no curl on PATH: the runtime\'s error, nothing else breaks', async () => {
   const bridge = new URL('../../runtime/bridge.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
   await tjs.writeFile(dir + '/nc.js', enc.encode(`await import(${JSON.stringify(bridge)});
 const e = await fetch('${A}/nativedrop/ok').then(() => null, (x) => x);
