@@ -5692,10 +5692,29 @@ below. amp not run on the others. Master not run on Windows.
 passes, on the tag and on the tag built with HTTP/3 off, which only shows that the
 build works and fetch still does without QUIC. It says nothing about the abort.
 
-- [ ] **Linux: HTTP/3 off stops the abort** — not run. `rm bin/tjs && TJS_BUILD=1
-  CC=gcc-12 CXX=g++-12 ./setup.sh`, then check.js passes `4 at once to an h2 + h3
-  host, 3 rounds` with no exit 134. Also amp's feeds and streams, and whether curl
-  on PATH is what reaches the RSA-only station.
+- [x] **Linux: HTTP/3 off stops the abort** — *(2026-11-06, 4f4e8e2, Ubuntu 24.04
+  arm64 VM, systemd-resolved; tjs built in ubuntu:22.04 with gcc-12 for arm64 and
+  x86_64, floor assertions pass, GLIBCXX now 3.4.29)* check.js all ok (64) on both,
+  x86_64 under Rosetta in a 22.04 container, so not a real x86_64 desktop. Rounds of
+  8 parallel fetches to google and simplecast, 3 rounds a run: the old tag build
+  dumped core in 10 of 10 runs, this build 8/8 in every round (10 runs on 41b806d, 6
+  on 4f4e8e2). Responses keep `alt-svc`, and the only UDP socket is DNS. update-fetch
+  and the suite pass; page tiny.fetch same in dev and built. megaphone 30/30 serial.
+  Sweeps: feeds 60/60, radio 397/415. Of the 4 stations curl reached on 11-04 that
+  missed, 3 fail in plain curl now too, and s2.voscast then answered 5 of 5.
+  amp's backend handlers: 7/7 feeds, 4 parallel `podFetchFeed` and `tiny.fetch` to
+  google return, gensokyo's now-playing works. Its `resolveStream` on prun.net times
+  out, and its `tiny.proxyURL` radio check gets media error 4, both on 26.6.0 too.
+  Curl on PATH is what reaches RSA-only `wmse.streamguys1.com` (200; rejected with it
+  off PATH; it refuses ECDHE and DHE, and its certificate is valid). amp by hand on
+  this build under `tinyjs dev`, listened to on the VM: works, and it exits clean.
+  - **Fallback:** a certificate only curl trusts (`CURL_CA_BUNDLE`, standing in for
+    the OS store): GET 200, POST rejected. With `SSL_CERT_FILE`, both 200 and no
+    curl. Cancel and abort leave no curl running; the URL and headers aren't in argv.
+  - **Still open:** a fetch where the runtime and curl both fail, then an exit at
+    once, leaves its `tinyjs-fetch-*` dir with the headers file in it (0700), since
+    only the path with a response awaits the cleanup. With no curl, the error for an
+    RSA-only host reads "The certificate validity has expired", which is misleading.
 - [ ] **Linux: a CI build has HTTP/3 off** — not run. The cache key moved to v3, and
   the glibc floor and verify steps need to pass on a `release-test/*` run.
 - [ ] **Windows: curl fallback** — not run. check.js's `curl fallback` cases, in a
