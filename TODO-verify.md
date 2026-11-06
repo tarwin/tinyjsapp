@@ -5746,11 +5746,23 @@ build works and fetch still does without QUIC. It says nothing about the abort.
   **Fixed by 4f4e8e2, rerun in all of those apps:** a non-ASCII response header no
   longer corrupts the body (41b806d gave `ose\r\n\r\nBODY`), and the header and URL
   files are gone once headers arrive, so `app.quit()` with a stream open no longer
-  leaves `authorization: Bearer ...` in temp (a hung server before headers: not
-  tried). System32's curl.exe by full path, `-q`, `--globoff`, `--config`: seen in the
+  leaves `authorization: Bearer ...` in temp (a hung server before headers: OPEN
+  below). System32's curl.exe by full path, `-q`, `--globoff`, `--config`: seen in the
   argv, no console flash, no secret or URL in it. A URL now goes out normalized through curl
   (`/sp%20ace`, `/back/slash`), while native still sends `/sp ace` raw, as on 26.6.0.
   Built amp again: 8/8 feeds, 3/3 streams, `.pls`, no curl.exe seen.
+  **Rerun on 95caecb (a2e94c4's cleanup):** check.js all ok (67), 2 of 2. An exit at once
+  after each ending, bare tjs with a private TEMP, 5 runs each, against a scratch
+  bridge.js without a2e94c4: both failing 0 left (5 without it); HEAD, a read body and
+  an unread stream 0 (0); abort at 0 to 300 ms, 9 timings, 0 (from 40 ms up, 2 to 5
+  of 5), so removing the files right after `kill()` doesn't lose to curl.exe holding
+  them.
+  **OPEN, on every path that exits before headers arrive:** with curl still waiting on a
+  server that has accepted and not answered, a process exit leaves the
+  `tinyjs-fetch-*` dir, `authorization: Bearer ...` included: 5 of 5 in bare tjs, and a
+  built app's `app.quit()` the same, though curl.exe itself goes. Nothing runs after
+  the exit to clean up. Passing headers and URL on curl's stdin (`--config -`) would mean
+  no file at all; not tried.
   **OPEN, runtime, slow or failing after a host advertises h3:** TODO-txiki.md. 4f4e8e2
   doesn't change it: google through bridge.js, median 2392 ms of 30.
 - [ ] **Windows arm64** — not run. Keeps HTTP/3 on; nothing has shown whether the
