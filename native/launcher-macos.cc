@@ -7091,8 +7091,13 @@ static void emit_winstate(NSWindow *win, const std::string &id) {
   auto b = [](bool v) { return v ? "true" : "false"; };
   // zoomed IS true in fullscreen; report the pre-fullscreen sense instead so
   // "maximized" means the green-button zoom state, matching Windows/Linux.
+  // isZoomed is ALSO true for any window without the Resizable bit (#113):
+  // after setResizable(false) every move reported maximized, rememberWindows
+  // saved it, and the next launch zoomed a window the user never maximized.
+  // A non-resizable window can't be zoomed by the user, so report false.
+  bool resizable = (win.styleMask & NSWindowStyleMaskResizable) != 0;
   std::string s = std::string("{\"fullscreen\":") + b(fs) +
-                  ",\"maximized\":" + b(!fs && win.zoomed) +
+                  ",\"maximized\":" + b(!fs && resizable && win.zoomed) +
                   ",\"minimized\":" + b(win.miniaturized) +
                   ",\"focused\":" + b(win.keyWindow) +
                   ",\"screenId\":" +

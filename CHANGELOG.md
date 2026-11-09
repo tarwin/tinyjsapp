@@ -4,6 +4,17 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.72.1 — 2026-11-10
+
+- **macOS: a non-resizable window came back maximized** (#113). With
+  `"rememberWindows": true`, a window whose page called
+  `tiny.win.setResizable(false)` reopened filling the screen after you had
+  dragged it, even though it was never maximized. AppKit reports any window
+  that can't be resized as zoomed, so every move saved `maximized: true`. A
+  window that isn't resizable now always reports `maximized: false`, both in
+  the saved placement and in `tiny.win.onState` / `onWindowState`. Windows and
+  Linux weren't affected.
+
 ## 0.72.0 — 2026-11-07
 
 - **`tiny.embedURL()`: YouTube and other players in an iframe** (#107). A

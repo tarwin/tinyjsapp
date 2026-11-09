@@ -1,0 +1,8 @@
+{
+  "name": "remembernonresizable",
+  "title": "remember non-resizable test",
+  "size": "500x400",
+  "id": "app.tinyjs.test.remembernonresizable",
+  "version": "0.1.0",
+  "rememberWindows": true
+}

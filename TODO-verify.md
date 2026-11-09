@@ -8,6 +8,23 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #113 — non-resizable window remembered as maximized (macOS fix, 2026-11-10)
+
+`-[NSWindow isZoomed]` is YES for any window without the Resizable bit, so after
+`setResizable(false)` every move reported `maximized: true`, rememberWindows saved
+it, and the next launch zoomed the window. `emit_winstate` now ANDs in the
+Resizable bit. Self-checking app: `test/remember-nonresizable/` (run `tinyjs dev`
+twice; README there). Windows (`IsZoomed`) and Linux (GTK maximized state) read
+the real state, so they shouldn't have had the bug, but nobody has watched it there.
+
+- [x] **macOS** (27.2, dev run, 2026-11-10): both runs PASS, `window-state.json`
+  keeps `maximized: false`. The same app on a launcher built WITHOUT the fix
+  reports `maximized:true` after the move and comes back zoomed on run 2.
+  User dragged kid by hand, quit, reran: came back where it was left, not
+  zoomed. Not yet seen: the reporter's rw1 sample, a built .app.
+- [ ] **Windows** — both runs PASS, no FAIL lines while dragging kid.
+- [ ] **Linux** — same (X11; Wayland can't check the position).
+
 ## #107 — `tiny.embedURL` (`feat/embed-url`, 2026-11-07)
 
 Self-driving app: `test/embed-url/app` (README there). Headless, any OS:
