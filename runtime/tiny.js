@@ -996,6 +996,8 @@
       //         menu?: [{ id, label, key? } | { separator: true }] }
       // icon: png path or 'sf:<name>' (SF Symbol); primaryAction: true makes a
       // left click fire onClick and moves the menu to right-click.
+      // titleColor ('#rrggbb' | { light, dark }) / titleFont
+      // ('monospacedDigit' | 'monospaced'): macOS only.
       set: (spec) => call('tray.set', spec),
       remove: () => call('tray.remove'),
       // The tray icon's on-screen rect { x, y, width, height } | null.

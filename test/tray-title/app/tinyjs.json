@@ -1,0 +1,7 @@
+{
+  "name": "traytitle",
+  "title": "tray title test",
+  "size": "460x420",
+  "id": "app.tinyjs.test.traytitle",
+  "version": "0.1.0"
+}

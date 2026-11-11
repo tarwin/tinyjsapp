@@ -318,6 +318,14 @@ declare interface TinyTraySpec {
   /** text beside the icon; Windows doesn't show it (it's the tooltip there
    *  when no tooltip is given) */
   title?: string;
+  /** macOS: the title's colour, '#rrggbb' / '#rrggbbaa' (or '#rgb'), or
+   *  { light, dark } for a light and a dark menu bar. Default: the system's.
+   *  A png or SF Symbol icon keeps its own look. Ignored on Windows and Linux. */
+  titleColor?: string | { light: string; dark: string };
+  /** macOS: 'monospacedDigit' gives every digit the same width, so a
+   *  ticking timer or counter doesn't shift sideways; 'monospaced' makes
+   *  the whole title monospace. Ignored on Windows and Linux. */
+  titleFont?: 'monospacedDigit' | 'monospaced';
   /** png path — absolute: a relative one is resolved against the working
    *  directory, which is the project in tinyjs dev but not in a built app
    *  (use (await paths()).resources + '/tray.png'). Template image by default.

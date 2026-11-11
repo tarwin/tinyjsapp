@@ -4,6 +4,24 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.73.0 — 2026-11-11
+
+- **macOS: colour and font for the tray title** (#114). `tray.set()` takes
+  two new fields. `titleColor` sets the colour of the text beside the icon:
+  `'#rrggbb'`, or `{ light, dark }` for a light and a dark menu bar, switching
+  as the menu bar does. `titleFont: 'monospacedDigit'` gives every digit the
+  same width, so a timer or counter in the title no longer shifts sideways
+  as it ticks; `'monospaced'` makes the whole title monospace.
+
+  ```js
+  tiny.tray.set({ icon: 'sf:timer', title: '24:59',
+                  titleFont: 'monospacedDigit', titleColor: '#ff3b30' });
+  ```
+
+  Windows shows no text beside a tray icon, and the Linux desktop draws the
+  title itself, so both ignore these fields. See
+  [title text](https://tinyjs.app/docs/tray#title).
+
 ## 0.72.1 — 2026-11-10
 
 - **macOS: a non-resizable window came back maximized** (#113). With

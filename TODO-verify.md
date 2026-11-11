@@ -8,6 +8,26 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #114 — tray `titleColor` / `titleFont` (macOS only, 2026-11-11)
+
+Two new TRAYBEGIN fields (5: colour `#rrggbbaa` or `#light,#dark`, 6:
+`monospacedDigit` | `monospaced`), applied as the status button's
+attributedTitle; `debug:tray` reports the drawn font and the colour resolved
+under Aqua and DarkAqua. Windows and Linux parse TRAYBEGIN by index with size
+checks, so they should just ignore the extra fields — nobody has watched it.
+
+- [x] **macOS** (27.2, dev run, 2026-11-11): a backend that set 8 specs in turn
+  read back the right colour, light and dark (`#f00` → `#ff0000`, the pair →
+  `#b00020` / `#ff8a80`) and the right font (`monospaced` →
+  `.AppleSystemUIFontMonospaced-Regular`). Screenshots on a dark menu bar
+  show the dark half of the pair. With `monospacedDigit`, "11:11" is 170px,
+  as wide as plain "88:88", against 152px plain. A plain `set()` after a
+  styled one goes back to the system colour; `'red'` and `'serif'` log a
+  warning and fall back. Not yet seen: a LIGHT menu bar.
+- [ ] **Windows** — a spec with both fields still shows the icon, tooltip
+  and menu as before (no garbled tooltip).
+- [ ] **Linux** — same, and the label (where the panel shows one) is unchanged.
+
 ## #113 — non-resizable window remembered as maximized (macOS fix, 2026-11-10)
 
 `-[NSWindow isZoomed]` is YES for any window without the Resizable bit, so after

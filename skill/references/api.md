@@ -344,6 +344,8 @@ await app.cookies.remove({ url: 'https://app.example.com' });   // -> number rem
 tiny.tray.set({ title, icon, tooltip, menu: [{ id, label }, { separator: true }] });
 // icon: png path | 'sf:<name>' (macOS SF Symbol) | 'emoji:<glyph>' (Windows,
 // drawn as mono silhouette). primaryAction: true = left-click fires onClick.
+// macOS only: titleColor '#rrggbb' | { light, dark }; titleFont
+// 'monospacedDigit' (timers/counters don't jitter) | 'monospaced'.
 tiny.tray.on((id) => ...); tiny.tray.onClick(fn); tiny.tray.remove();
 await tiny.tray.position();   // { x,y,width,height } | null (Linux: null)
 // Linux tray is AppIndicator/StatusNotifier — menu-based; a bare icon click

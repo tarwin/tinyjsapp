@@ -40,6 +40,8 @@ await tiny.tray.remove()
 |---|---|---|
 | `icon` | string | a png path, `'sf:<name>'` or `'emoji:<glyph>'` — see [icons](#icons) |
 | `title` | string | text beside the icon on macOS, and on Linux where the desktop shows it; Windows uses it as the tooltip when there's no `tooltip` |
+| `titleColor` | string \| object | macOS: the title's colour — see [title text](#title) |
+| `titleFont` | string | macOS: `'monospacedDigit'` or `'monospaced'` — see [title text](#title) |
 | `tooltip` | string | text shown on hover |
 | `template` | boolean | macOS: `false` keeps the png's colours instead of adapting it to the menu bar; default `true` |
 | `menu` | item[] | the menu, in the same [item shape](./menus#items) as the menu bar |
@@ -73,6 +75,24 @@ await tiny.tray.set({ icon, tooltip: 'Timer', menu });
 Pass an absolute path for a png — build it from [`paths().resources`](./resources) or `paths().data`. A relative path is resolved against the backend's working directory, which is your project folder in `tinyjs dev` but not dependably anything in a built app. Linux uses the path only if the file exists, and falls back to the app's icon otherwise.
 
 To show changing content — a countdown, a level meter — render a png yourself, write it to `paths().data`, and call `set` with the new path. `set` redraws the icon each time, so call it only when something changed.
+
+## title text {#title}
+
+On macOS the title follows the menu bar's colour and font by default. Two fields change that:
+
+- `titleColor` sets its colour: `'#rrggbb'`, `'#rrggbbaa'` or `'#rgb'`. A single colour can be hard to read on one of the menu bar's two looks, so you can pass one for each instead: `{ light: '#b00020', dark: '#ff8a80' }`. The menu bar's look follows the wallpaper behind it as well as Dark Mode, and the title switches with it.
+- `titleFont: 'monospacedDigit'` gives every digit the same width. Without it a title that counts — a timer, a download percentage — shifts sideways as it changes, because `1` is narrower than `8`. `'monospaced'` makes the whole title monospace.
+
+```js
+await tiny.tray.set({
+  icon: 'sf:timer',
+  title: '24:59',
+  titleFont: 'monospacedDigit',
+  titleColor: { light: '#b00020', dark: '#ff8a80' },
+});
+```
+
+Only the text changes; a template icon still takes the system's colour. Windows shows no text beside a tray icon, and on Linux the desktop draws the title, so both ignore these fields. To colour a tray icon on every OS, draw the text into a png and set `template: false`.
 
 ## clicks {#clicks}
 

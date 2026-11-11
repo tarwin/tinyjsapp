@@ -26,6 +26,8 @@ export function onTray(id, app) {
 - On win/linux `setHideOnClose` only holds while something can bring the app
   back (tray icon counts) — with a tray you're fine.
 - `primaryAction: true` = left-click fires `onClick`, menu on right-click.
+- A ticking title (timer, counter) jitters as digit widths change — pass
+  `titleFont: 'monospacedDigit'` (macOS). `titleColor` colours it (macOS).
 
 ## Desktop pet / overlay / HUD
 

@@ -1,0 +1,68 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>tray title test</title>
+<style>
+  :root { color-scheme: light dark; font: 13px -apple-system, system-ui, sans-serif; }
+  body { margin: 16px; }
+  h1 { font-size: 15px; margin: 0 0 6px; }
+  p { margin: 0 0 12px; opacity: .8; line-height: 1.4; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  button { font: inherit; padding: 4px 10px; }
+  button.on { outline: 2px solid #0a84ff; }
+  table { border-collapse: collapse; width: 100%; }
+  td { padding: 4px 6px; border-top: 1px solid #8884; vertical-align: top; }
+  td:first-child { opacity: .7; width: 9em; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px;
+        vertical-align: -2px; margin-right: 6px; border: 1px solid #8886; }
+  .now { font-weight: 600; }
+  #log { font: 11px ui-monospace, monospace; opacity: .7; white-space: pre-wrap; margin-top: 12px; }
+</style>
+</head>
+<body>
+<h1>Tray title: colour and font</h1>
+<p>The timer in the menu bar ticks every second. Switch Light/Dark in System Settings → Appearance:
+the title should change to the colour marked <b>now</b>, and the digits should never shift sideways
+(except with <i>plain</i>, which is there to compare).</p>
+<div class="row" id="variants"></div>
+<table>
+  <tr><td>variant</td><td id="v">—</td></tr>
+  <tr><td>system theme</td><td id="theme">—</td></tr>
+  <tr><td>light bar colour</td><td id="light">—</td></tr>
+  <tr><td>dark bar colour</td><td id="dark">—</td></tr>
+  <tr><td>font</td><td id="font">—</td></tr>
+</table>
+<div id="log"></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const sw = (c, now) => c
+  ? `<span class="sw" style="background:${c}"></span><span class="${now ? 'now' : ''}">${c}${now ? '  ← now' : ''}</span>`
+  : '— (system)';
+
+function show(r) {
+  $('v').textContent = r.variant;
+  const dark = !!r.theme?.dark;
+  $('theme').textContent = dark ? 'dark' : 'light';
+  const styled = r.spec.titleColor != null;
+  $('light').innerHTML = styled ? sw(r.tray.titleColorLight, !dark) : '— (system)';
+  $('dark').innerHTML = styled ? sw(r.tray.titleColorDark, dark) : '— (system)';
+  $('font').textContent = (r.tray.titleFont ?? '—') + (r.spec.titleFont ? `  (${r.spec.titleFont})` : '');
+  for (const b of document.querySelectorAll('#variants button')) b.classList.toggle('on', b.textContent === r.variant);
+  $('log').textContent = new Date().toLocaleTimeString() + '  ' + r.why + '\n' + $('log').textContent.split('\n').slice(0, 6).join('\n');
+}
+
+(async function boot() {
+  if (!window.tiny) return setTimeout(boot, 100);
+  tiny.api.on('report', show);
+  for (const name of await tiny.api.call('variants')) {
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.onclick = async () => show(await tiny.api.call('setVariant', { name }));
+    $('variants').append(b);
+  }
+  show(await tiny.api.call('report'));
+})();
+</script>
+</body>
+</html>

@@ -71,7 +71,7 @@
 //                         GET <qid> <what>           read-back query; what =
 //                                                    win | item:<id> | mouse |
 //                                                    clipboard[:count]
-//                         TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip>\t<primary01> /
+//                         TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip>\t<primary01>\t<titleColor>\t<titleFont> /
 //                         ITEM / SEP / TRAYEND       declare a menu bar status
 //                                                    item (applied on TRAYEND;
 //                                                    icon: png path or
@@ -1400,14 +1400,19 @@ static void install_key_window_observer() {}
 #endif
 
 // --- tray / status item (macOS) ----------------------------------------------
-// TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip>\t<primary01>, then
+// TRAYBEGIN <title>\t<icon>\t<template01>\t<tooltip>\t<primary01>\t<titleColor>\t<titleFont>, then
 // ITEM/SEP lines, then TRAYEND. icon is a png path or sf:<name> (SF Symbol).
 // With menu items the icon opens the menu (clicks -> `TRAY <id>`); without,
 // clicking the icon sends `TRAYCLICK`. primary=1 splits the two: left click
 // sends `TRAYCLICK`, right/ctrl-click opens the menu (Caffeine-style toggles).
+// titleColor: "#rrggbbaa" or "#light,#dark"; titleFont: monospacedDigit |
+// monospaced. Both empty = the system's look (and older bridges omit them).
 
 struct TraySpec {
   std::string title, icon, tooltip;
+  // "#rrggbbaa" or "#light,#dark" ("" = system colour); "monospacedDigit" |
+  // "monospaced" ("" = the menu-bar font). Fields 5 and 6 of TRAYBEGIN.
+  std::string title_color, title_font;
   bool template_icon = true;
   bool primary = false;
   std::vector<MenuItemSpec> items;
@@ -1415,6 +1420,32 @@ struct TraySpec {
 };
 
 #ifdef __APPLE__
+static bool parse_hex_color(const std::string &hex, CGFloat out[4]);
+
+// tray titleColor: "#rrggbbaa" (one colour) or "#light,#dark". A pair is a
+// dynamic colour, resolved against the status button's own appearance, so it
+// follows the menu bar (which tracks the wallpaper, not only Dark Mode).
+static NSColor *tray_title_color(const std::string &wire) {
+  if (wire.empty())
+    return nil;
+  size_t comma = wire.find(',');
+  CGFloat a[4], b[4];
+  if (!parse_hex_color(wire.substr(0, comma), a))
+    return nil;
+  NSColor *light = [NSColor colorWithSRGBRed:a[0] green:a[1] blue:a[2] alpha:a[3]];
+  if (comma == std::string::npos || !parse_hex_color(wire.substr(comma + 1), b))
+    return light;
+  NSColor *dark = [NSColor colorWithSRGBRed:b[0] green:b[1] blue:b[2] alpha:b[3]];
+  // MRC: copying the block (the provider is stored) retains light and dark.
+  return [NSColor colorWithName:nil
+                dynamicProvider:^NSColor *(NSAppearance *ap) {
+                  NSAppearanceName m = [ap bestMatchFromAppearancesWithNames:@[
+                    NSAppearanceNameAqua, NSAppearanceNameDarkAqua
+                  ]];
+                  return [m isEqualToString:NSAppearanceNameDarkAqua] ? dark : light;
+                }];
+}
+
 static void apply_tray(webview_t, void *arg) {
   TraySpec *spec = static_cast<TraySpec *>(arg);
   @autoreleasepool {
@@ -1467,7 +1498,25 @@ static void apply_tray(webview_t, void *arg) {
     if (img)
       [img setTemplate:spec->template_icon ? YES : NO];
     btn.image = img;
-    btn.title = ns(spec->title);
+    btn.title = ns(spec->title); // also drops a previous set()'s attributed title
+    NSColor *tcolor = tray_title_color(spec->title_color);
+    NSFont *tfont = nil;
+    if (!spec->title_font.empty()) {
+      // the status bar's own size, so a styled title sits where a plain one would
+      CGFloat size = btn.font ? btn.font.pointSize : [NSFont menuBarFontOfSize:0].pointSize;
+      if (spec->title_font == "monospacedDigit")
+        tfont = [NSFont monospacedDigitSystemFontOfSize:size weight:NSFontWeightRegular];
+      else if (spec->title_font == "monospaced")
+        tfont = [NSFont monospacedSystemFontOfSize:size weight:NSFontWeightRegular];
+    }
+    if (!spec->title.empty() && (tcolor || tfont)) {
+      NSMutableDictionary *attrs = [NSMutableDictionary dictionary];
+      attrs[NSFontAttributeName] = tfont ? tfont : (btn.font ? btn.font : [NSFont menuBarFontOfSize:0]);
+      if (tcolor)
+        attrs[NSForegroundColorAttributeName] = tcolor;
+      btn.attributedTitle = [[[NSAttributedString alloc] initWithString:ns(spec->title)
+                                                             attributes:attrs] autorelease];
+    }
     btn.toolTip = spec->tooltip.empty() ? nil : ns(spec->tooltip);
 
     [g_reg_tray release];
@@ -4654,7 +4703,31 @@ static void do_get(webview_t w, void *arg) {
                (g_status_item.menu ? "true" : "false") +
                ",\"menuHeld\":" + (g_tray_menu ? "true" : "false") +
                ",\"icon\":" + (btn.image ? "true" : "false") + ",\"title\":" +
-               json_escape(btn.title ? [btn.title UTF8String] : "") + "}";
+               json_escape(btn.title ? [btn.title UTF8String] : "");
+        // titleColor/titleFont as drawn: the attributed title's font, and its
+        // colour resolved under a light and a dark menu bar (null = system's)
+        NSAttributedString *at = btn.attributedTitle;
+        NSDictionary *ta = at.length ? [at attributesAtIndex:0 effectiveRange:NULL] : nil;
+        NSFont *tf = ta[NSFontAttributeName];
+        NSColor *tc = ta[NSForegroundColorAttributeName];
+        if (tf)
+          json += ",\"titleFont\":" + json_escape([tf.fontName UTF8String]) +
+                  ",\"titleFontSize\":" + std::to_string((int)tf.pointSize);
+        auto hexUnder = [&](NSAppearanceName n) {
+          __block std::string out = "null";
+          [[NSAppearance appearanceNamed:n] performAsCurrentDrawingAppearance:^{
+            NSColor *c = [tc colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+            char b[16];
+            std::snprintf(b, sizeof(b), "\"#%02x%02x%02x\"", (int)lround(c.redComponent * 255),
+                          (int)lround(c.greenComponent * 255), (int)lround(c.blueComponent * 255));
+            out = b;
+          }];
+          return out;
+        };
+        if (tc)
+          json += ",\"titleColorLight\":" + hexUnder(NSAppearanceNameAqua) +
+                  ",\"titleColorDark\":" + hexUnder(NSAppearanceNameDarkAqua);
+        json += "}";
       } else {
         json = "{\"exists\":false}";
       }
@@ -9454,6 +9527,8 @@ static void sock_read_loop() {
         pending_tray.template_icon = !(p.size() > 2 && p[2] == "0");
         pending_tray.tooltip = p.size() > 3 ? p[3] : "";
         pending_tray.primary = p.size() > 4 && p[4] == "1";
+        pending_tray.title_color = p.size() > 5 ? p[5] : "";
+        pending_tray.title_font = p.size() > 6 ? p[6] : "";
         collapse_subs();
         build_stack.assign(1, {});
         in_tray_block = true;

@@ -867,6 +867,31 @@ function redact(line) {
 // Each entry maps a method to its wire op and the params serialized as
 // tab-separated args (order matters; see launcher-macos.cc do_dialog).
 const one = (s) => String(s ?? '').replace(/[\t\n\r]/g, ' ');
+// tray.set's titleColor -> '#rrggbbaa' or '#light,#dark' on the wire ('' =
+// the system's colour). '#rgb' / '#rgba' are expanded; anything else is
+// dropped with a warning rather than sent for the launcher to misread.
+const hexColor = (c) => {
+  const m = /^#?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(String(c ?? '').trim());
+  if (!m) return null;
+  const h = m[1].length <= 4 ? [...m[1]].map((d) => d + d).join('') : m[1];
+  return '#' + h.toLowerCase();
+};
+function trayTitleColorWire(c) {
+  if (c == null || c === '') return '';
+  const pair = typeof c === 'object' ? [c.light, c.dark] : [c, c];
+  const out = pair.map(hexColor);
+  if (out.some((x) => !x)) {
+    console.log(`tinyjs: tray titleColor ${JSON.stringify(c)} ignored — use '#rrggbb' or { light: '#rrggbb', dark: '#rrggbb' }`);
+    return '';
+  }
+  return out[0] === out[1] ? out[0] : out.join(',');
+}
+function trayTitleFontWire(f) {
+  if (f == null || f === '') return '';
+  if (f === 'monospacedDigit' || f === 'monospaced') return f;
+  console.log(`tinyjs: tray titleFont ${JSON.stringify(f)} ignored — use 'monospacedDigit' or 'monospaced'`);
+  return '';
+}
 // Same, but real line breaks survive as a literal \n for the launcher to undo.
 // Existing backslashes are doubled first so text that already contained "\n"
 // comes out as itself rather than as a break. Only the Linux launcher unescapes
@@ -2526,6 +2551,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     // onTray option; with no menu, icon clicks arrive as 'trayclick'.
     // primaryAction: true splits the two — left click fires 'trayclick' (a
     // Caffeine-style toggle) and the menu opens on right/ctrl-click.
+    // titleColor / titleFont (macOS only; other launchers ignore the extra
+    // fields): the title's colour — '#rrggbb[aa]' or { light, dark } for a
+    // light and a dark menu bar — and 'monospacedDigit' | 'monospaced'.
     tray: {
       set(spec = {}) {
         let icon = spec.icon ?? '';
@@ -2533,7 +2561,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
         send('TRAYBEGIN ' + [one(spec.title), one(icon),
                              spec.template === false ? '0' : '1',
                              one(spec.tooltip),
-                             spec.primaryAction ? '1' : '0'].join('\t'));
+                             spec.primaryAction ? '1' : '0',
+                             trayTitleColorWire(spec.titleColor),
+                             trayTitleFontWire(spec.titleFont)].join('\t'));
         sendItems(spec.menu);
         send('TRAYEND');
       },
