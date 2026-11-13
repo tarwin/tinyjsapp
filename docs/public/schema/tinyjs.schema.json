@@ -45,7 +45,8 @@
         "notarize": {
           "type": ["object", "null"],
           "properties": {
-            "profile": { "$ref": "#/$defs/optionalString", "description": "notarytool keychain profile; TINYJS_NOTARY_PROFILE takes precedence." }
+            "profile": { "$ref": "#/$defs/optionalString", "description": "notarytool keychain profile; TINYJS_NOTARY_PROFILE takes precedence." },
+            "keychain": { "$ref": "#/$defs/optionalString", "description": "File-based keychain path for notarytool, absolute or relative to the project. Omit, null or empty uses the data protection keychain. TINYJS_NOTARY_KEYCHAIN takes precedence." }
           }
         },
         "chrome": { "$ref": "#/$defs/chrome" },

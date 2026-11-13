@@ -89,6 +89,10 @@ tinyjs notarize --dmg   # submit + staple + REBUILD the dmg from the stapled app
   --apple-id … --team-id …`, then `notarize.profile` in tinyjs.json or
   `TINYJS_NOTARY_PROFILE`. `notarize` fails fast on a non-Developer-ID
   signature instead of waiting minutes for Apple to reject.
+  For a file-based keychain, use `store-credentials --keychain <path>` and
+  set `notarize.keychain` or `TINYJS_NOTARY_KEYCHAIN` to the same path
+  (absolute or relative to the project). Unlock it before notarizing.
+  Without a path, `notarytool` uses the data protection keychain.
 - **Ordering matters**: a dmg made at build time contains the pre-staple
   bundle, which OFFLINE Gatekeeper rejects — always take the dmg from
   `notarize --dmg` (it auto-rebuilds if one exists). The publish zip is the
