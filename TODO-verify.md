@@ -8,6 +8,23 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #117 — Git Bash wrapper passes a native path (2026-11-15)
+
+The sh wrapper `tinyjs` now runs `cygpath -w` on cli.js's path under
+MINGW/MSYS/CYGWIN. Before, MSYS gave tjs.exe `C:/x/cli.js`, txiki's
+normalizer found no backslash in it, and `./runtime/...` imports resolved against
+the cwd. The release workflow's Git Bash smoke test now runs `version` and
+`build` from the app dir (before, it ran from the checkout, whose own
+runtime/ hid the bug). Written on macOS; never run on Windows.
+
+- [x] **macOS** (2026-11-15): `./tinyjs version` still works (the case
+  doesn't match Darwin).
+- [ ] **Windows, Git Bash**: in an app folder, `/c/path/to/tinyjs version`
+  and `tinyjs build` work (before the fix: `could not load
+  '.\runtime\update-signing.js'`). `tinyjs dev` opens the app.
+- [ ] **Windows, cmd/PowerShell**: `tinyjs.cmd` unchanged (sanity).
+- [ ] **CI**: the "Smoke test (Git Bash wrapper)" step passes on the next tag.
+
 ## #114 — tray `titleColor` / `titleFont` (macOS only, 2026-11-11)
 
 Two new TRAYBEGIN fields (5: colour `#rrggbbaa` or `#light,#dark`, 6:

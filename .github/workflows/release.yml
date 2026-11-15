@@ -227,10 +227,21 @@ jobs:
 
       - name: Smoke test (Git Bash wrapper)
         shell: bash
+        # Run from the app dir, NOT the checkout: with a forward-slash entry
+        # path cli.js's ./runtime/ imports resolved against the cwd, and the
+        # checkout has a runtime/ of its own, so `version` from here passed
+        # while every real Git Bash user got "could not load" (#117).
         run: |
-          out=$("$(cygpath -u "$TEMP")/tinyjs-ci/tinyjs" version)
+          set -e
+          tj="$(cygpath -u "$TEMP")/tinyjs-ci/tinyjs"
+          cd "$(cygpath -u "$TEMP")/tinyjs-ci-work/ci-check"
+          out=$("$tj" version)
           echo "$out"
           case "$out" in "tinyjs $GITHUB_REF_NAME "*) ;; *) echo 'sh wrapper broken'; exit 1;; esac
+          rm -rf dist
+          "$tj" build
+          test -f dist/ci-check.exe || { echo 'Git Bash build: missing dist/ci-check.exe'; exit 1; }
+          echo 'Git Bash wrapper OK'
 
       - uses: actions/upload-artifact@v6
         with:
