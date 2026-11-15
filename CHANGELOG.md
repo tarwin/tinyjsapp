@@ -4,6 +4,16 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **Windows: `tinyjs` failed in Git Bash** (#117). Running the CLI from Git
+  Bash (for example a GitHub Actions step with `shell: bash` on a Windows
+  runner) failed with `could not load '.\runtime\update-signing.js'` unless
+  the current folder happened to hold a `runtime\` folder. The sh wrapper
+  passed tjs a path with forward slashes only, so the CLI's own imports were
+  looked up relative to the current folder. It now passes a native Windows
+  path, as `tinyjs.cmd` does. cmd and PowerShell were never affected.
+
 ## 0.73.0 — 2026-11-11
 
 - **macOS: colour and font for the tray title** (#114). `tray.set()` takes

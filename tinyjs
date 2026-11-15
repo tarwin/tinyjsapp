@@ -2,4 +2,13 @@
 # tinyjs CLI wrapper. Symlink me onto your PATH:
 #   ln -s "$(pwd)/tinyjs" /usr/local/bin/tinyjs
 DIR="$(cd "$(dirname "$(readlink "$0" || echo "$0")")" && pwd)"
-exec "$DIR/bin/tjs" run "$DIR/cli.js" "$@"
+CLI="$DIR/cli.js"
+# Git Bash / MSYS / Cygwin on Windows (#117): MSYS hands tjs.exe the path as
+# C:/x/cli.js, forward slashes only, and txiki's module normalizer looks for
+# the importing file's directory with strrchr('\\'). With no backslash
+# cli.js's relative imports (./runtime/...) resolve against the cwd instead
+# and fail. Pass a native path, as tinyjs.cmd does.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) CLI="$(cygpath -w "$CLI")" ;;
+esac
+exec "$DIR/bin/tjs" run "$CLI" "$@"
