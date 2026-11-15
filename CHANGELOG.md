@@ -14,6 +14,15 @@ https://tinyjs.app/changelog.
   looked up relative to the current folder. It now passes a native Windows
   path, as `tinyjs.cmd` does. cmd and PowerShell were never affected.
 
+- **macOS: notarize with a file-based keychain** (#94 — thanks [@9wick](https://github.com/9wick)). A
+  `notarytool` profile stored only in a file-based keychain (as CI setups
+  usually create) wasn't found, because `tinyjs notarize` gave notarytool no
+  way to look there. Set `"notarize": { "profile": "…", "keychain":
+  "ci.keychain-db" }`, or export `TINYJS_NOTARY_KEYCHAIN`, and tinyjs passes
+  it as `notarytool --keychain`. A relative path starts at the project
+  folder. Unlock the keychain before notarizing. Without the setting nothing
+  changes. See [notarize](https://tinyjs.app/docs/config#notarize).
+
 ## 0.73.0 — 2026-11-11
 
 - **macOS: colour and font for the tray title** (#114). `tray.set()` takes

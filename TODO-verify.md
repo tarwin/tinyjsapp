@@ -8,6 +8,22 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #94 — `notarize.keychain` / `TINYJS_NOTARY_KEYCHAIN` (contributor PR, merged 2026-11-15)
+
+`tinyjs notarize` adds `--keychain <path>` to `notarytool submit` when the
+setting is present (env beats OS block beats root; null/"" means omit).
+`node test/notarize/check.mjs` covers argument building (10 cases, passes on
+main 2026-11-15). macOS only, so nothing to check on Windows or Linux.
+
+- [x] **macOS** (contributor's runs, macOS 26.4.1 arm64, notarytool 1.1.1):
+  a profile only in a file-based keychain works with the path and isn't found
+  without it; a project-relative path with spaces → Accepted, stapled,
+  `stapler validate` OK; an env absolute path overrides a bad config path;
+  missing/locked keychains error out; no setting → data-protection keychain
+  profile still works.
+- [ ] **macOS, ours**: one real notarize with a file-based keychain on this
+  machine (not yet watched by us).
+
 ## #117 — Git Bash wrapper passes a native path (2026-11-15)
 
 The sh wrapper `tinyjs` now runs `cygpath -w` on cli.js's path under
