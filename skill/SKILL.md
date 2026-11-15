@@ -99,7 +99,7 @@ tinyjs.json          { name, title, size, id, version, icon?,
                        chrome?: { frame, windowControls, windowControlsPos,
                                   transparent, vibrancy, squareCorners,
                                   acceptsFirstMouse, menu },
-                       signIdentity?, notarize?: { profile },
+                       signIdentity?, notarize?: { profile, keychain? },
                        backend?: "backend/main.ts",   // .ts → esbuild bundle;
                                       // default src/backend/main.{js,ts}, then
                                       // src/main.{js,ts} (pre-0.52), backend/main.{js,ts}
