@@ -15,14 +15,20 @@ MINGW/MSYS/CYGWIN. Before, MSYS gave tjs.exe `C:/x/cli.js`, txiki's
 normalizer found no backslash in it, and `./runtime/...` imports resolved against
 the cwd. The release workflow's Git Bash smoke test now runs `version` and
 `build` from the app dir (before, it ran from the checkout, whose own
-runtime/ hid the bug). Written on macOS; never run on Windows.
+runtime/ hid the bug). Written on macOS; verified on Windows 11 ARM64
+(Git Bash, MINGW64) the same day.
 
 - [x] **macOS** (2026-11-15): `./tinyjs version` still works (the case
   doesn't match Darwin).
-- [ ] **Windows, Git Bash**: in an app folder, `/c/path/to/tinyjs version`
-  and `tinyjs build` work (before the fix: `could not load
-  '.\runtime\update-signing.js'`). `tinyjs dev` opens the app.
-- [ ] **Windows, cmd/PowerShell**: `tinyjs.cmd` unchanged (sanity).
+- [x] **Windows, Git Bash** (2026-11-15, Win 11 ARM64): from
+  test/tray-title/app, main's wrapper reproduced `could not load
+  '.\runtime\update-signing.js'`; the branch's `version` printed `tinyjs
+  dev (txiki.js 26.11.0)`, `build` produced dist/traytitle.exe, and `dev`
+  opened the "tray title test" window with the backend logging. (Calling
+  through a symlink was not tried: native symlinks need admin/Developer Mode,
+  and the `DIR=` resolution line is unchanged.)
+- [x] **Windows, cmd/PowerShell** (2026-11-15): `tinyjs.cmd version` prints
+  the same line.
 - [ ] **CI**: the "Smoke test (Git Bash wrapper)" step passes on the next tag.
 
 ## #114 — tray `titleColor` / `titleFont` (macOS only, 2026-11-11)
