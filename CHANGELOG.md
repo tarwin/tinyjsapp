@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.74.0 — 2026-11-15
 
 - **Windows: `tinyjs` failed in Git Bash** (#117). Running the CLI from Git
   Bash (for example a GitHub Actions step with `shell: bash` on a Windows
