@@ -45,7 +45,9 @@ runtime/ hid the bug). Written on macOS; verified on Windows 11 ARM64
   and the `DIR=` resolution line is unchanged.)
 - [x] **Windows, cmd/PowerShell** (2026-11-15): `tinyjs.cmd version` prints
   the same line.
-- [ ] **CI**: the "Smoke test (Git Bash wrapper)" step passes on the next tag.
+- [x] **CI** (v0.74.0, 2026-11-15): "Smoke test (Git Bash wrapper)" ran
+  `version` + `build` from the app dir and printed "Git Bash wrapper OK" on
+  both windows-latest (x86_64) and windows-11-arm.
 
 ## #114 — tray `titleColor` / `titleFont` (macOS only, 2026-11-11)
 
