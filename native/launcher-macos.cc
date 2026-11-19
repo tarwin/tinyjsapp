@@ -10160,6 +10160,29 @@ static bool bundle_mode_setup(std::string &target, std::string &title,
        ![[NSFileManager defaultManager] fileExistsAtPath:frontend]))
     return false;
 
+  // A packaged app takes its settings from Info.plist / Resources/app, never
+  // from an inherited environment (#119, the macOS half of #29.4). Every
+  // TINYJS_* knob the launcher reads below checks the env BEFORE the plist,
+  // because dev mode passes them that way — so here, before any of them is
+  // read and before tjs is spawned with our environ, drop them all.
+  // Otherwise whoever can set this process's env (a shell, launchctl setenv,
+  // a LaunchAgent) gets what hardened runtime denies them via DYLD_*: code
+  // inside a signed app and its TCC grants — TINYJS_INJECT runs script in
+  // every page, TINYJS_MEDIA_ORIGINS hands any site camera/mic,
+  // TINYJS_READ_ACCESS widens file:// reads, TINYJS_DEBUG opens devtools.
+  // TINYJS_NOTIF_DEBUG stays: stderr logging only.
+  {
+    std::vector<std::string> drop;
+    for (char **e = environ; e && *e; e++) {
+      const char *eq = std::strchr(*e, '=');
+      std::string k = eq ? std::string(*e, eq - *e) : std::string(*e);
+      if (k.compare(0, 7, "TINYJS_") == 0 && k != "TINYJS_NOTIF_DEBUG")
+        drop.push_back(k);
+    }
+    for (const std::string &k : drop)
+      unsetenv(k.c_str());
+  }
+
   target = remote.length ? [remote UTF8String] : [frontend UTF8String];
   NSString *name = [mb objectForInfoDictionaryKey:@"CFBundleName"];
   title = name ? [name UTF8String] : "tinyjs";

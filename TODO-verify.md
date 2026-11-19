@@ -8,6 +8,122 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #118 — Windows custom context menu at WebView2's location (2026-11-20)
+
+`CtxHandler` (launcher-win.cc) now opens `g_ctx_menu` at
+`args->get_Location()` + the controller's bounds, through ClientToScreen on
+its parent window, instead of `GetCursorPos()`. Each handler carries its
+window id so secondary windows use their own controller. Falls back to the
+cursor if any step fails. Written on macOS: syntax-checked with
+x86_64-w64-mingw32-g++ against WebView2 SDK 1.0.2903.40, never run. The
+docs don't give get_Location's units; physical pixels was assumed and was
+WRONG: on Windows 11 at 200% every menu opened at half the distance from the
+WebView's corner (right-click at CSS 100,60 → menu at client + 100,60). It's
+DIPs; the handler now scales by the controller's RasterizationScale
+(window_scale() fallback) before adding the bounds.
+Linux probably has the same bug (`gtk_menu_popup_at_pointer` for a
+keyboard-opened menu too) and is not fixed: WebKitGTK gives no position for
+a keyboard-opened menu.
+
+How it was checked (2026-11-20, Windows 11 ARM64 VM, one display at 200%,
+x64 launcher): scratch app with `setContext([{ label: 'Example' }])` and a
+button; CDP (`--remote-debugging-port`) focused the button and sent
+Shift+F10 / ContextMenu keys / right-clicks via Input.dispatch*; a
+per-monitor-aware ctypes script read the launcher's visible `#32768` rect
+(physical px) and the cursor, then posted Escape to the menu. Expected
+points = ClientToScreen(0,0) + CSS × devicePixelRatio.
+
+- [ ] **Windows, 100% scaling**: issue's repro (`setContext([{ label:
+  'Example' }])`), focus a button with Tab, Shift+F10 → menu at the button,
+  not the mouse; Menu key the same; right-click → at the click point.
+  (Not run: changing scaling is system-wide. Scale 1.0 is the same code.)
+- [x] **Windows, 200% scaling** (2026-11-20): before the DIP fix, all
+  three opened at half the offset (not at the cursor — the cursor was
+  elsewhere). After: Shift+F10 and Menu key → menu top-left inside the
+  focused button (its centre); right-click → exactly the click point, and
+  at a bottom-right-corner right-click too. Mixed-DPI not run (one display).
+- [x] **Windows, secondary window** (`win.open`) (2026-11-20, 200%): same
+  four checks, menu at its own button / click point.
+- [x] **Windows, frameless window** (`chrome: { frame: false }`)
+  (2026-11-20, 200%): same four checks, no caption offset.
+- [x] **Windows, regression** (2026-11-20): tray right-click (posted
+  WM_TINY_TRAY / WM_RBUTTONUP) → menu top-left exactly at the cursor;
+  `setContext(null)` + right-click → WebView2's own menu
+  (Chrome_WidgetWin_1 popup from msedgewebview2) at the click point.
+
+## #119 — macOS packaged apps drop inherited `TINYJS_*` (2026-11-20)
+
+`bundle_mode_setup()` in launcher-macos.cc now unsetenv()s every `TINYJS_*`
+(except `TINYJS_NOTIF_DEBUG`, logging only) once it knows it is a .app,
+before any knob is read and before tjs is spawned. The macOS half of #29.4,
+whose note above ("macOS is untouched … packaged .apps read plist keys")
+was wrong: every knob checked the env FIRST. macOS only; Windows/Linux were
+verified under #29.4.
+
+- [x] **macOS** (2026-11-20, Apple silicon, macOS 27.2): scratch app with a
+  tinyjs.json `"inject"` setting `window.__legit`, built, then its
+  `Contents/MacOS/<name>` run with `TINYJS_INJECT='window.__pwned=1'`.
+  Control: the same .app with the pre-fix launcher (HEAD source, ad-hoc
+  signed) → `{ legit: false, pwned: true }` (the env REPLACED the app's
+  inject). Fixed launcher → `{ legit: true, pwned: false }`. `tinyjs dev`
+  → `{ legit: true }` (dev still passes inject through the env).
+- [x] **macOS, Developer-ID-signed build** (2026-11-20, Apple silicon,
+  macOS 27.2): the scratch app built with the Developer ID Application
+  identity, hardened runtime on (`flags=0x10000(runtime)`), `codesign
+  --verify --deep --strict` OK. Not notarized: that only adds a Gatekeeper
+  ticket, and the probe runs `Contents/MacOS/<name>` directly, so the
+  launcher behaves the same. Control = the same .app with the pre-fix
+  launcher (ad-hoc signed). One run each with `TINYJS_INJECT`,
+  `TINYJS_DEBUG=open`, `TINYJS_MEDIA_ORIGINS='camera *\nmicrophone *'`,
+  `TINYJS_READ_ACCESS=/`, `TINYJS_UA` and `TINYJS_NOTIF_DEBUG` set:
+  - inject: control `{ legit: false, pwned: true }`; signed `{ legit: true,
+    pwned: false }`.
+  - devtools: the page records `innerHeight` 3.5 s after load (the "open"
+    inspector docks, and shrinks the page; it opens no new window). Control
+    with DEBUG=open → 640 to 160; control without it → 640; signed with it
+    → 640.
+  - environment: `ps eww` on the backend `tjs` (it inherits the launcher's
+    environ after the strip). Control: DEBUG, INJECT, MEDIA_ORIGINS,
+    NOTIF_DEBUG, READ_ACCESS, UA and the rest. Signed: only `TINYJS_SOCKET`
+    and `TINYJS_NOTIF_DEBUG`. So MEDIA_ORIGINS, READ_ACCESS and UA never
+    reach a getenv in the launcher either. The WebKit camera prompt itself
+    was not watched.
+
+## #120 — `system.architecture()` on macOS from sysctl; `info().processArch` (2026-11-20)
+
+`runtime/bridge.js` used `navigator.platform` (always `MacIntel` on macOS)
+and fell through to `arm64`. `cpuArch()` now asks update.js: `macArch()`
+(`/usr/sbin/sysctl -n hw.optional.arm64`: `1` → arm64; missing key, exit 1
+→ x86_64) and `macProcessArch()` (`sysctl.proc_translated` 1 → x86_64).
+Windows uses `winArch()` (PE header of tjs.exe + env), Linux uname. New
+`info().processArch`. Written on Apple silicon.
+
+- [x] **macOS, Apple silicon** (2026-11-20): scratch app via TINYJS_HTML →
+  `info()` `{ arch: 'arm64', processArch: 'arm64' }`, `architecture()` →
+  `arm64`. Under `arch -x86_64 sh`, sysctl reads proc_translated 1 and
+  hw.optional.arm64 1 (no x86_64 tjs to run end to end).
+- [ ] **macOS, Intel**: `info()` → `{ arch: 'x86_64', processArch: 'x86_64' }`
+  (reporter's machine, or any Intel Mac).
+- [x] **macOS, Rosetta** (2026-11-20, Apple silicon, macOS 27.2): txiki
+  v26.11.0 `txiki-macos-x86_64` (sha256 matches runtime/txiki.sha256) as the
+  backend under Rosetta, via `<x86 tjs> run cli.js dev` with TINYJS_HTML →
+  page `info()` `{ arch: 'arm64', processArch: 'x86_64' }`,
+  `architecture()` → `arm64`. (A packaged app can't get here: the bundled
+  tjs is arm64-only, and the launcher refuses to start on Intel.)
+- [ ] **Windows x64**: `{ arch: 'x86_64', processArch: 'x86_64' }`.
+- [x] **Windows on ARM** (2026-11-20, Windows 11 ARM64): backend
+  `app.system.info()` in `tinyjs dev` under the checkout's x64 tjs →
+  `{ arch: 'arm64', processArch: 'x86_64' }`, `architecture()` → `arm64`;
+  under v0.74.0's tjs-windows-arm64 (`tjs run cli.js dev`) → both `arm64`.
+- [x] **Linux arm64** (2026-11-20, Ubuntu 24.04 VM, Wayland/GNOME):
+  scratch app via TINYJS_HTML → page `info()` and the backend's
+  `app.system.info()` both `{ arch: 'arm64', processArch: 'arm64' }`,
+  `architecture()` → `arm64` on both sides; `uname -m` aarch64.
+- [ ] **Linux x86_64**: both equal uname's CPU. Partial (2026-11-20): the
+  x86_64 tjs under Rosetta in an ubuntu:22.04 amd64 container reads
+  navigator.platform `Linux x86_64` → bridge.js's LINUX_ARCH expression
+  gives `x86_64`. Not yet seen through a running app on an x86_64 box.
+
 ## #94 — `notarize.keychain` / `TINYJS_NOTARY_KEYCHAIN` (contributor PR, merged 2026-11-15)
 
 `tinyjs notarize` adds `--keychain <path>` to `notarytool submit` when the

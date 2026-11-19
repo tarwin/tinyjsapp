@@ -1138,11 +1138,17 @@ static void apply_tray(webview_t, void *arg) {
   delete spec;
 }
 
-static void tray_popup(HMENU menu, const char *event_prefix) {
+// at: where to open, in screen pixels — null means at the cursor (tray icon
+// clicks). The page's context menu passes WebView2's own location instead.
+static void tray_popup(HMENU menu, const char *event_prefix,
+                       const POINT *at = nullptr) {
   if (!menu)
     return;
   POINT pt;
-  GetCursorPos(&pt);
+  if (at)
+    pt = *at;
+  else
+    GetCursorPos(&pt);
   SetForegroundWindow(g_host);
   UINT cmd = (UINT)TrackPopupMenu(menu,
                                   TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
@@ -5195,6 +5201,8 @@ static void do_get(webview_t, void *arg) {
 
 struct CtxHandler : public ICoreWebView2ContextMenuRequestedEventHandler {
   ULONG refs = 1;
+  std::string winid; // "main" or a secondary window's id, for its controller
+  explicit CtxHandler(std::string id) : winid(std::move(id)) {}
   ULONG STDMETHODCALLTYPE AddRef() override { return ++refs; }
   ULONG STDMETHODCALLTYPE Release() override {
     if (refs > 1)
@@ -5219,7 +5227,40 @@ struct CtxHandler : public ICoreWebView2ContextMenuRequestedEventHandler {
          ICoreWebView2ContextMenuRequestedEventArgs *args) override {
     if (g_ctx_menu) {
       args->put_Handled(TRUE);
-      tray_popup(g_ctx_menu, "CTX");
+      // Open where WebView2 says the menu belongs, as its own menu does
+      // (#118): the click point for a right-click, the focused element for
+      // Shift+F10 / the Menu key. The cursor is wrong for the keyboard case.
+      // The location is relative to the WebView's top-left in DIPs — NOT
+      // pixels: measured on Windows 11 at 200%, an unscaled point opened the
+      // menu at half the distance. Scale it by the controller's
+      // RasterizationScale (the monitor's DPI scale unless overridden; the
+      // parent's DPI if Controller3 is missing) into physical pixels, then
+      // offset by the controller's bounds (physical pixels in the parent's
+      // client area: default BoundsMode, per-monitor DPI-aware process).
+      // Cursor if any of it is missing.
+      POINT at;
+      bool have = false;
+      ICoreWebView2Controller *ctrl = ctrl_for_win(winid);
+      HWND parent = nullptr;
+      RECT b{};
+      if (ctrl && SUCCEEDED(args->get_Location(&at)) &&
+          SUCCEEDED(ctrl->get_Bounds(&b)) &&
+          SUCCEEDED(ctrl->get_ParentWindow(&parent)) && parent) {
+        double scale = 0;
+        ICoreWebView2Controller3 *c3 = nullptr;
+        if (SUCCEEDED(ctrl->QueryInterface(IID_ICoreWebView2Controller3,
+                                           (void **)&c3)) && c3) {
+          if (FAILED(c3->get_RasterizationScale(&scale)))
+            scale = 0;
+          c3->Release();
+        }
+        if (scale <= 0)
+          scale = window_scale(parent);
+        at.x = (LONG)lround(at.x * scale) + b.left;
+        at.y = (LONG)lround(at.y * scale) + b.top;
+        have = ClientToScreen(parent, &at) != FALSE;
+      }
+      tray_popup(g_ctx_menu, "CTX", have ? &at : nullptr);
       return S_OK;
     }
     if (g_ctx_suppress)
@@ -5237,7 +5278,7 @@ static void install_ctx_handler() {
   if (SUCCEEDED(g_wv2->QueryInterface(IID_ICoreWebView2_11, (void **)&wv11)) &&
       wv11) {
     EventRegistrationToken tok;
-    wv11->add_ContextMenuRequested(new CtxHandler(), &tok);
+    wv11->add_ContextMenuRequested(new CtxHandler("main"), &tok);
     wv11->Release();
     g_ctx_intercept = true;
   }
@@ -5825,7 +5866,7 @@ struct SecCtrlHandler
       if (SUCCEEDED(tw->wv->QueryInterface(IID_ICoreWebView2_11,
                                            (void **)&wv11)) && wv11) {
         EventRegistrationToken ctok;
-        wv11->add_ContextMenuRequested(new CtxHandler(), &ctok);
+        wv11->add_ContextMenuRequested(new CtxHandler(winid), &ctok);
         wv11->Release();
       }
       // …and the rest of the per-webview wiring main gets: UNC media

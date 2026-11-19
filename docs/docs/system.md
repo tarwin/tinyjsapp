@@ -17,10 +17,10 @@ tiny.system.os();         // 'macos' | 'windows' | 'linux' — synchronous
 tiny.system.isMacOS();    // also isWindows(), isLinux()
 
 await tiny.system.info();
-// { os: 'linux', arch: 'x86_64', session: 'wayland', desktop: 'ubuntu:GNOME' }
+// { os: 'linux', arch: 'x86_64', processArch: 'x86_64', session: 'wayland', desktop: 'ubuntu:GNOME' }
 ```
 
-`os()` and the `is…()` checks answer immediately, so they're safe while the page is setting up. `info()` also has the CPU (`'arm64'` or `'x86_64'`) and, on Linux only, the display server (`session`: `'x11'` or `'wayland'`) and the desktop (`desktop`, from `XDG_CURRENT_DESKTOP`). Both are `null` on macOS and Windows.
+`os()` and the `is…()` checks answer immediately, so they're safe while the page is setting up. `info()` also has the CPU (`'arm64'` or `'x86_64'`) twice: `arch` is the machine's chip and `processArch` is what the app runs as. They differ only when an x86_64 build is emulated (Rosetta, or Windows on ARM); see [portability](./portability). It also has, on Linux only, the display server (`session`: `'x11'` or `'wayland'`) and the desktop (`desktop`, from `XDG_CURRENT_DESKTOP`). Both are `null` on macOS and Windows.
 
 ## light and dark {#theme}
 
