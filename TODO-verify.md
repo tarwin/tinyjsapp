@@ -94,7 +94,14 @@ Windows uses `winArch()` (PE header of tjs.exe + env), Linux uname. New
   `app.system.info()` in `tinyjs dev` under the checkout's x64 tjs →
   `{ arch: 'arm64', processArch: 'x86_64' }`, `architecture()` → `arm64`;
   under v0.74.0's tjs-windows-arm64 (`tjs run cli.js dev`) → both `arm64`.
-- [ ] **Linux** (x86_64 and arm64): both equal uname's CPU.
+- [x] **Linux arm64** (2026-11-20, Ubuntu 24.04 VM, Wayland/GNOME):
+  scratch app via TINYJS_HTML → page `info()` and the backend's
+  `app.system.info()` both `{ arch: 'arm64', processArch: 'arm64' }`,
+  `architecture()` → `arm64` on both sides; `uname -m` aarch64.
+- [ ] **Linux x86_64**: both equal uname's CPU. Partial (2026-11-20): the
+  x86_64 tjs under Rosetta in an ubuntu:22.04 amd64 container reads
+  navigator.platform `Linux x86_64` → bridge.js's LINUX_ARCH expression
+  gives `x86_64`. Not yet seen through a running app on an x86_64 box.
 
 ## #94 — `notarize.keychain` / `TINYJS_NOTARY_KEYCHAIN` (contributor PR, merged 2026-11-15)
 
