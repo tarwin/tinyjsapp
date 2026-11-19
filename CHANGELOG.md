@@ -6,6 +6,11 @@ https://tinyjs.app/changelog.
 
 ## Unreleased
 
+- **Windows: a custom context menu opened from the keyboard appeared at the
+  mouse** (#118). With `tiny.menu.setContext`, Shift+F10 or the Menu key
+  opened the menu wherever the mouse pointer was. It now opens where
+  WebView2's own menu would: at the focused element from the keyboard, and
+  at the click point for a right-click.
 - **macOS: packaged apps ignore inherited `TINYJS_*` variables** (#119).
   A built .app read settings such as `TINYJS_INJECT` from its environment
   before its own Info.plist and `inject.js`. Anyone able to set the app's

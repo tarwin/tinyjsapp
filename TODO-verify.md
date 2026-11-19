@@ -8,6 +8,33 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #118 — Windows custom context menu at WebView2's location (2026-11-20)
+
+`CtxHandler` (launcher-win.cc) now opens `g_ctx_menu` at
+`args->get_Location()` + the controller's bounds, through ClientToScreen on
+its parent window, instead of `GetCursorPos()`. Each handler carries its
+window id so secondary windows use their own controller. Falls back to the
+cursor if any step fails. Written on macOS: syntax-checked with
+x86_64-w64-mingw32-g++ against WebView2 SDK 1.0.2903.40, never run. The
+docs don't give get_Location's units; physical pixels is assumed (default
+BoundsMode, per-monitor DPI-aware), so check a scaled display.
+Linux probably has the same bug (`gtk_menu_popup_at_pointer` for a
+keyboard-opened menu too) and is not fixed: WebKitGTK gives no position for
+a keyboard-opened menu.
+
+- [ ] **Windows, 100% scaling**: issue's repro (`setContext([{ label:
+  'Example' }])`), focus a button with Tab, Shift+F10 → menu at the button,
+  not the mouse; Menu key the same; right-click → at the click point.
+- [ ] **Windows, 150% (or mixed-DPI) scaling**: the same three, plus a
+  right-click near the bottom-right corner (an unscaled point lands
+  visibly off).
+- [ ] **Windows, secondary window** (`win.open`): Shift+F10 there → at its
+  own focused element.
+- [ ] **Windows, frameless window** (custom titlebar): menu not offset by
+  the missing caption.
+- [ ] **Windows, regression**: tray icon right-click menu still at the
+  cursor; `setContext(null)` → WebView2's own menu again.
+
 ## #119 — macOS packaged apps drop inherited `TINYJS_*` (2026-11-20)
 
 `bundle_mode_setup()` in launcher-macos.cc now unsetenv()s every `TINYJS_*`
