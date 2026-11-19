@@ -8,6 +8,28 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #120 — `system.architecture()` on macOS from sysctl; `info().processArch` (2026-11-20)
+
+`runtime/bridge.js` used `navigator.platform` (always `MacIntel` on macOS)
+and fell through to `arm64`. `cpuArch()` now asks update.js: `macArch()`
+(`/usr/sbin/sysctl -n hw.optional.arm64`: `1` → arm64; missing key, exit 1
+→ x86_64) and `macProcessArch()` (`sysctl.proc_translated` 1 → x86_64).
+Windows uses `winArch()` (PE header of tjs.exe + env), Linux uname. New
+`info().processArch`. Written on Apple silicon.
+
+- [x] **macOS, Apple silicon** (2026-11-20): scratch app via TINYJS_HTML →
+  `info()` `{ arch: 'arm64', processArch: 'arm64' }`, `architecture()` →
+  `arm64`. Under `arch -x86_64 sh`, sysctl reads proc_translated 1 and
+  hw.optional.arm64 1 (no x86_64 tjs to run end to end).
+- [ ] **macOS, Intel**: `info()` → `{ arch: 'x86_64', processArch: 'x86_64' }`
+  (reporter's machine, or any Intel Mac).
+- [ ] **macOS, Rosetta**: an x86_64 tjs/app on Apple silicon →
+  `{ arch: 'arm64', processArch: 'x86_64' }`.
+- [ ] **Windows x64**: `{ arch: 'x86_64', processArch: 'x86_64' }`.
+- [ ] **Windows on ARM**: arm64 build → both `arm64`; x64 build →
+  `{ arch: 'arm64', processArch: 'x86_64' }`.
+- [ ] **Linux** (x86_64 and arm64): both equal uname's CPU.
+
 ## #94 — `notarize.keychain` / `TINYJS_NOTARY_KEYCHAIN` (contributor PR, merged 2026-11-15)
 
 `tinyjs notarize` adds `--keychain <path>` to `notarytool submit` when the

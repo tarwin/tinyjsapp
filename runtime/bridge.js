@@ -16,7 +16,7 @@
 //                                                     answers the call itself
 //                         QUIT                        close the window
 
-import { bundlePath, checkForUpdate, installUpdate, relaunch, RELAUNCH_FLAG } from './update.js';
+import { bundlePath, checkForUpdate, installUpdate, macArch, macProcessArch, relaunch, RELAUNCH_FLAG, winArch } from './update.js';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -29,17 +29,27 @@ const DEBUG = !['', '0', 'false', 'dev'].includes(String(tjs.env.TINYJS_DEBUG ||
 // and navigator.platform reads "Linux …" from uname on Linux.
 const IS_WIN = tjs.env.OS === 'Windows_NT';
 const IS_LINUX = !IS_WIN && /linux/i.test(globalThis.navigator?.platform ?? '');
-// navigator.platform here is the runtime's own (uname on Linux), not a
-// webview's — so unlike the page it reports the real machine. On Windows it
-// says "Win32" on every CPU, so read the environment: an x64 build emulated
-// on ARM64 sees PROCESSOR_ARCHITECTURE=AMD64, but PROCESSOR_IDENTIFIER
-// ("ARMv8 (64-bit) Family 8 …") isn't rewritten — the machine, like doctor.
-const ARCH = IS_WIN
-  ? (/arm64/i.test((tjs.env.PROCESSOR_ARCHITECTURE ?? '') + ' ' + (tjs.env.PROCESSOR_ARCHITEW6432 ?? '')) ||
-     /^ARM/i.test(tjs.env.PROCESSOR_IDENTIFIER ?? '') ? 'arm64' : 'x86_64')
-  : /aarch64|arm64/i.test(globalThis.navigator?.platform ?? '') ? 'arm64'
-  : /x86_64|amd64/i.test(globalThis.navigator?.platform ?? '') ? 'x86_64'
-  : 'arm64';
+// CPU, two ways. `arch` is the MACHINE's chip (like doctor): an emulated
+// build still reports the native one. `processArch` is what this process
+// runs as — what a native library must match to dlopen. They differ only
+// under emulation (Rosetta, or x64 on Windows on ARM).
+//  - Linux: navigator.platform here is the runtime's own (uname), not a
+//    webview's, so it is right; no emulation to account for.
+//  - Windows: navigator.platform says "Win32" on every CPU; update.js's
+//    winArch() reads this build's CPU from its exe's PE header and the
+//    machine's from PROCESSOR_ARCHITEW6432 / PROCESSOR_IDENTIFIER (an
+//    emulated x64 process sees PROCESSOR_ARCHITECTURE=AMD64). No spawn.
+//  - macOS: navigator.platform says "MacIntel" on every Mac (#120: Intel
+//    Macs were reported as arm64), so ask sysctl via update.js —
+//    hw.optional.arm64 for the machine, sysctl.proc_translated for Rosetta.
+// All three helpers cache, so only the first info() call spawns.
+const IS_MAC = !IS_WIN && !IS_LINUX;
+const LINUX_ARCH = /aarch64|arm64/i.test(globalThis.navigator?.platform ?? '') ? 'arm64' : 'x86_64';
+async function cpuArch() {
+  if (IS_WIN) { const { own, machine } = await winArch(); return { arch: machine, processArch: own }; }
+  if (IS_MAC) return { arch: await macArch(), processArch: await macProcessArch() };
+  return { arch: LINUX_ARCH, processArch: LINUX_ARCH };
+}
 const OS = IS_WIN ? 'windows' : IS_LINUX ? 'linux' : 'macos';
 // Linux only: several capabilities exist on X11 but not on Wayland, which
 // hides other windows and the global pointer by design. GDK_BACKEND wins
@@ -553,10 +563,10 @@ async function systemRequirements(ids, refresh) {
   return out;
 }
 
-function systemInfo() {
+async function systemInfo() {
   return {
     os: OS,
-    arch: ARCH,
+    ...(await cpuArch()),
     // Linux desktops differ enough that apps sometimes need the specifics;
     // null everywhere else.
     session: IS_LINUX ? (ON_X11 ? 'x11' : (tjs.env.XDG_SESSION_TYPE || null)) : null,
@@ -2987,10 +2997,12 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
       isMacOS: () => OS === 'macos',
       isWindows: () => OS === 'windows',
       isLinux: () => OS === 'linux',
-      // { os, arch: 'arm64'|'x86_64', session, desktop } — session/desktop
-      // are the Linux display server and desktop name, null elsewhere.
+      // { os, arch, processArch, session, desktop } — arch is the machine's
+      // chip, processArch this process's ('arm64'|'x86_64'; they differ under
+      // emulation); session/desktop are the Linux display server and desktop
+      // name, null elsewhere.
       info: async () => systemInfo(),
-      architecture: async () => systemInfo().arch,
+      architecture: async () => (await systemInfo()).arch,
       // { <feature>: boolean, … } — anything absent is supported. The page's
       // copy adds `api` (what the tinyjs.json gate denies it); the backend
       // isn't gated, so there's none here.

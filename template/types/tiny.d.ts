@@ -569,7 +569,12 @@ declare interface TinyRequirement {
 
 declare interface TinySystemInfo {
   os: 'macos' | 'windows' | 'linux';
-  arch: string;
+  /** the machine's CPU: still 'arm64' for an x86_64 build under emulation */
+  arch: 'arm64' | 'x86_64';
+  /** the CPU this app's process runs as — what a native library must match
+   *  to load. Differs from `arch` only under emulation (Rosetta on macOS,
+   *  x64 on Windows on ARM). */
+  processArch: 'arm64' | 'x86_64';
   /** Linux display server ('x11' | 'wayland'); null elsewhere */
   session: string | null;
   /** Linux desktop name; null elsewhere */

@@ -29,7 +29,11 @@ tiny.system.os();  tiny.system.isMacOS();  tiny.system.isWindows();  tiny.system
 
 // the chip is the one thing the page CAN'T see: WKWebView reports MacIntel
 // on Apple silicon, so ask the backend
-await tiny.system.architecture();   // 'arm64' | 'x86_64'
+await tiny.system.architecture();   // 'arm64' | 'x86_64', the machine's chip
+// the CPU this app runs as, which differs from the chip only when an x86_64
+// build is emulated (Rosetta, Windows on ARM). Match a native library you
+// dlopen to processArch; pick a download for the machine by arch.
+(await tiny.system.info()).processArch;
 
 // Linux assembles media codecs, speech etc. from packages, so a feature can
 // be missing on one box — ask, and tell the user the fix. All ok elsewhere.

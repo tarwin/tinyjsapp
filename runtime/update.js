@@ -39,9 +39,21 @@ const LINUX_ARCH = /aarch64|arm64/i.test(globalThis.navigator?.platform ?? '') ?
 // Rosetta — an Intel build running there updates to the native arm64 build.
 // Intel Macs don't have the key at all (sysctl fails → x86_64).
 let macArchP = null;
-function macArch() {
-  return (macArchP ??= runCapture(['sysctl', '-n', 'hw.optional.arm64'])
+export function macArch() {
+  return (macArchP ??= runCapture(['/usr/sbin/sysctl', '-n', 'hw.optional.arm64'])
     .then((r) => (r.ok && r.out.trim() === '1' ? 'arm64' : 'x86_64'), () => 'x86_64'));
+}
+
+// This process's CPU on macOS: x86_64 when Rosetta translates it
+// (sysctl.proc_translated is 1), otherwise the machine's. The value is the
+// sysctl CHILD's, which matches ours: a universal binary spawned by a
+// translated process runs translated too (checked via arch -x86_64 sh). The
+// key is missing before macOS 11, where there is no Rosetta 2: not translated.
+let macProcessArchP = null;
+export function macProcessArch() {
+  return (macProcessArchP ??= runCapture(['/usr/sbin/sysctl', '-n', 'sysctl.proc_translated'])
+    .then((r) => r.ok && r.out.trim() === '1', () => false)
+    .then((translated) => (translated ? 'x86_64' : macArch())));
 }
 
 // Windows: this build's CPU from its own exe's PE header, and whether the
@@ -52,7 +64,7 @@ function macArch() {
 // through PROCESSOR_ARCHITEW6432 / PROCESSOR_IDENTIFIER. Missing both just
 // leaves an x64 build on x64 updates.
 let winArchP = null;
-function winArch() {
+export function winArch() {
   return (winArchP ??= (async () => {
     let own = /arm64/i.test(tjs.env.PROCESSOR_ARCHITECTURE ?? '') ? 'arm64' : 'x86_64';
     try {

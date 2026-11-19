@@ -4,6 +4,19 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **macOS: `tiny.system.architecture()` said `arm64` on Intel Macs** (#120).
+  The backend read the CPU from `navigator.platform`, which is `MacIntel` on
+  every Mac, so the value fell through to `arm64`. It now asks the hardware
+  (`sysctl hw.optional.arm64`), as the updater already did. Like Windows, it
+  reports the machine's chip, so an Intel build running under Rosetta on
+  Apple silicon still gets `arm64`. `system.info().arch` is fixed too.
+- **`system.info()` has `processArch`**, the CPU the app's process runs as
+  (`'arm64'` or `'x86_64'`). It differs from `arch` only when an x86_64
+  build is emulated (Rosetta on macOS, x64 on Windows on ARM). Pick a native
+  library to load by `processArch`, and a download for the machine by `arch`.
+
 ## 0.74.0 — 2026-11-15
 
 - **Windows: `tinyjs` failed in Git Bash** (#117). Running the CLI from Git
