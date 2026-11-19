@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.75.0 — 2026-11-20
 
 - **Windows: a custom context menu opened from the keyboard appeared at the
   mouse** (#118). With `tiny.menu.setContext`, Shift+F10 or the Menu key
