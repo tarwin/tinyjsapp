@@ -21,9 +21,8 @@ WRONG: on Windows 11 at 200% every menu opened at half the distance from the
 WebView's corner (right-click at CSS 100,60 → menu at client + 100,60). It's
 DIPs; the handler now scales by the controller's RasterizationScale
 (window_scale() fallback) before adding the bounds.
-Linux probably has the same bug (`gtk_menu_popup_at_pointer` for a
-keyboard-opened menu too) and is not fixed: WebKitGTK gives no position for
-a keyboard-opened menu.
+Linux had the same bug and is fixed the same day (its box below): WebKitGTK
+gives no position for a keyboard-opened menu, so the DOM event's is used.
 
 How it was checked (2026-11-20, Windows 11 ARM64 VM, one display at 200%,
 x64 launcher): scratch app with `setContext([{ label: 'Example' }])` and a
@@ -46,6 +45,29 @@ points = ClientToScreen(0,0) + CSS × devicePixelRatio.
   four checks, menu at its own button / click point.
 - [x] **Windows, frameless window** (`chrome: { frame: false }`)
   (2026-11-20, 200%): same four checks, no caption offset.
+- [x] **Linux** (2026-11-20, arm64 Ubuntu 24.04, WebKitGTK 2.52.6,
+  XWayland via `GDK_BACKEND=x11`). Had the same bug: `on_context_menu` gets
+  a `GDK_KEY_PRESS` (no coords) for Shift+F10 / the Menu key, and
+  `gtk_menu_popup_at_pointer` read the live pointer. Now an isolated-world
+  (`tinyjs-ctxpos`) top-frame listener records the DOM `contextmenu`
+  clientX/Y; for a non-button trigger the launcher reads-and-clears it
+  (× zoom level) and uses `gtk_menu_popup_at_rect` if it is under 1s old,
+  else falls back to the pointer. Rig: scratch app, button at CSS
+  300,200 120×40 focused, `setContext([{ label: 'Example' }])`, pointer
+  parked at 50,50 via XTest, popup rect from `xwininfo` (override-redirect,
+  viewable; GTK's shadow puts it ~6,5 up-left of the point). Before: Shift+F10
+  and Menu key → at the mouse. After, compared with `setContext(null)`
+  (WebKit's own menu at the button's bottom-left, CSS 300,239):
+  - 1x: Shift+F10 and Menu key → 890,628 vs WebKit's 890,629.
+  - `GDK_SCALE=2`: 882,660 vs WebKit's 882,662.
+  - `win.setZoom(1.5)`: at CSS 300,239 × 1.5 (±2px rounding).
+  - secondary window (`win.open`): its own button, ±1px.
+  - right-click → at the click point (1x, 2x, zoom), unchanged.
+  - focus in a same-origin iframe → at the pointer (fallback); a
+    page-world `globalThis.__tinyCtxPos = [5,5]` changes nothing.
+  - stale point: right-click top frame, Esc, left-click into the iframe
+    button, move away, Shift+F10 → at the pointer, not the old click.
+  Not seen: native Wayland, the 22.04 CI build, x86_64.
 - [x] **Windows, regression** (2026-11-20): tray right-click (posted
   WM_TINY_TRAY / WM_RBUTTONUP) → menu top-left exactly at the cursor;
   `setContext(null)` + right-click → WebView2's own menu

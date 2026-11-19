@@ -4,6 +4,14 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **Linux: a custom context menu opened from the keyboard appeared at the
+  mouse** (#118, the Windows fix shipped in 0.75.0). Shift+F10 or the Menu
+  key now open a `tiny.menu.setContext` menu where WebKitGTK's own menu
+  would go: at the focused element. Right-click is unchanged. Inside an
+  iframe, a keyboard-opened menu still opens at the mouse.
+
 ## 0.75.0 — 2026-11-20
 
 - **Windows: a custom context menu opened from the keyboard appeared at the

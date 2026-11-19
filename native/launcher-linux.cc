@@ -55,6 +55,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -671,6 +672,9 @@ static void assign_call_token(WebKitWebView* wv, const std::string& winid) {
                                       nullptr, nullptr, nullptr);
 }
 
+// Isolated script world holding the last DOM contextmenu point (make_ucm).
+#define CTX_POS_WORLD "tinyjs-ctxpos"
+
 // Build a UserContentManager with the full injection set for a window.
 static WebKitUserContentManager* make_ucm(const std::string& winid) {
   WebKitUserContentManager* ucm = webkit_user_content_manager_new();
@@ -683,6 +687,21 @@ static WebKitUserContentManager* make_ucm(const std::string& winid) {
   };
   add(tiny_shim_js(winid));
   add(TINY_CLIENT_JS);
+  // #118: a keyboard-opened context menu (Shift+F10, Menu key) reaches
+  // on_context_menu as a key press with no position, but WebKit has already
+  // dispatched the DOM contextmenu event at the point it picked (the focused
+  // element / selection). Remember that point in an isolated world — the
+  // page can neither see nor overwrite it — for on_context_menu to read.
+  {
+    WebKitUserScript* s = webkit_user_script_new_for_world(
+        "addEventListener('contextmenu', e => {"
+        " globalThis.__tinyCtxPos = [e.clientX, e.clientY, performance.now()]; },"
+        " true);",
+        WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+        WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, CTX_POS_WORLD, nullptr, nullptr);
+    webkit_user_content_manager_add_script(ucm, s);
+    webkit_user_script_unref(s);
+  }
   const char* inject = getenv("TINYJS_INJECT");
   if (inject && *inject) add(inject);
   g_signal_connect_data(ucm, "script-message-received::tiny",
@@ -727,6 +746,52 @@ static void clear_registry_kind(const std::string& kind, GtkWindow* owner);
 // them (an update while it's open shows live).
 static GtkWidget* g_ctx_menu = nullptr;
 
+// #118: pop the custom menu where WebKit's own would go. A right-click
+// (button press) is at the pointer; anything else — Shift+F10 or the Menu
+// key arrive as a GDK_KEY_PRESS — is read back from the isolated world's
+// record of the DOM event, which is in CSS px of the top frame (hence the
+// zoom). The read is async, so the menu shows a moment later. Nothing to
+// read (a focused iframe: the recorder is top-frame only) → the pointer,
+// as before.
+struct CtxPopup {
+  GtkWidget* menu;
+  WebKitWebView* wv;
+  GdkEvent* event;
+};
+static void ctx_popup_at_pos(GObject* src, GAsyncResult* res, gpointer data) {
+  CtxPopup* p = (CtxPopup*)data;
+  JSCValue* v = webkit_web_view_evaluate_javascript_finish(WEBKIT_WEB_VIEW(src), res, nullptr);
+  bool placed = false;
+  // The menu may have been replaced (another right-click) or destroyed with
+  // its window while we waited.
+  if (p->menu == g_ctx_menu && g_ctx_menu && gtk_widget_get_window(GTK_WIDGET(p->wv))) {
+    if (v && jsc_value_is_array(v)) {
+      JSCValue* jx = jsc_value_object_get_property_at_index(v, 0);
+      JSCValue* jy = jsc_value_object_get_property_at_index(v, 1);
+      if (jsc_value_is_number(jx) && jsc_value_is_number(jy)) {
+        double z = webkit_web_view_get_zoom_level(p->wv);
+        GtkAllocation a;
+        gtk_widget_get_allocation(GTK_WIDGET(p->wv), &a);
+        // Clamped to the view: the point is ours, but cheap to be sure.
+        double x = std::clamp(jsc_value_to_double(jx) * z, 0.0, (double)a.width);
+        double y = std::clamp(jsc_value_to_double(jy) * z, 0.0, (double)a.height);
+        GdkRectangle r = {(int)x, (int)y, 1, 1};
+        if (!gtk_widget_get_has_window(GTK_WIDGET(p->wv))) { r.x += a.x; r.y += a.y; }
+        gtk_menu_popup_at_rect(GTK_MENU(g_ctx_menu), gtk_widget_get_window(GTK_WIDGET(p->wv)),
+                               &r, GDK_GRAVITY_NORTH_WEST, GDK_GRAVITY_NORTH_WEST, p->event);
+        placed = true;
+      }
+      g_object_unref(jx);
+      g_object_unref(jy);
+    }
+    if (!placed) gtk_menu_popup_at_pointer(GTK_MENU(g_ctx_menu), p->event);
+  }
+  if (v) g_object_unref(v);
+  if (p->event) gdk_event_free(p->event);
+  g_object_unref(p->wv);
+  delete p;
+}
+
 static gboolean on_context_menu(WebKitWebView* wv, WebKitContextMenu*,
                                 GdkEvent* event, WebKitHitTestResult*, gpointer) {
   if (g_ctx_custom) {
@@ -747,7 +812,21 @@ static gboolean on_context_menu(WebKitWebView* wv, WebKitContextMenu*,
     }), nullptr);
     gtk_menu_attach_to_widget(GTK_MENU(g_ctx_menu), GTK_WIDGET(wv), nullptr);
     gtk_widget_show_all(g_ctx_menu);
-    gtk_menu_popup_at_pointer(GTK_MENU(g_ctx_menu), event);
+    if (event && event->type == GDK_BUTTON_PRESS) {
+      gtk_menu_popup_at_pointer(GTK_MENU(g_ctx_menu), event);
+    } else {
+      // Only a point recorded just now is this menu's. An older one is from
+      // an event that never reached here (the page called preventDefault, or
+      // the default menu was on) or from the top frame when this menu's
+      // event fired in an iframe (which records nothing up here).
+      auto* p = new CtxPopup{g_ctx_menu, WEBKIT_WEB_VIEW(g_object_ref(wv)),
+                             event ? gdk_event_copy(event) : nullptr};
+      webkit_web_view_evaluate_javascript(
+          wv, "(() => { const p = globalThis.__tinyCtxPos;"
+              " globalThis.__tinyCtxPos = null;"
+              " return p && performance.now() - p[2] < 1000 ? p : null; })()",
+          -1, CTX_POS_WORLD, nullptr, nullptr, ctx_popup_at_pos, p);
+    }
     return TRUE;  // ours is up; WebKit shows nothing
   }
   if (g_ctx_suppress) return TRUE;  // show nothing
