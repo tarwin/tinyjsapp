@@ -5230,9 +5230,14 @@ struct CtxHandler : public ICoreWebView2ContextMenuRequestedEventHandler {
       // Open where WebView2 says the menu belongs, as its own menu does
       // (#118): the click point for a right-click, the focused element for
       // Shift+F10 / the Menu key. The cursor is wrong for the keyboard case.
-      // The location is relative to the controller's bounds, which (default
-      // BoundsMode, per-monitor DPI-aware process) are physical pixels in
-      // the parent window's client area. Cursor if any of it is missing.
+      // The location is relative to the WebView's top-left in DIPs — NOT
+      // pixels: measured on Windows 11 at 200%, an unscaled point opened the
+      // menu at half the distance. Scale it by the controller's
+      // RasterizationScale (the monitor's DPI scale unless overridden; the
+      // parent's DPI if Controller3 is missing) into physical pixels, then
+      // offset by the controller's bounds (physical pixels in the parent's
+      // client area: default BoundsMode, per-monitor DPI-aware process).
+      // Cursor if any of it is missing.
       POINT at;
       bool have = false;
       ICoreWebView2Controller *ctrl = ctrl_for_win(winid);
@@ -5241,8 +5246,18 @@ struct CtxHandler : public ICoreWebView2ContextMenuRequestedEventHandler {
       if (ctrl && SUCCEEDED(args->get_Location(&at)) &&
           SUCCEEDED(ctrl->get_Bounds(&b)) &&
           SUCCEEDED(ctrl->get_ParentWindow(&parent)) && parent) {
-        at.x += b.left;
-        at.y += b.top;
+        double scale = 0;
+        ICoreWebView2Controller3 *c3 = nullptr;
+        if (SUCCEEDED(ctrl->QueryInterface(IID_ICoreWebView2Controller3,
+                                           (void **)&c3)) && c3) {
+          if (FAILED(c3->get_RasterizationScale(&scale)))
+            scale = 0;
+          c3->Release();
+        }
+        if (scale <= 0)
+          scale = window_scale(parent);
+        at.x = (LONG)lround(at.x * scale) + b.left;
+        at.y = (LONG)lround(at.y * scale) + b.top;
         have = ClientToScreen(parent, &at) != FALSE;
       }
       tray_popup(g_ctx_menu, "CTX", have ? &at : nullptr);

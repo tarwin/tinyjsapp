@@ -16,24 +16,40 @@ its parent window, instead of `GetCursorPos()`. Each handler carries its
 window id so secondary windows use their own controller. Falls back to the
 cursor if any step fails. Written on macOS: syntax-checked with
 x86_64-w64-mingw32-g++ against WebView2 SDK 1.0.2903.40, never run. The
-docs don't give get_Location's units; physical pixels is assumed (default
-BoundsMode, per-monitor DPI-aware), so check a scaled display.
+docs don't give get_Location's units; physical pixels was assumed and was
+WRONG: on Windows 11 at 200% every menu opened at half the distance from the
+WebView's corner (right-click at CSS 100,60 → menu at client + 100,60). It's
+DIPs; the handler now scales by the controller's RasterizationScale
+(window_scale() fallback) before adding the bounds.
 Linux probably has the same bug (`gtk_menu_popup_at_pointer` for a
 keyboard-opened menu too) and is not fixed: WebKitGTK gives no position for
 a keyboard-opened menu.
 
+How it was checked (2026-11-20, Windows 11 ARM64 VM, one display at 200%,
+x64 launcher): scratch app with `setContext([{ label: 'Example' }])` and a
+button; CDP (`--remote-debugging-port`) focused the button and sent
+Shift+F10 / ContextMenu keys / right-clicks via Input.dispatch*; a
+per-monitor-aware ctypes script read the launcher's visible `#32768` rect
+(physical px) and the cursor, then posted Escape to the menu. Expected
+points = ClientToScreen(0,0) + CSS × devicePixelRatio.
+
 - [ ] **Windows, 100% scaling**: issue's repro (`setContext([{ label:
   'Example' }])`), focus a button with Tab, Shift+F10 → menu at the button,
   not the mouse; Menu key the same; right-click → at the click point.
-- [ ] **Windows, 150% (or mixed-DPI) scaling**: the same three, plus a
-  right-click near the bottom-right corner (an unscaled point lands
-  visibly off).
-- [ ] **Windows, secondary window** (`win.open`): Shift+F10 there → at its
-  own focused element.
-- [ ] **Windows, frameless window** (custom titlebar): menu not offset by
-  the missing caption.
-- [ ] **Windows, regression**: tray icon right-click menu still at the
-  cursor; `setContext(null)` → WebView2's own menu again.
+  (Not run: changing scaling is system-wide. Scale 1.0 is the same code.)
+- [x] **Windows, 200% scaling** (2026-11-20): before the DIP fix, all
+  three opened at half the offset (not at the cursor — the cursor was
+  elsewhere). After: Shift+F10 and Menu key → menu top-left inside the
+  focused button (its centre); right-click → exactly the click point, and
+  at a bottom-right-corner right-click too. Mixed-DPI not run (one display).
+- [x] **Windows, secondary window** (`win.open`) (2026-11-20, 200%): same
+  four checks, menu at its own button / click point.
+- [x] **Windows, frameless window** (`chrome: { frame: false }`)
+  (2026-11-20, 200%): same four checks, no caption offset.
+- [x] **Windows, regression** (2026-11-20): tray right-click (posted
+  WM_TINY_TRAY / WM_RBUTTONUP) → menu top-left exactly at the cursor;
+  `setContext(null)` + right-click → WebView2's own menu
+  (Chrome_WidgetWin_1 popup from msedgewebview2) at the click point.
 
 ## #119 — macOS packaged apps drop inherited `TINYJS_*` (2026-11-20)
 
@@ -74,8 +90,10 @@ Windows uses `winArch()` (PE header of tjs.exe + env), Linux uname. New
 - [ ] **macOS, Rosetta**: an x86_64 tjs/app on Apple silicon →
   `{ arch: 'arm64', processArch: 'x86_64' }`.
 - [ ] **Windows x64**: `{ arch: 'x86_64', processArch: 'x86_64' }`.
-- [ ] **Windows on ARM**: arm64 build → both `arm64`; x64 build →
-  `{ arch: 'arm64', processArch: 'x86_64' }`.
+- [x] **Windows on ARM** (2026-11-20, Windows 11 ARM64): backend
+  `app.system.info()` in `tinyjs dev` under the checkout's x64 tjs →
+  `{ arch: 'arm64', processArch: 'x86_64' }`, `architecture()` → `arm64`;
+  under v0.74.0's tjs-windows-arm64 (`tjs run cli.js dev`) → both `arm64`.
 - [ ] **Linux** (x86_64 and arm64): both equal uname's CPU.
 
 ## #94 — `notarize.keychain` / `TINYJS_NOTARY_KEYCHAIN` (contributor PR, merged 2026-11-15)
