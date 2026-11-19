@@ -67,10 +67,27 @@ verified under #29.4.
   signed) → `{ legit: false, pwned: true }` (the env REPLACED the app's
   inject). Fixed launcher → `{ legit: true, pwned: false }`. `tinyjs dev`
   → `{ legit: true }` (dev still passes inject through the env).
-- [ ] **macOS, notarized build**: same probe against a Developer-ID-signed,
-  notarized .app (hardened runtime), plus `TINYJS_DEBUG=open` → no
-  inspector, `TINYJS_MEDIA_ORIGINS='camera *'` on a wrapped site → WebKit
-  still prompts.
+- [x] **macOS, Developer-ID-signed build** (2026-11-20, Apple silicon,
+  macOS 27.2): the scratch app built with the Developer ID Application
+  identity, hardened runtime on (`flags=0x10000(runtime)`), `codesign
+  --verify --deep --strict` OK. Not notarized: that only adds a Gatekeeper
+  ticket, and the probe runs `Contents/MacOS/<name>` directly, so the
+  launcher behaves the same. Control = the same .app with the pre-fix
+  launcher (ad-hoc signed). One run each with `TINYJS_INJECT`,
+  `TINYJS_DEBUG=open`, `TINYJS_MEDIA_ORIGINS='camera *\nmicrophone *'`,
+  `TINYJS_READ_ACCESS=/`, `TINYJS_UA` and `TINYJS_NOTIF_DEBUG` set:
+  - inject: control `{ legit: false, pwned: true }`; signed `{ legit: true,
+    pwned: false }`.
+  - devtools: the page records `innerHeight` 3.5 s after load (the "open"
+    inspector docks, and shrinks the page; it opens no new window). Control
+    with DEBUG=open → 640 to 160; control without it → 640; signed with it
+    → 640.
+  - environment: `ps eww` on the backend `tjs` (it inherits the launcher's
+    environ after the strip). Control: DEBUG, INJECT, MEDIA_ORIGINS,
+    NOTIF_DEBUG, READ_ACCESS, UA and the rest. Signed: only `TINYJS_SOCKET`
+    and `TINYJS_NOTIF_DEBUG`. So MEDIA_ORIGINS, READ_ACCESS and UA never
+    reach a getenv in the launcher either. The WebKit camera prompt itself
+    was not watched.
 
 ## #120 — `system.architecture()` on macOS from sysctl; `info().processArch` (2026-11-20)
 
@@ -87,8 +104,12 @@ Windows uses `winArch()` (PE header of tjs.exe + env), Linux uname. New
   hw.optional.arm64 1 (no x86_64 tjs to run end to end).
 - [ ] **macOS, Intel**: `info()` → `{ arch: 'x86_64', processArch: 'x86_64' }`
   (reporter's machine, or any Intel Mac).
-- [ ] **macOS, Rosetta**: an x86_64 tjs/app on Apple silicon →
-  `{ arch: 'arm64', processArch: 'x86_64' }`.
+- [x] **macOS, Rosetta** (2026-11-20, Apple silicon, macOS 27.2): txiki
+  v26.11.0 `txiki-macos-x86_64` (sha256 matches runtime/txiki.sha256) as the
+  backend under Rosetta, via `<x86 tjs> run cli.js dev` with TINYJS_HTML →
+  page `info()` `{ arch: 'arm64', processArch: 'x86_64' }`,
+  `architecture()` → `arm64`. (A packaged app can't get here: the bundled
+  tjs is arm64-only, and the launcher refuses to start on Intel.)
 - [ ] **Windows x64**: `{ arch: 'x86_64', processArch: 'x86_64' }`.
 - [x] **Windows on ARM** (2026-11-20, Windows 11 ARM64): backend
   `app.system.info()` in `tinyjs dev` under the checkout's x64 tjs →
