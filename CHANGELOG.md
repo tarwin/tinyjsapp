@@ -6,6 +6,15 @@ https://tinyjs.app/changelog.
 
 ## Unreleased
 
+- **macOS: packaged apps ignore inherited `TINYJS_*` variables** (#119).
+  A built .app read settings such as `TINYJS_INJECT` from its environment
+  before its own Info.plist and `inject.js`. Anyone able to set the app's
+  environment (a shell, `launchctl setenv`, a LaunchAgent) could run script
+  in every page of a signed app, open devtools, widen `file://` reads or
+  give a site camera and microphone access without a prompt. The launcher
+  now removes every inherited `TINYJS_*` variable at startup in a packaged
+  app, before reading any of them or starting the backend. Windows and
+  Linux builds already did this (#29). `tinyjs dev` is unchanged.
 - **macOS: `tiny.system.architecture()` said `arm64` on Intel Macs** (#120).
   The backend read the CPU from `navigator.platform`, which is `MacIntel` on
   every Mac, so the value fell through to `arm64`. It now asks the hardware

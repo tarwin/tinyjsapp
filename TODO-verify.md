@@ -8,6 +8,27 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #119 — macOS packaged apps drop inherited `TINYJS_*` (2026-11-20)
+
+`bundle_mode_setup()` in launcher-macos.cc now unsetenv()s every `TINYJS_*`
+(except `TINYJS_NOTIF_DEBUG`, logging only) once it knows it is a .app,
+before any knob is read and before tjs is spawned. The macOS half of #29.4,
+whose note above ("macOS is untouched … packaged .apps read plist keys")
+was wrong: every knob checked the env FIRST. macOS only; Windows/Linux were
+verified under #29.4.
+
+- [x] **macOS** (2026-11-20, Apple silicon, macOS 27.2): scratch app with a
+  tinyjs.json `"inject"` setting `window.__legit`, built, then its
+  `Contents/MacOS/<name>` run with `TINYJS_INJECT='window.__pwned=1'`.
+  Control: the same .app with the pre-fix launcher (HEAD source, ad-hoc
+  signed) → `{ legit: false, pwned: true }` (the env REPLACED the app's
+  inject). Fixed launcher → `{ legit: true, pwned: false }`. `tinyjs dev`
+  → `{ legit: true }` (dev still passes inject through the env).
+- [ ] **macOS, notarized build**: same probe against a Developer-ID-signed,
+  notarized .app (hardened runtime), plus `TINYJS_DEBUG=open` → no
+  inspector, `TINYJS_MEDIA_ORIGINS='camera *'` on a wrapped site → WebKit
+  still prompts.
+
 ## #120 — `system.architecture()` on macOS from sysctl; `info().processArch` (2026-11-20)
 
 `runtime/bridge.js` used `navigator.platform` (always `MacIntel` on macOS)
