@@ -1,0 +1,45 @@
+name: homebrew
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/homebrew/**'
+      - '.github/workflows/homebrew.yml'
+  push:
+    paths:
+      - 'packaging/homebrew/**'
+      - '.github/workflows/homebrew.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  formula:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Create a local test tap
+        run: |
+          brew tap-new tinyjs-ci/tap
+          mkdir -p "$(brew --repository tinyjs-ci/tap)/Formula"
+          cp packaging/homebrew/Formula/tinyjs.rb "$(brew --repository tinyjs-ci/tap)/Formula/tinyjs.rb"
+
+      - name: Check formula style and metadata
+        run: |
+          brew style tinyjs-ci/tap/tinyjs
+          brew audit --strict --online tinyjs-ci/tap/tinyjs
+
+      - name: Install the release and test the installed command
+        run: |
+          brew install tinyjs-ci/tap/tinyjs
+          brew test --verbose tinyjs-ci/tap/tinyjs
