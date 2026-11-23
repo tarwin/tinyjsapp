@@ -1566,6 +1566,44 @@ static bool g_hide_on_close = false;
 // lifts it.
 static bool g_accessory = false;
 static bool g_suppress_order_front = false;
+// An app that turns Regular after starting as an agent (LSUIElement, which
+// packaged "activation": "accessory" apps are) gets a menu bar that is drawn
+// but won't open on click until the app is activated afresh. Seen on macOS
+// 27.2 with Tiny Time: open its window from the tray, the menus show, clicks
+// do nothing until the window is clicked. `presence 1` marks the menu bar
+// stale; the next activating show (or presence 1 itself, when the app is
+// already active) hands activation to the Dock and takes it straight back,
+// which wakes the menus. A plain deactivate + activate is NOT enough (tried
+// on 27.2). Dev runs start Regular, so they never see it.
+static bool g_menu_stale = false;
+#ifdef __APPLE__
+static void refresh_menu_bar(NSWindow *win) {
+  g_menu_stale = false;
+  NSRunningApplication *dock = [[NSRunningApplication
+      runningApplicationsWithBundleIdentifier:@"com.apple.dock"] firstObject];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+    // macOS 14+ activation is cooperative: yield to the Dock first
+    if (dock && [NSApp respondsToSelector:@selector(yieldActivationToApplication:)])
+      [NSApp performSelector:@selector(yieldActivationToApplication:) withObject:dock];
+    if (dock)
+      [dock activateWithOptions:0];
+    else
+      [NSApp deactivate];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+      [NSApp activateIgnoringOtherApps:YES];
+      if (win)
+        [win makeKeyAndOrderFront:nil];
+    });
+  });
+}
+// presence 1: become Regular, and note whether that left the menu bar stale
+static void become_regular() {
+  g_accessory = false; // lift the accessory-mode coercion, if any
+  if ([NSApp activationPolicy] != NSApplicationActivationPolicyRegular)
+    g_menu_stale = true;
+  [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+}
+#endif
 // TINYJS_DEFER_SHOW=1 (rememberWindows): build main hidden so the bridge can
 // put it where it was before anyone sees it, then `WINOP show`. If no show
 // arrives (bridge died, restore threw) the window appears anyway — a
@@ -1928,14 +1966,17 @@ static void do_winop(webview_t w, void *arg) {
       if (*op == "presence 0")
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
       else if (*op == "presence 1") {
-        g_accessory = false;
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        become_regular();
+        if (g_menu_stale && [NSApp isActive])
+          refresh_menu_bar(nil);
       }
       else if (*op == "hide")
         [NSApp hide:nil];
       else if (*op == "show" || *op == "show 1") {
         [NSApp unhide:nil];
         [NSApp activateIgnoringOtherApps:YES];
+        if (g_menu_stale)
+          refresh_menu_bar(nil);
       } else if (*op == "show 0")
         [NSApp unhideWithoutActivation];
       delete wr;
@@ -1974,6 +2015,8 @@ static void do_winop(webview_t w, void *arg) {
       [NSApp activateIgnoringOtherApps:YES];
       [win makeKeyAndOrderFront:nil];
       attach_pending_parent(w, wr->win);
+      if (g_menu_stale)
+        refresh_menu_bar(win);
     } else if (*op == "show 0") {
       // Show without stealing focus (overlay/HUD panels): the window appears
       // but the active app keeps keyboard focus; clicking it activates
@@ -1988,9 +2031,10 @@ static void do_winop(webview_t w, void *arg) {
       if (is_main)
         [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
     } else if (*op == "presence 1" && is_main) {
-      g_accessory = false; // lift the accessory-mode coercion, if any
-      [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+      become_regular();
       [NSApp activateIgnoringOtherApps:YES];
+      if (g_menu_stale)
+        refresh_menu_bar(nil); // the window may be hidden: don't order it in
     } else if (*op == "hideonclose 1") {
       g_hide_on_close = true;
     } else if (*op == "hideonclose 0") {

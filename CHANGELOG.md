@@ -4,6 +4,16 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## 0.75.2 — 2026-11-23
+
+- **macOS: a menu-bar app's menus didn't open after it showed a window.**
+  A packaged app with `"activation": "accessory"` that calls
+  `app.presence('normal')` to show a window got a menu bar that was drawn
+  but ignored clicks until the window itself was clicked. The launcher now
+  hands activation to the Dock and takes it straight back the first time it
+  shows a window after turning regular, which wakes the menus. `tinyjs dev`
+  never showed the bug, because dev runs start as a regular app.
+
 ## 0.75.1 — 2026-11-20
 
 - **Linux: a custom context menu opened from the keyboard appeared at the
