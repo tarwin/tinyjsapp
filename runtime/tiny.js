@@ -194,7 +194,9 @@
     },
 
     log: (msg) => call('log', { msg }),
-    quit: () => call('quit'),
+    // { ask: true }: run onBeforeQuit (backend, then pages) first, like a
+    // user quit; resolves false if something cancelled.
+    quit: (opts) => call('quit', opts?.ask ? { ask: true } : {}),
 
     // Which machine is this? os()/isMacOS()/isWindows()/isLinux() answer
     // synchronously (the webview's own UA is decisive: WKWebView says
@@ -836,7 +838,8 @@
       // fn({ reason }) before a quit the USER asked for ('window' = main
       // window's close button, 'quit' = Cmd+Q / app-menu or Dock Quit,
       // 'session' = logout/shutdown, macOS only). Return false (or a promise
-      // of it) to cancel. tiny.quit() isn't asked. Returns an unsubscribe.
+      // of it) to cancel. Plain tiny.quit() isn't asked; tiny.quit({ ask:
+      // true }) is, with reason 'quit'. Returns an unsubscribe.
       onBeforeQuit(fn) {
         if (typeof fn !== 'function') throw new TypeError('tiny.app.onBeforeQuit(fn): fn must be a function');
         quitHandlers.push(fn);

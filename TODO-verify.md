@@ -34,6 +34,11 @@ toggles for backend veto / page confirm / hideOnClose, log file read back):
       (`«event aevtquit» given «class why?»:«constant ****rlgo»`) → vetoed
       with reason `'session'`. A real logout (macOS's "interrupted logout"
       notice) was not run.
+- [x] `tiny.quit({ ask: true })` (added later the same day, bridge-only):
+      backend veto → resolves false, app stays
+- [ ] `tiny.quit({ ask: true })` answered by the page confirm (Cancel →
+      false; OK → quits, onQuit runs) — same shouldQuit path as above, not
+      clicked through
 
 Windows (written on macOS; mingw `-fsyntax-only` clean against WebView2
 1.0.2903.40; never run):
@@ -41,6 +46,7 @@ Windows (written on macOS; mingw `-fsyntax-only` clean against WebView2
       a veto leaves the window up; an allow quits; `onQuit` runs
 - [ ] `hideOnClose` with a tray still hides without asking
 - [ ] a page handler that shows `tiny.dialog.confirm` holds the quit
+- [ ] `tiny.quit({ ask: true })` button: veto → false; allow → quits
 
 Linux (written on macOS; NOT compiled — no GTK here):
 - [ ] builds

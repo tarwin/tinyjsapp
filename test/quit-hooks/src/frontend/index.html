@@ -9,6 +9,7 @@ h2{margin:0 0 8px}
 <label><input type="checkbox" id="page"> Page <b>tiny.app.onBeforeQuit</b> asks with a confirm dialog</label>
 <label><input type="checkbox" id="hide"> <b>setHideOnClose</b> (close button hides; Dock icon brings it back)</label>
 <button id="quit">tiny.quit() (should NOT ask)</button>
+<button id="askquit">tiny.quit({ ask: true })</button>
 <div id="log"></div>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -29,6 +30,11 @@ function go() {
     } else { offPage?.(); offPage = null; tiny.api.call('qlog', { s: 'page handler removed' }); }
   };
   $('hide').onchange = (e) => { tiny.win.setHideOnClose(e.target.checked); tiny.api.call('qlog', { s: 'hideOnClose = ' + e.target.checked }); };
+  $('askquit').onclick = async () => {
+    tiny.api.call('qlog', { s: 'tiny.quit({ ask: true }) clicked' });
+    const ok = await tiny.quit({ ask: true });
+    tiny.api.call('qlog', { s: 'tiny.quit({ ask: true }) resolved ' + ok });
+  };
   $('quit').onclick = () => { tiny.api.call('qlog', { s: 'tiny.quit() clicked' }); setTimeout(() => tiny.quit(), 100); };
 }
 (function wait() { window.tiny ? go() : setTimeout(wait, 50); })();

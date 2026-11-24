@@ -897,7 +897,9 @@ declare interface Tiny {
 
   /** print to the backend's console (the tinyjs dev terminal); any JSON value */
   log(msg: unknown): Promise<true>;
-  quit(): Promise<void>;
+  /** { ask: true } runs onBeforeQuit first, as a user quit with reason
+   *  'quit' does, and resolves false if it was cancelled */
+  quit(opts?: { ask?: boolean }): Promise<boolean>;
   /** Desktop notification. Signed macOS apps get Notification Center
    *  banners; tinyjs dev and ad-hoc builds fall back to osascript. Never
    *  rejects. Resolves true once handed to the OS — even if the user has
@@ -1274,7 +1276,8 @@ declare interface Tiny {
     onOpenUrl(fn: (url: string) => void): () => void;
     onOpenFiles(fn: (paths: string[]) => void): () => void;
     onNotificationClick(fn: (id: string) => void): () => void;
-    /** fn runs before a quit the USER asked for (not tiny.quit()); return
+    /** fn runs before a quit the USER asked for, or tiny.quit({ ask: true })
+     *  (not plain tiny.quit()); return
      *  false, or a promise of false, to cancel it. Handlers run in order and
      *  the first false wins; the backend's onBeforeQuit export is asked
      *  first. Returns an unsubscribe. */
@@ -1527,6 +1530,9 @@ declare interface TinyApp {
   eval(js: string): void;
   reload(newHtml?: string): Promise<void>;
   quit(): void;
+  /** runs onBeforeQuit first, as a user quit with reason 'quit' does, and
+   *  resolves false if it was cancelled */
+  quit(opts: { ask: true }): Promise<boolean>;
   /** Same shape as tiny.notify, and the same result: true once handed to
    *  the OS, false only when the macOS dev fallback couldn't show it. */
   notify(title: string, body?: string, opts?: TinyNotifyOptions): Promise<boolean>;

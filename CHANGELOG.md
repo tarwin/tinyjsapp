@@ -14,8 +14,10 @@ https://tinyjs.app/changelog.
   `tiny.app.onBeforeQuit(fn)` in a page, to be asked before a quit the user
   started and return `false` to cancel it. `info.reason` is `'window'`
   (main window closed), `'quit'` (⌘Q, app-menu or Dock Quit; macOS) or
-  `'session'` (logout or shutdown; macOS). `tiny.quit()` / `app.quit()`
-  are never asked. Under an `"api"` gate a page needs `app.beforeQuit` and
+  `'session'` (logout or shutdown; macOS). Plain `tiny.quit()` / `app.quit()`
+  aren't asked; `tiny.quit({ ask: true })` is, with reason `'quit'`, and
+  resolves `false` if it was cancelled, so a tray or menu Quit item goes
+  through the same checks. Under an `"api"` gate a page needs `app.beforeQuit` and
   `app.beforeQuitAnswer`, which the `wrapper` preset leaves off.
 
 ## 0.75.2 — 2026-11-23

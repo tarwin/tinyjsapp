@@ -160,7 +160,15 @@ tiny.app.onBeforeQuit(async ({ reason }) => {
 
 Windows and Linux have no app-wide Quit of their own; a Quit item in your own menu or tray calls `tiny.quit()`. At logout they end the app without asking, and whether `onQuit` gets to run depends on how the system stops the backend. On macOS a logout waits while you answer, and `onQuit` runs after.
 
-Only quits the user asks for are checked. `tiny.quit()` and `app.quit()` quit at once, since the app already decided; to ask first, run your own check and then call it. A window set to [hide on close](./window#visibility) just hides, so nothing is asked. A page that isn't there can't trap the user: one that hasn't acknowledged the question within 2 seconds (it was reloading, say) counts as yes, and so does a handler that throws. Once a page has acknowledged, it's waited for, since its handler may be showing a dialog.
+Only quits the user asks for are checked. `tiny.quit()` and `app.quit()` quit at once, since the app already decided. Pass `{ ask: true }` to go through the same checks: `tiny.quit({ ask: true })` asks with reason `'quit'` and resolves `false` if something cancelled. Use it for a Quit item in your own tray or menu, so the check lives in one place:
+
+```js
+export function onTray(id, app) {
+  if (id === 'quit') app.quit({ ask: true });
+}
+```
+
+ A window set to [hide on close](./window#visibility) just hides, so nothing is asked. A page that isn't there can't trap the user: one that hasn't acknowledged the question within 2 seconds (it was reloading, say) counts as yes, and so does a handler that throws. Once a page has acknowledged, it's waited for, since its handler may be showing a dialog.
 
 With an [`api`](./config#api) block, a page needs `app.beforeQuit` and `app.beforeQuitAnswer` to register, so a [wrapped site](./site-wrappers) can't stop the app from quitting unless you allow it.
 

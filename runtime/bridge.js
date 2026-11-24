@@ -3321,7 +3321,17 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     // rememberWindows saves 500ms after the last change; a move made just
     // before quitting would die with its timer, so save those first (≤1s)
     // Programmatic: no onBeforeQuit ask (the app decided), but onQuit runs.
-    quit() {
+    // { ask: true } asks first, exactly as a user quit with reason 'quit'
+    // (a tray/menu Quit item on Windows/Linux, where the OS has none) and
+    // resolves true if the app is quitting, false if something cancelled.
+    quit(opts) {
+      if (opts?.ask) {
+        quitDecision ??= shouldQuit({ reason: 'quit' }).finally(() => { quitDecision = null; });
+        return quitDecision.then(async (ok) => {
+          if (ok) { await flushPlacements(); send('QUIT'); }
+          return ok;
+        });
+      }
       if (!placeTimers.size) return send('QUIT');
       flushPlacements().finally(() => send('QUIT'));
     },
@@ -3941,7 +3951,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     'fetch.cancel': async ({ id }, _a, m) => (cancelFetchStream(streamKey(m, id)), true),
     ping: async () => 'pong',
     log: async ({ msg }) => (console.log('[web]', msg), true),
-    quit: async () => (app.quit(), true),
+    quit: async ({ ask } = {}) => (ask ? app.quit({ ask: true }) : (app.quit(), true)),
     // win.* calls target the window the page lives in.
     'win.setTitle': async ({ title: t }, _a, m) => (forWin(m).setTitle(t), true),
     'win.setSize': async ({ width, height, units }, _a, m) => (forWin(m).setSize(width, height, { units }), true),
