@@ -8,6 +8,45 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #121 — quit hooks: `onBeforeQuit` / `onQuit` (`feat/121-quit-hooks`, 2026-11-24)
+
+Wire: backend sends `QUITHOOK 1|0`; while on, the launcher turns a user
+quit into `QUITQ <qid> <reason>` and acts only on `QUITR <qid> 1`. onQuit
+runs in the bridge before `app.done` resolves (5s cap), so it needs no
+launcher support. Scratch app used for macOS: backend `onBeforeQuit` vetoes
+the first ask and allows the second, logging to a file; a page variant does
+the same through `tiny.app.onBeforeQuit`; `onQuit` awaits 1s then logs.
+
+macOS, packaged app, 2026-11-24 (seen):
+- [x] AppleScript `quit` (the `terminate:` / Dock Quit path): first ask
+      vetoed (AppleScript gets "User canceled" -128, app stays up), second
+      allowed; `onQuit` finished its 1s of async work; both processes gone.
+- [x] same, answered by a page handler (ack + async verdict) instead.
+macOS, hand-tested by the user the same day (interactive scratch app:
+toggles for backend veto / page confirm / hideOnClose, log file read back):
+- [x] main window close button → reason `'window'`, veto keeps the window
+- [x] ⌘Q and app-menu Quit → reason `'quit'`
+- [x] Dock icon → Quit → reason `'quit'`
+- [x] page confirm dialog: Cancel keeps the app, OK quits; onQuit after
+- [x] `hideOnClose` hides without asking
+- [x] `tiny.quit()` doesn't ask; onQuit still runs
+- [x] reason `'session'`: a logout's quit event sent by hand
+      (`«event aevtquit» given «class why?»:«constant ****rlgo»`) → vetoed
+      with reason `'session'`. A real logout (macOS's "interrupted logout"
+      notice) was not run.
+
+Windows (written on macOS; mingw `-fsyntax-only` clean against WebView2
+1.0.2903.40; never run):
+- [ ] close button / Alt+F4 / taskbar "Close window" → reason `'window'`;
+      a veto leaves the window up; an allow quits; `onQuit` runs
+- [ ] `hideOnClose` with a tray still hides without asking
+- [ ] a page handler that shows `tiny.dialog.confirm` holds the quit
+
+Linux (written on macOS; NOT compiled — no GTK here):
+- [ ] builds
+- [ ] close button / Alt+F4 → reason `'window'`; veto / allow / `onQuit`
+- [ ] SIGTERM still quits without asking, and `onQuit` runs
+
 ## #118 — Windows custom context menu at WebView2's location (2026-11-20)
 
 `CtxHandler` (launcher-win.cc) now opens `g_ctx_menu` at

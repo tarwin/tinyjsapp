@@ -1535,6 +1535,8 @@ const app = await createApp({
   onNavigate: appMod.onNavigate,
   onDownload: appMod.onDownload,
   onWindowOpen: appMod.onWindowOpen,
+  onBeforeQuit: appMod.onBeforeQuit,
+  onQuit: appMod.onQuit,
   url: ${JSON.stringify(cfg.url ?? null)},
   downloads: ${JSON.stringify(cfg.downloads ?? null)},
   popups: ${JSON.stringify(cfg.popups ?? null)},

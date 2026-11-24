@@ -4,6 +4,20 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **Quit hooks** (#121). Export `onQuit(app)` from the backend and it runs
+  on every way the app ends (menu, Dock or tray Quit, closing the main
+  window, `app.quit()`, logout, a crashed window process), awaited for up to
+  5 seconds before the backend exits. That's the place to stop a helper
+  process the backend started. Export `onBeforeQuit(info, app)`, or register
+  `tiny.app.onBeforeQuit(fn)` in a page, to be asked before a quit the user
+  started and return `false` to cancel it. `info.reason` is `'window'`
+  (main window closed), `'quit'` (⌘Q, app-menu or Dock Quit; macOS) or
+  `'session'` (logout or shutdown; macOS). `tiny.quit()` / `app.quit()`
+  are never asked. Under an `"api"` gate a page needs `app.beforeQuit` and
+  `app.beforeQuitAnswer`, which the `wrapper` preset leaves off.
+
 ## 0.75.2 — 2026-11-23
 
 - **macOS: a menu-bar app's menus didn't open after it showed a window.**

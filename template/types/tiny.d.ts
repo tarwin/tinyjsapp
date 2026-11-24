@@ -1274,6 +1274,11 @@ declare interface Tiny {
     onOpenUrl(fn: (url: string) => void): () => void;
     onOpenFiles(fn: (paths: string[]) => void): () => void;
     onNotificationClick(fn: (id: string) => void): () => void;
+    /** fn runs before a quit the USER asked for (not tiny.quit()); return
+     *  false, or a promise of false, to cancel it. Handlers run in order and
+     *  the first false wins; the backend's onBeforeQuit export is asked
+     *  first. Returns an unsubscribe. */
+    onBeforeQuit(fn: (info: TinyQuitRequest) => boolean | void | Promise<boolean | void>): () => void;
     /** post a native keystroke, combo like 'cmd+v' (needs Accessibility) */
     keystroke(combo: string): Promise<TinyKeystrokeResult>;
     /** keystroke('cmd+v'): paste into the frontmost app (hide first) */
@@ -1828,6 +1833,18 @@ declare interface TinyDownloadEvent {
   bytes?: number;
   total?: number;
   error?: string;
+}
+
+/** onBeforeQuit backend export / tiny.app.onBeforeQuit — a quit the user
+ *  asked for. reason: 'window' = the main window's close button (also
+ *  Alt+F4 and the taskbar's "Close window"); 'quit' = Cmd+Q, the app menu's
+ *  Quit, Dock Quit or an AppleScript quit (macOS); 'session' = logout,
+ *  restart or shutdown (macOS only — Windows and Linux don't ask then).
+ *  The backend export is `onBeforeQuit(info, app)`; cleanup that must run
+ *  on every exit goes in `onQuit(app)`, which is awaited (up to 5s) before
+ *  the backend exits. */
+declare interface TinyQuitRequest {
+  reason: 'window' | 'quit' | 'session';
 }
 
 /** onWindowOpen backend hook / 'popup' page event (all three platforms) —

@@ -312,6 +312,26 @@ static void pipe_write_line(const std::string &line) {
   pipe_write_raw(line + "\n");
 }
 
+// -- quit requests (#121) ------------------------------------------------------
+// `QUITHOOK 1` (backend onBeforeQuit, or a page's tiny.app.onBeforeQuit):
+// closing the main window — the one quit Windows users have (close button,
+// Alt+F4, taskbar "Close window") — becomes `QUITQ <qid> window` and waits
+// for `QUITR <qid> 1|0`. Backend `QUIT` is never asked. UI thread only,
+// except g_quit_hook (set by the pipe thread).
+// Logoff/shutdown (WM_QUERYENDSESSION) is not asked: Windows wants that
+// answer synchronously, and the session may end the backend before onQuit
+// finishes. Documented under onBeforeQuit in docs/docs/backend.md.
+static std::atomic<bool> g_quit_hook{false};
+static bool g_quit_pending = false;
+static long g_quit_qid = 0;
+
+static void request_quit(const char *reason) {
+  if (g_quit_pending)
+    return; // one ask at a time
+  g_quit_pending = true;
+  pipe_write_line("QUITQ " + std::to_string(++g_quit_qid) + " " + reason);
+}
+
 static std::string json_escape(const std::string &s) {
   std::string out = "\"";
   for (char c : s) {
@@ -7952,6 +7972,12 @@ static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
       ShowWindow(hwnd, SW_HIDE);
       return 0;
     }
+    // Closing main quits; with the hook on, ask first (an approval arrives
+    // as QUITR and terminates the way a backend QUIT does).
+    if (g_quit_hook) {
+      request_quit("window");
+      return 0;
+    }
     break;
   case WM_COMMAND: {
     auto it = g_cmd_reg.find((UINT)LOWORD(wp));
@@ -8095,6 +8121,19 @@ static void do_terminate(webview_t w, void *) {
     webview_terminate(w);
   else
     PostQuitMessage(0); // windowless: our own loop (see run)
+}
+
+struct QuitrReq { long qid; bool ok; };
+static void do_quitr(webview_t w, void *arg) {
+  QuitrReq *r = (QuitrReq *)arg;
+  long qid = r->qid;
+  bool ok = r->ok;
+  delete r;
+  if (!g_quit_pending || qid != g_quit_qid)
+    return; // stale answer
+  g_quit_pending = false;
+  if (ok)
+    do_terminate(w, nullptr);
 }
 
 static void do_eval(webview_t w, void *arg) {
@@ -9183,6 +9222,15 @@ static void pipe_read_loop() {
         tiny_dispatch(do_navr,
                          new NavrReq{line.substr(5, sp - 5),
                                      line.substr(sp + 1)});
+      } else if (line == "QUITHOOK 1" || line == "QUITHOOK 0") {
+        g_quit_hook = line.back() == '1';
+      } else if (line.rfind("QUITR ", 0) == 0) {
+        // QUITR <qid> 1|0 — answer to a QUITQ.
+        size_t sp = line.find(' ', 6);
+        if (sp == std::string::npos) continue;
+        tiny_dispatch(do_quitr,
+                      new QuitrReq{std::atol(line.substr(6, sp - 6).c_str()),
+                                   line.substr(sp + 1) == "1"});
       } else if (line.rfind("POPUPR ", 0) == 0) {
         size_t sp = line.find(' ', 7);
         if (sp == std::string::npos)
