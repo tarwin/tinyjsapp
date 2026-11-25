@@ -4,6 +4,23 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
+## Unreleased
+
+- **Windows: sleep and wake weren't reported on Modern Standby machines**
+  (#122). Most current Windows laptops sleep with Modern Standby (S0
+  low-power idle) instead of classic S3 sleep. On those, `onSystem('sleep' |
+  'wake')` and the page's `tiny.api.on('sleep' | 'wake')` never fired,
+  because Windows freezes desktop apps around standby and drops the power
+  broadcast the launcher listened for. The launcher now registers for
+  suspend/resume notifications explicitly, so both events arrive. Seen
+  working on a Modern Standby laptop through real standbys, in both a
+  windowed and a tray-only (`"mainWindow": false`) app.
+- **Windows: `tinyjs update` failed under PowerShell 7** with
+  "Get-FileHash is not recognized" (#122). The installer runs in Windows
+  PowerShell 5.1, which inherited PowerShell 7's module path and couldn't
+  load its own built-in commands. `tinyjs update`, and `tinyjs dev`'s
+  launcher rebuild in a checkout, now start it with its own module path.
+
 ## 0.76.0 — 2026-11-24
 
 - **Quit hooks** (#121). Export `onQuit(app)` from the backend and it runs
