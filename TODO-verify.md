@@ -48,10 +48,40 @@ Windows (written on macOS; mingw `-fsyntax-only` clean against WebView2
 - [ ] a page handler that shows `tiny.dialog.confirm` holds the quit
 - [ ] `tiny.quit({ ask: true })` button: veto → false; allow → quits
 
-Linux (written on macOS; NOT compiled — no GTK here):
-- [ ] builds
-- [ ] close button / Alt+F4 → reason `'window'`; veto / allow / `onQuit`
-- [ ] SIGTERM still quits without asking, and `onQuit` runs
+Linux (written on macOS; seen 2026-11-25 on arm64 Ubuntu 24.04 / GNOME 46,
+`tinyjs dev` of test/quit-hooks under XWayland (`GDK_BACKEND=x11`), log via
+`QUIT_LOG`; the close was a `WM_DELETE_WINDOW` ClientMessage sent to Mutter's
+frame window — the close button's path; checkboxes toggled with XTest
+Tab/Space):
+- [x] builds (no warnings)
+- [x] close → `BACKEND onBeforeQuit reason=window -> CANCEL`, window and
+      both processes stay; veto off → `allow`, then `onQuit` started /
+      finished after 1s, launcher + backend gone.
+- [x] page handler (veto off, confirm on): close → backend allow, then
+      `PAGE onBeforeQuit reason=window` and the confirm; a SECOND close
+      while it's up asks nothing more (one QUITQ pending). Escape → CANCEL,
+      app stays; close again, Enter → allow → `onQuit` → exit.
+- [x] two closes back to back with the fast backend veto → two asks, both
+      CANCEL (the first was answered within ~1ms, so not pending — fine).
+- [x] `hideOnClose` with a tray (`tray.set` via `TINYJS_INJECT`): close
+      hides (IsUnMapped), nothing asked. Without a tray or other window
+      it can't live hidden (`can_live_hidden`), so the close is asked like
+      any other — expected.
+- [x] `tiny.quit()` with the veto on → not asked; `onQuit` ran; exit.
+- [x] SIGTERM to the launcher with the veto on → not asked; `onQuit` ran
+      its 1s; exit.
+- [x] `tiny.quit({ ask: true })` (2a3c561, same rig, the test app's
+      button): veto on → `BACKEND … reason=quit -> CANCEL`, resolves
+      false, app stays. Veto off → allow, `onQuit`, exit. Veto off + page
+      confirm → backend allow, `PAGE … reason=quit`; Escape → CANCEL,
+      resolves false, app stays; again + Enter → allow → `onQuit` → exit.
+      (The macOS box above for the page-confirm path is still a Mac one.)
+- [x] Alt+F4 and the close button by hand, native Wayland
+      (`GDK_BACKEND=wayland`, 2026-11-25, by the user, log read back): with
+      the veto on, two closes → `reason=window -> CANCEL`, app stays;
+      `tiny.quit({ ask: true })` → `reason=quit`, false; veto off, close
+      button → allow → `onQuit` finished its 1s → exit. (XTest can't reach
+      Mutter's keybindings or a Wayland client, hence by hand.)
 
 ## #118 — Windows custom context menu at WebView2's location (2026-11-20)
 
