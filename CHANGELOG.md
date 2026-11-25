@@ -4,7 +4,7 @@ All notable changes to tinyjs. Versions are git tags (`vX.Y.Z`); a tag push
 builds and publishes the release. The rendered version of this file lives at
 https://tinyjs.app/changelog.
 
-## Unreleased
+## 0.76.1 — 2026-11-24
 
 - **Windows: sleep and wake weren't reported on Modern Standby machines**
   (#122). Most current Windows laptops sleep with Modern Standby (S0
