@@ -120,6 +120,58 @@ In the backend it's `await app.info()`. Reading `app.info.version` without calli
 
 `tiny.quit()` quits the app: every window closes and the backend exits. Window positions saved by [`rememberWindows`](./config#rememberWindows) are written first. In the backend it's `app.quit()`. Closing the main window from its page with `tiny.win.close()` also quits.
 
+### cleaning up {#onQuit}
+
+The backend outlives the window. Export `onQuit(app)` and it runs on every way the app ends: a quit from the menu, Dock or tray, closing the main window, `app.quit()`, logout, or the window process crashing. It may be async; the backend waits for it, up to 5 seconds, before it exits. This is where a helper process the backend started gets stopped:
+
+```js
+// backend
+let server;
+export function init(app) {
+  server = app.spawnHidden(['./server', '--port', '8123']);
+}
+export async function onQuit(app) {
+  await fetch('http://127.0.0.1:8123/shutdown', { method: 'POST' }).catch(() => {});
+  server.kill();
+}
+```
+
+The window is already gone when `onQuit` runs, so it can't show anything or ask the page. If the backend itself is killed, `onQuit` can't run; a helper that must never outlive the app should also exit when its stdin closes. On Windows a process started with `tjs.spawn` or `app.spawnHidden` is ended with the backend anyway.
+
+### asking first {#onBeforeQuit}
+
+To check before the app quits, for unsaved work say, export `onBeforeQuit(info, app)` in the backend, or register `tiny.app.onBeforeQuit(fn)` in a page. Return `false`, or a promise of `false`, to cancel. The backend is asked first, then each page that registered, the main window first and one at a time, so two dialogs never stack. The first `false` wins.
+
+```js
+// page
+tiny.app.onBeforeQuit(async ({ reason }) => {
+  if (!dirty) return true;
+  return tiny.dialog.confirm('Quit without saving?');
+});
+```
+
+`reason` says what the user did:
+
+| reason | what the user did | macOS | Windows | Linux |
+|---|---|---|---|---|
+| `'window'` | closed the main window: close button, Alt+F4, taskbar "Close window" | ✓ | ✓ | ✓ |
+| `'quit'` | ⌘Q, the app menu's Quit, Dock Quit, an AppleScript `quit` | ✓ | — | — |
+| `'session'` | logged out, restarted or shut down | ✓ | — | — |
+
+Windows and Linux have no app-wide Quit of their own; a Quit item in your own menu or tray calls `tiny.quit()`. At logout they end the app without asking, and whether `onQuit` gets to run depends on how the system stops the backend. On macOS a logout waits while you answer, and `onQuit` runs after.
+
+Only quits the user asks for are checked. `tiny.quit()` and `app.quit()` quit at once, since the app already decided. Pass `{ ask: true }` to go through the same checks: `tiny.quit({ ask: true })` asks with reason `'quit'` and resolves `false` if something cancelled. Use it for a Quit item in your own tray or menu, so the check lives in one place:
+
+```js
+export function onTray(id, app) {
+  if (id === 'quit') app.quit({ ask: true });
+}
+```
+
+ A window set to [hide on close](./window#visibility) just hides, so nothing is asked. A page that isn't there can't trap the user: one that hasn't acknowledged the question within 2 seconds (it was reloading, say) counts as yes, and so does a handler that throws. Once a page has acknowledged, it's waited for, since its handler may be showing a dialog.
+
+With an [`api`](./config#api) block, a page needs `app.beforeQuit` and `app.beforeQuitAnswer` to register, so a [wrapped site](./site-wrappers) can't stop the app from quitting unless you allow it.
+
 ## local files in the page {#fileURL}
 
 `tiny.fileURL(path)` turns a path on disk into a `file://` URL for an `<img>`, `<audio>` or `<video>` `src`, escaped correctly on every OS. It runs in the page and returns a string at once.

@@ -1260,6 +1260,7 @@ const EVENT_GATE = {
   'media-key': 'nowplaying.event',
   'notification-click': 'notify', 'notification-action': 'notify',
   'clipboard-change': 'clip.read',
+  beforequit: 'app.beforeQuit',
 };
 export function eventGateName(event) {
   return EVENT_GATE[event] ?? 'event.' + event;
@@ -1687,7 +1688,7 @@ function withDeclaredSize(saved, declared) {
 }
 export const __screensForTest = { screenAtIn, screenForIn, matchScreenIn, layoutKey, placementFor, screenSnapshot, withDeclaredSize };
 
-export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, onNavigate, onDownload, onWindowOpen, chrome = null, update = null, activation = null, mainWindow = true, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null, downloads = null, popups = null, apiAccess = null, inject = null, resourcesPath = null, executablesPath = null, rememberWindows = false, embedHosts = null }) {
+export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', size = '960x640', version = '0.0.0', tinyjsVersion = 'dev', id = null, launcherPath, api = {}, onMenu, onTray, onHotkey, onContextMenu, onSystem, onOpenUrl, onOpenFiles, onNotificationClick, onNotificationAction, onMediaKey, onWindowClosed, onWindowState, onClipboardChange, onUpdateAvailable, onAudioTap, onLocale, onNavigate, onDownload, onWindowOpen, onBeforeQuit, onQuit, chrome = null, update = null, activation = null, mainWindow = true, readAccess = null, audioTap = null, windowPlacement = null, contextMenu = true, browserAccelerators = false, debug = false, about = null, userAgent = null, urlScheme = null, fileExtensions = null, openFolders = false, permissions = null, offscreenRescue = null, downloads = null, popups = null, apiAccess = null, inject = null, resourcesPath = null, executablesPath = null, rememberWindows = false, embedHosts = null }) {
   if (typeof mainWindow !== 'boolean') throw new Error('mainWindow must be a boolean');
   if (!mainWindow && url) throw new Error('`url` needs a main window to load into — drop mainWindow: false');
   // mainWindow: false — the launcher starts with no main window or WebView
@@ -2257,6 +2258,60 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     send(win === 'main' ? 'EVAL ' + js : 'EVAL@' + win + ' ' + js);
   }
 
+  // ── quit requests (#121) ──────────────────────────────────────────────────
+  // With QUITHOOK on, the launcher turns every quit the USER asks for (main
+  // window's close button, Cmd+Q / app-menu Quit, Dock Quit, logout on macOS)
+  // into `QUITQ <qid> <reason>` and holds it until `QUITR <qid> 1|0`. The
+  // backend's onBeforeQuit export goes first, then each page that registered
+  // tiny.app.onBeforeQuit — main first, one at a time, so two "unsaved
+  // changes?" dialogs never stack. Any false cancels. app.quit() is never
+  // asked: the app already decided.
+  //
+  // A page answers in two steps: an ack the moment its client sees the ask
+  // (before any handler runs), then the verdict. No ack within 2s = the page
+  // is gone, reloading or gated off, and counts as yes — a page must never
+  // be able to make the app unquittable by not being there. Once acked
+  // there's no timeout: a handler showing a confirm dialog waits on a human.
+  const quitPages = new Set();   // windows whose page has a beforequit handler
+  const quitAsks = new Map();    // qid -> { win, acked, done(ok) }
+  let quitHookOn = false;
+  let quitSeq = 0;
+  let quitDecision = null;       // in-flight shouldQuit(), shared by repeat asks
+  function syncQuitHook() {
+    const on = !!onBeforeQuit || quitPages.size > 0;
+    if (on === quitHookOn) return;
+    quitHookOn = on;
+    send('QUITHOOK ' + (on ? 1 : 0));
+  }
+  function askPageQuit(win, info) {
+    const qid = String(++quitSeq);
+    return new Promise((resolve) => {
+      const a = {
+        win, acked: false,
+        done(ok) { clearTimeout(t); quitAsks.delete(qid); resolve(ok !== false); },
+      };
+      const t = setTimeout(() => { if (!a.acked) a.done(true); }, 2000);
+      quitAsks.set(qid, a);
+      pushToWindow(win, 'beforequit', { ...info, qid });
+    });
+  }
+  async function shouldQuit(info) {
+    if (onBeforeQuit) {
+      try {
+        if (await onBeforeQuit(info, app) === false) return false;
+      } catch (e) {
+        // A handler that throws mustn't trap the user in the app.
+        console.log('tinyjs onBeforeQuit handler failed (quitting anyway):', e);
+      }
+    }
+    const wins = [...quitPages].sort((a, b) => (a === 'main' ? -1 : b === 'main' ? 1 : 0));
+    for (const w of wins) {
+      if (!quitPages.has(w)) continue;          // closed while an earlier one asked
+      if (!(await askPageQuit(w, info))) return false;
+    }
+    return true;
+  }
+
   // ── off-screen rescue policy ──────────────────────────────────────────────
   // The launcher owns the geometry (WINOP `onscreen` clamps a window with
   // less than a sliver visible on any screen onto the nearest one); THIS owns
@@ -2340,6 +2395,17 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   const placeStore = rememberWindows ? makeStore(id, 'window-state.json') : null;
   let placeLayouts = null;                 // in memory once loaded (sync reads)
   const placeTimers = new Map();
+  // Save every pending placement now (≤1s): the quit that follows would kill
+  // their timers. Shared by app.quit() and an approved quit request.
+  function flushPlacements() {
+    const wids = [...placeTimers.keys()];
+    for (const t of placeTimers.values()) clearTimeout(t);
+    placeTimers.clear();
+    return Promise.race([
+      Promise.all(wids.map((w) => savePlacement(w).catch(() => {}))),
+      new Promise((r) => setTimeout(r, 1000)),
+    ]);
+  }
   const pendingShowState = new Map();      // win id -> deferred applyPlacementState (show:false)
   // win id -> the size the app declares for it (tinyjs.json / win.open),
   // saved beside each rect — see withDeclaredSize
@@ -3254,15 +3320,20 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     },
     // rememberWindows saves 500ms after the last change; a move made just
     // before quitting would die with its timer, so save those first (≤1s)
-    quit() {
+    // Programmatic: no onBeforeQuit ask (the app decided), but onQuit runs.
+    // { ask: true } asks first, exactly as a user quit with reason 'quit'
+    // (a tray/menu Quit item on Windows/Linux, where the OS has none) and
+    // resolves true if the app is quitting, false if something cancelled.
+    quit(opts) {
+      if (opts?.ask) {
+        quitDecision ??= shouldQuit({ reason: 'quit' }).finally(() => { quitDecision = null; });
+        return quitDecision.then(async (ok) => {
+          if (ok) { await flushPlacements(); send('QUIT'); }
+          return ok;
+        });
+      }
       if (!placeTimers.size) return send('QUIT');
-      const wids = [...placeTimers.keys()];
-      for (const t of placeTimers.values()) clearTimeout(t);
-      placeTimers.clear();
-      Promise.race([
-        Promise.all(wids.map((w) => savePlacement(w).catch(() => {}))),
-        new Promise((r) => setTimeout(r, 1000)),
-      ]).finally(() => send('QUIT'));
+      flushPlacements().finally(() => send('QUIT'));
     },
     // --- multi-window ---------------------------------------------------
     // Open (or focus) a secondary window — app.win.open(id, opts), as a page
@@ -3880,7 +3951,7 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     'fetch.cancel': async ({ id }, _a, m) => (cancelFetchStream(streamKey(m, id)), true),
     ping: async () => 'pong',
     log: async ({ msg }) => (console.log('[web]', msg), true),
-    quit: async () => (app.quit(), true),
+    quit: async ({ ask } = {}) => (ask ? app.quit({ ask: true }) : (app.quit(), true)),
     // win.* calls target the window the page lives in.
     'win.setTitle': async ({ title: t }, _a, m) => (forWin(m).setTitle(t), true),
     'win.setSize': async ({ width, height, units }, _a, m) => (forWin(m).setSize(width, height, { units }), true),
@@ -3922,6 +3993,22 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
     },
     'win.windows': async () => app.windows(),
     'win.setHideOnClose': async ({ enabled }) => (app.setHideOnClose(enabled), true),
+    // tiny.app.onBeforeQuit: the page's client registers while it has a
+    // handler, then acks and answers each 'beforequit' ask. Answers count only
+    // from the window that was asked.
+    'app.beforeQuit': async ({ on }, _a, m) => {
+      const w = m?.window ?? 'main';
+      if (on) quitPages.add(w); else quitPages.delete(w);
+      syncQuitHook();
+      return true;
+    },
+    'app.beforeQuitAnswer': async ({ qid, ack, ok }, _a, m) => {
+      const a = quitAsks.get(String(qid));
+      if (!a || a.win !== (m?.window ?? 'main')) return false;
+      if (ack) a.acked = true;
+      else a.done(ok);
+      return true;
+    },
     'notify': async (params) => sendNotify(params),
     'app.presence': async ({ mode }) => {
       if (mode !== 'normal' && mode !== 'menubar')
@@ -4342,6 +4429,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
           clipWatch('win:' + id, 0);
           winOrigins.delete(id);
           pendingShowState.delete(id);   // closed before its first show
+          // A closed window can't veto a quit: answer its pending ask yes.
+          if (quitPages.delete(id)) syncQuitHook();
+          for (const a of [...quitAsks.values()]) if (a.win === id) a.done(true);
           push('window-closed', { id });
           fire('onWindowClosed', onWindowClosed, id, app);
         } else if (line.startsWith('WINGEOM ')) {
@@ -4433,6 +4523,16 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
             push('download', info);
             fire('onDownload', onDownload, info, app);
           }
+        } else if (line.startsWith('QUITQ ')) {
+          // QUITQ <qid> <reason>: the user asked to quit (see shouldQuit).
+          // Approval flushes placements first, as app.quit() does; the
+          // launcher then quits the way it would have without the hook.
+          const [qid, reason = 'quit'] = line.slice(6).split(' ');
+          quitDecision ??= shouldQuit({ reason }).finally(() => { quitDecision = null; });
+          quitDecision.then(async (ok) => {
+            if (ok) await flushPlacements();
+            send(`QUITR ${qid} ${ok ? 1 : 0}`);
+          });
         } else if (line.startsWith('POPUPQ ')) {
           // window.open policy ask: POPUPQ <qid> <popupid|->\t<opener>\t<url>\t<mode>.
           // In "window" mode the popup already exists (hidden, loading) under
@@ -4471,12 +4571,30 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   })().catch((e) => { console.log('tinyjs read loop error:', e); markEof(); });
 
   // Attach mode has no child process: done = the launcher closing the socket.
-  app.done = proc
+  // onQuit runs here, on EVERY way out (approved quit, app.quit(), a launcher
+  // crash, logout), before done resolves — so entry.js's tjs.exit waits for
+  // it. Capped at 5s: cleanup that hangs mustn't leave a headless backend.
+  const ended = proc
     ? proc.wait().then(async (st) => {
         await cleanup();
         return st;
       })
     : eofDone;
+  app.done = ended.then(async (st) => {
+    if (onQuit) {
+      let timer;
+      await Promise.race([
+        Promise.resolve().then(() => onQuit(app))
+          .catch((e) => console.log('tinyjs onQuit handler failed:', e)),
+        new Promise((r) => { timer = setTimeout(() => {
+          console.log('tinyjs: onQuit still running after 5s — exiting anyway');
+          r();
+        }, 5000); }),
+      ]);
+      clearTimeout(timer);
+    }
+    return st;
+  });
 
   // Attach mode: the launcher booted with plist defaults; apply the app's
   // configured title/size now.
@@ -4492,6 +4610,9 @@ export async function createApp({ html, htmlPath, url = null, title = 'tinyjs', 
   // contextMenu:false in the manifest suppresses WebKit's default right-click
   // menu (Reload/Back/Inspect Element…). A custom menu.setContext() still wins.
   if (contextMenu === false) send('CTXSUPPRESS 1');
+
+  // onBeforeQuit exported: the launcher asks before every user quit (#121).
+  syncQuitHook();
 
   // about:'menu' turns the macOS About item into a plain menu click — the
   // launcher sends `MENU about`, so it lands in onMenu('about') and the page

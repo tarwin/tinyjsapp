@@ -8,6 +8,95 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #121 — quit hooks: `onBeforeQuit` / `onQuit` (`feat/121-quit-hooks`, 2026-11-24)
+
+Wire: backend sends `QUITHOOK 1|0`; while on, the launcher turns a user
+quit into `QUITQ <qid> <reason>` and acts only on `QUITR <qid> 1`. onQuit
+runs in the bridge before `app.done` resolves (5s cap), so it needs no
+launcher support. Scratch app used for macOS: backend `onBeforeQuit` vetoes
+the first ask and allows the second, logging to a file; a page variant does
+the same through `tiny.app.onBeforeQuit`; `onQuit` awaits 1s then logs.
+
+macOS, packaged app, 2026-11-24 (seen):
+- [x] AppleScript `quit` (the `terminate:` / Dock Quit path): first ask
+      vetoed (AppleScript gets "User canceled" -128, app stays up), second
+      allowed; `onQuit` finished its 1s of async work; both processes gone.
+- [x] same, answered by a page handler (ack + async verdict) instead.
+macOS, hand-tested by the user the same day (interactive scratch app:
+toggles for backend veto / page confirm / hideOnClose, log file read back):
+- [x] main window close button → reason `'window'`, veto keeps the window
+- [x] ⌘Q and app-menu Quit → reason `'quit'`
+- [x] Dock icon → Quit → reason `'quit'`
+- [x] page confirm dialog: Cancel keeps the app, OK quits; onQuit after
+- [x] `hideOnClose` hides without asking
+- [x] `tiny.quit()` doesn't ask; onQuit still runs
+- [x] reason `'session'`: a logout's quit event sent by hand
+      (`«event aevtquit» given «class why?»:«constant ****rlgo»`) → vetoed
+      with reason `'session'`. A real logout (macOS's "interrupted logout"
+      notice) was not run.
+- [x] `tiny.quit({ ask: true })` (added later the same day, bridge-only):
+      backend veto → resolves false, app stays
+- [ ] `tiny.quit({ ask: true })` answered by the page confirm (Cancel →
+      false; OK → quits, onQuit runs) — same shouldQuit path as above, not
+      clicked through
+
+Windows (written on macOS; mingw `-fsyntax-only` clean against WebView2
+1.0.2903.40). Run 2026-11-25 on Windows 11 ARM64 (x64 launcher, `tinyjs
+dev` of test/quit-hooks with `QUIT_LOG` set), driven headlessly: page
+toggles clicked over CDP, close sent by posting `WM_SYSCOMMAND SC_CLOSE`
+(what the close button and Alt+F4 become) or a bare `WM_CLOSE` (what the
+taskbar's "Close window" sends) to the main hwnd; dialog buttons answered
+with a posted `WM_COMMAND IDOK/IDCANCEL`. NB a hand-compiled launcher must
+regenerate native/tiny_client.h first (setup.ps1 does) — without it the
+page had no `tiny.app.onBeforeQuit`.
+- [x] SC_CLOSE and WM_CLOSE → backend asked with reason `'window'`; veto
+      leaves the window up (both paths); allow quits, then `onQuit` logs
+      start and finish 1s later; launcher gone
+- [x] `hideOnClose` with a tray: both close paths hide the window, no
+      ask logged, launcher still running
+- [x] page handler with `tiny.dialog.confirm`: dialog still up and main
+      still visible 4s after the close (past the 2s ack); Cancel → window
+      stays; next close → OK → quits, `onQuit` runs
+- [x] `tiny.quit()` with the backend veto on: no ask, `onQuit` runs
+- [x] `tiny.quit({ ask: true })` (2026-11-25, 2a3c561): backend veto →
+      resolves false, app stays (reason `'quit'`); veto off + page confirm:
+      Cancel → resolves false, app stays; OK → quits, `onQuit` runs
+
+Linux (written on macOS; seen 2026-11-25 on arm64 Ubuntu 24.04 / GNOME 46,
+`tinyjs dev` of test/quit-hooks under XWayland (`GDK_BACKEND=x11`), log via
+`QUIT_LOG`; the close was a `WM_DELETE_WINDOW` ClientMessage sent to Mutter's
+frame window — the close button's path; checkboxes toggled with XTest
+Tab/Space):
+- [x] builds (no warnings)
+- [x] close → `BACKEND onBeforeQuit reason=window -> CANCEL`, window and
+      both processes stay; veto off → `allow`, then `onQuit` started /
+      finished after 1s, launcher + backend gone.
+- [x] page handler (veto off, confirm on): close → backend allow, then
+      `PAGE onBeforeQuit reason=window` and the confirm; a SECOND close
+      while it's up asks nothing more (one QUITQ pending). Escape → CANCEL,
+      app stays; close again, Enter → allow → `onQuit` → exit.
+- [x] two closes back to back with the fast backend veto → two asks, both
+      CANCEL (the first was answered within ~1ms, so not pending — fine).
+- [x] `hideOnClose` with a tray (`tray.set` via `TINYJS_INJECT`): close
+      hides (IsUnMapped), nothing asked. Without a tray or other window
+      it can't live hidden (`can_live_hidden`), so the close is asked like
+      any other — expected.
+- [x] `tiny.quit()` with the veto on → not asked; `onQuit` ran; exit.
+- [x] SIGTERM to the launcher with the veto on → not asked; `onQuit` ran
+      its 1s; exit.
+- [x] `tiny.quit({ ask: true })` (2a3c561, same rig, the test app's
+      button): veto on → `BACKEND … reason=quit -> CANCEL`, resolves
+      false, app stays. Veto off → allow, `onQuit`, exit. Veto off + page
+      confirm → backend allow, `PAGE … reason=quit`; Escape → CANCEL,
+      resolves false, app stays; again + Enter → allow → `onQuit` → exit.
+      (The macOS box above for the page-confirm path is still a Mac one.)
+- [x] Alt+F4 and the close button by hand, native Wayland
+      (`GDK_BACKEND=wayland`, 2026-11-25, by the user, log read back): with
+      the veto on, two closes → `reason=window -> CANCEL`, app stays;
+      `tiny.quit({ ask: true })` → `reason=quit`, false; veto off, close
+      button → allow → `onQuit` finished its 1s → exit. (XTest can't reach
+      Mutter's keybindings or a Wayland client, hence by hand.)
+
 ## #118 — Windows custom context menu at WebView2's location (2026-11-20)
 
 `CtxHandler` (launcher-win.cc) now opens `g_ctx_menu` at
@@ -203,8 +292,13 @@ checks, so they should just ignore the extra fields — nobody has watched it.
   as wide as plain "88:88", against 152px plain. A plain `set()` after a
   styled one goes back to the system colour; `'red'` and `'serif'` log a
   warning and fall back. Not yet seen: a LIGHT menu bar.
-- [ ] **Windows** — a spec with both fields still shows the icon, tooltip
-  and menu as before (no garbled tooltip).
+- [x] **Windows** (2026-11-25, Windows 11 ARM64, dev): `tray.set` with
+  `title`, `titleColor: { light, dark }`, `titleFont: 'monospacedDigit'`,
+  an emoji icon, a tooltip and two items. The icon sits in the hidden-icons
+  flyout; UI Automation reads its button name as exactly the tooltip
+  (`probe-tip-114`). A posted tray right-click opens the menu, and
+  MN_GETHMENU + GetMenuString read both labels back. The launcher reads
+  TRAYBEGIN fields 0-4 only, so 5 and 6 are dropped by index.
 - [ ] **Linux** — same, and the label (where the panel shows one) is unchanged.
 
 ## #113 — non-resizable window remembered as maximized (macOS fix, 2026-11-10)
@@ -221,7 +315,11 @@ the real state, so they shouldn't have had the bug, but nobody has watched it th
   reports `maximized:true` after the move and comes back zoomed on run 2.
   User dragged kid by hand, quit, reran: came back where it was left, not
   zoomed. Not yet seen: the reporter's rw1 sample, a built .app.
-- [ ] **Windows** — both runs PASS, no FAIL lines while dragging kid.
+- [x] **Windows** (2026-11-25, Windows 11 ARM64, 200%, dev): both runs
+  PASS. The drag was simulated: SetWindowPos in 20 steps between
+  WM_ENTERSIZEMOVE / WM_EXITSIZEMOVE, twice; no FAIL lines, IsZoomed 0,
+  window-state.json kept kid at 500,450 with `maximized: false`; run 2
+  brought kid back there at 400x300, not maximized.
 - [ ] **Linux** — same (X11; Wayland can't check the position).
 
 ## #107 — `tiny.embedURL` (`feat/embed-url`, 2026-11-07)
@@ -5926,7 +6024,11 @@ below. amp not run on the others. Master not run on Windows.
   Only startup was checked for the other six here; FFI itself has its own section
   below.
   The rest of the suite and update-fetch weren't rerun (cli.js doesn't load bridge.js).
-- [ ] **Windows arm64** — never run. CI's source build: the WAMR patches
+- [x] **Windows arm64** (2026-11-25): v0.75.2's release run built
+  txiki.js 26.11.0 from source on windows-11-arm (not from cache) and every
+  test-wasm*/wasi test printed OK. The shipped tjs-windows-arm64 (checksum
+  matched) reports v26.11.0 and passes test/fetch/check.js, all cases,
+  real hosts included. Earlier note: CI's source build: the WAMR patches
   `git apply --check` clean on 26.11.0's deps/wamr (same pin as 26.6.0), but
   neither the MSVC build nor the wasm test step has run. New since 26.6.0: the
   build applies `patches/*.patch` with git at configure time. They have LF
@@ -6002,8 +6104,9 @@ build works and fetch still does without QUIC. It says nothing about the abort.
   Built amp again: 8/8 feeds, 3/3 streams, `.pls`, no curl.exe seen.
   **OPEN, runtime, slow or failing after a host advertises h3:** TODO-txiki.md. 4f4e8e2
   doesn't change it: google through bridge.js, median 2392 ms of 30.
-- [ ] **Windows arm64** — not run. Keeps HTTP/3 on; nothing has shown whether the
-  abort happens there.
+- [x] **Windows arm64** (2026-11-25, v0.75.2's native tjs, Windows 11 ARM64
+  VM): test/fetch/check.js, all cases passed, no abort, including "4 at once
+  to an h2 + h3 host, 3 rounds" and 4 × 20 MB to simplecast. One run only.
 
 **CONNECT proxy through the curl fallback.** curl's `-i` printed the proxy's own reply
 first, so the status was the proxy's, headers were empty and the real header block
@@ -6067,9 +6170,13 @@ Examples' `origin/ffi-dlopen` (098328f, NOT merged) moves its 7 FFI apps over; o
   not Windows-only, but that's unchecked. A u64 past 2^53 comes back as a rounded
   number and BigInt args are refused, as tjs.d.ts says, while a `defineStruct` u64
   field unpacks to a BigInt.
-- [ ] **Windows arm64, native tjs** — not run. Different FFI ABI (libffi on Windows
-  arm64), and its tjs only comes from CI, so x64 emulation says nothing about it.
-  Needs a `release-test/*` build, then test/ffi/check.js and matcha on it.
+- [x] **Windows arm64, native tjs** (2026-11-25, v0.75.2's tjs-windows-arm64,
+  Windows 11 ARM64 VM): test/ffi/check.js all 33 passed, the same results and
+  limits as x64 (u64 past 2^53 rounds, `(void)` dlopenCProto throws, errno()
+  0), soak flat at 17.0 MB. matcha under `tjs run cli.js dev` with that tjs
+  (backend process path checked): a posted tray left-click took
+  CallNtPowerInformation(SystemExecutionState) from 0x0 to 0x3, a second one
+  back to 0x0.
 - [ ] **Windows x64 hardware** — not run. test/ffi/check.js and matcha.
 - [x] **macOS arm64** — *(2026-11-04, macOS 27.2, M3 Max, examples `origin/ffi-dlopen`
   098328f, scratch copies with throwaway ids)* CGEventCreate, CGEventGetLocation (a

@@ -89,6 +89,10 @@ static GtkWidget* g_menubar = nullptr;   // main's bar (== g_main_menu.bar)
 static GtkAccelGroup* g_accel = nullptr; // main's accelerators
 
 static bool g_hide_on_close = false;
+// Quit requests (#121): see on_main_delete. Main-thread only.
+static bool g_quit_hook = false;
+static bool g_quit_pending = false;
+static long g_quit_qid = 0;
 static bool g_accessory = false;
 // "mainWindow": false (TINYJS_NO_MAIN_WINDOW=1): no main window or WebView
 // at all — g_win/g_wv stay null, so WebKit's processes don't start until the
@@ -7423,6 +7427,20 @@ static void handle_line(const std::string& line) {
   }
 
   if (line == "QUIT") { g_quitting = true; gtk_main_quit(); return; }
+  if (line == "QUITHOOK 1" || line == "QUITHOOK 0") {
+    g_quit_hook = line.back() == '1';
+    return;
+  }
+  if (line.rfind("QUITR ", 0) == 0) {
+    // QUITR <qid> 1|0 — answer to a QUITQ (stale ids ignored).
+    size_t sp = line.find(' ', 6);
+    if (sp == std::string::npos) return;
+    long qid = std::atol(line.substr(6, sp - 6).c_str());
+    if (!g_quit_pending || qid != g_quit_qid) return;
+    g_quit_pending = false;
+    if (line.substr(sp + 1) == "1" && !g_quitting) { g_quitting = true; gtk_main_quit(); }
+    return;
+  }
   if (line == "RELOAD") {
     // Windowless: app.reload() means the named windows that are open.
     if (g_wv) webkit_web_view_reload_bypass_cache(g_wv);
@@ -7808,10 +7826,27 @@ static bool can_live_hidden() {
   return false;
 }
 
+// -- quit requests (#121) --
+// `QUITHOOK 1` (backend onBeforeQuit, or a page's tiny.app.onBeforeQuit):
+// closing the main window (close button, Alt+F4, the WM's Close) becomes
+// `QUITQ <qid> window` and waits for `QUITR <qid> 1|0`. Backend QUIT and
+// SIGTERM/SIGINT/SIGHUP are never asked. There's no session-end hook here
+// (no GtkApplication / SessionManager registration) — logout ends the app
+// the way SIGTERM does, and onQuit still runs in the backend.
+// Main-thread state: handle_line runs on the GTK thread.
+// (g_quit_hook / g_quit_pending / g_quit_qid are declared at the top.)
+
 static gboolean on_main_delete(GtkWidget*, GdkEvent*, gpointer) {
   if (g_hide_on_close && can_live_hidden()) {
     gtk_widget_hide(GTK_WIDGET(g_win));
     return TRUE;
+  }
+  if (g_quit_hook) {
+    if (!g_quit_pending) {
+      g_quit_pending = true;
+      pipe_write_line("QUITQ " + std::to_string(++g_quit_qid) + " window");
+    }
+    return TRUE;   // an approval arrives as QUITR and quits like QUIT
   }
   return FALSE;
 }

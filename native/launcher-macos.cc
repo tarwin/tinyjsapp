@@ -547,12 +547,61 @@ static void do_size(webview_t w, void *arg) {
 }
 
 
+// ── quit requests (#121) ─────────────────────────────────────────────────────
+// `QUITHOOK 1` (the backend has an onBeforeQuit, or a page registered
+// tiny.app.onBeforeQuit): every quit the USER asks for — main window's close
+// button, Cmd+Q / app-menu Quit, and -[NSApp terminate:] (Dock Quit,
+// AppleScript quit, logout) — becomes `QUITQ <qid> <reason>` and waits for
+// `QUITR <qid> 1|0`. Backend `QUIT` (app.quit()) is never asked.
+// terminate: is held with NSTerminateLater (so a logout waits for the answer
+// instead of being aborted); the others are simply not acted on until yes.
+// All of this state lives on the main thread.
+static std::atomic<bool> g_quit_hook{false};
+static bool g_quit_pending = false; // a QUITQ is out
+static bool g_quit_later = false;   // ...and terminate: is held on it
+static long g_quit_qid = 0;
+
+static void request_quit(const char *reason, bool later) {
+  if (later) g_quit_later = true;
+  if (g_quit_pending) return;   // one ask at a time; its answer settles both
+  g_quit_pending = true;
+  sock_write_line("QUITQ " + std::to_string(++g_quit_qid) + " " + reason);
+}
+
 static void do_terminate(webview_t, void *) {
+  // A terminate: held for the backend (NSTerminateLater) must be released
+  // with a reply — [NSApp stop:] from inside that modal state wouldn't end
+  // the app. Reached by an approval, a backend QUIT, or the backend dying.
+  if (g_quit_later) {
+    g_quit_later = false;
+    g_quit_pending = false;
+    [NSApp replyToApplicationShouldTerminate:YES];
+    return;
+  }
   [NSApp stop:nil];
   // Like the webview Cocoa backend, wake the loop so socket cleanup can run.
   [NSApp postEvent:[NSEvent otherEventWithType:NSEventTypeApplicationDefined
       location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0
       context:nil subtype:0 data1:0 data2:0] atStart:YES];
+}
+
+struct QuitrReq { long qid; bool ok; };
+static void do_quitr(webview_t w, void *arg) {
+  QuitrReq *r = (QuitrReq *)arg;
+  long qid = r->qid;
+  bool ok = r->ok;
+  delete r;
+  if (!g_quit_pending || qid != g_quit_qid)
+    return;   // stale answer
+  if (ok) {
+    do_terminate(w, nullptr);
+    return;
+  }
+  g_quit_pending = false;
+  if (g_quit_later) {
+    g_quit_later = false;
+    [NSApp replyToApplicationShouldTerminate:NO];
+  }
 }
 
 // Load a local HTML file. On macOS this must go through
@@ -951,6 +1000,7 @@ static const NSInteger kTinyItemDisabled = 1;  // NSMenuItem.tag: app said disab
   [NSApp orderFrontStandardAboutPanelWithOptions:about];
 }
 - (void)doQuit:(id)sender {
+  if (g_quit_hook) { request_quit("quit", false); return; }
   do_terminate(g_w, nullptr);
 }
 @end
@@ -1616,10 +1666,17 @@ static bool g_defer_show = false;
 // close click. When hide-on-close is on, the window just orders out (tray apps
 // keep running); otherwise the normal close/quit path proceeds.
 static BOOL tiny_windowShouldClose(id, SEL, id sender) {
-  if (!g_hide_on_close)
-    return YES;
-  [(NSWindow *)sender orderOut:nil];
-  return NO;
+  if (g_hide_on_close) {
+    [(NSWindow *)sender orderOut:nil];
+    return NO;
+  }
+  // Closing main quits; with the hook on, ask first. An approval quits via
+  // do_terminate (the window never closes on its own).
+  if (g_quit_hook) {
+    request_quit("window", false);
+    return NO;
+  }
+  return YES;
 }
 
 static void install_close_hook(webview_t w) {
@@ -9457,6 +9514,15 @@ static void sock_read_loop() {
         if (sp == std::string::npos) continue;
         launcher_dispatch(g_w, do_navr,
                          new NavrReq{line.substr(5, sp - 5), line.substr(sp + 1)});
+      } else if (line == "QUITHOOK 1" || line == "QUITHOOK 0") {
+        g_quit_hook = line.back() == '1';
+      } else if (line.rfind("QUITR ", 0) == 0) {
+        // QUITR <qid> 1|0 — answer to a QUITQ.
+        size_t sp = line.find(' ', 6);
+        if (sp == std::string::npos) continue;
+        launcher_dispatch(g_w, do_quitr,
+                          new QuitrReq{std::atol(line.substr(6, sp - 6).c_str()),
+                                       line.substr(sp + 1) == "1"});
       } else if (line.rfind("POPUPR ", 0) == 0) {
         // POPUPR <qid> window|external|deny — answer to a POPUPQ ask.
         size_t sp = line.find(' ', 7);
@@ -10109,6 +10175,23 @@ static void tiny_openFiles(id, SEL, id app, NSArray *files) {
   [(NSApplication *)app replyToOpenOrPrint:NSApplicationDelegateReplySuccess];
 }
 
+// -[NSApp terminate:] — Dock Quit, AppleScript `quit`, logout/restart/
+// shutdown. A quit-reason parameter on the current Apple Event means the
+// session is ending; report that as 'session'.
+static NSUInteger tiny_shouldTerminate(id, SEL, NSApplication *) {
+  if (!g_quit_hook)
+    return NSTerminateNow;
+  const char *reason = "quit";
+  NSAppleEventDescriptor *ev =
+      [[NSAppleEventManager sharedAppleEventManager] currentAppleEvent];
+  if (ev && [ev attributeDescriptorForKeyword:kAEQuitReason])
+    reason = "session";
+  else if (ev && [ev paramDescriptorForKeyword:kAEQuitReason])
+    reason = "session";
+  request_quit(reason, true);
+  return NSTerminateLater;
+}
+
 static BOOL tiny_reopen(id, SEL, NSApplication *, BOOL hasVisibleWindows) {
   // A close-hidden window is still alive, but AppKit's default reopen path
   // does not order it back in. Use the same show operation as the page API.
@@ -10170,6 +10253,9 @@ static void install_open_handlers() {
   class_addMethod(object_getClass(delegate),
                   @selector(applicationShouldHandleReopen:hasVisibleWindows:),
                   (IMP)tiny_reopen, "c@:@c");
+  class_addMethod(object_getClass(delegate),
+                  @selector(applicationShouldTerminate:),
+                  (IMP)tiny_shouldTerminate, "Q@:@");
   // NSApplication caches delegate capabilities at setDelegate: time; re-set
   // it so AppKit notices the methods we just added.
   [NSApp setDelegate:nil];

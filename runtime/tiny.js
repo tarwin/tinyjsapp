@@ -18,6 +18,22 @@
   // tiny.clipboard.onChange starts a watch only if this page hasn't one.
   let clipWatching = false;
   const handlers = {};
+  // tiny.app.onBeforeQuit handlers, and the answer to the bridge's ask:
+  // ack at once (the bridge counts an unacked ask as "page gone" after 2s),
+  // then run them in order; the first false cancels the quit. A handler
+  // that throws counts as yes — it mustn't trap the user in the app.
+  const quitHandlers = [];
+  const answerBeforeQuit = async ({ qid, reason }) => {
+    call('app.beforeQuitAnswer', { qid, ack: true }).catch(() => {});
+    let ok = true;
+    for (const fn of quitHandlers.slice()) {
+      try { if (await fn({ reason }) === false) { ok = false; break; } }
+      catch (e) { if (typeof reportError === 'function') reportError(e); }
+    }
+    // A reloaded page lost its handlers; let the bridge forget this window.
+    if (!quitHandlers.length) call('app.beforeQuit', { on: false }).catch(() => {});
+    call('app.beforeQuitAnswer', { qid, ok }).catch(() => {});
+  };
 
   // tiny.fetch: like window.fetch, but the request runs in the backend (a
   // native process) — no CORS, CSP, or mixed-content limits, so the page can
@@ -178,7 +194,9 @@
     },
 
     log: (msg) => call('log', { msg }),
-    quit: () => call('quit'),
+    // { ask: true }: run onBeforeQuit (backend, then pages) first, like a
+    // user quit; resolves false if something cancelled.
+    quit: (opts) => call('quit', opts?.ask ? { ask: true } : {}),
 
     // Which machine is this? os()/isMacOS()/isWindows()/isLinux() answer
     // synchronously (the webview's own UA is decisive: WKWebView says
@@ -817,6 +835,22 @@
     app: {
       // { version: <app>, tinyjs: <framework that built it>, runtime: <txiki> }
       info: () => call('app.info'),
+      // fn({ reason }) before a quit the USER asked for ('window' = main
+      // window's close button, 'quit' = Cmd+Q / app-menu or Dock Quit,
+      // 'session' = logout/shutdown, macOS only). Return false (or a promise
+      // of it) to cancel. Plain tiny.quit() isn't asked; tiny.quit({ ask:
+      // true }) is, with reason 'quit'. Returns an unsubscribe.
+      onBeforeQuit(fn) {
+        if (typeof fn !== 'function') throw new TypeError('tiny.app.onBeforeQuit(fn): fn must be a function');
+        quitHandlers.push(fn);
+        if (quitHandlers.length === 1) call('app.beforeQuit', { on: true }).catch(() => {});
+        return () => {
+          const i = quitHandlers.indexOf(fn);
+          if (i === -1) return;
+          quitHandlers.splice(i, 1);
+          if (!quitHandlers.length) call('app.beforeQuit', { on: false }).catch(() => {});
+        };
+      },
       // Deep links + file associations (packaged .app; see tinyjs.json
       // "urlScheme" and "fileExtensions"). Cold-start events are buffered.
       onOpenUrl(fn) { return window.tiny.api.on('open-url', ({ url }) => fn(url)); },
@@ -1033,6 +1067,7 @@
   };
 
   window.__emit = (msg) => {
+    if (msg.event === 'beforequit') return answerBeforeQuit(msg.data);
     // Snapshot: a handler that unsubscribes (itself or a sibling) mid-dispatch
     // must not make forEach skip the next one. And one handler's mistake must
     // not silence the rest (the backend's fire() works the same way): report

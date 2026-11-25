@@ -90,6 +90,8 @@ Export any of these and tinyjs calls it. Each also reaches the page as an event,
 | `onNavigate(info, app)` | a page navigates — and the backend may allow or block it | [site wrappers](./site-wrappers) |
 | `onDownload(info, app)` | a download starts, finishes or fails — it reports; the [`downloads`](./config#downloads) setting decides | [site wrappers](./site-wrappers) |
 | `onWindowOpen(info, app)` | a page opens a popup — and the backend decides where it goes | [site wrappers](./site-wrappers) |
+| `onBeforeQuit(info, app)` | the user asks to quit — return `false` to cancel | [quitting](./api#quit) |
+| `onQuit(app)` | the app is ending, whatever the reason — awaited, up to 5 seconds | [quitting](./api#quit) |
 
 ## the app handle {#app}
 
