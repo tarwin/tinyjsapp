@@ -7913,6 +7913,25 @@ static void send_theme() {
 }
 
 // ---------------------------------------------------------------------------
+// system sleep / wake (#122)
+//
+// The WM_POWERBROADCAST *broadcast* never reaches us on Modern Standby
+// (S0 low-power idle) machines: Windows freezes desktop apps around standby
+// and the broadcast to a frozen window is dropped. Measured 2026-11-24 on a
+// Modern Standby laptop: a control launcher saw no PBT_* message at all
+// across real standbys. Registering the host window explicitly makes Windows
+// deliver PBT_APMSUSPEND before the freeze and PBT_APMRESUMEAUTOMATIC /
+// PBT_APMRESUMESUSPEND after it, to the same tiny_wndproc case as before,
+// and is harmless on S3 machines, which already got the broadcast. The
+// bridge is its own process and can be frozen too, so on Modern Standby the
+// backend may see `sleep` only on resume, just before `wake`.
+static void power_register(HWND hwnd) {
+  if (!RegisterSuspendResumeNotification(hwnd, DEVICE_NOTIFY_WINDOW_HANDLE))
+    std::fprintf(stderr, "launcher: RegisterSuspendResumeNotification failed (%lu); "
+                         "sleep/wake may not be reported\n", GetLastError());
+}
+
+// ---------------------------------------------------------------------------
 // window proc subclass
 
 static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
@@ -8099,7 +8118,7 @@ static LRESULT CALLBACK tiny_wndproc(HWND hwnd, UINT msg, WPARAM wp,
     }
     break;
   }
-  case WM_POWERBROADCAST:
+  case WM_POWERBROADCAST: // delivered via power_register (#122)
     if (wp == PBT_APMSUSPEND && !g_asleep) {
       g_asleep = true;
       pipe_write_line("SYS sleep");
@@ -9719,6 +9738,7 @@ static int run_windowless() {
   }
   g_orig_wndproc = (WNDPROC)SetWindowLongPtrW(g_host, GWLP_WNDPROC,
                                               (LONG_PTR)tiny_wndproc);
+  power_register(g_host);
   ensure_start_menu_shortcut();
   read_browser_policy_env();
   autodlg_arm();
@@ -9876,6 +9896,7 @@ static int run(int argc, char **argv) {
   g_host = g_hwnd;
   g_orig_wndproc = (WNDPROC)SetWindowLongPtrW(g_hwnd, GWLP_WNDPROC,
                                               (LONG_PTR)tiny_wndproc);
+  power_register(g_hwnd);
   // The webview library created main with (or without) a redirection bitmap
   // from this same env var; menu_allowed needs to know which, since a
   // transparent window has nothing for a GDI menu bar to draw on.

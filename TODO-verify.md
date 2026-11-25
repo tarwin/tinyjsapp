@@ -8,6 +8,32 @@ Tick a box only after seeing it with your own eyes on that OS — a
 fire-and-forget wire op that reaches a shell which ignores it looks exactly
 like one that was never implemented.
 
+## #122 — Windows sleep/wake on Modern Standby; `tinyjs update` from pwsh 7 (`fix/122-standby-update`, 2026-11-24)
+
+Launcher: `power_register` calls `RegisterSuspendResumeNotification` on the
+host window (main, or the windowless `TinyjsHost`), because the plain
+WM_POWERBROADCAST broadcast never arrived on Modern Standby. CLI: `ps51Env()`
+drops PSModulePath for every `powershell` (5.1) child.
+
+Windows 11 arm64 Modern Standby laptop (AoAc=1, no S3), 2026-11-24 (seen):
+- [x] control (broadcast only, i.e. v0.76): no PBT_* message at all and no
+      `onSystem` sleep/wake across real standbys of 5 s and 21 s;
+      reproduces #122.
+- [x] registered: PBT_APMSUSPEND at standby entry, PBT_APMRESUMEAUTOMATIC +
+      PBT_APMRESUMESUSPEND at exit (the latch turns them into one `wake`).
+- [x] final build, 2 min 15 s standby (Kernel-Power 506 → 507): backend
+      `onSystem('sleep')` at entry and `onSystem('wake')` at exit, in both
+      a windowed app and a `"mainWindow": false` tray app. In a 21 s standby
+      the bridge was frozen too and `sleep` arrived at resume, just before
+      `wake` (documented in the launcher comment).
+- [x] pwsh 7.7 → tjs → `powershell -File` running `Get-FileHash`: inherited
+      env gives the reporter's "not recognized"; `ps51Env()` works. Also
+      fine from a 5.1 shell and from cmd.
+- [ ] page-side `tiny.api.on('sleep' | 'wake')` (same `push` path as the
+      backend hook; not watched).
+- [ ] a classic S3 machine still gets exactly one sleep and one wake.
+- [ ] a real `tinyjs update` run from pwsh 7 against a published release.
+
 ## #121 — quit hooks: `onBeforeQuit` / `onQuit` (`feat/121-quit-hooks`, 2026-11-24)
 
 Wire: backend sends `QUITHOOK 1|0`; while on, the launcher turns a user

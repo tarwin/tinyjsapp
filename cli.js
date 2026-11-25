@@ -811,6 +811,17 @@ async function run(argv, opts = {}) {
   }
 }
 
+// Environment for a Windows PowerShell 5.1 child (`powershell`). Run from
+// pwsh 7, we inherit ITS PSModulePath, which points 5.1 at 7.x's
+// Microsoft.PowerShell.Utility; 5.1 can't load it, so Get-FileHash and
+// friends come up "not recognized" (#122). Without the variable 5.1 rebuilds
+// its own default. Windows env names are case-insensitive, hence the regex.
+function ps51Env(env = tjs.env) {
+  const out = {};
+  for (const [k, v] of Object.entries(env)) if (!/^psmodulepath$/i.test(k)) out[k] = v;
+  return out;
+}
+
 // Like run(), but stdout passes through only until a line matches `stopAt`;
 // that line and everything after it are dropped. For create-vite, whose
 // closing "Done. Now run: npm install / npm run dev" contradicts the steps
@@ -1099,7 +1110,7 @@ async function cmdUpdate() {
     console.log('    (this install has no bundled installer — using the one on tinyjs.app)');
     if (IS_WIN) {
       await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                 '-Command', 'irm https://tinyjs.app/install.ps1 | iex'], { env });
+                 '-Command', 'irm https://tinyjs.app/install.ps1 | iex'], { env: ps51Env(env) });
     } else {
       await run(['sh', '-c', 'curl -fsSL https://tinyjs.app/install | sh'], { env });
     }
@@ -1110,7 +1121,7 @@ async function cmdUpdate() {
   await copyFile(local, script);
   try {
     if (IS_WIN) {
-      await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { env });
+      await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { env: ps51Env(env) });
     } else {
       await run(['sh', script], { env });
     }
@@ -2529,7 +2540,7 @@ async function ensureLauncherFresh() {
               ' — rebuilding (' + (IS_WIN ? 'setup.ps1' : 'setup.sh') + ')');
   if (IS_WIN) {
     await run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-               '-File', TOOL_DIR + 'setup.ps1', '-SkipPath'], { cwd: TOOL_DIR });
+               '-File', TOOL_DIR + 'setup.ps1', '-SkipPath'], { cwd: TOOL_DIR, env: ps51Env() });
   } else {
     await run(['sh', TOOL_DIR + 'setup.sh'],
               { cwd: TOOL_DIR, env: fat ? { ...tjs.env, TINYJS_UNIVERSAL: '1' } : tjs.env });
